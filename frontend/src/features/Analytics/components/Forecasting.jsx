@@ -363,7 +363,7 @@ function Forecasting() {
 
           <InfoBanner variant="info">
             <strong>What is this metric?</strong> This percentage tells you how close your
-            forecasts are to real-world results on average. Your current score means your
+            forecasts are to real-world results on average. Your current error score of 7.4% means your
             predictions are typically accurate to within {latestAccuracy}% of the actual
             totals, whether the guess was slightly too high or too low.
           </InfoBanner>
