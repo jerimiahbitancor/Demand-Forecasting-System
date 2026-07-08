@@ -1,6 +1,10 @@
-venv/
+# Backend .gitignore
+node_modules/
 .env
-__pycache__/
-*.pyc
-ml/saved_models/*.joblib
 .DS_Store
+*.log
+dist/
+build/
+coverage/
+.vscode/
+.idea/

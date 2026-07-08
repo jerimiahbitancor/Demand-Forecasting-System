@@ -22,3 +22,15 @@ dist-ssr
 *.njsproj
 *.sln
 *.sw?
+
+
+# Frontend .gitignore
+node_modules/
+.env
+.DS_Store
+dist/
+build/
+*.log
+coverage/
+.vscode/
+.idea/
