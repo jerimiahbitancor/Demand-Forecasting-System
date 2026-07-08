@@ -7,8 +7,8 @@ const path = require('path');
 // Import routes
 const authRoutes = require('./routes/auth');
 const userRoutes = require('./routes/users');
-const productRoutes = require('./routes/product');
-const { supabase } = require('./config/supabase');
+const uploadRoutes = require('./routes/upload');
+const uploadsRoutes = require('./routes/uploads');
 
 // Load environment variables
 dotenv.config({ path: path.join(__dirname, '.env') });
@@ -30,6 +30,8 @@ app.use((req, res, next) => {
 // Routes
 app.use('/api/auth', authRoutes);
 app.use('/api/users', userRoutes);
+app.use('/api/upload', uploadRoutes);
+app.use('/api/uploads', uploadsRoutes);
 app.use('/api/products', productRoutes);
 
 // Health check
@@ -44,15 +46,24 @@ app.get('/api/health', (req, res) => {
 // Test Supabase connection
 app.get('/api/test-supabase', async (req, res) => {
   try {
-    const { data, error, count } = await supabase
-      .from('users')
+    const { supabase, isConfigured } = require('./config/supabase');
+    
+    if (!isConfigured) {
+      return res.status(500).json({ 
+        error: 'Supabase not configured',
+        details: 'Missing credentials in .env file'
+      });
+    }
+
+    const { data, error } = await supabase
+      .from('uploads')
       .select('*', { count: 'exact', head: true });
     
     if (error) throw error;
     
     res.json({ 
-      message: 'Supabase connection successful',
-      userCount: count || 0
+      message: '✅ Supabase connection successful',
+      uploadsCount: data?.length || 0
     });
   } catch (error) {
     res.status(500).json({ 
@@ -68,27 +79,43 @@ app.get('/', (req, res) => {
     message: 'Sales Forecasting API',
     version: '1.0.0',
     endpoints: {
-      register: 'POST /api/auth/register',
-      login: 'POST /api/auth/login',
-      users: 'GET /api/users',
-      user: 'GET /api/users/:id',
-      update: 'PUT /api/auth/update/:id',
-      changePassword: 'PUT /api/auth/change-password/:id',
+      auth: {
+        register: 'POST /api/auth/register',
+        login: 'POST /api/auth/login',
+        update: 'PUT /api/auth/update/:id',
+        changePassword: 'PUT /api/auth/change-password/:id'
+      },
+      users: {
+        getAll: 'GET /api/users',
+        getOne: 'GET /api/users/:id'
+      },
+      uploads: {
+        upload: 'POST /api/upload',
+        getAll: 'GET /api/uploads',
+        getOne: 'GET /api/uploads/:id',
+        updateStatus: 'PATCH /api/uploads/:id/status',
+        delete: 'DELETE /api/uploads/:id',
+        stats: 'GET /api/uploads/stats/summary'
+      },
       health: 'GET /api/health',
-      test: 'GET /api/test-supabase'
+      testSupabase: 'GET /api/test-supabase'
     }
   });
 });
 
+// 404 handler
 app.use((req, res) => {
   res.status(404).json({ error: 'Route not found' });
 });
 
+// Error handler
 app.use((err, req, res, next) => {
   console.error('Error:', err);
   res.status(500).json({ error: 'Something went wrong' });
 });
 
 app.listen(PORT, () => {
-  console.log(`Server running on http://localhost:${PORT}`);
+  console.log(`🚀 Server running on http://localhost:${PORT}`);
 });
+
+module.exports = app;

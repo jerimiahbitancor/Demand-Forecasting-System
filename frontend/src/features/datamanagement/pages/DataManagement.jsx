@@ -1,16 +1,90 @@
 // DataManagement.jsx
-import { useState } from "react";
-import {
-  
-} from "react-icons/fi";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import "./DataManagement.css";
 import Navbar from "../../components/Navbar/Navbar";
 import UploadData from "../components/UploadData";
+import axios from 'axios';
+
+const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:5000/api';
 
 const DataManagement = () => {
   const [uploadedFile, setUploadedFile] = useState(null);
   const [isDragging, setIsDragging] = useState(false);
   const [activeTab, setActiveTab] = useState("upload");
+  const [stats, setStats] = useState({
+    total_uploads: 0,
+    processed: 0,
+    pending: 0,
+    failed: 0,
+    sales_records: 0,      // Changed from total_rows
+    menu_items: 0,
+    last_sync: null
+  });
+  const [loading, setLoading] = useState(true);
+
+  // Get auth token from localStorage
+  const getAuthToken = () => {
+    return localStorage.getItem('token');
+  };
+
+  const apiClient = useMemo(() => axios.create({
+    baseURL: API_URL,
+    headers: {
+      'Content-Type': 'application/json',
+    }
+  }), []);
+
+  // Add token to requests
+  apiClient.interceptors.request.use(
+    (config) => {
+      const token = getAuthToken();
+      if (token) {
+        config.headers.Authorization = `Bearer ${token}`;
+      }
+      return config;
+    },
+    (error) => Promise.reject(error)
+  );
+
+  const fetchStats = useCallback(async () => {
+    try {
+      setLoading(true);
+      const response = await apiClient.get('/uploads/stats/summary');
+      
+      if (response.data.success) {
+        setStats({
+          total_uploads: response.data.data.total_uploads || 0,
+          processed: response.data.data.processed || 0,
+          pending: response.data.data.pending || 0,
+          failed: response.data.data.failed || 0,
+          sales_records: response.data.data.sales_records || 0,  // Only sales records
+          menu_items: response.data.data.menu_items || 0,
+          last_sync: response.data.data.last_sync || new Date().toISOString()
+        });
+      }
+    } catch (error) {
+      console.error('Error fetching stats:', error);
+      setStats({
+        total_uploads: 0,
+        processed: 0,
+        pending: 0,
+        failed: 0,
+        sales_records: 0,
+        menu_items: 0,
+        last_sync: new Date().toISOString()
+      });
+    } finally {
+      setLoading(false);
+    }
+  }, [apiClient]);
+
+  useEffect(() => {
+    const timeoutId = window.setTimeout(() => {
+      void fetchStats();
+    }, 0);
+
+    return () => window.clearTimeout(timeoutId);
+  }, [fetchStats]);
 
   const handleFileDrop = (e) => {
     e.preventDefault();
@@ -40,9 +114,28 @@ const DataManagement = () => {
     setIsDragging(false);
   };
 
-  const handleConfirmUpload = () => {
-    console.log("Upload confirmed");
-    alert("File uploaded successfully!");
+  const handleConfirmUpload = async (file, fileType) => {
+    try {
+      const formData = new FormData();
+      formData.append('file', file);
+      formData.append('fileType', fileType);
+
+      const response = await apiClient.post('/upload', formData, {
+        headers: {
+          'Content-Type': 'multipart/form-data'
+        }
+      });
+
+      if (response.data.success) {
+        // Refresh stats after successful upload
+        await fetchStats();
+        return response.data;
+      }
+      throw new Error('Upload failed');
+    } catch (error) {
+      console.error('Upload error:', error);
+      throw error;
+    }
   };
 
   const handleDiscard = () => {
@@ -58,9 +151,30 @@ const DataManagement = () => {
   const tabs = [
     { id: "upload", label: "Sales Data Upload" },
     { id: "mapping", label: "Menu & Ingredient Mapping" },
-        { id: "historical", label: "Historical Data Storage" },
-
+    { id: "historical", label: "Historical Data Storage" },
   ];
+
+  // Format last sync date
+  const formatLastSync = (dateString) => {
+    if (!dateString) return 'N/A';
+    try {
+      const date = new Date(dateString);
+      const now = new Date();
+      const diffHours = Math.floor((now - date) / (1000 * 60 * 60));
+      
+      if (diffHours < 1) return 'Just now';
+      if (diffHours === 1) return '1h ago';
+      if (diffHours < 24) return `${diffHours}h ago`;
+      
+      return date.toLocaleDateString('en-US', { 
+        month: 'short', 
+        day: 'numeric', 
+        year: 'numeric' 
+      });
+    } catch {
+      return 'N/A';
+    }
+  };
 
   return (
     <div className="data-management-wrapper">
@@ -78,27 +192,27 @@ const DataManagement = () => {
         </div>
 
         <div className="content-grid">
-          {/* Summary Cards */}
+          {/* Summary Cards - Dynamic */}
           <div className="summary-cards">
             <div className="summary-card">
               <div className="summary-card-content">
                 <p className="summary-label">Sales Records</p>
-                <p className="summary-val">12,450</p>
-                <p className="summary-subtext">Total Active</p>
+                <p className="summary-val">{loading ? '...' : stats.sales_records || 0}</p>
+                <p className="summary-subtext">Total Sales Rows</p>
               </div>
             </div>
             <div className="summary-card">
               <div className="summary-card-content">
                 <p className="summary-label">Menu Items</p>
-                <p className="summary-val">142</p>
+                <p className="summary-val">{loading ? '...' : stats.menu_items || 0}</p>
                 <p className="summary-subtext">Mapped Items</p>
               </div>
             </div>
             <div className="summary-card">
               <div className="summary-card-content">
                 <p className="summary-label">Last Sync</p>
-                <p className="summary-val">2h ago</p>
-                <p className="summary-subtext">June 20, 2025</p>
+                <p className="summary-val">{loading ? '...' : formatLastSync(stats.last_sync)}</p>
+                <p className="summary-subtext">{loading ? '...' : (stats.last_sync ? new Date(stats.last_sync).toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' }) : 'No uploads yet')}</p>
               </div>
             </div>
           </div>
@@ -117,6 +231,7 @@ const DataManagement = () => {
             handleConfirmUpload={handleConfirmUpload}
             handleDiscard={handleDiscard}
             handleFixIssue={handleFixIssue}
+            apiUrl={API_URL}
           />
         </div>
       </main>

@@ -98,10 +98,11 @@
 }
 
 .upload-header {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  margin-bottom: 24px;
+ display: flex;
+    flex-direction: column;
+    gap: 8px;
+    margin-bottom: 24px;
+    align-items: flex-start;
 }
 
 .upload-title {

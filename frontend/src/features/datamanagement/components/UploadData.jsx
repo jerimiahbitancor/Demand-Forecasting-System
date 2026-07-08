@@ -1,27 +1,284 @@
 // components/UploadData.jsx
-import  { useState } from "react";
+import { useState } from "react";
 import {
   FiUploadCloud,
   FiAlertCircle,
   FiCheckCircle,
+  FiXCircle,
 } from "react-icons/fi";
 import HistoricalData from "./HistoricalData";
 import MappingData from "./MappingData";
+import axios from 'axios';
+import * as XLSX from 'xlsx';
+import toast from 'react-hot-toast';
 
 const UploadData = ({
   activeTab,
   setActiveTab,
-  tabs
+  tabs,
+  apiUrl,
+  onUploadSuccess,
+  handleConfirmUpload
 }) => {
   // Sales upload state
   const [salesFile, setSalesFile] = useState(null);
   const [isSalesDragging, setIsSalesDragging] = useState(false);
-  const [salesUploadStatus, setSalesUploadStatus] = useState(null); // 'success', 'error', null
+  const [salesUploadStatus, setSalesUploadStatus] = useState(null); // 'loading', 'success', 'error'
 
   // Menu upload state
   const [menuFile, setMenuFile] = useState(null);
   const [isMenuDragging, setIsMenuDragging] = useState(false);
-  const [menuUploadStatus, setMenuUploadStatus] = useState(null); // 'success', 'error', null
+  const [menuUploadStatus, setMenuUploadStatus] = useState(null); // 'loading', 'success', 'error'
+
+  // Dynamic preview data from API
+  const [salesPreviewData, setSalesPreviewData] = useState({
+    totalRecords: 0,
+    validRecords: 0,
+    invalidRecords: 0,
+    systemMatch: "0%",
+    issues: []
+  });
+
+  const [menuPreviewData, setMenuPreviewData] = useState({
+    totalItems: 0,
+    mappedItems: 0,
+    unmappedItems: 0,
+    issues: []
+  });
+
+  // Toast container refs
+  const [salesToastId, setSalesToastId] = useState(null);
+  const [menuToastId, setMenuToastId] = useState(null);
+
+  // Get auth token
+  const getAuthToken = () => {
+    return localStorage.getItem('token');
+  };
+
+  // Axios instance
+  const apiClient = axios.create({
+    baseURL: apiUrl || 'http://localhost:5000/api',
+    headers: {
+      'Content-Type': 'application/json',
+    }
+  });
+
+  // Add token to requests
+  apiClient.interceptors.request.use(
+    (config) => {
+      const token = getAuthToken();
+      if (token) {
+        config.headers.Authorization = `Bearer ${token}`;
+      }
+      return config;
+    },
+    (error) => Promise.reject(error)
+  );
+
+  // Function to read file client-side
+  const readFileData = (file) => {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      
+      reader.onload = (e) => {
+        try {
+          let data = [];
+          const fileExtension = file.name.split('.').pop().toLowerCase();
+          
+          if (fileExtension === 'csv') {
+            const text = e.target.result;
+            const lines = text.split('\n');
+            const headers = lines[0].split(',').map(h => h.trim());
+            
+            for (let i = 1; i < lines.length; i++) {
+              if (lines[i].trim()) {
+                const values = lines[i].split(',').map(v => v.trim());
+                const row = {};
+                headers.forEach((header, index) => {
+                  row[header] = values[index] || '';
+                });
+                data.push(row);
+              }
+            }
+          } else if (fileExtension === 'xlsx' || fileExtension === 'xls') {
+            const workbook = XLSX.read(e.target.result, { type: 'array' });
+            const firstSheet = workbook.Sheets[workbook.SheetNames[0]];
+            data = XLSX.utils.sheet_to_json(firstSheet);
+          }
+          
+          resolve(data);
+        } catch (error) {
+          reject(error);
+        }
+      };
+      
+      reader.onerror = reject;
+      
+      if (file.name.endsWith('.csv')) {
+        reader.readAsText(file);
+      } else {
+        reader.readAsArrayBuffer(file);
+      }
+    });
+  };
+
+  // Validate sales data - Check for required columns
+  const validateSalesData = (data) => {
+    const errors = [];
+    let validCount = 0;
+    let invalidCount = 0;
+    
+    if (data.length === 0) {
+      return {
+        totalRows: 0,
+        validRows: 0,
+        invalidRows: 0,
+        errors: [{ row: 0, message: 'File is empty' }]
+      };
+    }
+
+    // REQUIRED columns for sales data
+    const requiredColumns = ['Date', 'Item Name', 'Item Sold', 'Category', 'Net Sales'];
+    const headers = Object.keys(data[0]);
+    
+    // Check which required columns are missing
+    const missingColumns = [];
+    requiredColumns.forEach(col => {
+      // Check if column exists (case insensitive)
+      const found = headers.some(h => h.toLowerCase() === col.toLowerCase());
+      if (!found) {
+        missingColumns.push(col);
+      }
+    });
+    
+    // If there are missing columns, show error
+    if (missingColumns.length > 0) {
+      errors.push({
+        row: 1,
+        message: `Missing required columns: ${missingColumns.join(', ')}. 
+                  Your file has: ${headers.join(', ')}. 
+                  Required columns: ${requiredColumns.join(', ')}`
+      });
+      return {
+        totalRows: data.length,
+        validRows: 0,
+        invalidRows: data.length,
+        errors: errors
+      };
+    }
+    
+    // Validate each row for required data
+    data.forEach((row, index) => {
+      const rowNumber = index + 2; // +2 because 1-indexed and header row
+      const rowErrors = [];
+      
+      // Check each required column for empty values
+      requiredColumns.forEach(col => {
+        // Find the actual column name (case insensitive)
+        const actualCol = headers.find(h => h.toLowerCase() === col.toLowerCase());
+        const value = row[actualCol];
+        
+        // Check if value is empty or null
+        if (value === undefined || value === null || value === '' || value === ' ') {
+          rowErrors.push(`${col} is empty`);
+        }
+      });
+      
+      if (rowErrors.length > 0) {
+        errors.push({
+          row: rowNumber,
+          message: rowErrors.join('; ')
+        });
+        invalidCount++;
+      } else {
+        validCount++;
+      }
+    });
+    
+    return {
+      totalRows: data.length,
+      validRows: validCount,
+      invalidRows: invalidCount,
+      errors: errors.slice(0, 10) // Limit to first 10 errors
+    };
+  };
+
+  // Validate menu data - Check for required columns
+  const validateMenuData = (data) => {
+    const errors = [];
+    let validCount = 0;
+    let invalidCount = 0;
+    
+    if (data.length === 0) {
+      return {
+        totalRows: 0,
+        validRows: 0,
+        invalidRows: 0,
+        errors: [{ row: 0, message: 'File is empty' }]
+      };
+    }
+
+    // REQUIRED columns for menu data
+// In the validateMenuData function, update requiredColumns:
+const requiredColumns = ['Product Name', 'Ingredients', 'Quantity', 'Unit', 'Price', 'Category'];    const headers = Object.keys(data[0]);
+    
+    // Check which required columns are missing
+    const missingColumns = [];
+    requiredColumns.forEach(col => {
+      const found = headers.some(h => h.toLowerCase() === col.toLowerCase());
+      if (!found) {
+        missingColumns.push(col);
+      }
+    });
+    
+    // If there are missing columns, show error
+    if (missingColumns.length > 0) {
+      errors.push({
+        row: 1,
+        message: `Missing required columns: ${missingColumns.join(', ')}. 
+                  Your file has: ${headers.join(', ')}. 
+                  Required columns: ${requiredColumns.join(', ')}`
+      });
+      return {
+        totalRows: data.length,
+        validRows: 0,
+        invalidRows: data.length,
+        errors: errors
+      };
+    }
+    
+    // Validate each row for required data
+    data.forEach((row, index) => {
+      const rowNumber = index + 2;
+      const rowErrors = [];
+      
+      requiredColumns.forEach(col => {
+        const actualCol = headers.find(h => h.toLowerCase() === col.toLowerCase());
+        const value = row[actualCol];
+        
+        if (value === undefined || value === null || value === '' || value === ' ') {
+          rowErrors.push(`${col} is empty`);
+        }
+      });
+      
+      if (rowErrors.length > 0) {
+        errors.push({
+          row: rowNumber,
+          message: rowErrors.join('; ')
+        });
+        invalidCount++;
+      } else {
+        validCount++;
+      }
+    });
+    
+    return {
+      totalRows: data.length,
+      validRows: validCount,
+      invalidRows: invalidCount,
+      errors: errors.slice(0, 10)
+    };
+  };
 
   // Sales handlers
   const handleSalesFileDrop = (e) => {
@@ -40,23 +297,46 @@ const UploadData = ({
     }
   };
 
-  const validateAndSetSalesFile = (file) => {
+  const validateAndSetSalesFile = async (file) => {
     // Validate file type
     const validTypes = ['text/csv', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', 'application/vnd.ms-excel'];
     if (!validTypes.includes(file.type) && !file.name.match(/\.(csv|xlsx)$/i)) {
-      alert('Please upload a CSV or XLSX file');
+      if (salesToastId) toast.dismiss(salesToastId);
+      const id = toast.error('Please upload a CSV or XLSX file');
+      setSalesToastId(id);
       return;
     }
 
     // Validate file size (max 20MB)
     if (file.size > 20 * 1024 * 1024) {
-      alert('File size exceeds 20MB limit');
+      if (salesToastId) toast.dismiss(salesToastId);
+      const id = toast.error('File size exceeds 20MB limit');
+      setSalesToastId(id);
       return;
     }
 
     setSalesFile(file);
     setSalesUploadStatus(null);
     console.log("Sales file uploaded:", file.name);
+
+    // Read and validate file client-side
+    try {
+      const data = await readFileData(file);
+      const validation = validateSalesData(data);
+      setSalesPreviewData({
+        totalRecords: validation.totalRows,
+        validRecords: validation.validRows,
+        invalidRecords: validation.invalidRows,
+        systemMatch: validation.totalRows > 0 ? 
+          `${Math.round((validation.validRows / validation.totalRows) * 100)}%` : '0%',
+        issues: validation.errors
+      });
+    } catch (error) {
+      console.error('Error reading file:', error);
+      if (salesToastId) toast.dismiss(salesToastId);
+      const id = toast.error('Error reading file. Please make sure it is a valid CSV or Excel file.');
+      setSalesToastId(id);
+    }
   };
 
   const handleSalesDragOver = (e) => {
@@ -69,36 +349,93 @@ const UploadData = ({
     setIsSalesDragging(false);
   };
 
-  const handleSalesConfirm = () => {
+  const handleSalesConfirm = async () => {
     if (!salesFile) {
-      alert('Please select a file first');
+      if (salesToastId) toast.dismiss(salesToastId);
+      const id = toast.error('Please select a file first');
+      setSalesToastId(id);
       return;
     }
     
-    // Simulate upload process
-    setSalesUploadStatus('loading');
-    console.log("Sales upload confirmed");
-    
-    // Simulate API call
-    setTimeout(() => {
-      setSalesUploadStatus('success');
-      alert("Sales file uploaded successfully!");
-      // Reset after 3 seconds
+    try {
+      setSalesUploadStatus('loading');
+      console.log("Sales upload confirmed");
+      
+      const response = await (handleConfirmUpload ? handleConfirmUpload(salesFile, 'sales') : apiClient.post('/upload', (() => {
+        const formData = new FormData();
+        formData.append('file', salesFile);
+        formData.append('fileType', 'sales');
+        return formData;
+      })(), {
+        headers: {
+          'Content-Type': 'multipart/form-data'
+        }
+      }));
+
+      if (response?.data?.success || response?.success) {
+        setSalesUploadStatus('success');
+        
+        const summary = response?.data?.summary || response?.summary || {};
+        setSalesPreviewData({
+          totalRecords: summary.totalRows || 0,
+          validRecords: summary.validRows || 0,
+          invalidRecords: summary.invalidRows || 0,
+          systemMatch: summary.validRows && summary.totalRows ? 
+            `${Math.round((summary.validRows / summary.totalRows) * 100)}%` : '0%',
+          issues: summary.errors || []
+        });
+        
+        // Show success toast below the preview
+        if (salesToastId) toast.dismiss(salesToastId);
+        const id = toast.success(`Sales data uploaded successfully! ${summary.validRows || 0} records processed.`);
+        setSalesToastId(id);
+        
+        if (onUploadSuccess) {
+          onUploadSuccess(response.data || response);
+        }
+        
+        // Reset after 3 seconds
+        setTimeout(() => {
+          setSalesUploadStatus(null);
+          setSalesFile(null);
+        }, 3000);
+      }
+    } catch (error) {
+      console.error('Upload error:', error);
+      setSalesUploadStatus('error');
+      
+      const errorMsg = error.response?.data?.error || error.message || 'Upload failed';
+      if (salesToastId) toast.dismiss(salesToastId);
+      const id = toast.error(`Upload failed: ${errorMsg}`);
+      setSalesToastId(id);
+      
       setTimeout(() => {
         setSalesUploadStatus(null);
       }, 3000);
-    }, 1500);
+    }
   };
 
   const handleSalesDiscard = () => {
     setSalesFile(null);
     setSalesUploadStatus(null);
+    setSalesPreviewData({
+      totalRecords: 0,
+      validRecords: 0,
+      invalidRecords: 0,
+      systemMatch: "0%",
+      issues: []
+    });
+    if (salesToastId) toast.dismiss(salesToastId);
+    const id = toast('File discarded');
+    setSalesToastId(id);
     console.log("Sales upload discarded");
   };
 
   const handleSalesFixIssue = (row) => {
     console.log(`Fixing sales issue at row ${row}`);
-    alert(`Fixing issue at row ${row}...`);
+    if (salesToastId) toast.dismiss(salesToastId);
+    const id = toast(`Fixing issue at row ${row}...`);
+    setSalesToastId(id);
   };
 
   // Menu handlers
@@ -118,23 +455,44 @@ const UploadData = ({
     }
   };
 
-  const validateAndSetMenuFile = (file) => {
+  const validateAndSetMenuFile = async (file) => {
     // Validate file type
     const validTypes = ['text/csv', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', 'application/vnd.ms-excel'];
     if (!validTypes.includes(file.type) && !file.name.match(/\.(csv|xlsx)$/i)) {
-      alert('Please upload a CSV or XLSX file');
+      if (menuToastId) toast.dismiss(menuToastId);
+      const id = toast.error('Please upload a CSV or XLSX file');
+      setMenuToastId(id);
       return;
     }
 
     // Validate file size (max 20MB)
     if (file.size > 20 * 1024 * 1024) {
-      alert('File size exceeds 20MB limit');
+      if (menuToastId) toast.dismiss(menuToastId);
+      const id = toast.error('File size exceeds 20MB limit');
+      setMenuToastId(id);
       return;
     }
 
     setMenuFile(file);
     setMenuUploadStatus(null);
     console.log("Menu file uploaded:", file.name);
+
+    // Read and validate file client-side
+    try {
+      const data = await readFileData(file);
+      const validation = validateMenuData(data);
+      setMenuPreviewData({
+        totalItems: validation.totalRows,
+        mappedItems: validation.validRows,
+        unmappedItems: validation.invalidRows,
+        issues: validation.errors
+      });
+    } catch (error) {
+      console.error('Error reading file:', error);
+      if (menuToastId) toast.dismiss(menuToastId);
+      const id = toast.error('Error reading file. Please make sure it is a valid CSV or Excel file.');
+      setMenuToastId(id);
+    }
   };
 
   const handleMenuDragOver = (e) => {
@@ -147,54 +505,85 @@ const UploadData = ({
     setIsMenuDragging(false);
   };
 
-  const handleMenuConfirm = () => {
+  const handleMenuConfirm = async () => {
     if (!menuFile) {
-      alert('Please select a file first');
+      if (menuToastId) toast.dismiss(menuToastId);
+      const id = toast.error('Please select a file first');
+      setMenuToastId(id);
       return;
     }
     
-    // Simulate upload process
-    setMenuUploadStatus('loading');
-    console.log("Menu upload confirmed");
-    
-    // Simulate API call
-    setTimeout(() => {
-      setMenuUploadStatus('success');
-      alert("Menu file uploaded successfully!");
+    try {
+      setMenuUploadStatus('loading');
+      console.log("Menu upload confirmed");
+      
+      const response = await (handleConfirmUpload ? handleConfirmUpload(menuFile, 'menu') : apiClient.post('/upload', (() => {
+        const formData = new FormData();
+        formData.append('file', menuFile);
+        formData.append('fileType', 'menu');
+        return formData;
+      })(), {
+        headers: {
+          'Content-Type': 'multipart/form-data'
+        }
+      }));
+
+      if (response?.data?.success || response?.success) {
+        setMenuUploadStatus('success');
+        
+        const summary = response?.data?.summary || response?.summary || {};
+        setMenuPreviewData({
+          totalItems: summary.totalRows || 0,
+          mappedItems: summary.validRows || 0,
+          unmappedItems: summary.invalidRows || 0,
+          issues: summary.errors || []
+        });
+        
+        // Show success toast with details
+        const productMsg = summary.productsInserted ? ` ${summary.productsInserted} products added.` : '';
+        const ingredientMsg = summary.ingredientsInserted ? ` ${summary.ingredientsInserted} ingredients added.` : '';
+        
+        if (menuToastId) toast.dismiss(menuToastId);
+        const id = toast.success(`Menu data uploaded successfully!${productMsg}${ingredientMsg}`);
+        setMenuToastId(id);
+        
+        if (onUploadSuccess) {
+          onUploadSuccess(response.data || response);
+        }
+        
+        setTimeout(() => {
+          setMenuUploadStatus(null);
+          setMenuFile(null);
+        }, 3000);
+      }
+    } catch (error) {
+      console.error('Upload error:', error);
+      setMenuUploadStatus('error');
+      
+      const errorMsg = error.response?.data?.error || error.message || 'Upload failed';
+      if (menuToastId) toast.dismiss(menuToastId);
+      const id = toast.error(`Upload failed: ${errorMsg}`);
+      setMenuToastId(id);
+      
       setTimeout(() => {
         setMenuUploadStatus(null);
       }, 3000);
-    }, 1500);
+    }
   };
 
   const handleMenuDiscard = () => {
     setMenuFile(null);
     setMenuUploadStatus(null);
+    setMenuPreviewData({
+      totalItems: 0,
+      mappedItems: 0,
+      unmappedItems: 0,
+      issues: []
+    });
+    if (menuToastId) toast.dismiss(menuToastId);
+    const id = toast('File discarded');
+    setMenuToastId(id);
     console.log("Menu upload discarded");
-  };
-
-  // Sample preview data (always shown)
-  const salesPreviewData = {
-    totalRecords: 156,
-    validRecords: 152,
-    invalidRecords: 4,
-    systemMatch: "98%",
-    issues: [
-      { row: 42, message: "Invalid Date Format" },
-      { row: 89, message: "Missing Transaction ID" },
-      { row: 112, message: "Category 'Beverage' mismatch" }
-    ]
-  };
-
-  const menuPreviewData = {
-    totalItems: 42,
-    mappedItems: 38,
-    unmappedItems: 4,
-    issues: [
-      { item: " Sisig", message: "Missing ingredient mapping" },
-      { item: "Chicken Poppers", message: "Duplicate entry" },
-      { item: "Tapsilog", message: "Category has no items" }
-    ]
   };
 
   return (
@@ -222,7 +611,7 @@ const UploadData = ({
                 <div>
                   <h2 className="upload-title">Upload New Sales Data</h2>
                   <p className="upload-subtitle">
-                    Drag and drop your sales export below.
+                    Drag and drop your sales export below. For Sales Data your file must have these columns: <strong>Date, Item Name, Item Sold, Category, Net Sales</strong>
                   </p>
                 </div>
               </div>
@@ -287,6 +676,12 @@ const UploadData = ({
                   Upload successful!
                 </div>
               )}
+              {salesUploadStatus === 'error' && (
+                <div className="upload-status error">
+                  <FiXCircle size={20} />
+                  Upload failed
+                </div>
+              )}
 
               {/* Data Preview for Sales - Always shown */}
               <div className="data-preview">
@@ -295,11 +690,11 @@ const UploadData = ({
                   <div className="preview-status">
                     <span className={`status-badge ${salesFile ? "success" : "warning"}`}>
                       <span className="status-dot"></span>
-                      {salesFile ? "File ready" : "Sample Preview"}
+                      {salesFile ? "File ready" : "No file uploaded"}
                     </span>
                     <span className="status-separator">|</span>
                     <span className="status-records">
-                      {salesPreviewData.totalRecords} records found
+                      {salesPreviewData.totalRecords || 0} records found
                     </span>
                   </div>
                 </div>
@@ -307,42 +702,46 @@ const UploadData = ({
                 <div className="preview-stats">
                   <div className="stat-box">
                     <p className="stat-label">Valid Records</p>
-                    <p className="stat-value success">{salesPreviewData.validRecords}</p>
+                    <p className="stat-value success">{salesPreviewData.validRecords || 0}</p>
                   </div>
                   <div className="stat-box">
                     <p className="stat-label">Invalid Records</p>
-                    <p className="stat-value error">{salesPreviewData.invalidRecords}</p>
+                    <p className="stat-value error">{salesPreviewData.invalidRecords || 0}</p>
                   </div>
                   <div className="stat-box">
                     <p className="stat-label">System Match</p>
-                    <p className="stat-value">{salesPreviewData.systemMatch}</p>
+                    <p className="stat-value">{salesPreviewData.systemMatch || '0%'}</p>
                   </div>
                 </div>
 
                 {/* Validation Issues */}
-                <div className="validation-issues">
-                  <div className="issues-header">
-                    <FiAlertCircle size={16} className="issues-icon" />
-                    <p className="issues-title">
-                      Validation Issues Identified
-                    </p>
+                {salesPreviewData.issues && salesPreviewData.issues.length > 0 && (
+                  <div className="validation-issues">
+                    <div className="issues-header">
+                      <FiAlertCircle size={16} className="issues-icon" />
+                      <p className="issues-title">
+                        Validation Issues Identified ({salesPreviewData.issues.length})
+                      </p>
+                    </div>
+                    <div className="issues-list">
+                      {salesPreviewData.issues.map((issue, index) => (
+                        <div className="issue-item" key={index}>
+                          <span className="issue-text">
+                            {issue.row ? `Row ${issue.row}: ` : ''}{issue.message}
+                          </span>
+                          {issue.row && issue.row > 1 && (
+                            <button
+                              className="issue-fix-btn"
+                              onClick={() => handleSalesFixIssue(issue.row)}
+                            >
+                              Fix now
+                            </button>
+                          )}
+                        </div>
+                      ))}
+                    </div>
                   </div>
-                  <div className="issues-list">
-                    {salesPreviewData.issues.map((issue, index) => (
-                      <div className="issue-item" key={index}>
-                        <span className="issue-text">
-                          Row {issue.row}: {issue.message}
-                        </span>
-                        <button
-                          className="issue-fix-btn"
-                          onClick={() => handleSalesFixIssue(issue.row)}
-                        >
-                          Fix now
-                        </button>
-                      </div>
-                    ))}
-                  </div>
-                </div>
+                )}
 
                 {/* Action Buttons */}
                 <div className="action-buttons">
@@ -372,7 +771,7 @@ const UploadData = ({
                 <div>
                   <h2 className="upload-title">Upload Menu Data</h2>
                   <p className="upload-subtitle">
-                    Drag and drop your menu mapping file below.
+                    Drag and drop your menu mapping file below. For Menu Data your file must have these columns: <strong>Product Name, Ingredients, Quantity, Unit, Price</strong>
                   </p>
                 </div>
               </div>
@@ -437,6 +836,12 @@ const UploadData = ({
                   Upload successful!
                 </div>
               )}
+              {menuUploadStatus === 'error' && (
+                <div className="upload-status error">
+                  <FiXCircle size={20} />
+                  Upload failed
+                </div>
+              )}
 
               {/* Data Preview for Menu - Always shown */}
               <div className="data-preview">
@@ -445,11 +850,11 @@ const UploadData = ({
                   <div className="preview-status">
                     <span className={`status-badge ${menuFile ? "success" : "warning"}`}>
                       <span className="status-dot"></span>
-                      {menuFile ? "File ready" : "Sample Preview"}
+                      {menuFile ? "File ready" : "No file uploaded"}
                     </span>
                     <span className="status-separator">|</span>
                     <span className="status-records">
-                      {menuPreviewData.totalItems} items found
+                      {menuPreviewData.totalItems || 0} items found
                     </span>
                   </div>
                 </div>
@@ -457,39 +862,43 @@ const UploadData = ({
                 <div className="preview-stats">
                   <div className="stat-box">
                     <p className="stat-label">Menu Items</p>
-                    <p className="stat-value success">{menuPreviewData.totalItems}</p>
+                    <p className="stat-value success">{menuPreviewData.totalItems || 0}</p>
                   </div>
                   <div className="stat-box">
                     <p className="stat-label">Mapped Items</p>
-                    <p className="stat-value">{menuPreviewData.mappedItems}</p>
+                    <p className="stat-value">{menuPreviewData.mappedItems || 0}</p>
                   </div>
                   <div className="stat-box">
                     <p className="stat-label">Unmapped</p>
-                    <p className="stat-value error">{menuPreviewData.unmappedItems}</p>
+                    <p className="stat-value error">{menuPreviewData.unmappedItems || 0}</p>
                   </div>
                 </div>
 
                 {/* Menu Validation Issues */}
-                <div className="validation-issues">
-                  <div className="issues-header">
-                    <FiAlertCircle size={16} className="issues-icon" />
-                    <p className="issues-title">
-                      Mapping Issues Found
-                    </p>
+                {menuPreviewData.issues && menuPreviewData.issues.length > 0 && (
+                  <div className="validation-issues">
+                    <div className="issues-header">
+                      <FiAlertCircle size={16} className="issues-icon" />
+                      <p className="issues-title">
+                        Mapping Issues Found ({menuPreviewData.issues.length})
+                      </p>
+                    </div>
+                    <div className="issues-list">
+                      {menuPreviewData.issues.map((issue, index) => (
+                        <div className="issue-item" key={index}>
+                          <span className="issue-text">
+                            {issue.row ? `Row ${issue.row}: ` : ''}{issue.message}
+                          </span>
+                          {issue.row && issue.row > 1 && (
+                            <button className="issue-fix-btn">
+                              Fix now
+                            </button>
+                          )}
+                        </div>
+                      ))}
+                    </div>
                   </div>
-                  <div className="issues-list">
-                    {menuPreviewData.issues.map((issue, index) => (
-                      <div className="issue-item" key={index}>
-                        <span className="issue-text">
-                          Item '{issue.item}': {issue.message}
-                        </span>
-                        <button className="issue-fix-btn">
-                          Fix now
-                        </button>
-                      </div>
-                    ))}
-                  </div>
-                </div>
+                )}
 
                 {/* Action Buttons */}
                 <div className="action-buttons">
