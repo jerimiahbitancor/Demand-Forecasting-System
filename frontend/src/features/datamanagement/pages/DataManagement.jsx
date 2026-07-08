@@ -1,14 +1,11 @@
 // DataManagement.jsx
-import { useState, useEffect } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import "./DataManagement.css";
 import Navbar from "../../components/Navbar/Navbar";
 import UploadData from "../components/UploadData";
 import axios from 'axios';
 
-// Use environment variable with fallback
-const API_URL = typeof process !== 'undefined' && process.env && process.env.REACT_APP_API_URL 
-  ? process.env.REACT_APP_API_URL 
-  : 'http://localhost:5000/api';
+const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:5000/api';
 
 const DataManagement = () => {
   const [uploadedFile, setUploadedFile] = useState(null);
@@ -19,7 +16,7 @@ const DataManagement = () => {
     processed: 0,
     pending: 0,
     failed: 0,
-    total_rows: 0,
+    sales_records: 0,      // Changed from total_rows
     menu_items: 0,
     last_sync: null
   });
@@ -30,13 +27,12 @@ const DataManagement = () => {
     return localStorage.getItem('token');
   };
 
-  // Axios instance with auth header
-  const apiClient = axios.create({
+  const apiClient = useMemo(() => axios.create({
     baseURL: API_URL,
     headers: {
       'Content-Type': 'application/json',
     }
-  });
+  }), []);
 
   // Add token to requests
   apiClient.interceptors.request.use(
@@ -50,8 +46,7 @@ const DataManagement = () => {
     (error) => Promise.reject(error)
   );
 
-  // Fetch upload statistics
-  const fetchStats = async () => {
+  const fetchStats = useCallback(async () => {
     try {
       setLoading(true);
       const response = await apiClient.get('/uploads/stats/summary');
@@ -62,31 +57,34 @@ const DataManagement = () => {
           processed: response.data.data.processed || 0,
           pending: response.data.data.pending || 0,
           failed: response.data.data.failed || 0,
-          total_rows: response.data.data.total_rows || 0,
-          menu_items: response.data.data.menu_items || 0, // Default if not available
+          sales_records: response.data.data.sales_records || 0,  // Only sales records
+          menu_items: response.data.data.menu_items || 0,
           last_sync: response.data.data.last_sync || new Date().toISOString()
         });
       }
     } catch (error) {
       console.error('Error fetching stats:', error);
-      // Keep default values if API fails
       setStats({
         total_uploads: 0,
         processed: 0,
         pending: 0,
         failed: 0,
-        total_rows: 0,
+        sales_records: 0,
         menu_items: 0,
         last_sync: new Date().toISOString()
       });
     } finally {
       setLoading(false);
     }
-  };
+  }, [apiClient]);
 
   useEffect(() => {
-    fetchStats();
-  }, []);
+    const timeoutId = window.setTimeout(() => {
+      void fetchStats();
+    }, 0);
+
+    return () => window.clearTimeout(timeoutId);
+  }, [fetchStats]);
 
   const handleFileDrop = (e) => {
     e.preventDefault();
@@ -199,8 +197,8 @@ const DataManagement = () => {
             <div className="summary-card">
               <div className="summary-card-content">
                 <p className="summary-label">Sales Records</p>
-                <p className="summary-val">{loading ? '...' : stats.total_rows || 0}</p>
-                <p className="summary-subtext">Total Active</p>
+                <p className="summary-val">{loading ? '...' : stats.sales_records || 0}</p>
+                <p className="summary-subtext">Total Sales Rows</p>
               </div>
             </div>
             <div className="summary-card">
@@ -214,7 +212,7 @@ const DataManagement = () => {
               <div className="summary-card-content">
                 <p className="summary-label">Last Sync</p>
                 <p className="summary-val">{loading ? '...' : formatLastSync(stats.last_sync)}</p>
-                <p className="summary-subtext">{loading ? '...' : new Date(stats.last_sync || Date.now()).toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' })}</p>
+                <p className="summary-subtext">{loading ? '...' : (stats.last_sync ? new Date(stats.last_sync).toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' }) : 'No uploads yet')}</p>
               </div>
             </div>
           </div>

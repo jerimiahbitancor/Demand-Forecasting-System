@@ -1,3 +1,4 @@
+// services/fileProcessor.js
 const xlsx = require('xlsx');
 const csv = require('csv-parser');
 const { createReadStream } = require('fs');
@@ -56,20 +57,62 @@ class FileProcessor {
     let validCount = 0;
     let invalidCount = 0;
 
+    if (data.length === 0) {
+      return {
+        totalRows: 0,
+        validRows: 0,
+        invalidRows: 0,
+        errors: [{ row: 0, message: 'File is empty' }]
+      };
+    }
+
+    const headers = Object.keys(data[0]);
+    const lowerHeaders = headers.map(h => h.toLowerCase());
+
     // Different validation rules based on file type
     switch(fileType) {
-      case 'sales':
+      case 'sales': {
+        // Required columns for sales
+        const requiredColumns = ['Date', 'Item Name', 'Item Sold', 'Category', 'Net Sales'];
+        const missingColumns = [];
+        
+        requiredColumns.forEach(col => {
+          const found = headers.some(h => h.toLowerCase() === col.toLowerCase());
+          if (!found) {
+            missingColumns.push(col);
+          }
+        });
+
+        if (missingColumns.length > 0) {
+          errors.push({
+            row: 1,
+            message: `Missing required columns: ${missingColumns.join(', ')}. Found: ${headers.join(', ')}`
+          });
+          return {
+            totalRows: data.length,
+            validRows: 0,
+            invalidRows: data.length,
+            errors: errors
+          };
+        }
+
+        // Validate each row
         data.forEach((row, index) => {
-          // Check for required fields (case insensitive)
-          const rowKeys = Object.keys(row).map(k => k.toLowerCase());
-          const hasDate = rowKeys.some(k => k.includes('date'));
-          const hasTransaction = rowKeys.some(k => k.includes('transaction') || k.includes('id'));
-          const hasAmount = rowKeys.some(k => k.includes('amount') || k.includes('sales') || k.includes('revenue'));
+          const rowNumber = index + 2;
+          const rowErrors = [];
           
-          if (!hasDate || !hasTransaction || !hasAmount) {
-            errors.push({ 
-              row: index + 2, 
-              message: 'Missing required fields (date, transaction_id, sales_amount)' 
+          requiredColumns.forEach(col => {
+            const actualCol = headers.find(h => h.toLowerCase() === col.toLowerCase());
+            const value = row[actualCol];
+            if (value === undefined || value === null || value === '' || value === ' ') {
+              rowErrors.push(`${col} is empty`);
+            }
+          });
+
+          if (rowErrors.length > 0) {
+            errors.push({
+              row: rowNumber,
+              message: rowErrors.join('; ')
             });
             invalidCount++;
           } else {
@@ -77,17 +120,84 @@ class FileProcessor {
           }
         });
         break;
-      case 'menu':
+      }
+
+      case 'menu': {
+        // Required columns for menu
+        const requiredColumns = ['Product Name', 'Ingredients', 'Quantity', 'Unit', 'Price'];
+        const missingColumns = [];
+        
+        requiredColumns.forEach(col => {
+          const found = headers.some(h => h.toLowerCase() === col.toLowerCase());
+          if (!found) {
+            missingColumns.push(col);
+          }
+        });
+
+        if (missingColumns.length > 0) {
+          errors.push({
+            row: 1,
+            message: `Missing required columns: ${missingColumns.join(', ')}. Found: ${headers.join(', ')}`
+          });
+          return {
+            totalRows: data.length,
+            validRows: 0,
+            invalidRows: data.length,
+            errors: errors
+          };
+        }
+
+        // Validate each row
         data.forEach((row, index) => {
-          const rowKeys = Object.keys(row).map(k => k.toLowerCase());
-          const hasItem = rowKeys.some(k => k.includes('item') || k.includes('name') || k.includes('product'));
-          const hasCategory = rowKeys.some(k => k.includes('category') || k.includes('type'));
-          const hasPrice = rowKeys.some(k => k.includes('price') || k.includes('cost') || k.includes('amount'));
+          const rowNumber = index + 2;
+          const rowErrors = [];
           
-          if (!hasItem || !hasCategory || !hasPrice) {
-            errors.push({ 
-              row: index + 2, 
-              message: 'Missing required fields (item_name, category, price)' 
+          // Get actual column names (case insensitive)
+          const productNameCol = headers.find(h => h.toLowerCase() === 'product name');
+          const ingredientsCol = headers.find(h => h.toLowerCase() === 'ingredients');
+          const quantityCol = headers.find(h => h.toLowerCase() === 'quantity');
+          const unitCol = headers.find(h => h.toLowerCase() === 'unit');
+          const priceCol = headers.find(h => h.toLowerCase() === 'price');
+
+          const productName = row[productNameCol];
+          const ingredients = row[ingredientsCol];
+          const quantity = row[quantityCol];
+          const unit = row[unitCol];
+          const price = row[priceCol];
+
+          // Validate Product Name
+          if (!productName || productName.toString().trim() === '') {
+            rowErrors.push('Product Name is empty');
+          }
+
+          // Validate Ingredients
+          if (!ingredients || ingredients.toString().trim() === '') {
+            rowErrors.push('Ingredients is empty');
+          }
+
+          // Validate Quantity (must be a number)
+          if (!quantity || quantity.toString().trim() === '') {
+            rowErrors.push('Quantity is empty');
+          } else if (isNaN(parseFloat(quantity))) {
+            rowErrors.push('Quantity must be a valid number');
+          }
+
+          // Validate Unit
+          if (!unit || unit.toString().trim() === '') {
+            rowErrors.push('Unit is empty');
+          }
+
+          // Validate Price (must be a number)
+          if (!price || price.toString().trim() === '') {
+            rowErrors.push('Price is empty');
+          } else if (isNaN(parseFloat(price))) {
+            rowErrors.push('Price must be a valid number');
+          }
+
+          if (rowErrors.length > 0) {
+            errors.push({
+              row: rowNumber,
+              message: rowErrors.join('; ')
             });
             invalidCount++;
           } else {
@@ -95,16 +205,57 @@ class FileProcessor {
           }
         });
         break;
-      case 'historical':
+      }
+
+      case 'historical': {
+        // Required columns for historical
+        const requiredColumns = ['Date', 'Sales Volume'];
+        const missingColumns = [];
+        
+        requiredColumns.forEach(col => {
+          const found = headers.some(h => h.toLowerCase() === col.toLowerCase());
+          if (!found) {
+            missingColumns.push(col);
+          }
+        });
+
+        if (missingColumns.length > 0) {
+          errors.push({
+            row: 1,
+            message: `Missing required columns: ${missingColumns.join(', ')}. Found: ${headers.join(', ')}`
+          });
+          return {
+            totalRows: data.length,
+            validRows: 0,
+            invalidRows: data.length,
+            errors: errors
+          };
+        }
+
         data.forEach((row, index) => {
-          const rowKeys = Object.keys(row).map(k => k.toLowerCase());
-          const hasDate = rowKeys.some(k => k.includes('date'));
-          const hasVolume = rowKeys.some(k => k.includes('sales') || k.includes('volume') || k.includes('amount'));
+          const rowNumber = index + 2;
+          const rowErrors = [];
           
-          if (!hasDate || !hasVolume) {
-            errors.push({ 
-              row: index + 2, 
-              message: 'Missing required fields (date, sales_volume)' 
+          const dateCol = headers.find(h => h.toLowerCase() === 'date');
+          const volumeCol = headers.find(h => h.toLowerCase() === 'sales volume');
+          
+          const date = row[dateCol];
+          const volume = row[volumeCol];
+
+          if (!date || date.toString().trim() === '') {
+            rowErrors.push('Date is empty');
+          }
+
+          if (!volume || volume.toString().trim() === '') {
+            rowErrors.push('Sales Volume is empty');
+          } else if (isNaN(parseFloat(volume))) {
+            rowErrors.push('Sales Volume must be a valid number');
+          }
+
+          if (rowErrors.length > 0) {
+            errors.push({
+              row: rowNumber,
+              message: rowErrors.join('; ')
             });
             invalidCount++;
           } else {
@@ -112,8 +263,12 @@ class FileProcessor {
           }
         });
         break;
-      default:
+      }
+
+      default: {
+        // No validation for unknown types
         validCount = data.length;
+      }
     }
 
     return {
@@ -122,6 +277,17 @@ class FileProcessor {
       invalidRows: invalidCount,
       errors: errors.slice(0, 10) // Limit to first 10 errors
     };
+  }
+
+  // Helper method to get column names case-insensitively
+  getColumnNames(data) {
+    if (data.length === 0) return [];
+    return Object.keys(data[0]);
+  }
+
+  // Helper method to find column case-insensitively
+  findColumn(headers, columnName) {
+    return headers.find(h => h.toLowerCase() === columnName.toLowerCase());
   }
 }
 

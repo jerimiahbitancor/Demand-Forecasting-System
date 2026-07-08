@@ -1,3 +1,4 @@
+// routes/uploads.js
 const express = require('express');
 const router = express.Router();
 const uploadService = require('../services/uploadService');

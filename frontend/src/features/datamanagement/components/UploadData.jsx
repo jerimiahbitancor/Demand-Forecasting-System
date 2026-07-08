@@ -1,5 +1,5 @@
 // components/UploadData.jsx
-import { useState, useEffect } from "react";
+import { useState } from "react";
 import {
   FiUploadCloud,
   FiAlertCircle,
@@ -10,13 +10,15 @@ import HistoricalData from "./HistoricalData";
 import MappingData from "./MappingData";
 import axios from 'axios';
 import * as XLSX from 'xlsx';
+import toast from 'react-hot-toast';
 
 const UploadData = ({
   activeTab,
   setActiveTab,
   tabs,
   apiUrl,
-  onUploadSuccess
+  onUploadSuccess,
+  handleConfirmUpload
 }) => {
   // Sales upload state
   const [salesFile, setSalesFile] = useState(null);
@@ -43,6 +45,10 @@ const UploadData = ({
     unmappedItems: 0,
     issues: []
   });
+
+  // Toast container refs
+  const [salesToastId, setSalesToastId] = useState(null);
+  const [menuToastId, setMenuToastId] = useState(null);
 
   // Get auth token
   const getAuthToken = () => {
@@ -213,8 +219,8 @@ const UploadData = ({
     }
 
     // REQUIRED columns for menu data
-    const requiredColumns = ['Product Name', 'Ingredients', 'Quantity', 'Unit', 'Price'];
-    const headers = Object.keys(data[0]);
+// In the validateMenuData function, update requiredColumns:
+const requiredColumns = ['Product Name', 'Ingredients', 'Quantity', 'Unit', 'Price', 'Category'];    const headers = Object.keys(data[0]);
     
     // Check which required columns are missing
     const missingColumns = [];
@@ -295,13 +301,17 @@ const UploadData = ({
     // Validate file type
     const validTypes = ['text/csv', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', 'application/vnd.ms-excel'];
     if (!validTypes.includes(file.type) && !file.name.match(/\.(csv|xlsx)$/i)) {
-      alert('Please upload a CSV or XLSX file');
+      if (salesToastId) toast.dismiss(salesToastId);
+      const id = toast.error('Please upload a CSV or XLSX file');
+      setSalesToastId(id);
       return;
     }
 
     // Validate file size (max 20MB)
     if (file.size > 20 * 1024 * 1024) {
-      alert('File size exceeds 20MB limit');
+      if (salesToastId) toast.dismiss(salesToastId);
+      const id = toast.error('File size exceeds 20MB limit');
+      setSalesToastId(id);
       return;
     }
 
@@ -323,7 +333,9 @@ const UploadData = ({
       });
     } catch (error) {
       console.error('Error reading file:', error);
-      alert('Error reading file. Please make sure it\'s a valid CSV or Excel file.');
+      if (salesToastId) toast.dismiss(salesToastId);
+      const id = toast.error('Error reading file. Please make sure it is a valid CSV or Excel file.');
+      setSalesToastId(id);
     }
   };
 
@@ -339,7 +351,9 @@ const UploadData = ({
 
   const handleSalesConfirm = async () => {
     if (!salesFile) {
-      alert('Please select a file first');
+      if (salesToastId) toast.dismiss(salesToastId);
+      const id = toast.error('Please select a file first');
+      setSalesToastId(id);
       return;
     }
     
@@ -347,32 +361,37 @@ const UploadData = ({
       setSalesUploadStatus('loading');
       console.log("Sales upload confirmed");
       
-      const formData = new FormData();
-      formData.append('file', salesFile);
-      formData.append('fileType', 'sales');
-
-      const response = await apiClient.post('/upload', formData, {
+      const response = await (handleConfirmUpload ? handleConfirmUpload(salesFile, 'sales') : apiClient.post('/upload', (() => {
+        const formData = new FormData();
+        formData.append('file', salesFile);
+        formData.append('fileType', 'sales');
+        return formData;
+      })(), {
         headers: {
           'Content-Type': 'multipart/form-data'
         }
-      });
+      }));
 
-      if (response.data.success) {
+      if (response?.data?.success || response?.success) {
         setSalesUploadStatus('success');
         
-        // Update preview with real data from backend
+        const summary = response?.data?.summary || response?.summary || {};
         setSalesPreviewData({
-          totalRecords: response.data.summary.totalRows || 0,
-          validRecords: response.data.summary.validRows || 0,
-          invalidRecords: response.data.summary.invalidRows || 0,
-          systemMatch: response.data.summary.validRows && response.data.summary.totalRows ? 
-            `${Math.round((response.data.summary.validRows / response.data.summary.totalRows) * 100)}%` : '0%',
-          issues: response.data.summary.errors || []
+          totalRecords: summary.totalRows || 0,
+          validRecords: summary.validRows || 0,
+          invalidRecords: summary.invalidRows || 0,
+          systemMatch: summary.validRows && summary.totalRows ? 
+            `${Math.round((summary.validRows / summary.totalRows) * 100)}%` : '0%',
+          issues: summary.errors || []
         });
         
-        // Notify parent
+        // Show success toast below the preview
+        if (salesToastId) toast.dismiss(salesToastId);
+        const id = toast.success(`Sales data uploaded successfully! ${summary.validRows || 0} records processed.`);
+        setSalesToastId(id);
+        
         if (onUploadSuccess) {
-          onUploadSuccess(response.data);
+          onUploadSuccess(response.data || response);
         }
         
         // Reset after 3 seconds
@@ -386,7 +405,9 @@ const UploadData = ({
       setSalesUploadStatus('error');
       
       const errorMsg = error.response?.data?.error || error.message || 'Upload failed';
-      alert(`Upload failed: ${errorMsg}`);
+      if (salesToastId) toast.dismiss(salesToastId);
+      const id = toast.error(`Upload failed: ${errorMsg}`);
+      setSalesToastId(id);
       
       setTimeout(() => {
         setSalesUploadStatus(null);
@@ -404,12 +425,17 @@ const UploadData = ({
       systemMatch: "0%",
       issues: []
     });
+    if (salesToastId) toast.dismiss(salesToastId);
+    const id = toast('File discarded');
+    setSalesToastId(id);
     console.log("Sales upload discarded");
   };
 
   const handleSalesFixIssue = (row) => {
     console.log(`Fixing sales issue at row ${row}`);
-    alert(`Fixing issue at row ${row}...`);
+    if (salesToastId) toast.dismiss(salesToastId);
+    const id = toast(`Fixing issue at row ${row}...`);
+    setSalesToastId(id);
   };
 
   // Menu handlers
@@ -433,13 +459,17 @@ const UploadData = ({
     // Validate file type
     const validTypes = ['text/csv', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', 'application/vnd.ms-excel'];
     if (!validTypes.includes(file.type) && !file.name.match(/\.(csv|xlsx)$/i)) {
-      alert('Please upload a CSV or XLSX file');
+      if (menuToastId) toast.dismiss(menuToastId);
+      const id = toast.error('Please upload a CSV or XLSX file');
+      setMenuToastId(id);
       return;
     }
 
     // Validate file size (max 20MB)
     if (file.size > 20 * 1024 * 1024) {
-      alert('File size exceeds 20MB limit');
+      if (menuToastId) toast.dismiss(menuToastId);
+      const id = toast.error('File size exceeds 20MB limit');
+      setMenuToastId(id);
       return;
     }
 
@@ -459,7 +489,9 @@ const UploadData = ({
       });
     } catch (error) {
       console.error('Error reading file:', error);
-      alert('Error reading file. Please make sure it\'s a valid CSV or Excel file.');
+      if (menuToastId) toast.dismiss(menuToastId);
+      const id = toast.error('Error reading file. Please make sure it is a valid CSV or Excel file.');
+      setMenuToastId(id);
     }
   };
 
@@ -475,7 +507,9 @@ const UploadData = ({
 
   const handleMenuConfirm = async () => {
     if (!menuFile) {
-      alert('Please select a file first');
+      if (menuToastId) toast.dismiss(menuToastId);
+      const id = toast.error('Please select a file first');
+      setMenuToastId(id);
       return;
     }
     
@@ -483,28 +517,38 @@ const UploadData = ({
       setMenuUploadStatus('loading');
       console.log("Menu upload confirmed");
       
-      const formData = new FormData();
-      formData.append('file', menuFile);
-      formData.append('fileType', 'menu');
-
-      const response = await apiClient.post('/upload', formData, {
+      const response = await (handleConfirmUpload ? handleConfirmUpload(menuFile, 'menu') : apiClient.post('/upload', (() => {
+        const formData = new FormData();
+        formData.append('file', menuFile);
+        formData.append('fileType', 'menu');
+        return formData;
+      })(), {
         headers: {
           'Content-Type': 'multipart/form-data'
         }
-      });
+      }));
 
-      if (response.data.success) {
+      if (response?.data?.success || response?.success) {
         setMenuUploadStatus('success');
         
+        const summary = response?.data?.summary || response?.summary || {};
         setMenuPreviewData({
-          totalItems: response.data.summary.totalRows || 0,
-          mappedItems: response.data.summary.validRows || 0,
-          unmappedItems: response.data.summary.invalidRows || 0,
-          issues: response.data.summary.errors || []
+          totalItems: summary.totalRows || 0,
+          mappedItems: summary.validRows || 0,
+          unmappedItems: summary.invalidRows || 0,
+          issues: summary.errors || []
         });
         
+        // Show success toast with details
+        const productMsg = summary.productsInserted ? ` ${summary.productsInserted} products added.` : '';
+        const ingredientMsg = summary.ingredientsInserted ? ` ${summary.ingredientsInserted} ingredients added.` : '';
+        
+        if (menuToastId) toast.dismiss(menuToastId);
+        const id = toast.success(`Menu data uploaded successfully!${productMsg}${ingredientMsg}`);
+        setMenuToastId(id);
+        
         if (onUploadSuccess) {
-          onUploadSuccess(response.data);
+          onUploadSuccess(response.data || response);
         }
         
         setTimeout(() => {
@@ -517,7 +561,9 @@ const UploadData = ({
       setMenuUploadStatus('error');
       
       const errorMsg = error.response?.data?.error || error.message || 'Upload failed';
-      alert(`Upload failed: ${errorMsg}`);
+      if (menuToastId) toast.dismiss(menuToastId);
+      const id = toast.error(`Upload failed: ${errorMsg}`);
+      setMenuToastId(id);
       
       setTimeout(() => {
         setMenuUploadStatus(null);
@@ -534,6 +580,9 @@ const UploadData = ({
       unmappedItems: 0,
       issues: []
     });
+    if (menuToastId) toast.dismiss(menuToastId);
+    const id = toast('File discarded');
+    setMenuToastId(id);
     console.log("Menu upload discarded");
   };
 
@@ -685,7 +734,7 @@ const UploadData = ({
                               className="issue-fix-btn"
                               onClick={() => handleSalesFixIssue(issue.row)}
                             >
-                            
+                              Fix now
                             </button>
                           )}
                         </div>
@@ -842,7 +891,7 @@ const UploadData = ({
                           </span>
                           {issue.row && issue.row > 1 && (
                             <button className="issue-fix-btn">
-                            
+                              Fix now
                             </button>
                           )}
                         </div>

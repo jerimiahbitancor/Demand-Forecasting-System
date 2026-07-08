@@ -1,3 +1,4 @@
+// server.js
 const express = require('express');
 const cors = require('cors');
 const dotenv = require('dotenv');
@@ -44,7 +45,15 @@ app.get('/api/health', (req, res) => {
 // Test Supabase connection
 app.get('/api/test-supabase', async (req, res) => {
   try {
-    const supabase = require('./config/supabase');
+    const { supabase, isConfigured } = require('./config/supabase');
+    
+    if (!isConfigured) {
+      return res.status(500).json({ 
+        error: 'Supabase not configured',
+        details: 'Missing credentials in .env file'
+      });
+    }
+
     const { data, error } = await supabase
       .from('uploads')
       .select('*', { count: 'exact', head: true });
@@ -52,7 +61,7 @@ app.get('/api/test-supabase', async (req, res) => {
     if (error) throw error;
     
     res.json({ 
-      message: 'Supabase connection successful',
+      message: '✅ Supabase connection successful',
       uploadsCount: data?.length || 0
     });
   } catch (error) {
@@ -105,8 +114,7 @@ app.use((err, req, res, next) => {
 });
 
 app.listen(PORT, () => {
-  console.log(`Server running on http://localhost:${PORT}`);
-  console.log(`Upload directory: ${path.join(__dirname, 'uploads')}`);
+  console.log(`🚀 Server running on http://localhost:${PORT}`);
 });
 
 module.exports = app;
