@@ -8,7 +8,6 @@ const authenticate = require('../middleware/auth');
 const fileProcessor = require('../services/fileProcessor');
 const uploadService = require('../services/uploadService');
 const menuService = require('../services/menuService');
-const fs = require('fs');
 
 // Upload file endpoint (protected)
 router.post(
@@ -30,10 +29,11 @@ router.post(
 
       console.log('📄 Processing file:', file.originalname, 'Type:', fileType);
 
-      // Process file
+      // Process file from memory buffer
       const processedData = await fileProcessor.processFile(
-        file.path,
-        file.originalname
+        file.buffer,
+        file.originalname,
+        file.mimetype
       );
 
       console.log('📊 File processed:', processedData.rowCount, 'rows');
@@ -46,19 +46,18 @@ router.post(
         // Process menu data - insert into products and product_ingredients ONLY
         result = await menuService.processMenuData(processedData.data);
         
-        // DO NOT save menu uploads to uploads table
-        // Only log the result
-        console.log('✅ Menu data processed:', result);
-        
-        // Clean up file
-        if (fs.existsSync(file.path)) {
-          fs.unlinkSync(file.path);
-        }
+        console.log('✅ Menu data processed:', {
+          totalRows: result.validation.totalRows,
+          validRows: result.validation.validRows,
+          invalidRows: result.validation.invalidRows,
+          productsInserted: result.productsInserted || 0,
+          ingredientsInserted: result.ingredientsInserted || 0
+        });
 
         return res.status(201).json({
           success: true,
           message: 'Menu data uploaded and processed successfully',
-          uploadId: null, // No upload ID for menu data
+          uploadId: null,
           summary: {
             totalRows: result.validation.totalRows,
             validRows: result.validation.validRows,
@@ -75,9 +74,8 @@ router.post(
 
         uploadId = await uploadService.saveUploadRecord(
           {
-            filename: file.filename,
+            filename: file.filename || `${Date.now()}-${file.originalname}`,
             originalName: file.originalname,
-            path: file.path,
             size: file.size,
             type: file.mimetype
           },
@@ -89,11 +87,6 @@ router.post(
           },
           userId
         );
-
-        // Clean up file
-        if (fs.existsSync(file.path)) {
-          fs.unlinkSync(file.path);
-        }
 
         return res.status(201).json({
           success: true,
@@ -111,12 +104,8 @@ router.post(
     } catch (error) {
       console.error('❌ Upload error:', error);
       
-      // Clean up file on error
-      if (req.file && fs.existsSync(req.file.path)) {
-        fs.unlinkSync(req.file.path);
-      }
-
       res.status(500).json({ 
+        success: false,
         error: 'Failed to process upload',
         details: error.message 
       });

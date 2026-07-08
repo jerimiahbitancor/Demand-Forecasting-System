@@ -1,6 +1,6 @@
 // components/Navbar.jsx
 import { useState, useEffect } from 'react';
-import { NavLink, useNavigate, useLocation } from 'react-router-dom';
+import { NavLink, useNavigate, } from 'react-router-dom';
 import Swal from 'sweetalert2';
 import { useAuth } from '../../../context/AuthContext';
 import { 
@@ -9,10 +9,10 @@ import {
   FaChartPie,
   FaChevronDown,
   FaCog,
-  FaRegBell,
   FaRegQuestionCircle,
   FaUser
 } from 'react-icons/fa';
+import NotificationDropdown from '../Notification/NotificationDropdown';
 import './Navbar.css';
 
 const Navbar = () => {
@@ -20,12 +20,7 @@ const Navbar = () => {
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
   const [isMobileProfileOpen, setIsMobileProfileOpen] = useState(false);
   const navigate = useNavigate();
-  const location = useLocation();
   const { logout, user } = useAuth();
-
-  // Check if any analytics sub-route is active
-  const isAnalyticsActive = location.pathname === '/forecasting' || 
-                           location.pathname === '/product-performance';
 
   // Close dropdown when clicking outside
   useEffect(() => {
@@ -163,12 +158,13 @@ const Navbar = () => {
 
       {/* Header Actions */}
       <div className="navbar-actions">
-        <button className="action-btn" aria-label="Notifications">
-          <FaRegBell className="action-icon" />
-        </button>
+        {/* Notification Dropdown Component */}
+        <NotificationDropdown />
+
         <button className="action-btn" aria-label="Help">
           <FaRegQuestionCircle className="action-icon" />
         </button>
+
         <div className="nav-dropdown">
           <button className="profile-section" type="button" onClick={toggleDropdown}>
             <div className="profile-avatar">

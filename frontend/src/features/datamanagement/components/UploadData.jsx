@@ -877,7 +877,7 @@ const UploadData = ({
                   <div className="preview-status">
                     <span className={`status-badge ${salesValidated ? "success" : salesFile ? "warning" : "warning"}`}>
                       <span className="status-dot"></span>
-                      {salesValidated ? "✅ Validated" : salesFile ? "⚠️ Needs Review" : "No file uploaded"}
+                      {salesValidated ? "Validated" : salesFile ? "Needs Review" : "No file uploaded"}
                     </span>
                     <span className="status-separator">|</span>
                     <span className="status-records">
@@ -1040,7 +1040,7 @@ const UploadData = ({
                   <div className="preview-status">
                     <span className={`status-badge ${menuValidated ? "success" : menuFile ? "warning" : "warning"}`}>
                       <span className="status-dot"></span>
-                      {menuValidated ? "✅ Validated" : menuFile ? "⚠️ Needs Review" : "No file uploaded"}
+                      {menuValidated ? "Validated" : menuFile ? "Needs Review" : "No file uploaded"}
                     </span>
                     <span className="status-separator">|</span>
                     <span className="status-records">
