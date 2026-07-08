@@ -1,16 +1,20 @@
-// register.jsx - Updated to use global styles
-import{ useState } from 'react';
-import { Link } from 'react-router-dom';
+// register.jsx
+import { useState } from 'react';
+import { Link, useNavigate } from 'react-router-dom';
 import { 
   FaUser, 
   FaEnvelope, 
   FaLock, 
-  FaKey
- 
+  FaKey,
+  FaSpinner
 } from 'react-icons/fa';
+import { useAuth } from '../../../../context/AuthContext';
 import './Register.css';
 
 const Register = () => {
+  const navigate = useNavigate();
+  const { register, loading } = useAuth();
+  
   const [formData, setFormData] = useState({
     fullName: '',
     email: '',
@@ -21,6 +25,7 @@ const Register = () => {
 
   const [focusedInput, setFocusedInput] = useState(null);
   const [errors, setErrors] = useState({});
+  const [error, setError] = useState('');
 
   const handleChange = (e) => {
     const { id, value, type, checked } = e.target;
@@ -31,6 +36,7 @@ const Register = () => {
     if (errors[id]) {
       setErrors((prev) => ({ ...prev, [id]: '' }));
     }
+    setError('');
   };
 
   const validateForm = () => {
@@ -38,6 +44,8 @@ const Register = () => {
     
     if (!formData.fullName.trim()) {
       newErrors.fullName = 'Full name is required';
+    } else if (formData.fullName.length < 2) {
+      newErrors.fullName = 'Name must be at least 2 characters';
     }
     
     if (!formData.email.trim()) {
@@ -50,6 +58,8 @@ const Register = () => {
       newErrors.password = 'Password is required';
     } else if (formData.password.length < 6) {
       newErrors.password = 'Password must be at least 6 characters';
+    } else if (!/(?=.*[A-Z])/.test(formData.password)) {
+      newErrors.password = 'Password must contain at least one uppercase letter';
     }
     
     if (!formData.confirmPassword) {
@@ -66,20 +76,30 @@ const Register = () => {
     return Object.keys(newErrors).length === 0;
   };
 
-  const handleSubmit = (e) => {
+  const handleSubmit = async (e) => {
     e.preventDefault();
+    setError('');
+    
     if (validateForm()) {
-      console.log('Form submitted:', formData);
-      alert('Registration successful!');
+      const result = await register({
+        fullName: formData.fullName,
+        email: formData.email,
+        password: formData.password,
+      });
+      
+      if (result.success) {
+        // Redirect to login or dashboard
+        navigate('/login', { 
+          state: { message: 'Registration successful! Please login.' } 
+        });
+      } else {
+        setError(result.error || 'Registration failed. Please try again.');
+      }
     }
   };
 
   const getIconColor = (inputId) => {
     return focusedInput === inputId ? '#bb0114' : '#6c757d';
-  };
-
-  const handleSocialLogin = (provider) => {
-    console.log(`${provider} sign up`);
   };
 
   return (
@@ -101,6 +121,12 @@ const Register = () => {
             <p className="brand-subtitle">Join our vibrant culinary community today.</p>
           </div>
 
+          {error && (
+            <div className="alert alert-error">
+              {error}
+            </div>
+          )}
+
           <form onSubmit={handleSubmit} className="registration-form">
             <div className="form-group">
               <label className="form-label" htmlFor="fullName">
@@ -120,6 +146,7 @@ const Register = () => {
                   onChange={handleChange}
                   onFocus={() => setFocusedInput('fullName')}
                   onBlur={() => setFocusedInput(null)}
+                  disabled={loading}
                 />
               </div>
               {errors.fullName && <span className="error-message">{errors.fullName}</span>}
@@ -143,6 +170,7 @@ const Register = () => {
                   onChange={handleChange}
                   onFocus={() => setFocusedInput('email')}
                   onBlur={() => setFocusedInput(null)}
+                  disabled={loading}
                 />
               </div>
               {errors.email && <span className="error-message">{errors.email}</span>}
@@ -167,6 +195,7 @@ const Register = () => {
                     onChange={handleChange}
                     onFocus={() => setFocusedInput('password')}
                     onBlur={() => setFocusedInput(null)}
+                    disabled={loading}
                   />
                 </div>
                 {errors.password && <span className="error-message">{errors.password}</span>}
@@ -189,6 +218,7 @@ const Register = () => {
                     onChange={handleChange}
                     onFocus={() => setFocusedInput('confirmPassword')}
                     onBlur={() => setFocusedInput(null)}
+                    disabled={loading}
                   />
                 </div>
                 {errors.confirmPassword && <span className="error-message">{errors.confirmPassword}</span>}
@@ -203,6 +233,7 @@ const Register = () => {
                   type="checkbox"
                   checked={formData.terms}
                   onChange={handleChange}
+                  disabled={loading}
                 />
               </div>
               <label className="terms-label" htmlFor="terms">
@@ -211,8 +242,15 @@ const Register = () => {
               {errors.terms && <span className="error-message">{errors.terms}</span>}
             </div>
 
-            <button className="btn-primary" type="submit">
-              Sign Up
+            <button className="btn-primary" type="submit" disabled={loading}>
+              {loading ? (
+                <>
+                  <FaSpinner className="spinner" />
+                  Creating Account...
+                </>
+              ) : (
+                'Sign Up'
+              )}
             </button>
           </form>
 
@@ -223,8 +261,6 @@ const Register = () => {
               <div className="divider-line"></div>
             </div>
             
-           
-            
             <p className="login-prompt">
               Already have an account? 
               <Link className="login-link" to="/login">Log in</Link>
@@ -232,8 +268,6 @@ const Register = () => {
           </div>
         </div>
       </main>
-      
-    
     </div>
   );
 };
