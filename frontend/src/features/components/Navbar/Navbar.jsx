@@ -1,6 +1,8 @@
 // components/Navbar.jsx
 import { useState, useEffect } from 'react';
 import { NavLink, useNavigate, useLocation } from 'react-router-dom';
+import Swal from 'sweetalert2';
+import { useAuth } from '../../../context/AuthContext';
 import { 
   FaChartBar,
   FaDatabase,
@@ -16,8 +18,10 @@ import './Navbar.css';
 const Navbar = () => {
   const [isDropdownOpen, setIsDropdownOpen] = useState(false);
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
+  const [isMobileProfileOpen, setIsMobileProfileOpen] = useState(false);
   const navigate = useNavigate();
   const location = useLocation();
+  const { logout, user } = useAuth();
 
   // Check if any analytics sub-route is active
   const isAnalyticsActive = location.pathname === '/forecasting' || 
@@ -46,11 +50,61 @@ const Navbar = () => {
     navigate(path);
     setIsMobileMenuOpen(false);
     setIsDropdownOpen(false);
+    setIsMobileProfileOpen(false);
   };
 
   const handleDropdownItemClick = (path) => {
     navigate(path);
     setIsDropdownOpen(false);
+    setIsMobileMenuOpen(false);
+    setIsMobileProfileOpen(false);
+  };
+
+  const handleLogout = async () => {
+    const confirmation = await Swal.fire({
+      title: 'Are you sure?',
+      text: 'Do you want to log out?',
+      icon: 'question',
+      showCancelButton: true,
+      confirmButtonText: 'Yes, log out',
+      cancelButtonText: 'Cancel',
+    });
+
+    if (!confirmation.isConfirmed) {
+      return;
+    }
+
+    Swal.fire({
+      title: 'Logging out...',
+      allowOutsideClick: false,
+      didOpen: () => {
+        Swal.showLoading();
+      },
+    });
+
+    const result = await logout();
+    Swal.close();
+
+    if (result.success) {
+      await Swal.fire({
+        icon: 'success',
+        title: 'Logged out',
+        text: 'You have been signed out successfully.',
+        timer: 1200,
+        showConfirmButton: false,
+      });
+      navigate('/login');
+    } else {
+      Swal.fire({
+        icon: 'error',
+        title: 'Logout failed',
+        text: result.error || 'Please try again.',
+      });
+      console.error('Logout failed:', result.error);
+    }
+
+    setIsDropdownOpen(false);
+    setIsMobileProfileOpen(false);
     setIsMobileMenuOpen(false);
   };
 
@@ -115,14 +169,25 @@ const Navbar = () => {
         <button className="action-btn" aria-label="Help">
           <FaRegQuestionCircle className="action-icon" />
         </button>
-        <div className="profile-section" onClick={() => handleNavigation('/profile')}>
-          <div className="profile-avatar">
-            <FaUser className="profile-icon" />
-          </div>
-          <div className="profile-info">
-            <span className="profile-name">Owner</span>
-            <span className="profile-role">Administrator</span>
-          </div>
+        <div className="nav-dropdown">
+          <button className="profile-section" type="button" onClick={toggleDropdown}>
+            <div className="profile-avatar">
+              <FaUser className="profile-icon" />
+            </div>
+            <div className="profile-info">
+              <span className="profile-name">{user?.name || 'Owner'}</span>
+              <span className="profile-role">Administrator</span>
+            </div>
+            <FaChevronDown className={`dropdown-arrow ${isDropdownOpen ? 'open' : ''}`} />
+          </button>
+
+          {isDropdownOpen && (
+            <div className="dropdown-menu">
+              <button className="dropdown-item logout-item" type="button" onClick={handleLogout}>
+                Logout
+              </button>
+            </div>
+          )}
         </div>
         
         {/* Mobile Menu Toggle */}
@@ -172,6 +237,27 @@ const Navbar = () => {
           <FaCog className="nav-icon" />
           Settings
         </NavLink>
+
+        <div className="mobile-dropdown">
+          <button 
+            className="dropdown-toggle" 
+            type="button" 
+            onClick={() => setIsMobileProfileOpen(!isMobileProfileOpen)}
+          >
+            <span>{user?.name || 'Owner'}</span>
+            <FaChevronDown className={`dropdown-arrow ${isMobileProfileOpen ? 'open' : ''}`} />
+          </button>
+          {isMobileProfileOpen && (
+            <div className="mobile-dropdown-menu">
+              <button className="dropdown-item" type="button" onClick={() => handleDropdownItemClick('/profile')}>
+                Profile
+              </button>
+              <button className="dropdown-item logout-item" type="button" onClick={handleLogout}>
+                Logout
+              </button>
+            </div>
+          )}
+        </div>
       </div>
     </header>
   );

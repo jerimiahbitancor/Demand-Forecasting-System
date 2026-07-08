@@ -3,6 +3,9 @@ import { Routes, Route, Navigate } from 'react-router-dom';
 import { Toaster } from 'react-hot-toast';
 import Register from '../src/features/auth/pages/register/Register';
 import Login from '../src/features/auth/pages/login/Login';
+import AuthSetup from './features/auth/pages/AuthSetup';
+import ForgotPassword from './features/auth/pages/forgotpass/forgotpass';
+import ForgotPassword2 from './features/auth/pages/forgotpass/forgotpass2';
 import ChefDuoLanding from './features/landing/ChefDuoLanding';
 import Dashboard from './features/dashboard/pages/Dashboard';
 import DataManagement from './features/datamanagement/pages/DataManagement';
@@ -77,9 +80,11 @@ function App() {
       
       <Routes>
         {/* Auth Routes */}
-        <Route path="/" element={<Navigate to="/login" replace />} />
+        <Route path="/" element={<AuthSetup />} />
         <Route path="/login" element={<Login />} />
         <Route path="/register" element={<Register />} />
+        <Route path="/forgot-password" element={<ForgotPassword />} />
+        <Route path="/forgot-password/reset" element={<ForgotPassword2 />} />
         
         {/* Landing Page */}
         <Route path="/landing" element={<ChefDuoLanding />} />

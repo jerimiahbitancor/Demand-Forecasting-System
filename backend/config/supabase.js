@@ -21,5 +21,8 @@ try {
 }
 
 
+const supabase = supabaseUrl && supabaseAnonKey
+  ? createClient(supabaseUrl, supabaseAnonKey)
+  : null;
 
 module.exports = { supabase, isConfigured };
