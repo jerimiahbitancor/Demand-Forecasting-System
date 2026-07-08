@@ -419,7 +419,6 @@ const MappingData = () => {
       {/* Search and Filter */}
       <div className="mapping-controls">
         <div className="search-wrapper">
-          <FiSearch className="search-icon" />
           <input
             type="text"
             placeholder="Search product or ingredient..."
