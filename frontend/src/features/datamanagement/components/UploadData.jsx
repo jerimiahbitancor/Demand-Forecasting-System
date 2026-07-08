@@ -24,11 +24,17 @@ const UploadData = ({
   const [salesFile, setSalesFile] = useState(null);
   const [isSalesDragging, setIsSalesDragging] = useState(false);
   const [salesUploadStatus, setSalesUploadStatus] = useState(null); // 'loading', 'success', 'error'
+  const [salesProgress, setSalesProgress] = useState(0);
+  const [salesValidated, setSalesValidated] = useState(false);
+  const [salesValidationErrors, setSalesValidationErrors] = useState([]);
 
   // Menu upload state
   const [menuFile, setMenuFile] = useState(null);
   const [isMenuDragging, setIsMenuDragging] = useState(false);
   const [menuUploadStatus, setMenuUploadStatus] = useState(null); // 'loading', 'success', 'error'
+  const [menuProgress, setMenuProgress] = useState(0);
+  const [menuValidated, setMenuValidated] = useState(false);
+  const [menuValidationErrors, setMenuValidationErrors] = useState([]);
 
   // Dynamic preview data from API
   const [salesPreviewData, setSalesPreviewData] = useState({
@@ -133,25 +139,22 @@ const UploadData = ({
         totalRows: 0,
         validRows: 0,
         invalidRows: 0,
-        errors: [{ row: 0, message: 'File is empty' }]
+        errors: [{ row: 0, message: 'File is empty' }],
+        isValid: false
       };
     }
 
-    // REQUIRED columns for sales data
     const requiredColumns = ['Date', 'Item Name', 'Item Sold', 'Category', 'Net Sales'];
     const headers = Object.keys(data[0]);
     
-    // Check which required columns are missing
     const missingColumns = [];
     requiredColumns.forEach(col => {
-      // Check if column exists (case insensitive)
       const found = headers.some(h => h.toLowerCase() === col.toLowerCase());
       if (!found) {
         missingColumns.push(col);
       }
     });
     
-    // If there are missing columns, show error
     if (missingColumns.length > 0) {
       errors.push({
         row: 1,
@@ -163,91 +166,11 @@ const UploadData = ({
         totalRows: data.length,
         validRows: 0,
         invalidRows: data.length,
-        errors: errors
+        errors: errors,
+        isValid: false
       };
     }
     
-    // Validate each row for required data
-    data.forEach((row, index) => {
-      const rowNumber = index + 2; // +2 because 1-indexed and header row
-      const rowErrors = [];
-      
-      // Check each required column for empty values
-      requiredColumns.forEach(col => {
-        // Find the actual column name (case insensitive)
-        const actualCol = headers.find(h => h.toLowerCase() === col.toLowerCase());
-        const value = row[actualCol];
-        
-        // Check if value is empty or null
-        if (value === undefined || value === null || value === '' || value === ' ') {
-          rowErrors.push(`${col} is empty`);
-        }
-      });
-      
-      if (rowErrors.length > 0) {
-        errors.push({
-          row: rowNumber,
-          message: rowErrors.join('; ')
-        });
-        invalidCount++;
-      } else {
-        validCount++;
-      }
-    });
-    
-    return {
-      totalRows: data.length,
-      validRows: validCount,
-      invalidRows: invalidCount,
-      errors: errors.slice(0, 10) // Limit to first 10 errors
-    };
-  };
-
-  // Validate menu data - Check for required columns
-  const validateMenuData = (data) => {
-    const errors = [];
-    let validCount = 0;
-    let invalidCount = 0;
-    
-    if (data.length === 0) {
-      return {
-        totalRows: 0,
-        validRows: 0,
-        invalidRows: 0,
-        errors: [{ row: 0, message: 'File is empty' }]
-      };
-    }
-
-    // REQUIRED columns for menu data
-// In the validateMenuData function, update requiredColumns:
-const requiredColumns = ['Product Name', 'Ingredients', 'Quantity', 'Unit', 'Price', 'Category'];    const headers = Object.keys(data[0]);
-    
-    // Check which required columns are missing
-    const missingColumns = [];
-    requiredColumns.forEach(col => {
-      const found = headers.some(h => h.toLowerCase() === col.toLowerCase());
-      if (!found) {
-        missingColumns.push(col);
-      }
-    });
-    
-    // If there are missing columns, show error
-    if (missingColumns.length > 0) {
-      errors.push({
-        row: 1,
-        message: `Missing required columns: ${missingColumns.join(', ')}. 
-                  Your file has: ${headers.join(', ')}. 
-                  Required columns: ${requiredColumns.join(', ')}`
-      });
-      return {
-        totalRows: data.length,
-        validRows: 0,
-        invalidRows: data.length,
-        errors: errors
-      };
-    }
-    
-    // Validate each row for required data
     data.forEach((row, index) => {
       const rowNumber = index + 2;
       const rowErrors = [];
@@ -276,7 +199,96 @@ const requiredColumns = ['Product Name', 'Ingredients', 'Quantity', 'Unit', 'Pri
       totalRows: data.length,
       validRows: validCount,
       invalidRows: invalidCount,
-      errors: errors.slice(0, 10)
+      errors: errors.slice(0, 10),
+      isValid: errors.length === 0
+    };
+  };
+
+  // Validate menu data - Check for required columns
+  const validateMenuData = (data) => {
+    const errors = [];
+    let validCount = 0;
+    let invalidCount = 0;
+    
+    if (data.length === 0) {
+      return {
+        totalRows: 0,
+        validRows: 0,
+        invalidRows: 0,
+        errors: [{ row: 0, message: 'File is empty' }],
+        isValid: false
+      };
+    }
+
+    const requiredColumns = ['Product Name', 'Ingredients', 'Quantity', 'Unit', 'Price', 'Category'];
+    const headers = Object.keys(data[0]);
+    
+    const missingColumns = [];
+    requiredColumns.forEach(col => {
+      const found = headers.some(h => h.toLowerCase() === col.toLowerCase());
+      if (!found) {
+        missingColumns.push(col);
+      }
+    });
+    
+    if (missingColumns.length > 0) {
+      errors.push({
+        row: 1,
+        message: `Missing required columns: ${missingColumns.join(', ')}. 
+                  Your file has: ${headers.join(', ')}. 
+                  Required columns: ${requiredColumns.join(', ')}`
+      });
+      return {
+        totalRows: data.length,
+        validRows: 0,
+        invalidRows: data.length,
+        errors: errors,
+        isValid: false
+      };
+    }
+    
+    data.forEach((row, index) => {
+      const rowNumber = index + 2;
+      const rowErrors = [];
+      
+      requiredColumns.forEach(col => {
+        const actualCol = headers.find(h => h.toLowerCase() === col.toLowerCase());
+        const value = row[actualCol];
+        
+        // Special validation for numeric fields
+        if (col === 'Quantity' || col === 'Price') {
+          if (value === undefined || value === null || value === '' || value === ' ') {
+            rowErrors.push(`${col} is empty`);
+          } else if (isNaN(parseFloat(value))) {
+            rowErrors.push(`${col} must be a valid number`);
+          } else if (parseFloat(value) <= 0) {
+            rowErrors.push(`${col} must be greater than 0`);
+          }
+        } else {
+          // For string columns
+          if (value === undefined || value === null || value === '' || value === ' ') {
+            rowErrors.push(`${col} is empty`);
+          }
+        }
+      });
+      
+      if (rowErrors.length > 0) {
+        errors.push({
+          row: rowNumber,
+          message: rowErrors.join('; ')
+        });
+        invalidCount++;
+      } else {
+        validCount++;
+      }
+    });
+    
+    return {
+      totalRows: data.length,
+      validRows: validCount,
+      invalidRows: invalidCount,
+      errors: errors.slice(0, 10),
+      isValid: errors.length === 0
     };
   };
 
@@ -298,7 +310,6 @@ const requiredColumns = ['Product Name', 'Ingredients', 'Quantity', 'Unit', 'Pri
   };
 
   const validateAndSetSalesFile = async (file) => {
-    // Validate file type
     const validTypes = ['text/csv', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', 'application/vnd.ms-excel'];
     if (!validTypes.includes(file.type) && !file.name.match(/\.(csv|xlsx)$/i)) {
       if (salesToastId) toast.dismiss(salesToastId);
@@ -307,7 +318,6 @@ const requiredColumns = ['Product Name', 'Ingredients', 'Quantity', 'Unit', 'Pri
       return;
     }
 
-    // Validate file size (max 20MB)
     if (file.size > 20 * 1024 * 1024) {
       if (salesToastId) toast.dismiss(salesToastId);
       const id = toast.error('File size exceeds 20MB limit');
@@ -317,12 +327,15 @@ const requiredColumns = ['Product Name', 'Ingredients', 'Quantity', 'Unit', 'Pri
 
     setSalesFile(file);
     setSalesUploadStatus(null);
+    setSalesProgress(0);
+    setSalesValidated(false);
+    setSalesValidationErrors([]);
     console.log("Sales file uploaded:", file.name);
 
-    // Read and validate file client-side
     try {
       const data = await readFileData(file);
       const validation = validateSalesData(data);
+      
       setSalesPreviewData({
         totalRecords: validation.totalRows,
         validRecords: validation.validRows,
@@ -331,6 +344,19 @@ const requiredColumns = ['Product Name', 'Ingredients', 'Quantity', 'Unit', 'Pri
           `${Math.round((validation.validRows / validation.totalRows) * 100)}%` : '0%',
         issues: validation.errors
       });
+      
+      setSalesValidated(validation.isValid);
+      setSalesValidationErrors(validation.errors);
+      
+      if (validation.isValid) {
+        if (salesToastId) toast.dismiss(salesToastId);
+        const id = toast.success(`File validated: ${validation.validRows} valid records found`);
+        setSalesToastId(id);
+      } else {
+        if (salesToastId) toast.dismiss(salesToastId);
+        const id = toast.error(` File has ${validation.invalidRows} issues. Please review the preview below.`);
+        setSalesToastId(id);
+      }
     } catch (error) {
       console.error('Error reading file:', error);
       if (salesToastId) toast.dismiss(salesToastId);
@@ -350,16 +376,45 @@ const requiredColumns = ['Product Name', 'Ingredients', 'Quantity', 'Unit', 'Pri
   };
 
   const handleSalesConfirm = async () => {
+    // Check if file is selected
     if (!salesFile) {
       if (salesToastId) toast.dismiss(salesToastId);
       const id = toast.error('Please select a file first');
       setSalesToastId(id);
       return;
     }
+
+    // Check if file is validated
+    if (!salesValidated) {
+      if (salesToastId) toast.dismiss(salesToastId);
+      const id = toast.error('Please wait for file validation to complete');
+      setSalesToastId(id);
+      return;
+    }
+
+    // Check if there are validation errors
+    if (salesValidationErrors.length > 0) {
+      if (salesToastId) toast.dismiss(salesToastId);
+      const id = toast.error(`Cannot upload. Please fix ${salesValidationErrors.length} validation issue(s) first.`);
+      setSalesToastId(id);
+      return;
+    }
     
     try {
       setSalesUploadStatus('loading');
+      setSalesProgress(0);
       console.log("Sales upload confirmed");
+      
+      // Simulate progress
+      const progressInterval = setInterval(() => {
+        setSalesProgress(prev => {
+          if (prev >= 90) {
+            clearInterval(progressInterval);
+            return 90;
+          }
+          return prev + Math.random() * 10;
+        });
+      }, 300);
       
       const response = await (handleConfirmUpload ? handleConfirmUpload(salesFile, 'sales') : apiClient.post('/upload', (() => {
         const formData = new FormData();
@@ -369,8 +424,15 @@ const requiredColumns = ['Product Name', 'Ingredients', 'Quantity', 'Unit', 'Pri
       })(), {
         headers: {
           'Content-Type': 'multipart/form-data'
+        },
+        onUploadProgress: (progressEvent) => {
+          const percentCompleted = Math.round((progressEvent.loaded * 100) / progressEvent.total);
+          setSalesProgress(percentCompleted);
         }
       }));
+
+      clearInterval(progressInterval);
+      setSalesProgress(100);
 
       if (response?.data?.success || response?.success) {
         setSalesUploadStatus('success');
@@ -385,7 +447,6 @@ const requiredColumns = ['Product Name', 'Ingredients', 'Quantity', 'Unit', 'Pri
           issues: summary.errors || []
         });
         
-        // Show success toast below the preview
         if (salesToastId) toast.dismiss(salesToastId);
         const id = toast.success(`Sales data uploaded successfully! ${summary.validRows || 0} records processed.`);
         setSalesToastId(id);
@@ -398,11 +459,15 @@ const requiredColumns = ['Product Name', 'Ingredients', 'Quantity', 'Unit', 'Pri
         setTimeout(() => {
           setSalesUploadStatus(null);
           setSalesFile(null);
+          setSalesProgress(0);
+          setSalesValidated(false);
+          setSalesValidationErrors([]);
         }, 3000);
       }
     } catch (error) {
       console.error('Upload error:', error);
       setSalesUploadStatus('error');
+      setSalesProgress(0);
       
       const errorMsg = error.response?.data?.error || error.message || 'Upload failed';
       if (salesToastId) toast.dismiss(salesToastId);
@@ -418,6 +483,9 @@ const requiredColumns = ['Product Name', 'Ingredients', 'Quantity', 'Unit', 'Pri
   const handleSalesDiscard = () => {
     setSalesFile(null);
     setSalesUploadStatus(null);
+    setSalesProgress(0);
+    setSalesValidated(false);
+    setSalesValidationErrors([]);
     setSalesPreviewData({
       totalRecords: 0,
       validRecords: 0,
@@ -456,7 +524,6 @@ const requiredColumns = ['Product Name', 'Ingredients', 'Quantity', 'Unit', 'Pri
   };
 
   const validateAndSetMenuFile = async (file) => {
-    // Validate file type
     const validTypes = ['text/csv', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', 'application/vnd.ms-excel'];
     if (!validTypes.includes(file.type) && !file.name.match(/\.(csv|xlsx)$/i)) {
       if (menuToastId) toast.dismiss(menuToastId);
@@ -465,7 +532,6 @@ const requiredColumns = ['Product Name', 'Ingredients', 'Quantity', 'Unit', 'Pri
       return;
     }
 
-    // Validate file size (max 20MB)
     if (file.size > 20 * 1024 * 1024) {
       if (menuToastId) toast.dismiss(menuToastId);
       const id = toast.error('File size exceeds 20MB limit');
@@ -475,18 +541,34 @@ const requiredColumns = ['Product Name', 'Ingredients', 'Quantity', 'Unit', 'Pri
 
     setMenuFile(file);
     setMenuUploadStatus(null);
+    setMenuProgress(0);
+    setMenuValidated(false);
+    setMenuValidationErrors([]);
     console.log("Menu file uploaded:", file.name);
 
-    // Read and validate file client-side
     try {
       const data = await readFileData(file);
       const validation = validateMenuData(data);
+      
       setMenuPreviewData({
         totalItems: validation.totalRows,
         mappedItems: validation.validRows,
         unmappedItems: validation.invalidRows,
         issues: validation.errors
       });
+      
+      setMenuValidated(validation.isValid);
+      setMenuValidationErrors(validation.errors);
+      
+      if (validation.isValid) {
+        if (menuToastId) toast.dismiss(menuToastId);
+        const id = toast.success(`Menu file validated: ${validation.validRows} items ready`);
+        setMenuToastId(id);
+      } else {
+        if (menuToastId) toast.dismiss(menuToastId);
+        const id = toast.error(`Menu file has ${validation.invalidRows} issues. Please review the preview below.`);
+        setMenuToastId(id);
+      }
     } catch (error) {
       console.error('Error reading file:', error);
       if (menuToastId) toast.dismiss(menuToastId);
@@ -506,16 +588,45 @@ const requiredColumns = ['Product Name', 'Ingredients', 'Quantity', 'Unit', 'Pri
   };
 
   const handleMenuConfirm = async () => {
+    // Check if file is selected
     if (!menuFile) {
       if (menuToastId) toast.dismiss(menuToastId);
       const id = toast.error('Please select a file first');
       setMenuToastId(id);
       return;
     }
+
+    // Check if file is validated
+    if (!menuValidated) {
+      if (menuToastId) toast.dismiss(menuToastId);
+      const id = toast.error('Please wait for file validation to complete');
+      setMenuToastId(id);
+      return;
+    }
+
+    // Check if there are validation errors
+    if (menuValidationErrors.length > 0) {
+      if (menuToastId) toast.dismiss(menuToastId);
+      const id = toast.error(`Cannot upload. Please fix ${menuValidationErrors.length} validation issue(s) first.`);
+      setMenuToastId(id);
+      return;
+    }
     
     try {
       setMenuUploadStatus('loading');
+      setMenuProgress(0);
       console.log("Menu upload confirmed");
+      
+      // Simulate progress
+      const progressInterval = setInterval(() => {
+        setMenuProgress(prev => {
+          if (prev >= 90) {
+            clearInterval(progressInterval);
+            return 90;
+          }
+          return prev + Math.random() * 10;
+        });
+      }, 300);
       
       const response = await (handleConfirmUpload ? handleConfirmUpload(menuFile, 'menu') : apiClient.post('/upload', (() => {
         const formData = new FormData();
@@ -525,8 +636,15 @@ const requiredColumns = ['Product Name', 'Ingredients', 'Quantity', 'Unit', 'Pri
       })(), {
         headers: {
           'Content-Type': 'multipart/form-data'
+        },
+        onUploadProgress: (progressEvent) => {
+          const percentCompleted = Math.round((progressEvent.loaded * 100) / progressEvent.total);
+          setMenuProgress(percentCompleted);
         }
       }));
+
+      clearInterval(progressInterval);
+      setMenuProgress(100);
 
       if (response?.data?.success || response?.success) {
         setMenuUploadStatus('success');
@@ -539,7 +657,6 @@ const requiredColumns = ['Product Name', 'Ingredients', 'Quantity', 'Unit', 'Pri
           issues: summary.errors || []
         });
         
-        // Show success toast with details
         const productMsg = summary.productsInserted ? ` ${summary.productsInserted} products added.` : '';
         const ingredientMsg = summary.ingredientsInserted ? ` ${summary.ingredientsInserted} ingredients added.` : '';
         
@@ -554,11 +671,15 @@ const requiredColumns = ['Product Name', 'Ingredients', 'Quantity', 'Unit', 'Pri
         setTimeout(() => {
           setMenuUploadStatus(null);
           setMenuFile(null);
+          setMenuProgress(0);
+          setMenuValidated(false);
+          setMenuValidationErrors([]);
         }, 3000);
       }
     } catch (error) {
       console.error('Upload error:', error);
       setMenuUploadStatus('error');
+      setMenuProgress(0);
       
       const errorMsg = error.response?.data?.error || error.message || 'Upload failed';
       if (menuToastId) toast.dismiss(menuToastId);
@@ -574,6 +695,9 @@ const requiredColumns = ['Product Name', 'Ingredients', 'Quantity', 'Unit', 'Pri
   const handleMenuDiscard = () => {
     setMenuFile(null);
     setMenuUploadStatus(null);
+    setMenuProgress(0);
+    setMenuValidated(false);
+    setMenuValidationErrors([]);
     setMenuPreviewData({
       totalItems: 0,
       mappedItems: 0,
@@ -584,6 +708,66 @@ const requiredColumns = ['Product Name', 'Ingredients', 'Quantity', 'Unit', 'Pri
     const id = toast('File discarded');
     setMenuToastId(id);
     console.log("Menu upload discarded");
+  };
+
+  // Progress bar component
+  const ProgressBar = ({ progress, status }) => {
+    const getColor = () => {
+      if (status === 'error') return '#ef4444';
+      if (status === 'success') return '#10b981';
+      if (progress < 100) return '#3b82f6';
+      return '#10b981';
+    };
+
+    return (
+      <div className="progress-bar-container" style={{ marginTop: '10px' }}>
+        <div className="progress-bar-track" style={{
+          width: '100%',
+          height: '8px',
+          backgroundColor: '#e5e7eb',
+          borderRadius: '4px',
+          overflow: 'hidden',
+          position: 'relative'
+        }}>
+          <div className="progress-bar-fill" style={{
+            width: `${Math.min(progress, 100)}%`,
+            height: '100%',
+            backgroundColor: getColor(),
+            borderRadius: '4px',
+            transition: 'width 0.3s ease-in-out',
+            position: 'relative'
+          }}>
+            {progress > 0 && progress < 100 && (
+              <div className="progress-bar-animation" style={{
+                position: 'absolute',
+                top: 0,
+                left: 0,
+                right: 0,
+                bottom: 0,
+                background: 'linear-gradient(90deg, transparent, rgba(255,255,255,0.3), transparent)',
+                animation: 'shimmer 1.5s infinite'
+              }} />
+            )}
+          </div>
+        </div>
+        <div className="progress-bar-label" style={{
+          display: 'flex',
+          justifyContent: 'space-between',
+          marginTop: '4px',
+          fontSize: '12px',
+          color: '#6b7280'
+        }}>
+          <span>{status === 'loading' ? 'Uploading...' : status === 'success' ? 'Complete!' : status === 'error' ? 'Failed' : 'Ready'}</span>
+          <span>{Math.min(progress, 100)}%</span>
+        </div>
+        <style>{`
+          @keyframes shimmer {
+            0% { transform: translateX(-100%); }
+            100% { transform: translateX(100%); }
+          }
+        `}</style>
+      </div>
+    );
   };
 
   return (
@@ -663,23 +847,26 @@ const requiredColumns = ['Product Name', 'Ingredients', 'Quantity', 'Unit', 'Pri
                 />
               </div>
 
-              {/* Upload Status */}
+              {/* Upload Status with Progress Bar */}
               {salesUploadStatus === 'loading' && (
                 <div className="upload-status loading">
                   <span className="spinner"></span>
                   Uploading...
+                  <ProgressBar progress={salesProgress} status="loading" />
                 </div>
               )}
               {salesUploadStatus === 'success' && (
                 <div className="upload-status success">
                   <FiCheckCircle size={20} />
                   Upload successful!
+                  <ProgressBar progress={100} status="success" />
                 </div>
               )}
               {salesUploadStatus === 'error' && (
                 <div className="upload-status error">
                   <FiXCircle size={20} />
                   Upload failed
+                  <ProgressBar progress={salesProgress} status="error" />
                 </div>
               )}
 
@@ -688,9 +875,9 @@ const requiredColumns = ['Product Name', 'Ingredients', 'Quantity', 'Unit', 'Pri
                 <div className="preview-header">
                   <h3 className="preview-title">Preview & Validation</h3>
                   <div className="preview-status">
-                    <span className={`status-badge ${salesFile ? "success" : "warning"}`}>
+                    <span className={`status-badge ${salesValidated ? "success" : salesFile ? "warning" : "warning"}`}>
                       <span className="status-dot"></span>
-                      {salesFile ? "File ready" : "No file uploaded"}
+                      {salesValidated ? "✅ Validated" : salesFile ? "⚠️ Needs Review" : "No file uploaded"}
                     </span>
                     <span className="status-separator">|</span>
                     <span className="status-records">
@@ -756,7 +943,7 @@ const requiredColumns = ['Product Name', 'Ingredients', 'Quantity', 'Unit', 'Pri
                     <button
                       className={`btn-primary ${salesUploadStatus === 'loading' ? 'loading' : ''}`}
                       onClick={handleSalesConfirm}
-                      disabled={!salesFile || salesUploadStatus === 'loading'}
+                      disabled={!salesFile || salesUploadStatus === 'loading' || !salesValidated || salesValidationErrors.length > 0}
                     >
                       {salesUploadStatus === 'loading' ? 'Uploading...' : 'Confirm & Process Upload'}
                     </button>
@@ -771,7 +958,7 @@ const requiredColumns = ['Product Name', 'Ingredients', 'Quantity', 'Unit', 'Pri
                 <div>
                   <h2 className="upload-title">Upload Menu Data</h2>
                   <p className="upload-subtitle">
-                    Drag and drop your menu mapping file below. For Menu Data your file must have these columns: <strong>Product Name, Ingredients, Quantity, Unit, Price</strong>
+                    Drag and drop your menu mapping file below. For Menu Data your file must have these columns: <strong>Product Name, Ingredients, Quantity, Unit, Price, Category</strong>
                   </p>
                 </div>
               </div>
@@ -823,23 +1010,26 @@ const requiredColumns = ['Product Name', 'Ingredients', 'Quantity', 'Unit', 'Pri
                 />
               </div>
 
-              {/* Upload Status */}
+              {/* Upload Status with Progress Bar */}
               {menuUploadStatus === 'loading' && (
                 <div className="upload-status loading">
                   <span className="spinner"></span>
                   Uploading...
+                  <ProgressBar progress={menuProgress} status="loading" />
                 </div>
               )}
               {menuUploadStatus === 'success' && (
                 <div className="upload-status success">
                   <FiCheckCircle size={20} />
                   Upload successful!
+                  <ProgressBar progress={100} status="success" />
                 </div>
               )}
               {menuUploadStatus === 'error' && (
                 <div className="upload-status error">
                   <FiXCircle size={20} />
                   Upload failed
+                  <ProgressBar progress={menuProgress} status="error" />
                 </div>
               )}
 
@@ -848,9 +1038,9 @@ const requiredColumns = ['Product Name', 'Ingredients', 'Quantity', 'Unit', 'Pri
                 <div className="preview-header">
                   <h3 className="preview-title">Menu Preview & Validation</h3>
                   <div className="preview-status">
-                    <span className={`status-badge ${menuFile ? "success" : "warning"}`}>
+                    <span className={`status-badge ${menuValidated ? "success" : menuFile ? "warning" : "warning"}`}>
                       <span className="status-dot"></span>
-                      {menuFile ? "File ready" : "No file uploaded"}
+                      {menuValidated ? "✅ Validated" : menuFile ? "⚠️ Needs Review" : "No file uploaded"}
                     </span>
                     <span className="status-separator">|</span>
                     <span className="status-records">
@@ -913,7 +1103,7 @@ const requiredColumns = ['Product Name', 'Ingredients', 'Quantity', 'Unit', 'Pri
                     <button
                       className={`btn-primary ${menuUploadStatus === 'loading' ? 'loading' : ''}`}
                       onClick={handleMenuConfirm}
-                      disabled={!menuFile || menuUploadStatus === 'loading'}
+                      disabled={!menuFile || menuUploadStatus === 'loading' || !menuValidated || menuValidationErrors.length > 0}
                     >
                       {menuUploadStatus === 'loading' ? 'Uploading...' : 'Process Menu Data'}
                     </button>

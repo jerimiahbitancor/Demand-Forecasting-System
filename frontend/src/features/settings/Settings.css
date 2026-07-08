@@ -157,14 +157,14 @@
 }
 
 .tabs-header {
-    display: flex;
+ display: flex;
     border-bottom: 1px solid #f0f0f0;
     background-color: #faf8f7;
     overflow-x: auto;
-    padding: 0 8px;
+    padding: 0 0px;
     flex-direction: row;
     align-items: flex-start;
-    justify-content: space-between;
+    justify-content: flex-start;
 }
 .tab-btn {
   display: flex;

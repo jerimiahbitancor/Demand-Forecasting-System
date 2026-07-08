@@ -1,220 +1,107 @@
 // components/MappingData.jsx
-import { useState, useEffect } from "react";
-import {
-  FiPlus,
-  FiEdit2,
-  FiTrash2,
+import { useState } from "react";
+import { 
+  FiPlus, 
+  FiEdit2, 
+  FiTrash2, 
   FiChevronLeft,
   FiChevronRight,
   FiX,
-  FiSave,
+  FiSave
 } from "react-icons/fi";
+import axios from 'axios';
+import toast from 'react-hot-toast';
 import "./MappingData.css";
-import { productService } from "../../../services/productService";
-import { useToast } from "../../components/Toast/use_toast";
-import Toast from "../../components/Toast/Toast";
-import ConfirmDeleteModal from "./ConfirmDeleteModal";
-
-const EMPTY_FORM = {
-  id: null,
-  productName: "",
-  category: "",
-  price: "",
-  ingredients: [],
-};
-
-const EMPTY_INGREDIENT = { name: "", quantity: "", unit: "kg" };
 
 const MappingData = () => {
   const [searchTerm, setSearchTerm] = useState("");
+  const [selectedCategory, setSelectedCategory] = useState("All");
   const [sortBy, setSortBy] = useState("Newest First");
   const [currentPage, setCurrentPage] = useState(1);
+  const [isModalOpen, setIsModalOpen] = useState(false);
 
-  // Modal + form state — "add" and "edit" share one modal, driven by modalMode.
-  const [modalMode, setModalMode] = useState(null); // null | "add" | "edit"
-  const [formData, setFormData] = useState(EMPTY_FORM);
-  const [newIngredient, setNewIngredient] = useState(EMPTY_INGREDIENT);
-  const [formError, setFormError] = useState("");
+  // Sample mapping data
+  const [mappingData, setMappingData] = useState([
+    { id: 1, productName: "Tonkatsu", ingredient: "Pork Loin, Breadcrumbs, Egg", price: "₱250" },
+    { id: 2, productName: "Sisig", ingredient: "Pork Face, Liver, Onions, Chili", price: "₱180" },
+    { id: 3, productName: "Tapsilog", ingredient: "Beef Tapa, Garlic Rice, Egg", price: "₱150" },
+    { id: 4, productName: "Chicken Poppers", ingredient: "Chicken, Breading, Sweet Chili", price: "₱185" },
+    { id: 5, productName: "Adobo", ingredient: "Chicken, Soy Sauce, Vinegar, Garlic", price: "₱220" },
+    { id: 6, productName: "Sinigang", ingredient: "Pork, Tamarind, Vegetables", price: "₱195" },
+    { id: 7, productName: "Lechon Kawali", ingredient: "Pork Belly, Salt, Pepper", price: "₱210" },
+    { id: 8, productName: "Halo-Halo", ingredient: "Ice, Milk, Fruits, Beans, Leche Flan", price: "₱120" },
+    { id: 9, productName: "Pancit Canton", ingredient: "Noodles, Vegetables, Chicken", price: "₱160" },
+    { id: 10, productName: "Lumpia", ingredient: "Pork, Vegetables, Wrapper", price: "₱140" },
+    { id: 11, productName: "Kare-Kare", ingredient: "Oxtail, Peanut Sauce, Vegetables", price: "₱280" },
+    { id: 12, productName: "Bicol Express", ingredient: "Pork, Coconut Milk, Chili", price: "₱200" },
+  ]);
 
-  // Delete confirmation state
-  const [pendingDelete, setPendingDelete] = useState(null);
+  // New mapping form state
+  const [newMapping, setNewMapping] = useState({
+    productName: "",
+    price: "",
+    ingredients: []
+  });
 
-  // Live data from the backend
-  const [products, setProducts] = useState([]);
-  const [isLoading, setIsLoading] = useState(true);
-  const [loadError, setLoadError] = useState("");
+  const [newIngredient, setNewIngredient] = useState({
+    name: "",
+    quantity: "",
+    unit: "kg"
+  });
 
-  const { toast, showToast, dismissToast } = useToast();
-
-  const loadProducts = async () => {
-    try {
-      setIsLoading(true);
-      const data = await productService.getAll();
-      setProducts(data);
-      setLoadError("");
-    } catch (err) {
-      setLoadError(err.message);
-    } finally {
-      setIsLoading(false);
+  const handleAddMapping = () => {
+    if (newMapping.productName && newMapping.price) {
+      const newId = mappingData.length + 1;
+      const ingredientNames = newMapping.ingredients.map(ing => ing.name).join(", ");
+      setMappingData([...mappingData, {
+        id: newId,
+        productName: newMapping.productName,
+        ingredient: ingredientNames,
+        price: `₱${newMapping.price}`
+      }]);
+      
+      // Reset form and close modal
+      setNewMapping({ productName: "", price: "", ingredients: [] });
+      setNewIngredient({ name: "", quantity: "", unit: "kg" });
+      setIsModalOpen(false);
     }
   };
-
-  useEffect(() => {
-    loadProducts();
-  }, []);
-
-  // ---------- Modal open/close helpers ----------
-
-  const openAddModal = () => {
-    setFormData(EMPTY_FORM);
-    setNewIngredient(EMPTY_INGREDIENT);
-    setFormError("");
-    setModalMode("add");
-  };
-
-  const openEditModal = (item) => {
-    setFormData({
-      id: item.id,
-      productName: item.name,
-      category: item.category,
-      price: item.price,
-      ingredients: item.ingredients.map((ing) => ({
-        name: ing.name,
-        quantity: ing.quantity,
-        unit: ing.unit,
-      })),
-    });
-    setNewIngredient(EMPTY_INGREDIENT);
-    setFormError("");
-    setModalMode("edit");
-  };
-
-  const closeModal = () => {
-    setModalMode(null);
-    setFormData(EMPTY_FORM);
-    setFormError("");
-  };
-
-  // ---------- Ingredient row helpers (inside the modal) ----------
 
   const handleAddIngredient = () => {
-    const name = newIngredient.name.trim();
-    const quantity = Number(newIngredient.quantity);
-
-    if (!name || !newIngredient.quantity) {
-      setFormError("Enter both an ingredient name and a quantity.");
-      return;
+    if (newIngredient.name && newIngredient.quantity) {
+      setNewMapping({
+        ...newMapping,
+        ingredients: [...newMapping.ingredients, { ...newIngredient }]
+      });
+      setNewIngredient({ name: "", quantity: "", unit: "kg" });
     }
-    if (isNaN(quantity) || quantity <= 0) {
-      setFormError("Quantity must be a positive number.");
-      return;
-    }
-    // Mirrors the backend's own duplicate check (ProductController._buildMappingRows)
-    // so the user sees the error immediately instead of after a round trip.
-    const alreadyAdded = formData.ingredients.some(
-      (ing) => ing.name.toLowerCase() === name.toLowerCase()
-    );
-    if (alreadyAdded) {
-      setFormError(`"${name}" was already added to this product.`);
-      return;
-    }
-
-    setFormData({
-      ...formData,
-      ingredients: [...formData.ingredients, { ...newIngredient, name, quantity }],
-    });
-    setNewIngredient(EMPTY_INGREDIENT);
-    setFormError("");
   };
 
+  // Remove ingredient from list
   const handleRemoveIngredient = (index) => {
-    setFormData({
-      ...formData,
-      ingredients: formData.ingredients.filter((_, i) => i !== index),
-    });
+    const updatedIngredients = newMapping.ingredients.filter((_, i) => i !== index);
+    setNewMapping({ ...newMapping, ingredients: updatedIngredients });
   };
 
-  // ---------- Save (create or update) ----------
-
-  const handleSaveMapping = async () => {
-    if (!formData.productName.trim() || !formData.category.trim() || !formData.price) {
-      setFormError("Product name, category, and price are required.");
-      return;
-    }
-    if (isNaN(Number(formData.price)) || Number(formData.price) <= 0) {
-      setFormError("Price must be a positive number.");
-      return;
-    }
-
-    const payload = {
-      name: formData.productName.trim(),
-      category: formData.category.trim(),
-      price: Number(formData.price),
-      ingredients: formData.ingredients,
-    };
-
-    try {
-      const response =
-        modalMode === "edit"
-          ? await productService.update(formData.id, payload)
-          : await productService.create(payload);
-
-      // Step 2 of the UX spec: close the modal instantly, don't wait on the toast.
-      closeModal();
-      showToast(response.message);
-      loadProducts();
-    } catch (err) {
-      // Keep the modal open so the user doesn't lose their input on a validation error.
-      setFormError(err.message);
+  const handleDeleteMapping = (id) => {
+    if (window.confirm('Are you sure you want to delete this mapping?')) {
+      setMappingData(mappingData.filter(item => item.id !== id));
     }
   };
 
-  // ---------- Delete ----------
+  // Filter mapping data based on search
+  const filteredData = mappingData.filter(item =>
+    item.productName.toLowerCase().includes(searchTerm.toLowerCase()) ||
+    item.ingredient.toLowerCase().includes(searchTerm.toLowerCase())
+  );
 
-  const confirmDelete = async () => {
-    try {
-      const response = await productService.remove(pendingDelete.id);
-      setPendingDelete(null);
-      showToast(response.message);
-      loadProducts();
-    } catch (err) {
-      setPendingDelete(null);
-      showToast(err.message, "error");
-    }
-  };
-
-  // ---------- Search, sort, paginate ----------
-
-  const filteredData = products.filter((item) => {
-    const term = searchTerm.toLowerCase();
-    const ingredientNames = item.ingredients.map((ing) => ing.name).join(", ");
-    return (
-      item.name.toLowerCase().includes(term) ||
-      ingredientNames.toLowerCase().includes(term)
-    );
-  });
-
-  const sortedData = [...filteredData].sort((a, b) => {
-    switch (sortBy) {
-      case "Oldest First":
-        return new Date(a.created_at) - new Date(b.created_at);
-      case "Price: Low to High":
-        return a.price - b.price;
-      case "Price: High to Low":
-        return b.price - a.price;
-      case "A-Z":
-        return a.name.localeCompare(b.name);
-      case "Newest First":
-      default:
-        return new Date(b.created_at) - new Date(a.created_at);
-    }
-  });
-
+  // Pagination
   const itemsPerPage = 5;
   const totalPages = Math.ceil(sortedData.length / itemsPerPage) || 1;
   const startIndex = (currentPage - 1) * itemsPerPage;
   const currentData = sortedData.slice(startIndex, startIndex + itemsPerPage);
 
+  // Get page numbers for pagination
   const getPageNumbers = () => {
     const pages = [];
     if (totalPages <= 7) {
@@ -239,10 +126,11 @@ const MappingData = () => {
     <div className="mapping-container">
       {/* Header */}
       <div className="mapping-header">
-        <h2 className="mapping-title">
-          Current Ingredient Mapping ({products.length} Active Products)
-        </h2>
-        <button className="btn-upload" onClick={openAddModal}>
+        <h2 className="mapping-title">Current Ingredient Mapping ({mappingData.length} Active Products)</h2>
+        <button 
+          className="btn-upload"
+          onClick={() => setIsModalOpen(true)}
+        >
           <FiPlus size={16} /> Upload New Mapping
         </button>
       </div>
@@ -250,6 +138,7 @@ const MappingData = () => {
       {/* Search and Filter */}
       <div className="mapping-controls">
         <div className="search-wrapper">
+          <FiSearch className="search-icon" />
           <input
             type="text"
             placeholder="Search product or ingredient..."
@@ -263,7 +152,7 @@ const MappingData = () => {
         </div>
         <div className="sort-wrapper">
           <label>Sort By:</label>
-          <select
+          <select 
             className="sort-select"
             value={sortBy}
             onChange={(e) => setSortBy(e.target.value)}
@@ -274,68 +163,53 @@ const MappingData = () => {
             <option>Price: High to Low</option>
             <option>A-Z</option>
           </select>
+          <button className="btn-refresh" onClick={fetchData} disabled={loading}>
+            <FiRefreshCw size={16} className={loading ? 'spinning' : ''} />
+          </button>
         </div>
       </div>
 
       {/* Product Mapping Table */}
       <div className="mapping-section">
         <div className="mapping-table-wrapper">
-          {isLoading ? (
-            <p style={{ padding: "24px", textAlign: "center" }}>Loading products…</p>
-          ) : loadError ? (
-            <p style={{ padding: "24px", textAlign: "center", color: "var(--color-error)" }}>
-              {loadError}
-            </p>
-          ) : (
-            <table className="mapping-table">
-              <thead>
-                <tr>
-                  <th>No.</th>
-                  <th>Product Name</th>
-                  <th>Category</th>
-                  <th>Ingredient</th>
-                  <th>Price</th>
-                  <th>Action</th>
+          <table className="mapping-table">
+            <thead>
+              <tr>
+                <th>No.</th>
+                <th>Product Name</th>
+                <th>Ingredient</th>
+                <th>Price</th>
+                <th>Action</th>
+              </tr>
+            </thead>
+            <tbody>
+              {currentData.map((item, index) => (
+                <tr key={item.id}>
+                  <td>{startIndex + index + 1}</td>
+                  <td>{item.productName}</td>
+                  <td>{item.ingredient}</td>
+                  <td>{item.price}</td>
+                  <td>
+                    <button className="action-btn edit">
+                      <FiEdit2 size={16} />
+                    </button>
+                    <button 
+                      className="action-btn delete"
+                      onClick={() => handleDeleteMapping(item.id)}
+                    >
+                      <FiTrash2 size={16} />
+                    </button>
+                  </td>
                 </tr>
-              </thead>
-              <tbody>
-                {currentData.length === 0 ? (
-                  <tr>
-                    <td colSpan="6" className="empty-row">
-                      No products found.
-                    </td>
-                  </tr>
-                ) : (
-                  currentData.map((item, index) => (
-                    <tr key={item.id}>
-                      <td>{startIndex + index + 1}</td>
-                      <td>{item.name}</td>
-                      <td>{item.category}</td>
-                      <td>{item.ingredients.map((ing) => ing.name).join(", ")}</td>
-                      <td>₱{item.price}</td>
-                      <td>
-                        <button className="action-btn edit" onClick={() => openEditModal(item)}>
-                          <FiEdit2 size={16} />
-                        </button>
-                        <button
-                          className="action-btn delete"
-                          onClick={() => setPendingDelete(item)}
-                        >
-                          <FiTrash2 size={16} />
-                        </button>
-                      </td>
-                    </tr>
-                  ))
-                )}
-              </tbody>
-            </table>
-          )}
+              ))}
+            </tbody>
+          </table>
         </div>
 
         {/* Pagination */}
         <div className="pagination">
           <div className="pagination-left">
-            <button
+            <button 
               className="page-btn"
               onClick={() => setCurrentPage(Math.max(1, currentPage - 1))}
               disabled={currentPage === 1}
@@ -347,18 +221,16 @@ const MappingData = () => {
             {getPageNumbers().map((page, index) => (
               <button
                 key={index}
-                className={`page-number ${page === currentPage ? "active" : ""} ${
-                  page === "..." ? "dots" : ""
-                }`}
-                onClick={() => typeof page === "number" && setCurrentPage(page)}
-                disabled={page === "..."}
+                className={`page-number ${page === currentPage ? 'active' : ''} ${page === '...' ? 'dots' : ''}`}
+                onClick={() => typeof page === 'number' && setCurrentPage(page)}
+                disabled={page === '...'}
               >
                 {page}
               </button>
             ))}
           </div>
           <div className="pagination-right">
-            <button
+            <button 
               className="page-btn"
               onClick={() => setCurrentPage(Math.min(totalPages, currentPage + 1))}
               disabled={currentPage === totalPages}
@@ -369,13 +241,13 @@ const MappingData = () => {
         </div>
       </div>
 
-      {/* Modal for Add / Edit Mapping */}
-      {modalMode && (
-        <div className="modal-overlay" onClick={closeModal}>
+      {/* Modal for Add New Mapping */}
+      {isModalOpen && (
+        <div className="modal-overlay" onClick={() => setIsModalOpen(false)}>
           <div className="modal-content" onClick={(e) => e.stopPropagation()}>
             <div className="modal-header">
-              <h3>{modalMode === "edit" ? "Edit Mapping" : "Add New Mapping"}</h3>
-              <button className="modal-close" onClick={closeModal}>
+              <h3>Add New Mapping</h3>
+              <button className="modal-close" onClick={() => setIsModalOpen(false)}>
                 <FiX size={24} />
               </button>
             </div>
@@ -386,34 +258,24 @@ const MappingData = () => {
                 <input
                   type="text"
                   placeholder="Enter product name"
-                  value={formData.productName}
-                  onChange={(e) => setFormData({ ...formData, productName: e.target.value })}
-                />
-              </div>
-
-              <div className="form-group">
-                <label>Product Category</label>
-                <input
-                  type="text"
-                  placeholder="Enter product category"
-                  value={formData.category}
-                  onChange={(e) => setFormData({ ...formData, category: e.target.value })}
+                  value={newMapping.productName}
+                  onChange={(e) => setNewMapping({...newMapping, productName: e.target.value})}
                 />
               </div>
 
               <div className="form-group">
                 <label>Product Price</label>
                 <input
-                  type="number"
+                  type="text"
                   placeholder="Enter product price"
-                  value={formData.price}
-                  onChange={(e) => setFormData({ ...formData, price: e.target.value })}
+                  value={newMapping.price}
+                  onChange={(e) => setNewMapping({...newMapping, price: e.target.value})}
                 />
               </div>
 
               <div className="form-group">
                 <label>Ingredients</label>
-
+                
                 {/* Ingredient Input Row */}
                 <div className="ingredient-input-row">
                   <input
@@ -425,12 +287,10 @@ const MappingData = () => {
                   />
                   <input
                     type="number"
-                    placeholder="Quantity"
+                    placeholder="Qty"
                     className="ingredient-qty-input"
                     value={newIngredient.quantity}
-                    onChange={(e) =>
-                      setNewIngredient({ ...newIngredient, quantity: e.target.value })
-                    }
+                    onChange={(e) => setNewIngredient({...newIngredient, quantity: e.target.value})}
                   />
                   <select
                     className="ingredient-unit-select"
@@ -444,6 +304,9 @@ const MappingData = () => {
                     <option value="pcs">pcs</option>
                     <option value="tbsp">tbsp</option>
                     <option value="tsp">tsp</option>
+                    <option value="cup">cup</option>
+                    <option value="oz">oz</option>
+                    <option value="lb">lb</option>
                   </select>
                   <button className="btn-add-ingredient" onClick={handleAddIngredient}>
                     <FiPlus size={16} /> Add
@@ -451,7 +314,7 @@ const MappingData = () => {
                 </div>
 
                 {/* Ingredients Table */}
-                <div className="ingredients-table-wrapper">
+                <div className={`ingredients-table-wrapper ${formErrors.ingredients ? 'error-border' : ''}`}>
                   <table className="ingredients-modal-table">
                     <thead>
                       <tr>
@@ -478,6 +341,7 @@ const MappingData = () => {
                               <button
                                 className="action-btn delete"
                                 onClick={() => handleRemoveIngredient(index)}
+                                title="Remove ingredient"
                               >
                                 <FiTrash2 size={16} />
                               </button>
@@ -487,6 +351,11 @@ const MappingData = () => {
                       )}
                     </tbody>
                   </table>
+                  {formErrors.ingredients && (
+                    <span className="error-text" style={{ padding: '8px 12px', display: 'block' }}>
+                      {formErrors.ingredients}
+                    </span>
+                  )}
                 </div>
 
                 {formError && (
@@ -498,10 +367,10 @@ const MappingData = () => {
             </div>
 
             <div className="modal-footer">
-              <button className="btn-secondary" onClick={closeModal}>
+              <button className="btn-secondary" onClick={() => setIsModalOpen(false)}>
                 Discard
               </button>
-              <button className="btn-primary" onClick={handleSaveMapping}>
+              <button className="btn-primary" onClick={handleAddMapping}>
                 <FiSave size={16} /> Save
               </button>
             </div>

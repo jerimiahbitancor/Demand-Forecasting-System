@@ -1,38 +1,98 @@
 // components/HistoricalData.jsx
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { 
   FiChevronLeft, 
   FiChevronRight, 
   FiDownload,
-  FiPlus
+  
 } from "react-icons/fi";
+import axios from 'axios';
+import toast from 'react-hot-toast';
 import "./HistoricalData.css";
+
+const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:5000/api';
 
 const HistoricalData = () => {
   const [searchTerm, setSearchTerm] = useState("");
   const [sortBy, setSortBy] = useState("Newest First");
   const [currentPage, setCurrentPage] = useState(1);
+  const [loading, setLoading] = useState(true);
+  const [historicalData, setHistoricalData] = useState([]);
 
-  // Sample historical data
-  const [historicalData] = useState([
-    { id: 1, uploadDate: "2025-06-20 14:30", fileName: "Data_File.xlsx", records: 245 },
-    { id: 2, uploadDate: "2025-06-20 11:15", fileName: ".csv", records: 189 },
-    { id: 3, uploadDate: "2025-06-19 16:45", fileName: ".xlsx", records: 156 },
-    { id: 4, uploadDate: "2025-06-19 09:20", fileName: ".csv", records: 210 },
-    { id: 5, uploadDate: "2025-06-18 13:50", fileName: ".xlsx", records: 98 },
-    { id: 6, uploadDate: "2025-06-18 10:30", fileName: ".csv", records: 167 },
-    { id: 7, uploadDate: "2025-06-17 15:20", fileName: ".xlsx", records: 134 },
-    { id: 8, uploadDate: "2025-06-17 08:45", fileName: ".csv", records: 223 },
-    { id: 9, uploadDate: "2025-06-16 14:10", fileName: ".xlsx", records: 189 },
-    { id: 10, uploadDate: "2025-06-16 09:30", fileName: ".csv", records: 145 },
-    { id: 11, uploadDate: "2025-06-15 16:40", fileName: ".xlsx", records: 176 },
-    { id: 12, uploadDate: "2025-06-15 11:25", fileName: ".csv", records: 198 },
-  ]);
+  // Get auth token
+  const getAuthToken = () => {
+    return localStorage.getItem('token');
+  };
+
+  // Axios instance
+  const apiClient = axios.create({
+    baseURL: API_URL,
+    headers: {
+      'Content-Type': 'application/json',
+    }
+  });
+
+  apiClient.interceptors.request.use(
+    (config) => {
+      const token = getAuthToken();
+      if (token) {
+        config.headers.Authorization = `Bearer ${token}`;
+      }
+      return config;
+    },
+    (error) => Promise.reject(error)
+  );
+
+  // Fetch historical data from uploads table
+  const fetchHistoricalData = async () => {
+    try {
+      setLoading(true);
+      
+      // Fetch uploads from the uploads table
+      const response = await apiClient.get('/uploads', {
+        params: {
+          limit: 100,
+          offset: 0
+        }
+      });
+
+      let uploads = [];
+      if (response.data.success) {
+        uploads = response.data.data;
+      }
+
+      // Transform uploads data to match the table structure
+      const transformedData = uploads.map(upload => ({
+        id: upload.id,
+        uploadDate: upload.upload_date || upload.created_at || new Date().toISOString(),
+        fileName: upload.original_name || upload.filename || 'Unknown file',
+        records: upload.row_count || 0,
+        status: upload.status || 'pending'
+      }));
+
+      // Sort by date (newest first)
+      transformedData.sort((a, b) => new Date(b.uploadDate) - new Date(a.uploadDate));
+
+      setHistoricalData(transformedData);
+
+    } catch (error) {
+      console.error('Error fetching historical data:', error);
+      toast.error('Failed to load historical data');
+      setHistoricalData([]);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    fetchHistoricalData();
+  }, []);
 
   // Filter data based on search
   const filteredData = historicalData.filter(item =>
     item.fileName.toLowerCase().includes(searchTerm.toLowerCase()) ||
-    item.uploadDate.toLowerCase().includes(searchTerm.toLowerCase())
+    item.uploadDate.toLowerCase().includes(searchTerm.toLowerCase()) ||
+    (item.status && item.status.toLowerCase().includes(searchTerm.toLowerCase()))
   );
 
   // Pagination
@@ -60,14 +120,48 @@ const HistoricalData = () => {
     return pages;
   };
 
+  // Format date
+  const formatDate = (dateString) => {
+    if (!dateString) return 'N/A';
+    try {
+      const date = new Date(dateString);
+      return date.toLocaleString('en-US', {
+        year: 'numeric',
+        month: 'short',
+        day: 'numeric',
+        hour: '2-digit',
+        minute: '2-digit'
+      });
+    } catch {
+      return dateString;
+    }
+  };
+
+  // Get status badge class
+  const getStatusBadgeClass = (status) => {
+    switch(status) {
+      case 'processed':
+        return 'status-success';
+      case 'pending':
+        return 'status-pending';
+      case 'failed':
+        return 'status-failed';
+      default:
+        return 'status-info';
+    }
+  };
+
+  // Handle download
+  const handleDownload = (item) => {
+    toast.success(`Downloading ${item.fileName}...`);
+  };
+
   return (
     <div className="historical-container">
       {/* Header */}
       <div className="historical-header">
         <h2 className="historical-title">Historical Data Storage</h2>
-        <button className="btn-upload">
-          <FiPlus size={16} /> Upload New Data
-        </button>
+       
       </div>
 
       {/* Search and Filter */}
@@ -75,14 +169,13 @@ const HistoricalData = () => {
         <div className="search-wrapper">
           <input
             type="text"
-            placeholder="Search product or ingredient..."
+            placeholder="Search file name, date, or status..."
             className="search-input"
             value={searchTerm}
             onChange={(e) => setSearchTerm(e.target.value)}
           />
         </div>
         <div className="sort-wrapper">
-          <label>Sort By:</label>
           <select 
             className="sort-select"
             value={sortBy}
@@ -101,67 +194,85 @@ const HistoricalData = () => {
       {/* Historical Data Table */}
       <div className="historical-section">
         <div className="historical-table-wrapper">
-          <table className="historical-table">
-            <thead>
-              <tr>
-                <th>No.</th>
-                <th>Upload Date</th>
-                <th>File Name</th>
-                <th>Records</th>
-                <th>Action</th>
-              </tr>
-            </thead>
-            <tbody>
-              {currentData.map((item, index) => (
-                <tr key={item.id}>
-                  <td>{startIndex + index + 1}</td>
-                  <td>{item.uploadDate}</td>
-                  <td>{item.fileName}</td>
-                  <td>{item.records.toLocaleString()}</td>
-                  <td>
-                    <button className="action-btn download">
-                      <FiDownload size={16} />
-                    </button>
-                  </td>
+          {loading ? (
+            <div className="loading-state">Loading historical data...</div>
+          ) : currentData.length === 0 ? (
+            <div className="empty-state">No historical data found</div>
+          ) : (
+            <table className="historical-table">
+              <thead>
+                <tr>
+                  <th>No.</th>
+                  <th>Upload Date</th>
+                  <th>File Name</th>
+                  <th>Records</th>
+                  <th>Status</th>
+                  <th>Action</th>
                 </tr>
-              ))}
-            </tbody>
-          </table>
+              </thead>
+              <tbody>
+                {currentData.map((item, index) => (
+                  <tr key={item.id}>
+                    <td>{startIndex + index + 1}</td>
+                    <td>{formatDate(item.uploadDate)}</td>
+                    <td className="file-name-cell">{item.fileName}</td>
+                    <td>{item.records.toLocaleString()}</td>
+                    <td>
+                      <span className={`status-badge ${getStatusBadgeClass(item.status)}`}>
+                        {item.status || 'pending'}
+                      </span>
+                    </td>
+                    <td>
+                      <button 
+                        className="action-btn download"
+                        onClick={() => handleDownload(item)}
+                        title="Download file"
+                      >
+                        <FiDownload size={16} />
+                      </button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
         </div>
 
         {/* Pagination */}
-        <div className="pagination">
-          <div className="pagination-left">
-            <button 
-              className="page-btn"
-              onClick={() => setCurrentPage(Math.max(1, currentPage - 1))}
-              disabled={currentPage === 1}
-            >
-              <FiChevronLeft size={16} /> Previous
-            </button>
-          </div>
-          <div className="pagination-center">
-            {getPageNumbers().map((page, index) => (
-              <button
-                key={index}
-                className={`page-number ${page === currentPage ? 'active' : ''} ${page === '...' ? 'dots' : ''}`}
-                onClick={() => typeof page === 'number' && setCurrentPage(page)}
-                disabled={page === '...'}
+        {totalPages > 1 && !loading && (
+          <div className="pagination">
+            <div className="pagination-left">
+              <button 
+                className="page-btn"
+                onClick={() => setCurrentPage(Math.max(1, currentPage - 1))}
+                disabled={currentPage === 1}
               >
-                {page}
+                <FiChevronLeft size={16} /> Previous
               </button>
-            ))}
+            </div>
+            <div className="pagination-center">
+              {getPageNumbers().map((page, index) => (
+                <button
+                  key={index}
+                  className={`page-number ${page === currentPage ? 'active' : ''} ${page === '...' ? 'dots' : ''}`}
+                  onClick={() => typeof page === 'number' && setCurrentPage(page)}
+                  disabled={page === '...'}
+                >
+                  {page}
+                </button>
+              ))}
+            </div>
+            <div className="pagination-right">
+              <button 
+                className="page-btn"
+                onClick={() => setCurrentPage(Math.min(totalPages, currentPage + 1))}
+                disabled={currentPage === totalPages}
+              >
+                Next <FiChevronRight size={16} />
+              </button>
+            </div>
           </div>
-          <div className="pagination-right">
-            <button 
-              className="page-btn"
-              onClick={() => setCurrentPage(Math.min(totalPages, currentPage + 1))}
-              disabled={currentPage === totalPages}
-            >
-              Next <FiChevronRight size={16} />
-            </button>
-          </div>
-        </div>
+        )}
       </div>
     </div>
   );
