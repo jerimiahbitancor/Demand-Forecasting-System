@@ -1,16 +1,20 @@
-// login.jsx - Login component using global styles
+// login.jsx
 import { useState } from 'react';
-import { Link } from 'react-router-dom';
+import { Link, useNavigate } from 'react-router-dom';
 import { 
   FaEnvelope, 
   FaLock, 
-  
   FaEye,
-  FaEyeSlash
+  FaEyeSlash,
+  FaSpinner
 } from 'react-icons/fa';
+import { useAuth } from '../../../../context/AuthContext';
 import './Login.css';
 
 const Login = () => {
+  const navigate = useNavigate();
+  const { login, loading } = useAuth();
+  
   const [formData, setFormData] = useState({
     email: '',
     password: '',
@@ -20,6 +24,7 @@ const Login = () => {
   const [focusedInput, setFocusedInput] = useState(null);
   const [errors, setErrors] = useState({});
   const [showPassword, setShowPassword] = useState(false);
+  const [error, setError] = useState('');
 
   const handleChange = (e) => {
     const { id, value, type, checked } = e.target;
@@ -30,6 +35,7 @@ const Login = () => {
     if (errors[id]) {
       setErrors((prev) => ({ ...prev, [id]: '' }));
     }
+    setError('');
   };
 
   const validateForm = () => {
@@ -51,20 +57,28 @@ const Login = () => {
     return Object.keys(newErrors).length === 0;
   };
 
-  const handleSubmit = (e) => {
+  const handleSubmit = async (e) => {
     e.preventDefault();
+    setError('');
+    
     if (validateForm()) {
-      console.log('Login submitted:', formData);
-      alert('Login successful!');
+      const result = await login(
+        formData.email, 
+        formData.password, 
+        formData.rememberMe
+      );
+      
+      if (result.success) {
+        // Redirect to dashboard or home
+        navigate('/dashboard');
+      } else {
+        setError(result.error || 'Login failed. Please try again.');
+      }
     }
   };
 
   const getIconColor = (inputId) => {
     return focusedInput === inputId ? '#bb0114' : '#6c757d';
-  };
-
-  const handleSocialLogin = (provider) => {
-    console.log(`${provider} login`);
   };
 
   const togglePasswordVisibility = () => {
@@ -90,6 +104,12 @@ const Login = () => {
             <p className="brand-subtitle">Welcome back! Log in to your account.</p>
           </div>
 
+          {error && (
+            <div className="alert alert-error">
+              {error}
+            </div>
+          )}
+
           <form onSubmit={handleSubmit} className="login-form">
             <div className="form-group">
               <label className="form-label" htmlFor="email">
@@ -109,6 +129,7 @@ const Login = () => {
                   onChange={handleChange}
                   onFocus={() => setFocusedInput('email')}
                   onBlur={() => setFocusedInput(null)}
+                  disabled={loading}
                 />
               </div>
               {errors.email && <span className="error-message">{errors.email}</span>}
@@ -132,12 +153,14 @@ const Login = () => {
                   onChange={handleChange}
                   onFocus={() => setFocusedInput('password')}
                   onBlur={() => setFocusedInput(null)}
+                  disabled={loading}
                 />
                 <button
                   type="button"
                   className="password-toggle"
                   onClick={togglePasswordVisibility}
                   aria-label={showPassword ? 'Hide password' : 'Show password'}
+                  disabled={loading}
                 >
                   {showPassword ? <FaEyeSlash /> : <FaEye />}
                 </button>
@@ -153,6 +176,7 @@ const Login = () => {
                   type="checkbox"
                   checked={formData.rememberMe}
                   onChange={handleChange}
+                  disabled={loading}
                 />
                 <label className="remember-label" htmlFor="rememberMe">
                   Remember me
@@ -163,8 +187,15 @@ const Login = () => {
               </Link>
             </div>
 
-            <button className="btn-primary" type="submit">
-              Log In
+            <button className="btn-primary" type="submit" disabled={loading}>
+              {loading ? (
+                <>
+                  <FaSpinner className="spinner" />
+                  Logging in...
+                </>
+              ) : (
+                'Log In'
+              )}
             </button>
           </form>
 
@@ -175,8 +206,6 @@ const Login = () => {
               <div className="divider-line"></div>
             </div>
             
-          
-            
             <p className="register-prompt">
               Don't have an account? 
               <Link className="register-link" to="/register">Sign up</Link>
@@ -184,8 +213,6 @@ const Login = () => {
           </div>
         </div>
       </main>
-      
-     
     </div>
   );
 };
