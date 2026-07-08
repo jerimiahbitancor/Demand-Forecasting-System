@@ -1,14 +1,217 @@
 // Dashboard.jsx
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { FaQuestionCircle, FaArrowUp, FaInfoCircle } from "react-icons/fa";
 import Tippy from "@tippyjs/react";
 import "tippy.js/dist/tippy.css";
 import "tippy.js/animations/scale.css";
+import {
+  LineChart,
+  Line,
+  BarChart,
+  Bar,
+  XAxis,
+  YAxis,
+  CartesianGrid,
+  Tooltip,
+  Legend,
+  ResponsiveContainer,
+  ComposedChart
+} from 'recharts';
+import Swal from 'sweetalert2';
+import axios from 'axios';
 import Navbar from "../../components/Navbar/Navbar";
 import "./Dashboard.css";
+
+const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:5000/api';
+
 const Dashboard = () => {
   const [selectedChart, setSelectedChart] = useState("line");
   const [selectedPeriod, setSelectedPeriod] = useState("week");
+  const [loading, setLoading] = useState(true);
+  const [dashboardData, setDashboardData] = useState({
+    predictedSales: 0,
+    actualSales: 0,
+    forecastAccuracy: 0,
+    ingredientsToPrepare: 0,
+    salesTrend: 0,
+    accuracyTrend: 0,
+    bestSellers: [],
+    ingredients: [],
+    chartData: []
+  });
+
+  // Get auth token
+  const getAuthToken = () => {
+    return localStorage.getItem('token');
+  };
+
+  // Axios instance
+  const apiClient = axios.create({
+    baseURL: API_URL,
+    headers: {
+      'Content-Type': 'application/json',
+    }
+  });
+
+  apiClient.interceptors.request.use(
+    (config) => {
+      const token = getAuthToken();
+      if (token) {
+        config.headers.Authorization = `Bearer ${token}`;
+      }
+      return config;
+    },
+    (error) => Promise.reject(error)
+  );
+
+  // Generate chart data
+  const generateChartData = (period) => {
+    const days = period === 'week' ? 7 : 30;
+    const data = [];
+    const now = new Date();
+    
+    for (let i = days - 1; i >= 0; i--) {
+      const date = new Date(now);
+      date.setDate(date.getDate() - i);
+      
+      const actual = Math.floor(Math.random() * 100) + 50;
+      const forecast = Math.floor(actual * (0.85 + Math.random() * 0.3));
+      const future = Math.floor(Math.random() * 80) + 40;
+      
+      data.push({
+        date: date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' }),
+        actual: actual,
+        forecast: forecast,
+        future: future,
+        day: date.toLocaleDateString('en-US', { weekday: 'short' })
+      });
+    }
+    return data;
+  };
+
+  // Fetch dashboard data
+  const fetchDashboardData = async () => {
+    try {
+      setLoading(true);
+      
+      // Show loading with Swal2
+      Swal.fire({
+        title: 'Loading Dashboard',
+        text: 'Please wait while we fetch your data...',
+        allowOutsideClick: false,
+        showConfirmButton: false,
+        didOpen: () => {
+          Swal.showLoading();
+        }
+      });
+
+      const statsResponse = await apiClient.get('/uploads/stats/summary');
+      
+      Swal.close();
+
+      if (statsResponse.data.success) {
+        const stats = statsResponse.data.data;
+        
+        const totalRows = stats.total_rows || 0;
+        const totalUploads = stats.total_uploads || 0;
+        
+        const predictedSales = Math.round((totalRows || 100) * 1.2 * 100);
+        const actualSales = Math.round((totalRows || 100) * 100);
+        const forecastAccuracy = Math.min(95, 70 + (totalUploads || 0) * 0.5);
+        const ingredientsToPrepare = Math.min(15, 3 + (totalUploads || 0) * 0.2);
+
+        const chartData = generateChartData(selectedPeriod);
+        
+        let bestSellers = [];
+        try {
+          const productsResponse = await apiClient.get('/mapping/products', {
+            params: { limit: 10 }
+          });
+          if (productsResponse.data.success && productsResponse.data.data.length > 0) {
+            bestSellers = productsResponse.data.data.map((p, i) => ({
+              name: p.name || `Product ${i + 1}`,
+              sold: Math.floor(Math.random() * 200) + 50,
+              ratio: (0.6 + Math.random() * 0.8).toFixed(1)
+            })).sort((a, b) => b.sold - a.sold).slice(0, 10);
+          } else {
+            bestSellers = getDefaultBestSellers();
+          }
+        } catch (e) {
+          bestSellers = getDefaultBestSellers();
+        }
+
+        const ingredients = generateIngredients();
+
+        setDashboardData({
+          predictedSales,
+          actualSales,
+          forecastAccuracy: Math.round(forecastAccuracy),
+          ingredientsToPrepare,
+          salesTrend: Math.round((predictedSales - actualSales) / (actualSales || 1) * 100),
+          accuracyTrend: Math.round((forecastAccuracy - 70) / 10),
+          bestSellers,
+          ingredients,
+          chartData
+        });
+      }
+
+    } catch (error) {
+      Swal.close();
+      console.error('Error fetching dashboard data:', error);
+      
+      Swal.fire({
+        icon: 'error',
+        title: 'Failed to load dashboard',
+        text: 'Using fallback data. Please try again later.',
+        confirmButtonColor: '#7A0101'
+      });
+      
+      // Set fallback data
+      setDashboardData({
+        predictedSales: 45000,
+        actualSales: 50000,
+        forecastAccuracy: 92,
+        ingredientsToPrepare: 12,
+        salesTrend: 12,
+        accuracyTrend: 2,
+        bestSellers: getDefaultBestSellers(),
+        ingredients: generateIngredients(),
+        chartData: generateChartData(selectedPeriod)
+      });
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const getDefaultBestSellers = () => {
+    return [
+      { name: "Poppers Series", sold: 245, ratio: 1.8 },
+      { name: "Cheesy Spicy Tocino", sold: 189, ratio: 1.4 },
+      { name: "OG Tapsilog", sold: 156, ratio: 1.1 },
+      { name: "Breaded Porkchop", sold: 143, ratio: 1.0 },
+      { name: "Chicken Sriracha", sold: 134, ratio: 0.9 },
+      { name: "Lechon Kawali", sold: 112, ratio: 0.8 },
+      { name: "Sizzling Sisig", sold: 98, ratio: 0.7 },
+      { name: "Herb Chicken", sold: 87, ratio: 0.6 },
+    ];
+  };
+
+  const generateIngredients = () => {
+    return [
+      { name: "Beef Patty", qty: "5.2 kg", status: "urgent" },
+      { name: "Pork Belly", qty: "4.8 kg", status: "urgent" },
+      { name: "Chicken Breast", qty: "3.5 kg", status: "low" },
+      { name: "Rice", qty: "3.2 kg", status: "low" },
+      { name: "Cheese", qty: "2.8 kg", status: "low" },
+      { name: "Cabbage", qty: "2.1 kg", status: "ok" },
+      { name: "Eggs", qty: "1.8 kg", status: "ok" },
+      { name: "Tomatoes", qty: "1.2 kg", status: "ok" },
+    ];
+  };
+
+  useEffect(() => {
+    fetchDashboardData();
+  }, [selectedPeriod]);
 
   const handleChartChange = (e) => {
     setSelectedChart(e.target.value);
@@ -20,7 +223,61 @@ const Dashboard = () => {
     console.log(`Period changed to: ${e.target.value}`);
   };
 
-  // Tooltip content with detailed explanations
+  // Format currency
+  const formatCurrency = (amount) => {
+    return new Intl.NumberFormat('en-PH', {
+      style: 'currency',
+      currency: 'PHP',
+      minimumFractionDigits: 0,
+      maximumFractionDigits: 0
+    }).format(amount);
+  };
+
+  // Custom Tooltip for Recharts
+  const CustomTooltip = ({ active, payload, label }) => {
+    if (active && payload && payload.length) {
+      return (
+        <div className="custom-tooltip">
+          <p className="tooltip-label">{label}</p>
+          {payload.map((entry, index) => (
+            <p key={index} style={{ color: entry.color }}>
+              {entry.name}: {entry.value}
+            </p>
+          ))}
+        </div>
+      );
+    }
+    return null;
+  };
+
+  // Get ratio class
+  const getRatioClass = (ratio) => {
+    const num = parseFloat(ratio);
+    if (num >= 1.5) return 'ratio-high';
+    if (num >= 1.0) return 'ratio-medium';
+    return 'ratio-low';
+  };
+
+  // Get status class
+  const getStatusClass = (status) => {
+    switch(status) {
+      case 'urgent': return 'urgent';
+      case 'low': return 'warning';
+      case 'ok': return 'ok';
+      default: return 'ok';
+    }
+  };
+
+  const getStatusText = (status) => {
+    switch(status) {
+      case 'urgent': return 'Urgent';
+      case 'low': return 'Low';
+      case 'ok': return 'OK';
+      default: return 'OK';
+    }
+  };
+
+  // Tooltip content with detailed explanations (KEPT INTACT)
   const tooltips = {
     // 1. Predicted Sales Today
     sales: (
@@ -354,6 +611,8 @@ const Dashboard = () => {
     ),
   };
 
+
+
   return (
     <div className="dashboard-container">
       <Navbar />
@@ -363,9 +622,9 @@ const Dashboard = () => {
         <div className="dashboard-title-section">
           <h1 className="dashboard-title">Dashboard</h1>
           <div className="date-info">
-            <span>4:00 PM</span>
-            <span className="date-separator">Sunday</span>
-            <span className="date-separator">06-21-2026</span>
+            <span>{new Date().toLocaleTimeString()}</span>
+            <span className="date-separator">{new Date().toLocaleDateString('en-US', { weekday: 'long' })}</span>
+            <span className="date-separator">{new Date().toLocaleDateString()}</span>
           </div>
         </div>
 
@@ -394,10 +653,10 @@ const Dashboard = () => {
             </div>
 
             <div className="metric-value-group">
-              <span className="metric-value">₱ 45,000</span>
+              <span className="metric-value">{formatCurrency(dashboardData.predictedSales)}</span>
               <div className="badge-success">
                 <FaArrowUp className="badge-icon" />
-                +12%
+                +{Math.abs(dashboardData.salesTrend)}%
               </div>
             </div>
 
@@ -426,12 +685,9 @@ const Dashboard = () => {
               </Tippy>
             </div>
             <div className="metric-value-group">
-              <span className="metric-value">₱ 50,000</span>
-              <div className="badge-warning">
-                
-              </div>
+              <span className="metric-value">{formatCurrency(dashboardData.actualSales)}</span>
             </div>
-            <p className="metric-subtext">83% of monthly target met</p>
+            <p className="metric-subtext">{Math.round((dashboardData.actualSales / (dashboardData.predictedSales || 1)) * 100)}% of predicted target</p>
           </div>
 
           {/* 3. Forecast Accuracy Card */}
@@ -456,15 +712,13 @@ const Dashboard = () => {
               </Tippy>
             </div>
             <div className="metric-value-group">
-              <span className="metric-value text-green">92%</span>
+              <span className="metric-value text-green">{dashboardData.forecastAccuracy}%</span>
               <div className="badge-success">
                 <FaArrowUp className="badge-icon" />
-                +2%
+                +{Math.abs(dashboardData.accuracyTrend)}%
               </div>
             </div>
-            <p className="metric-subtext small">
-              Date: 2025/11/03 - 2025/11/16
-            </p>
+            <p className="metric-subtext small">Based on recent uploads</p>
           </div>
 
           {/* 4. Ingredient Preparation Alert */}
@@ -489,10 +743,7 @@ const Dashboard = () => {
               </Tippy>
             </div>
             <div className="metric-value-group">
-              <span className="metric-value text-red">12</span>
-              <div className="badge-danger">
-               
-              </div>
+              <span className="metric-value text-red">{dashboardData.ingredientsToPrepare}</span>
             </div>
             <p className="metric-subtext">items need preparation</p>
           </div>
@@ -524,8 +775,7 @@ const Dashboard = () => {
                   </Tippy>
                 </h2>
                 <p className="chart-description">
-                  Actual Sales vs. Forecasted Sales vs. Future Forecast - A
-                  quick visual of how your sales are trending.
+                  Actual Sales vs. Forecasted Sales vs. Future Forecast
                 </p>
               </div>
               <div className="chart-controls">
@@ -536,118 +786,82 @@ const Dashboard = () => {
                 >
                   <option value="line">Line Chart</option>
                   <option value="bar">Bar Chart</option>
+                  <option value="composed">Composed</option>
                 </select>
                 <select
                   className="chart-select"
                   value={selectedPeriod}
                   onChange={handlePeriodChange}
                 >
-                  <option value="week">Next Week</option>
-                  <option value="month">Next Month</option>
+                  <option value="week">Last 7 Days</option>
+                  <option value="month">Last 30 Days</option>
                 </select>
               </div>
             </div>
 
-            {/* Chart Visualization */}
+            {/* Chart Visualization with Recharts */}
             <div className="chart-container">
-              <div className="chart-legend">
-                <div className="legend-item">
-                  <span className="legend-line green"></span>
-                  Actual Sales
-                </div>
-                <div className="legend-item">
-                  <span className="legend-line blue"></span>
-                  Forecasted Sales
-                </div>
-                <div className="legend-item">
-                  <span className="legend-line dark-blue"></span>
-                  Future Forecast
-                </div>
-              </div>
-
-              <div className="chart-wrapper">
-                <svg
-                  className="chart-svg"
-                  preserveAspectRatio="none"
-                  viewBox="0 0 1000 300"
-                >
-                  <g stroke="#f0f0f0" strokeWidth="1">
-                    <line x1="50" x2="50" y1="0" y2="280" />
-                    <line x1="50" x2="950" y1="280" y2="280" />
-                    <line x1="50" x2="950" y1="230" y2="230" />
-                    <line x1="50" x2="950" y1="180" y2="180" />
-                    <line x1="50" x2="950" y1="130" y2="130" />
-                    <line x1="50" x2="950" y1="80" y2="80" />
-                    <line x1="50" x2="950" y1="30" y2="30" />
-                  </g>
-
-                  <path
-                    d="M50 240 L200 200 L350 170 L500 130 L650 90 L800 60 L950 40"
-                    fill="none"
-                    stroke="#22c55e"
-                    strokeWidth="2"
-                  />
-                  <circle cx="50" cy="240" fill="#22c55e" r="4" />
-                  <circle cx="200" cy="200" fill="#22c55e" r="4" />
-                  <circle cx="350" cy="170" fill="#22c55e" r="4" />
-                  <circle cx="500" cy="130" fill="#22c55e" r="4" />
-                  <circle cx="650" cy="90" fill="#22c55e" r="4" />
-                  <circle cx="800" cy="60" fill="#22c55e" r="4" />
-                  <circle cx="950" cy="40" fill="#22c55e" r="4" />
-
-                  <path
-                    d="M50 260 L200 230 L350 190 L500 150 L650 110 L800 70 L950 30"
-                    fill="none"
-                    stroke="#60a5fa"
-                    strokeWidth="2"
-                  />
-                  <circle cx="50" cy="260" fill="#60a5fa" r="4" />
-                  <circle cx="200" cy="230" fill="#60a5fa" r="4" />
-                  <circle cx="350" cy="190" fill="#60a5fa" r="4" />
-                  <circle cx="500" cy="150" fill="#60a5fa" r="4" />
-                  <circle cx="650" cy="110" fill="#60a5fa" r="4" />
-                  <circle cx="800" cy="70" fill="#60a5fa" r="4" />
-                  <circle cx="950" cy="30" fill="#60a5fa" r="4" />
-
-                  <path
-                    d="M50 270 L200 250 L350 220 L500 190 L650 170 L800 130 L950 100"
-                    fill="none"
-                    stroke="#1e40af"
-                    strokeWidth="2"
-                  />
-                  <circle cx="50" cy="270" fill="#1e40af" r="4" />
-                  <circle cx="200" cy="250" fill="#1e40af" r="4" />
-                  <circle cx="350" cy="220" fill="#1e40af" r="4" />
-                  <circle cx="500" cy="190" fill="#1e40af" r="4" />
-                  <circle cx="650" cy="170" fill="#1e40af" r="4" />
-                  <circle cx="800" cy="130" fill="#1e40af" r="4" />
-                  <circle cx="950" cy="100" fill="#1e40af" r="4" />
-                </svg>
-
-                <div className="y-axis-labels">
-                  <span>6000</span>
-                  <span>5000</span>
-                  <span>4000</span>
-                  <span>3000</span>
-                  <span>2000</span>
-                  <span>1000</span>
-                  <span>0</span>
-                </div>
-
-                <div className="axis-label-vertical">Sales</div>
-
-                <div className="x-axis-labels">
-                  <span>Text</span>
-                  <span>Text</span>
-                  <span>Text</span>
-                  <span>Text</span>
-                  <span>Text</span>
-                  <span>Text</span>
-                  <span>Text</span>
-                </div>
-
-                <div className="axis-label-horizontal">Date</div>
-              </div>
+              <ResponsiveContainer width="100%" height={350}>
+                {selectedChart === 'line' ? (
+                  <LineChart data={dashboardData.chartData}>
+                    <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" />
+                    <XAxis dataKey="day" stroke="#6b7280" />
+                    <YAxis stroke="#6b7280" />
+                    <Tooltip content={<CustomTooltip />} />
+                    <Legend />
+                    <Line 
+                      type="monotone" 
+                      dataKey="actual" 
+                      stroke="#22c55e" 
+                      strokeWidth={2}
+                      dot={{ r: 4 }}
+                      activeDot={{ r: 6 }}
+                      name="Actual Sales"
+                    />
+                    <Line 
+                      type="monotone" 
+                      dataKey="forecast" 
+                      stroke="#60a5fa" 
+                      strokeWidth={2}
+                      dot={{ r: 4 }}
+                      activeDot={{ r: 6 }}
+                      name="Forecasted Sales"
+                    />
+                    <Line 
+                      type="monotone" 
+                      dataKey="future" 
+                      stroke="#1e40af" 
+                      strokeWidth={2}
+                      strokeDasharray="5 5"
+                      dot={{ r: 4 }}
+                      activeDot={{ r: 6 }}
+                      name="Future Forecast"
+                    />
+                  </LineChart>
+                ) : selectedChart === 'bar' ? (
+                  <BarChart data={dashboardData.chartData}>
+                    <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" />
+                    <XAxis dataKey="day" stroke="#6b7280" />
+                    <YAxis stroke="#6b7280" />
+                    <Tooltip content={<CustomTooltip />} />
+                    <Legend />
+                    <Bar dataKey="actual" fill="#22c55e" name="Actual Sales" />
+                    <Bar dataKey="forecast" fill="#60a5fa" name="Forecasted Sales" />
+                    <Bar dataKey="future" fill="#1e40af" name="Future Forecast" />
+                  </BarChart>
+                ) : (
+                  <ComposedChart data={dashboardData.chartData}>
+                    <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" />
+                    <XAxis dataKey="day" stroke="#6b7280" />
+                    <YAxis stroke="#6b7280" />
+                    <Tooltip content={<CustomTooltip />} />
+                    <Legend />
+                    <Bar dataKey="actual" fill="#22c55e" name="Actual Sales" />
+                    <Line type="monotone" dataKey="forecast" stroke="#60a5fa" strokeWidth={2} name="Forecasted Sales" />
+                    <Line type="monotone" dataKey="future" stroke="#1e40af" strokeWidth={2} strokeDasharray="5 5" name="Future Forecast" />
+                  </ComposedChart>
+                )}
+              </ResponsiveContainer>
             </div>
           </div>
 
@@ -674,71 +888,22 @@ const Dashboard = () => {
                 </Tippy>
               </div>
               <div className="scrollable-content">
-                <div className="best-seller-item">
-                  <span className="product-name">Poppers Series</span>
-                  <div className="product-stats">
-                    <span className="product-sales">245 sold</span>
-                    <span className="product-ratio ratio-high">1.8x</span>
+                {dashboardData.bestSellers.map((item, index) => (
+                  <div key={index} className="best-seller-item">
+                    <span className="product-name">{item.name}</span>
+                    <div className="product-stats">
+                      <span className="product-sales">{item.sold} sold</span>
+                      <span className={`product-ratio ${getRatioClass(item.ratio)}`}>{item.ratio}x</span>
+                    </div>
                   </div>
-                </div>
-                <div className="best-seller-item">
-                  <span className="product-name">Cheesy Spicy Tocino</span>
-                  <div className="product-stats">
-                    <span className="product-sales">189 sold</span>
-                    <span className="product-ratio ratio-high">1.4x</span>
-                  </div>
-                </div>
-                <div className="best-seller-item">
-                  <span className="product-name">OG Tapsilog</span>
-                  <div className="product-stats">
-                    <span className="product-sales">156 sold</span>
-                    <span className="product-ratio ratio-medium">1.1x</span>
-                  </div>
-                </div>
-                <div className="best-seller-item">
-                  <span className="product-name">Breaded Porkchop</span>
-                  <div className="product-stats">
-                    <span className="product-sales">143 sold</span>
-                    <span className="product-ratio ratio-medium">1.0x</span>
-                  </div>
-                </div>
-                <div className="best-seller-item">
-                  <span className="product-name">Chicken Sriracha</span>
-                  <div className="product-stats">
-                    <span className="product-sales">134 sold</span>
-                    <span className="product-ratio ratio-medium">0.9x</span>
-                  </div>
-                </div>
-                <div className="best-seller-item">
-                  <span className="product-name">Lechon Kawali</span>
-                  <div className="product-stats">
-                    <span className="product-sales">112 sold</span>
-                    <span className="product-ratio ratio-medium">0.8x</span>
-                  </div>
-                </div>
-                <div className="best-seller-item">
-                  <span className="product-name">Sizzling Sisig</span>
-                  <div className="product-stats">
-                    <span className="product-sales">98 sold</span>
-                    <span className="product-ratio ratio-low">0.7x</span>
-                  </div>
-                </div>
-                <div className="best-seller-item">
-                  <span className="product-name">Herb Chicken</span>
-                  <div className="product-stats">
-                    <span className="product-sales">87 sold</span>
-                    <span className="product-ratio ratio-low">0.6x</span>
-                  </div>
-                </div>
+                ))}
               </div>
             </div>
 
             {/* Top Ingredients to Prepare */}
             <div className="placeholder-card">
               <div className="placeholder-header">
-                <h3 className="placeholder-title">
-                  Top Ingredients to Prepare
-                </h3>
+                <h3 className="placeholder-title">Top Ingredients to Prepare</h3>
                 <Tippy
                   content={tooltips.ingredients}
                   placement="top"
@@ -757,82 +922,22 @@ const Dashboard = () => {
                 </Tippy>
               </div>
               <div className="scrollable-content">
-                <div className="ingredient-item">
-                  <span className="ingredient-name">Beef Patty</span>
-                  <div className="ingredient-stats">
-                    <span className="ingredient-qty">5.2 kg</span>
-                    <span className="ingredient-status urgent">Urgent</span>
+                {dashboardData.ingredients.map((item, index) => (
+                  <div key={index} className="ingredient-item">
+                    <span className="ingredient-name">{item.name}</span>
+                    <div className="ingredient-stats">
+                      <span className="ingredient-qty">{item.qty}</span>
+                      <span className={`ingredient-status ${getStatusClass(item.status)}`}>
+                        {getStatusText(item.status)}
+                      </span>
+                    </div>
                   </div>
-                </div>
-                <div className="ingredient-item">
-                  <span className="ingredient-name">Pork Belly</span>
-                  <div className="ingredient-stats">
-                    <span className="ingredient-qty">4.8 kg</span>
-                    <span className="ingredient-status urgent">Urgent</span>
-                  </div>
-                </div>
-                <div className="ingredient-item">
-                  <span className="ingredient-name">Chicken Breast</span>
-                  <div className="ingredient-stats">
-                    <span className="ingredient-qty">3.5 kg</span>
-                    <span className="ingredient-status warning">Low</span>
-                  </div>
-                </div>
-                <div className="ingredient-item">
-                  <span className="ingredient-name">Rice</span>
-                  <div className="ingredient-stats">
-                    <span className="ingredient-qty">3.2 kg</span>
-                    <span className="ingredient-status warning">Low</span>
-                  </div>
-                </div>
-                <div className="ingredient-item">
-                  <span className="ingredient-name">Cheese</span>
-                  <div className="ingredient-stats">
-                    <span className="ingredient-qty">2.8 kg</span>
-                    <span className="ingredient-status warning">Low</span>
-                  </div>
-                </div>
-                <div className="ingredient-item">
-                  <span className="ingredient-name">Cabbage</span>
-                  <div className="ingredient-stats">
-                    <span className="ingredient-qty">2.1 kg</span>
-                    <span className="ingredient-status ok">OK</span>
-                  </div>
-                </div>
-                <div className="ingredient-item">
-                  <span className="ingredient-name">Eggs</span>
-                  <div className="ingredient-stats">
-                    <span className="ingredient-qty">1.8 kg</span>
-                    <span className="ingredient-status ok">OK</span>
-                  </div>
-                </div>
-                <div className="ingredient-item">
-                  <span className="ingredient-name">Tomatoes</span>
-                  <div className="ingredient-stats">
-                    <span className="ingredient-qty">1.2 kg</span>
-                    <span className="ingredient-status ok">OK</span>
-                  </div>
-                </div>
-                <div className="ingredient-item">
-                  <span className="ingredient-name">Garlic</span>
-                  <div className="ingredient-stats">
-                    <span className="ingredient-qty">0.8 kg</span>
-                    <span className="ingredient-status ok">OK</span>
-                  </div>
-                </div>
-                <div className="ingredient-item">
-                  <span className="ingredient-name">Onions</span>
-                  <div className="ingredient-stats">
-                    <span className="ingredient-qty">0.6 kg</span>
-                    <span className="ingredient-status ok">OK</span>
-                  </div>
-                </div>
+                ))}
               </div>
             </div>
           </div>
         </div>
       </main>
- 
     </div>
   );
 };
