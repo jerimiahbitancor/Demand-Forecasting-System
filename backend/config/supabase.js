@@ -20,6 +20,4 @@ try {
 } catch (error) {
 }
 
-
-
 module.exports = { supabase, isConfigured };

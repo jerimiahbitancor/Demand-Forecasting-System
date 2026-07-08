@@ -66,6 +66,26 @@ router.post('/register', async (req, res) => {
   }
 });
 
+// ============ SETUP CHECK ============
+router.get('/setup', async (req, res) => {
+  try {
+    const { data, error } = await supabase
+      .from('users')
+      .select('id')
+      .limit(1);
+
+    if (error) {
+      throw error;
+    }
+
+    const hasUser = Array.isArray(data) && data.length > 0;
+    res.json({ success: true, hasUser });
+  } catch (error) {
+    console.error('Setup check error:', error);
+    res.status(500).json({ error: 'Failed to check setup: ' + error.message });
+  }
+});
+
 // ============ LOGIN ============
 router.post('/login', async (req, res) => {
   const { email, password } = req.body;

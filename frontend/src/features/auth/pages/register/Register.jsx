@@ -1,6 +1,7 @@
 // register.jsx
 import { useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
+import Swal from 'sweetalert2';
 import { 
   FaUser, 
   FaEnvelope, 
@@ -41,7 +42,16 @@ const Register = () => {
 
   const validateForm = () => {
     const newErrors = {};
-    
+    const password = formData.password;
+    const passwordRules = [
+      { test: password.length >= 8, message: 'Minimum 8 characters' },
+      { test: /[A-Z]/.test(password), message: 'One uppercase letter' },
+      { test: /[a-z]/.test(password), message: 'One lowercase letter' },
+      { test: /\d/.test(password), message: 'One number' },
+      { test: /[^A-Za-z0-9]/.test(password), message: 'One special character' },
+    ];
+    const failedPasswordRules = passwordRules.filter((rule) => !rule.test);
+
     if (!formData.fullName.trim()) {
       newErrors.fullName = 'Full name is required';
     } else if (formData.fullName.length < 2) {
@@ -54,12 +64,11 @@ const Register = () => {
       newErrors.email = 'Email is invalid';
     }
     
-    if (!formData.password) {
+    if (!password) {
       newErrors.password = 'Password is required';
-    } else if (formData.password.length < 6) {
-      newErrors.password = 'Password must be at least 6 characters';
-    } else if (!/(?=.*[A-Z])/.test(formData.password)) {
-      newErrors.password = 'Password must contain at least one uppercase letter';
+    } else if (failedPasswordRules.length > 0) {
+      newErrors.password = 'Password must meet all requirements';
+      newErrors.passwordRequirements = failedPasswordRules.map((rule) => rule.message);
     }
     
     if (!formData.confirmPassword) {
@@ -81,19 +90,38 @@ const Register = () => {
     setError('');
     
     if (validateForm()) {
+      Swal.fire({
+        title: 'Creating account...',
+        allowOutsideClick: false,
+        didOpen: () => {
+          Swal.showLoading();
+        },
+      });
+
       const result = await register({
         fullName: formData.fullName,
         email: formData.email,
         password: formData.password,
       });
+
+      Swal.close();
       
       if (result.success) {
-        // Redirect to login or dashboard
-        navigate('/login', { 
-          state: { message: 'Registration successful! Please login.' } 
+        await Swal.fire({
+          icon: 'success',
+          title: 'Account created',
+          text: 'Welcome to ChefDuo!',
+          timer: 1200,
+          showConfirmButton: false,
         });
+        navigate('/landing');
       } else {
         setError(result.error || 'Registration failed. Please try again.');
+        Swal.fire({
+          icon: 'error',
+          title: 'Registration failed',
+          text: result.error || 'Please try again.',
+        });
       }
     }
   };
@@ -199,6 +227,13 @@ const Register = () => {
                   />
                 </div>
                 {errors.password && <span className="error-message">{errors.password}</span>}
+                {errors.passwordRequirements && (
+                  <ul className="requirements-list">
+                    {errors.passwordRequirements.map((requirement) => (
+                      <li key={requirement}>{requirement}</li>
+                    ))}
+                  </ul>
+                )}
               </div>
               <div className="form-group">
                 <label className="form-label" htmlFor="confirmPassword">
@@ -254,18 +289,6 @@ const Register = () => {
             </button>
           </form>
 
-          <div className="social-section">
-            <div className="divider-container">
-              <div className="divider-line"></div>
-              <span className="divider-text">OR</span>
-              <div className="divider-line"></div>
-            </div>
-            
-            <p className="login-prompt">
-              Already have an account? 
-              <Link className="login-link" to="/login">Log in</Link>
-            </p>
-          </div>
         </div>
       </main>
     </div>

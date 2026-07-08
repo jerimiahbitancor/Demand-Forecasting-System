@@ -1,0 +1,289 @@
+:root {
+  --color-red-primary: #7A0101;
+  --color-error: #EF4444;
+  --color-success: #0F9918;
+  --color-white: #FFFFFF;
+  --color-text-primary: #1C2632;
+  --color-text-secondary: #5c403c;
+  --color-border: #ced4da;
+}
+
+.forgot-password2-container {
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+  background-image: url('../../../../assets/images/Mask.png');
+  background-size: cover;
+  background-position: center;
+}
+
+.forgot-password2-main {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  position: relative;
+  padding: 20px 16px;
+}
+
+.background-effects {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  overflow: hidden;
+}
+
+.bg-effect-top {
+  position: absolute;
+  top: -96px;
+  right: -96px;
+  width: 384px;
+  height: 384px;
+  background: radial-gradient(circle, rgba(187, 1, 20, 0.08), transparent 70%);
+  border-radius: 50%;
+  filter: blur(64px);
+}
+
+.bg-effect-bottom {
+  position: absolute;
+  bottom: -96px;
+  left: -96px;
+  width: 384px;
+  height: 384px;
+  background: radial-gradient(circle, rgba(253, 192, 3, 0.12), transparent 70%);
+  border-radius: 50%;
+  filter: blur(64px);
+}
+
+.forgot-password2-card {
+  width: 100%;
+  max-width: 400px;
+  background: rgba(255, 255, 255, 0.95);
+  backdrop-filter: blur(10px);
+  border-radius: 16px;
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.06);
+  padding: 24px 20px;
+  position: relative;
+  z-index: 10;
+}
+
+.brand-header {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  margin-bottom: 20px;
+}
+
+.logo {
+  width: 56px;
+  height: 56px;
+  object-fit: contain;
+}
+
+.brand-title {
+  font-size: 24px;
+  font-weight: 700;
+  color: var(--color-red-primary);
+  margin-bottom: 2px;
+  letter-spacing: -0.5px;
+  background: linear-gradient(135deg, #bb0114, #e02929);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+}
+
+.brand-subtitle {
+  font-size: 13px;
+  color: var(--color-text-secondary);
+  font-weight: 400;
+  letter-spacing: 0.2px;
+}
+
+.success-message {
+  background: rgba(15, 153, 24, 0.1);
+  color: var(--color-success);
+  border: 1px solid rgba(15, 153, 24, 0.18);
+  padding: 10px 12px;
+  border-radius: 10px;
+  font-size: 13px;
+  margin-bottom: 14px;
+}
+
+.forgot-password2-form {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.form-group {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.form-label {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--color-text-primary);
+}
+
+.input-with-icon {
+  position: relative;
+}
+
+.input-icon {
+  position: absolute;
+  left: 12px;
+  top: 50%;
+  transform: translateY(-50%);
+  font-size: 15px;
+  color: #6c757d;
+}
+
+.form-input {
+  width: 100%;
+  padding: 11px 12px 11px 40px;
+  border: 1px solid var(--color-border);
+  border-radius: 10px;
+  font-size: 14px;
+  color: var(--color-text-primary);
+  background-color: var(--color-white);
+  outline: none;
+  transition: border-color 0.2s ease, box-shadow 0.2s ease;
+}
+
+.form-input:focus {
+  border-color: #bb0114;
+  box-shadow: 0 0 0 3px rgba(187, 1, 20, 0.12);
+}
+
+.input-error {
+  border-color: var(--color-error);
+}
+
+.error-message {
+  font-size: 12px;
+  color: var(--color-error);
+}
+
+.requirements-list {
+  margin: 4px 0 0 16px;
+  padding: 0;
+  color: var(--color-text-secondary);
+  font-size: 12px;
+}
+
+.requirements-list li {
+  margin-bottom: 2px;
+}
+
+.password-toggle {
+  position: absolute;
+  right: 12px;
+  top: 50%;
+  transform: translateY(-50%);
+  background: none;
+  border: none;
+  color: #6c757d;
+  cursor: pointer;
+  padding: 4px;
+  font-size: 16px;
+}
+
+.password-toggle:hover {
+  color: #bb0114;
+}
+
+.btn-primary {
+  width: 100%;
+  padding: 12px 16px;
+  background: linear-gradient(135deg, #bb0114, #e02929);
+  color: var(--color-white);
+  border: none;
+  border-radius: 10px;
+  font-size: 14px;
+  font-weight: 700;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  transition: transform 0.2s ease, box-shadow 0.2s ease;
+}
+
+.btn-primary:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 6px 16px rgba(187, 1, 20, 0.2);
+}
+
+.btn-primary:disabled {
+  opacity: 0.7;
+  cursor: not-allowed;
+}
+
+.spinner {
+  animation: spin 1s linear infinite;
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.auth-links {
+  margin-top: 16px;
+  text-align: center;
+}
+
+.back-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  color: #bb0114;
+  font-weight: 600;
+  text-decoration: none;
+}
+
+.back-link:hover {
+  text-decoration: underline;
+}
+
+@media (min-width: 768px) {
+  .forgot-password2-main {
+    padding: 40px 32px;
+  }
+
+  .forgot-password2-card {
+    max-width: 420px;
+    padding: 32px 28px;
+  }
+
+  .brand-title {
+    font-size: 28px;
+  }
+
+  .logo {
+    width: 64px;
+    height: 64px;
+  }
+}
+
+@media (max-width: 480px) {
+  .forgot-password2-card {
+    padding: 20px 16px;
+    border-radius: 14px;
+    max-width: 100%;
+  }
+
+  .brand-title {
+    font-size: 22px;
+  }
+
+  .logo {
+    width: 48px;
+    height: 48px;
+  }
+}
