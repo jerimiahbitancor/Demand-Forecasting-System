@@ -2,6 +2,8 @@
 import { Routes, Route, Navigate } from 'react-router-dom';
 import Register from '../src/features/auth/pages/register/Register';
 import Login from '../src/features/auth/pages/login/Login';
+import ForgotPassword from './features/auth/pages/forgotpass/forgotpass';
+import ForgotPassword2 from './features/auth/pages/forgotpass/forgotpass2';
 import ChefDuoLanding from './features/landing/ChefDuoLanding';
 import Dashboard from './features/dashboard/pages/Dashboard';
 import DataManagement from './features/datamanagement/pages/DataManagement';
@@ -20,6 +22,8 @@ function App() {
         <Route path="/" element={<Navigate to="/login" replace />} />
         <Route path="/login" element={<Login />} />
         <Route path="/register" element={<Register />} />
+        <Route path="/forgot-password" element={<ForgotPassword />} />
+        <Route path="/forgot-password/reset" element={<ForgotPassword2 />} />
         
         {/* Landing Page */}
         <Route path="/landing" element={<ChefDuoLanding />} />
