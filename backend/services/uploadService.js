@@ -2,6 +2,7 @@
 const { supabase, isConfigured } = require('../config/supabase');
 const fs = require('fs');
 const path = require('path');
+const xlsx = require('xlsx');
 
 class UploadService {
   constructor() {
@@ -17,7 +18,229 @@ class UploadService {
     return ready;
   }
 
+  // Validate file columns
+  validateFileColumns(headers, requiredColumns, fileType) {
+    const missingColumns = [];
+    const validColumns = [];
+    
+    requiredColumns.forEach(col => {
+      const found = headers.some(h => h.toLowerCase().trim() === col.toLowerCase().trim());
+      if (!found) {
+        missingColumns.push(col);
+      } else {
+        validColumns.push(col);
+      }
+    });
+
+    return {
+      isValid: missingColumns.length === 0,
+      missingColumns,
+      validColumns,
+      message: missingColumns.length > 0 
+        ? `Missing required columns: ${missingColumns.join(', ')}. Required: ${requiredColumns.join(', ')}`
+        : 'All required columns are present'
+    };
+  }
+
+  // Validate file data rows
+  validateFileData(data, requiredColumns) {
+    const errors = [];
+    let validRows = 0;
+    let invalidRows = 0;
+    
+    // Get actual column names from the data (case insensitive matching)
+    const headers = Object.keys(data[0] || {});
+    const columnMap = {};
+    
+    requiredColumns.forEach(col => {
+      const found = headers.find(h => h.toLowerCase().trim() === col.toLowerCase().trim());
+      if (found) {
+        columnMap[col] = found;
+      }
+    });
+
+    data.forEach((row, index) => {
+      const rowErrors = [];
+      const rowNumber = index + 2; // +2 because 0-indexed and header row is 1
+
+      requiredColumns.forEach(col => {
+        const actualCol = columnMap[col];
+        if (!actualCol) {
+          rowErrors.push(`${col} column not found`);
+          return;
+        }
+
+        const value = row[actualCol];
+        // Check if value is empty, undefined, null, or only whitespace
+        if (value === undefined || value === null || value === '' || value === ' ') {
+          rowErrors.push(`${col} is empty`);
+        }
+      });
+
+      if (rowErrors.length > 0) {
+        errors.push({
+          row: rowNumber,
+          message: rowErrors.join('; ')
+        });
+        invalidRows++;
+      } else {
+        validRows++;
+      }
+    });
+
+    return {
+      errors: errors.slice(0, 10), // Limit to first 10 errors
+      validRows,
+      invalidRows,
+      totalRows: data.length
+    };
+  }
+
+  // Process and validate sales data
+  async validateSalesData(data) {
+    const requiredColumns = ['Date', 'Item Name', 'Item Sold', 'Category', 'Net Sales'];
+    
+    // Get headers from data
+    const headers = data.length > 0 ? Object.keys(data[0]) : [];
+    
+    // Check if data is empty
+    if (data.length === 0) {
+      return {
+        isValid: false,
+        errors: [{ row: 0, message: 'File is empty' }],
+        validRows: 0,
+        invalidRows: 0,
+        totalRows: 0,
+        validation: {
+          columns: {
+            isValid: false,
+            missingColumns: ['Data is empty'],
+            validColumns: [],
+            message: 'File contains no data'
+          }
+        }
+      };
+    }
+
+    // Validate columns
+    const columnValidation = this.validateFileColumns(headers, requiredColumns, 'sales');
+    
+    if (!columnValidation.isValid) {
+      return {
+        isValid: false,
+        errors: [{ row: 1, message: columnValidation.message }],
+        validRows: 0,
+        invalidRows: data.length,
+        totalRows: data.length,
+        validation: {
+          columns: columnValidation
+        }
+      };
+    }
+
+    // Validate rows
+    const rowValidation = this.validateFileData(data, requiredColumns);
+
+    return {
+      isValid: rowValidation.errors.length === 0,
+      errors: rowValidation.errors,
+      validRows: rowValidation.validRows,
+      invalidRows: rowValidation.invalidRows,
+      totalRows: data.length,
+      validation: {
+        columns: columnValidation,
+        rows: rowValidation
+      }
+    };
+  }
+
+  // Save upload record with validation
   async saveUploadRecord(fileData, processedData, userId = null) {
+    try {
+      // Validate the data before saving
+      const validation = await this.validateSalesData(processedData.data || []);
+      
+      // Log validation results
+      console.log('📋 Validation Results:');
+      console.log(`  Total Rows: ${validation.totalRows}`);
+      console.log(`  Valid Rows: ${validation.validRows}`);
+      console.log(`  Invalid Rows: ${validation.invalidRows}`);
+      console.log(`  Valid: ${validation.isValid ? '✅' : '❌'}`);
+      
+      if (validation.errors.length > 0) {
+        console.log('  Errors:', validation.errors);
+      }
+
+      // Determine status based on validation
+      let status = 'processed';
+      if (!validation.isValid) {
+        status = 'failed';
+      } else if (validation.invalidRows > 0) {
+        status = 'pending'; // Some rows have issues but file is valid
+      }
+
+      const record = {
+        filename: fileData.filename,
+        original_name: fileData.originalName || fileData.filename,
+        file_size: fileData.size || 0,
+        file_type: fileData.type || 'unknown',
+        row_count: validation.totalRows,
+        valid_rows: validation.validRows,
+        invalid_rows: validation.invalidRows,
+        status: status,
+        validation_errors: validation.errors.length > 0 ? JSON.stringify(validation.errors) : null
+      };
+
+      console.log('💾 Saving to uploads table:', {
+        filename: record.original_name,
+        rows: record.row_count,
+        valid: record.valid_rows,
+        invalid: record.invalid_rows,
+        status: record.status
+      });
+
+      if (!this.isSupabaseReady()) {
+        const upload = {
+          id: this.memoryStore.uploads.length + 1,
+          ...record,
+          upload_date: new Date().toISOString(),
+          user_id: userId
+        };
+        this.memoryStore.uploads.push(upload);
+        console.log('📝 Upload saved to memory (ID:', upload.id, ')');
+        return upload.id;
+      }
+
+      // Only insert columns that exist in your uploads table
+      const insertData = {
+        filename: fileData.filename,
+        row_count: validation.totalRows,
+        status: status,
+        // Note: original_name, file_size, file_type, valid_rows, invalid_rows, validation_errors 
+        // are not in the uploads table schema, so we don't include them
+      };
+
+      const { data, error } = await supabase
+        .from('uploads')
+        .insert(insertData)
+        .select()
+        .single();
+
+      if (error) {
+        console.error('❌ Supabase insert error:', error);
+        throw error;
+      }
+      
+      console.log('✅ Upload saved to Supabase (ID:', data.id, ')');
+      return data.id;
+    } catch (error) {
+      console.error('❌ Error saving upload record:', error);
+      throw error;
+    }
+  }
+
+  // Legacy method for compatibility
+  async saveUploadRecordOld(fileData, processedData, userId = null) {
     try {
       const record = {
         filename: fileData.filename,
@@ -58,6 +281,7 @@ class UploadService {
     }
   }
 
+  // Rest of the methods remain the same...
   async getUploads(options = {}) {
     try {
       if (!this.isSupabaseReady()) {
@@ -214,8 +438,8 @@ class UploadService {
         processed: uploads.filter((upload) => upload.status === 'processed').length,
         pending: uploads.filter((upload) => upload.status === 'pending').length,
         failed: uploads.filter((upload) => upload.status === 'failed').length,
-        sales_records: uploads.reduce((sum, upload) => sum + (upload.row_count || 0), 0), // Only from uploads table
-        menu_items: menuItemsCount || 0, // Only from products table
+        sales_records: uploads.reduce((sum, upload) => sum + (upload.row_count || 0), 0),
+        menu_items: menuItemsCount || 0,
         last_sync: uploads[uploads.length - 1]?.upload_date || new Date().toISOString()
       };
 

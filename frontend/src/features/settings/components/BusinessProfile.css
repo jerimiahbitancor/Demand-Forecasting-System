@@ -226,13 +226,10 @@
   border-radius: 6px;
   font-size: 14px;
   font-weight: 500;
-  margin-top: 16px;
 }
 
 .upload-status.loading {
-  background: #eff6ff;
   color: var(--color-uploading);
-  border: 1px solid #bfdbfe;
 }
 
 .upload-status.success {
