@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { Link, useLocation, useNavigate } from 'react-router-dom';
+import Swal from 'sweetalert2';
 import {
   FaLock,
   FaEye,
@@ -64,15 +65,30 @@ const ForgotPassword2 = () => {
     return Object.keys(newErrors).length === 0;
   };
 
-  const handleSubmit = (e) => {
+  const handleSubmit = async (e) => {
     e.preventDefault();
     if (!validateForm()) return;
 
+    Swal.fire({
+      title: 'Updating password...',
+      allowOutsideClick: false,
+      didOpen: () => {
+        Swal.showLoading();
+      },
+    });
+
     setLoading(true);
-    setTimeout(() => {
+    setTimeout(async () => {
       setLoading(false);
-      setSuccessMessage(`Your password for ${email} has been updated successfully.`);
-      setTimeout(() => navigate('/login'), 1200);
+      Swal.close();
+      await Swal.fire({
+        icon: 'success',
+        title: 'Password updated',
+        text: `Your password for ${email} has been updated successfully.`,
+        timer: 1400,
+        showConfirmButton: false,
+      });
+      navigate('/login');
     }, 800);
   };
 

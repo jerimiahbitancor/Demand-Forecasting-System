@@ -1,6 +1,7 @@
 // login.jsx
 import { useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
+import Swal from 'sweetalert2';
 import { 
   FaEnvelope, 
   FaLock, 
@@ -62,17 +63,38 @@ const Login = () => {
     setError('');
     
     if (validateForm()) {
+      Swal.fire({
+        title: 'Logging in...',
+        allowOutsideClick: false,
+        didOpen: () => {
+          Swal.showLoading();
+        },
+      });
+
       const result = await login(
         formData.email, 
         formData.password, 
         formData.rememberMe
       );
+
+      Swal.close();
       
       if (result.success) {
-        // Redirect to dashboard or home
+        await Swal.fire({
+          icon: 'success',
+          title: 'Login successful',
+          text: 'Welcome back!',
+          timer: 1200,
+          showConfirmButton: false,
+        });
         navigate('/dashboard');
       } else {
         setError(result.error || 'Login failed. Please try again.');
+        Swal.fire({
+          icon: 'error',
+          title: 'Login failed',
+          text: result.error || 'Please try again.',
+        });
       }
     }
   };
@@ -198,19 +220,6 @@ const Login = () => {
               )}
             </button>
           </form>
-
-          <div className="social-section">
-            <div className="divider-container">
-              <div className="divider-line"></div>
-              <span className="divider-text">OR</span>
-              <div className="divider-line"></div>
-            </div>
-            
-            <p className="register-prompt">
-              Don't have an account? 
-              <Link className="register-link" to="/register">Sign up</Link>
-            </p>
-          </div>
         </div>
       </main>
     </div>

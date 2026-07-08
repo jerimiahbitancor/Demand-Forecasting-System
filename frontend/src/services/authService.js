@@ -112,6 +112,27 @@ export const authService = {
     }
   },
 
+  hasUser: async () => {
+    try {
+      const response = await fetch(`${API_URL}/auth/setup`, {
+        method: 'GET',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+      });
+
+      const data = await response.json();
+
+      if (!response.ok) {
+        throw new Error(data.error || 'Setup check failed');
+      }
+
+      return { success: true, data };
+    } catch (error) {
+      return { success: false, error: error.message };
+    }
+  },
+
   isAuthenticated: () => {
     const session = localStorage.getItem('supabase_session') || 
                    sessionStorage.getItem('supabase_session');

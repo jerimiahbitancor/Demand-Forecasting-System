@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
+import Swal from 'sweetalert2';
 import {
   FaEnvelope,
   FaKey,
@@ -52,9 +53,25 @@ const ForgotPassword = () => {
     e.preventDefault();
     if (!validateEmail()) return;
 
+    Swal.fire({
+      title: 'Sending code...',
+      allowOutsideClick: false,
+      didOpen: () => {
+        Swal.showLoading();
+      },
+    });
+
     setLoading(true);
     setTimeout(() => {
       setLoading(false);
+      Swal.close();
+      Swal.fire({
+        icon: 'success',
+        title: 'Code sent',
+        text: `A 6-digit verification code was sent to ${formData.email}.`,
+        timer: 1600,
+        showConfirmButton: false,
+      });
       setCodeSent(true);
       setStatusMessage(`A 6-digit verification code was sent to ${formData.email}.`);
     }, 600);
@@ -73,9 +90,25 @@ const ForgotPassword = () => {
     setErrors(newErrors);
 
     if (Object.keys(newErrors).length === 0) {
+      Swal.fire({
+        title: 'Verifying code...',
+        allowOutsideClick: false,
+        didOpen: () => {
+          Swal.showLoading();
+        },
+      });
+
       setLoading(true);
       setTimeout(() => {
         setLoading(false);
+        Swal.close();
+        Swal.fire({
+          icon: 'success',
+          title: 'Code verified',
+          text: 'Please create your new password.',
+          timer: 1300,
+          showConfirmButton: false,
+        });
         navigate('/forgot-password/reset', { state: { email: formData.email } });
       }, 500);
     }
