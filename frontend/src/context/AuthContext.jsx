@@ -22,36 +22,24 @@ export const AuthProvider = ({ children }) => {
       console.log('Checking authentication on app load...');
       
       try {
-        // Check if we have a stored session
-        const session = sessionStorage.getItem('supabase_session');
+        // ✅ Use sessionStorage
+        const token = sessionStorage.getItem('token');
         const storedUser = sessionStorage.getItem('user');
         
-        console.log('Stored session:', session ? 'exists' : 'none');
+        console.log('Stored token:', token ? 'exists' : 'none');
         console.log('Stored user:', storedUser ? 'exists' : 'none');
         
-        // AuthContext.jsx, inside checkAuth()
-        if (session && storedUser) {
-          const result = await authService.validateToken();
-          console.log('Token validation result:', result);
-
-          if (result.reason === 'unauthorized') {
-            console.warn('Token invalid, clearing session');
-            sessionStorage.removeItem('supabase_session');
-            sessionStorage.removeItem('user');
-            setUser(null);
-          } else {
-            const userData = JSON.parse(storedUser);
-            setUser(userData);
-            console.log('User authenticated:', userData);
-          }
+        if (token && storedUser) {
+          const userData = JSON.parse(storedUser);
+          setUser(userData);
+          console.log('User authenticated:', userData);
         } else {
           console.log('No stored session found');
           setUser(null);
         }
       } catch (error) {
         console.error('Auth check failed:', error);
-        // Clear potentially corrupted data
-        sessionStorage.removeItem('supabase_session');
+        sessionStorage.removeItem('token');
         sessionStorage.removeItem('user');
         setUser(null);
       } finally {
@@ -72,8 +60,18 @@ export const AuthProvider = ({ children }) => {
       console.log('AuthContext: Login result:', result);
       
       if (result.success) {
-        // The user data should be in result.data.user
         const userData = result.data.user;
+        const token = result.data.access_token || result.data.session?.access_token;
+        
+        // ✅ Store in sessionStorage
+        if (token) {
+          sessionStorage.setItem('token', token);
+          console.log('✅ Token stored in sessionStorage');
+        }
+        if (userData) {
+          sessionStorage.setItem('user', JSON.stringify(userData));
+        }
+        
         setUser(userData);
         console.log('AuthContext: User set:', userData);
         return { success: true };
@@ -96,7 +94,18 @@ export const AuthProvider = ({ children }) => {
     try {
       const result = await authService.register(userData);
       if (result.success) {
-        setUser(result.data.user);
+        const user = result.data.user;
+        const token = result.data.access_token || result.data.session?.access_token;
+        
+        // ✅ Store in sessionStorage
+        if (token) {
+          sessionStorage.setItem('token', token);
+        }
+        if (user) {
+          sessionStorage.setItem('user', JSON.stringify(user));
+        }
+        
+        setUser(user);
         return { success: true };
       } else {
         setError(result.error);
@@ -114,6 +123,10 @@ export const AuthProvider = ({ children }) => {
     setLoading(true);
     try {
       await authService.logout();
+      // ✅ Clear sessionStorage
+      sessionStorage.removeItem('token');
+      sessionStorage.removeItem('user');
+      sessionStorage.removeItem('token_expiry');
       setUser(null);
       console.log('User logged out');
       return { success: true };
@@ -132,7 +145,7 @@ export const AuthProvider = ({ children }) => {
     login,
     register,
     logout,
-    isAuthenticated: authService.isAuthenticated,
+    isAuthenticated: !!user,
   };
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;

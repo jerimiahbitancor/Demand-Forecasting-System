@@ -7,11 +7,9 @@ class MenuService {
   }
 
   isSupabaseReady() {
-    const ready = Boolean(isConfigured && supabase && typeof supabase.from === 'function');
-    return ready;
+    return Boolean(isConfigured && supabase && typeof supabase.from === 'function');
   }
 
-  // ----- Helper to validate userId -----
   isValidUserId(userId) {
     return userId && typeof userId === 'number' && Number.isInteger(userId) && userId > 0;
   }
@@ -334,7 +332,6 @@ class MenuService {
         .select('id')
         .ilike('name', name);
 
-      // Only filter by user_id if it's valid
       if (this.isValidUserId(userId)) {
         query = query.eq('user_id', userId);
       }
@@ -370,7 +367,6 @@ class MenuService {
         first_sold_date: productData.first_sold_date || null
       };
 
-      // Only add user_id if it's valid
       if (this.isValidUserId(productData.user_id)) {
         insertData.user_id = productData.user_id;
       }
@@ -390,7 +386,7 @@ class MenuService {
         throw error;
       }
       
-      console.log(`✅ Product inserted: ${productData.name} (Category: ${productData.category}, ID: ${data.id})`);
+      console.log(`✅ Product inserted: ${productData.name} (Category: ${productData.category}, ID: ${data.id}, User: ${productData.user_id || 'N/A'})`);
       return data.id;
     } catch (error) {
       console.error('Error inserting product:', error);
@@ -498,7 +494,7 @@ class MenuService {
         throw insertError;
       }
 
-      console.log(`✅ Ingredient inserted: ${name} (Unit: ${unit}, ID: ${newData.id})`);
+      console.log(`✅ Ingredient inserted: ${name} (Unit: ${unit}, ID: ${newData.id}, User: ${userId || 'N/A'})`);
       return newData.id;
 
     } catch (error) {
@@ -560,6 +556,7 @@ class MenuService {
 
       if (this.isValidUserId(userId)) {
         query = query.eq('user_id', userId);
+        console.log(`🔍 Fetching products for user_id: ${userId}`);
       }
 
       const { data, error } = await query;

@@ -16,35 +16,43 @@ const DataManagement = () => {
     processed: 0,
     pending: 0,
     failed: 0,
-    sales_records: 0,      // Changed from total_rows
+    sales_records: 0,
     menu_items: 0,
     last_sync: null
   });
   const [loading, setLoading] = useState(true);
 
-  // Get auth token from localStorage
+  // Get auth token from sessionStorage
   const getAuthToken = () => {
-    return localStorage.getItem('token');
+    return sessionStorage.getItem('token') || sessionStorage.getItem('access_token');
   };
 
-  const apiClient = useMemo(() => axios.create({
-    baseURL: API_URL,
-    headers: {
-      'Content-Type': 'application/json',
-    }
-  }), []);
-
-  // Add token to requests
-  apiClient.interceptors.request.use(
-    (config) => {
-      const token = getAuthToken();
-      if (token) {
-        config.headers.Authorization = `Bearer ${token}`;
+  // Create axios instance
+  const apiClient = useMemo(() => {
+    const client = axios.create({
+      baseURL: API_URL,
+      headers: {
+        'Content-Type': 'application/json',
       }
-      return config;
-    },
-    (error) => Promise.reject(error)
-  );
+    });
+
+    // Add token to requests from sessionStorage
+    client.interceptors.request.use(
+      (config) => {
+        const token = getAuthToken();
+        if (token) {
+          config.headers.Authorization = `Bearer ${token}`;
+          console.log('✅ DataManagement - Token added to request:', config.url);
+        } else {
+          console.warn('⚠️ DataManagement - No token found for request:', config.url);
+        }
+        return config;
+      },
+      (error) => Promise.reject(error)
+    );
+
+    return client;
+  }, []);
 
   const fetchStats = useCallback(async () => {
     try {
@@ -57,13 +65,18 @@ const DataManagement = () => {
           processed: response.data.data.processed || 0,
           pending: response.data.data.pending || 0,
           failed: response.data.data.failed || 0,
-          sales_records: response.data.data.sales_records || 0,  // Only sales records
+          sales_records: response.data.data.sales_records || 0,
           menu_items: response.data.data.menu_items || 0,
           last_sync: response.data.data.last_sync || new Date().toISOString()
         });
       }
     } catch (error) {
       console.error('Error fetching stats:', error);
+      // If unauthorized, clear session
+      if (error.response?.status === 401) {
+        sessionStorage.removeItem('token');
+        sessionStorage.removeItem('user');
+      }
       setStats({
         total_uploads: 0,
         processed: 0,
@@ -119,6 +132,9 @@ const DataManagement = () => {
       const formData = new FormData();
       formData.append('file', file);
       formData.append('fileType', fileType);
+
+      const token = getAuthToken();
+      console.log('🔑 DataManagement - Upload with token:', token ? 'Yes' : 'No');
 
       const response = await apiClient.post('/upload', formData, {
         headers: {

@@ -1,5 +1,5 @@
 // components/MappingData.jsx
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback, useMemo } from "react";
 import { 
   FiPlus, 
   FiEdit2, 
@@ -18,22 +18,57 @@ import ConfirmDeleteModal from "./ConfirmDeleteModal";
 
 const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:5000/api';
 
+// Session storage keys - consistent with DataManagement
+const STORAGE_KEYS = {
+  MAPPING_DATA: 'mapping_data',
+  CATEGORIES: 'mapping_categories',
+  TOTAL_PRODUCTS: 'mapping_total_products',
+  SEARCH_TERM: 'mapping_search_term',
+  SELECTED_CATEGORY: 'mapping_selected_category',
+  SORT_BY: 'mapping_sort_by',
+  CURRENT_PAGE: 'mapping_current_page',
+  LAST_FETCH: 'mapping_last_fetch'
+};
+
 const MappingData = () => {
-  const [searchTerm, setSearchTerm] = useState("");
-  const [selectedCategory, setSelectedCategory] = useState("All");
-  const [sortBy, setSortBy] = useState("Newest First");
-  const [currentPage, setCurrentPage] = useState(1);
+  // Load from sessionStorage or use defaults
+  const [searchTerm, setSearchTerm] = useState(() => {
+    return sessionStorage.getItem(STORAGE_KEYS.SEARCH_TERM) || "";
+  });
+  
+  const [selectedCategory, setSelectedCategory] = useState(() => {
+    return sessionStorage.getItem(STORAGE_KEYS.SELECTED_CATEGORY) || "All";
+  });
+  
+  const [sortBy, setSortBy] = useState(() => {
+    return sessionStorage.getItem(STORAGE_KEYS.SORT_BY) || "Newest First";
+  });
+  
+  const [currentPage, setCurrentPage] = useState(() => {
+    return parseInt(sessionStorage.getItem(STORAGE_KEYS.CURRENT_PAGE)) || 1;
+  });
+  
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [isEditMode, setIsEditMode] = useState(false);
   const [editingId, setEditingId] = useState(null);
   const [loading, setLoading] = useState(true);
   const [isSaving, setIsSaving] = useState(false);
-  const [mappingData, setMappingData] = useState([]);
-  const [categories, setCategories] = useState(['All']);
-  const [totalProducts, setTotalProducts] = useState(0);
+  
+  // Load from sessionStorage or use defaults
+  const [mappingData, setMappingData] = useState(() => {
+    const stored = sessionStorage.getItem(STORAGE_KEYS.MAPPING_DATA);
+    return stored ? JSON.parse(stored) : [];
+  });
+  
+  const [categories, setCategories] = useState(() => {
+    const stored = sessionStorage.getItem(STORAGE_KEYS.CATEGORIES);
+    return stored ? JSON.parse(stored) : ['All'];
+  });
+  
+  const [totalProducts, setTotalProducts] = useState(() => {
+    return parseInt(sessionStorage.getItem(STORAGE_KEYS.TOTAL_PRODUCTS)) || 0;
+  });
 
-  // Delete confirmation — holds { id, name } of the product pending deletion,
-  // or null when no confirmation is showing.
   const [pendingDelete, setPendingDelete] = useState(null);
 
   // Form state
@@ -51,7 +86,6 @@ const MappingData = () => {
     unit: "kg"
   });
 
-  // Form validation errors
   const [formErrors, setFormErrors] = useState({
     productName: "",
     price: "",
@@ -59,65 +93,185 @@ const MappingData = () => {
     ingredients: ""
   });
 
-  // Get auth token
-  const getAuthToken = () => {
-    return localStorage.getItem('token');
-  };
+  // Get auth token from sessionStorage (same as DataManagement)
+  const getAuthToken = useCallback(() => {
+    return sessionStorage.getItem('token') || sessionStorage.getItem('access_token');
+  }, []);
 
-  // Axios instance
-  const apiClient = axios.create({
-    baseURL: API_URL,
-    headers: {
-      'Content-Type': 'application/json',
-    }
-  });
-
-  apiClient.interceptors.request.use(
-    (config) => {
-      const token = getAuthToken();
-      if (token) {
-        config.headers.Authorization = `Bearer ${token}`;
+  // Create axios instance (same as DataManagement)
+  const apiClient = useMemo(() => {
+    const client = axios.create({
+      baseURL: API_URL,
+      headers: {
+        'Content-Type': 'application/json',
       }
-      return config;
-    },
-    (error) => Promise.reject(error)
-  );
+    });
 
-  // Fetch data
-  const fetchData = async () => {
+    client.interceptors.request.use(
+      (config) => {
+        const token = getAuthToken();
+        if (token) {
+          config.headers.Authorization = `Bearer ${token}`;
+          console.log('✅ MappingData - Token added to request:', config.url);
+        } else {
+          console.warn('⚠️ MappingData - No token found for request:', config.url);
+        }
+        return config;
+      },
+      (error) => Promise.reject(error)
+    );
+
+    return client;
+  }, [getAuthToken]);
+
+  // Save to sessionStorage whenever state changes
+  useEffect(() => {
+    sessionStorage.setItem(STORAGE_KEYS.MAPPING_DATA, JSON.stringify(mappingData));
+  }, [mappingData]);
+
+  useEffect(() => {
+    sessionStorage.setItem(STORAGE_KEYS.CATEGORIES, JSON.stringify(categories));
+  }, [categories]);
+
+  useEffect(() => {
+    sessionStorage.setItem(STORAGE_KEYS.TOTAL_PRODUCTS, totalProducts.toString());
+  }, [totalProducts]);
+
+  useEffect(() => {
+    sessionStorage.setItem(STORAGE_KEYS.SEARCH_TERM, searchTerm);
+  }, [searchTerm]);
+
+  useEffect(() => {
+    sessionStorage.setItem(STORAGE_KEYS.SELECTED_CATEGORY, selectedCategory);
+  }, [selectedCategory]);
+
+  useEffect(() => {
+    sessionStorage.setItem(STORAGE_KEYS.SORT_BY, sortBy);
+  }, [sortBy]);
+
+  useEffect(() => {
+    sessionStorage.setItem(STORAGE_KEYS.CURRENT_PAGE, currentPage.toString());
+  }, [currentPage]);
+
+  // Fetch data with sessionStorage support
+  const fetchData = useCallback(async (forceRefresh = false) => {
     try {
       setLoading(true);
+      
+      // Check if we have valid cached data
+      const storedData = sessionStorage.getItem(STORAGE_KEYS.MAPPING_DATA);
+      const storedCategories = sessionStorage.getItem(STORAGE_KEYS.CATEGORIES);
+      const storedTotal = sessionStorage.getItem(STORAGE_KEYS.TOTAL_PRODUCTS);
+      const lastFetch = sessionStorage.getItem(STORAGE_KEYS.LAST_FETCH);
+      
+      // Cache is valid for 5 minutes
+      const cacheValid = lastFetch && (Date.now() - parseInt(lastFetch)) < 5 * 60 * 1000;
+      
+      if (!forceRefresh && storedData && storedCategories && storedTotal && cacheValid) {
+        const parsedData = JSON.parse(storedData);
+        const parsedCategories = JSON.parse(storedCategories);
+        const parsedTotal = parseInt(storedTotal);
+        
+        setMappingData(parsedData);
+        setCategories(parsedCategories);
+        setTotalProducts(parsedTotal);
+        setLoading(false);
+        console.log('📦 Using cached mapping data from sessionStorage');
+        return;
+      }
+
+      console.log('🔄 Fetching fresh mapping data from API...');
       
       // Fetch products
       const productsResponse = await apiClient.get('/mapping/products', {
         params: {
           category: selectedCategory === 'All' ? null : selectedCategory,
-          search: searchTerm || null
+          search: searchTerm || null,
+          forceRefresh: forceRefresh ? 'true' : 'false'
         }
       });
 
       if (productsResponse.data.success) {
-        setMappingData(productsResponse.data.data);
-        setTotalProducts(productsResponse.data.data.length);
+        const data = productsResponse.data.data || [];
+        setMappingData(data);
+        setTotalProducts(data.length);
+        // Save to sessionStorage
+        sessionStorage.setItem(STORAGE_KEYS.MAPPING_DATA, JSON.stringify(data));
+        sessionStorage.setItem(STORAGE_KEYS.TOTAL_PRODUCTS, data.length.toString());
+        sessionStorage.setItem(STORAGE_KEYS.LAST_FETCH, Date.now().toString());
       }
 
       // Fetch categories
-      const categoriesResponse = await apiClient.get('/mapping/categories');
+      const categoriesResponse = await apiClient.get('/mapping/categories', {
+        params: {
+          forceRefresh: forceRefresh ? 'true' : 'false'
+        }
+      });
+      
       if (categoriesResponse.data.success) {
-        setCategories(categoriesResponse.data.data);
+        const cats = categoriesResponse.data.data || ['All'];
+        setCategories(cats);
+        sessionStorage.setItem(STORAGE_KEYS.CATEGORIES, JSON.stringify(cats));
       }
 
     } catch (error) {
-      console.error('Error fetching data:', error);
-      toast.error('Failed to load mapping data');
+      console.error('Error fetching mapping data:', error);
+      // If unauthorized, clear session
+      if (error.response?.status === 401) {
+        sessionStorage.removeItem('token');
+        sessionStorage.removeItem('user');
+        toast.error('Session expired. Please login again.');
+      } else {
+        toast.error('Failed to load mapping data');
+      }
     } finally {
       setLoading(false);
     }
-  };
+  }, [apiClient, selectedCategory, searchTerm]);
 
+  // Initial load - check sessionStorage first
   useEffect(() => {
-    fetchData();
-  }, [selectedCategory, searchTerm]);
+    // Check if we have cached data
+    const hasStoredData = sessionStorage.getItem(STORAGE_KEYS.MAPPING_DATA) !== null;
+    const lastFetch = sessionStorage.getItem(STORAGE_KEYS.LAST_FETCH);
+    const cacheValid = lastFetch && (Date.now() - parseInt(lastFetch)) < 5 * 60 * 1000;
+    
+    if (hasStoredData && cacheValid) {
+      // Use cached data
+      const storedData = sessionStorage.getItem(STORAGE_KEYS.MAPPING_DATA);
+      const storedCategories = sessionStorage.getItem(STORAGE_KEYS.CATEGORIES);
+      const storedTotal = sessionStorage.getItem(STORAGE_KEYS.TOTAL_PRODUCTS);
+      
+      if (storedData) setMappingData(JSON.parse(storedData));
+      if (storedCategories) setCategories(JSON.parse(storedCategories));
+      if (storedTotal) setTotalProducts(parseInt(storedTotal));
+      setLoading(false);
+      console.log('📦 Loaded mapping data from sessionStorage cache');
+    } else {
+      // No cached data or cache expired, fetch from API
+      fetchData(false);
+    }
+  }, [fetchData]);
+
+  // Refresh data when tab becomes active (triggered by DataManagement)
+  useEffect(() => {
+    // Listen for tab visibility changes to refresh data
+    const handleVisibilityChange = () => {
+      if (!document.hidden) {
+        // Check if data is stale (older than 5 minutes)
+        const lastFetch = sessionStorage.getItem(STORAGE_KEYS.LAST_FETCH);
+        const cacheValid = lastFetch && (Date.now() - parseInt(lastFetch)) < 5 * 60 * 1000;
+        if (!cacheValid) {
+          fetchData(true);
+        }
+      }
+    };
+
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+    return () => {
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+    };
+  }, [fetchData]);
 
   // Validate form
   const validateForm = () => {
@@ -195,7 +349,8 @@ const MappingData = () => {
         toast.success(isEditMode ? '✅ Product updated successfully!' : '✅ Product added successfully!');
         resetForm();
         setIsModalOpen(false);
-        fetchData();
+        // Force refresh from API to get latest data
+        await fetchData(true);
       }
     } catch (error) {
       toast.dismiss(savingToast);
@@ -227,12 +382,12 @@ const MappingData = () => {
     setIsModalOpen(true);
   };
 
-  // Ask for delete confirmation — opens the modal instead of window.confirm.
+  // Ask for delete confirmation
   const requestDelete = (id, name) => {
     setPendingDelete({ id, name });
   };
 
-  // Runs only after the user confirms inside ConfirmDeleteModal.
+  // Confirm delete
   const confirmDelete = async () => {
     const { id, name } = pendingDelete;
     const deletingToast = toast.loading('Deleting product...');
@@ -243,7 +398,8 @@ const MappingData = () => {
 
       if (response.data.success) {
         toast.success(`✅ "${name}" has been removed.`);
-        fetchData();
+        // Force refresh from API
+        await fetchData(true);
       }
     } catch (error) {
       toast.dismiss(deletingToast);
@@ -269,9 +425,7 @@ const MappingData = () => {
     setEditingId(null);
   };
 
-  // Close modal — only ever called from the X button or Cancel button now,
-  // never from a click on the overlay, so in-progress edits can't be lost
-  // by an accidental outside click.
+  // Close modal
   const closeModal = () => {
     if (isSaving) return;
     setIsModalOpen(false);
@@ -295,7 +449,6 @@ const MappingData = () => {
       return;
     }
 
-    // Check for duplicate ingredient
     const duplicate = formData.ingredients.some(
       ing => ing.name.toLowerCase() === newIngredient.name.trim().toLowerCase()
     );
@@ -330,8 +483,8 @@ const MappingData = () => {
     }
   };
 
-  // Filter and sort data
-  const getFilteredData = () => {
+  // Filter and sort data locally (without API call)
+  const getFilteredData = useMemo(() => {
     let filtered = [...mappingData];
     
     if (searchTerm) {
@@ -365,16 +518,15 @@ const MappingData = () => {
     }
 
     return filtered;
-  };
+  }, [mappingData, searchTerm, selectedCategory, sortBy]);
 
-  const filteredData = getFilteredData();
   const itemsPerPage = 5;
-  const totalPages = Math.ceil(filteredData.length / itemsPerPage) || 1;
+  const totalPages = Math.ceil(getFilteredData.length / itemsPerPage) || 1;
   const startIndex = (currentPage - 1) * itemsPerPage;
-  const currentData = filteredData.slice(startIndex, startIndex + itemsPerPage);
+  const currentData = getFilteredData.slice(startIndex, startIndex + itemsPerPage);
 
   // Get page numbers for pagination
-  const getPageNumbers = () => {
+  const getPageNumbers = useMemo(() => {
     const pages = [];
     if (totalPages <= 7) {
       for (let i = 1; i <= totalPages; i++) pages.push(i);
@@ -392,22 +544,7 @@ const MappingData = () => {
       pages.push(totalPages);
     }
     return pages;
-  };
-
-  // Format date
-  const formatDate = (dateString) => {
-    if (!dateString) return 'N/A';
-    try {
-      const date = new Date(dateString);
-      return date.toLocaleDateString('en-US', {
-        year: 'numeric',
-        month: 'short',
-        day: 'numeric'
-      });
-    } catch {
-      return dateString;
-    }
-  };
+  }, [totalPages, currentPage]);
 
   return (
     <div className="mapping-container">
@@ -464,7 +601,11 @@ const MappingData = () => {
             <option>Price: High to Low</option>
             <option>A-Z</option>
           </select>
-          <button className="btn-refresh" onClick={fetchData} disabled={loading}>
+          <button 
+            className="btn-refresh" 
+            onClick={() => fetchData(true)} 
+            disabled={loading}
+          >
             <FiRefreshCw size={16} className={loading ? 'spinning' : ''} />
           </button>
         </div>
@@ -549,7 +690,7 @@ const MappingData = () => {
               </button>
             </div>
             <div className="pagination-center">
-              {getPageNumbers().map((page, index) => (
+              {getPageNumbers.map((page, index) => (
                 <button
                   key={index}
                   className={`page-number ${page === currentPage ? 'active' : ''} ${page === '...' ? 'dots' : ''}`}
@@ -573,8 +714,7 @@ const MappingData = () => {
         )}
       </div>
 
-      {/* Modal for Add/Edit Product — overlay click no longer closes it,
-          so an accidental outside click can't discard the form. */}
+      {/* Modal for Add/Edit Product */}
       {isModalOpen && (
         <div className="modal-overlay">
           <div className="modal-content" onClick={(e) => e.stopPropagation()}>
@@ -772,7 +912,7 @@ const MappingData = () => {
         </div>
       )}
 
-      {/* Delete confirmation — replaces window.confirm with the styled modal */}
+      {/* Delete confirmation */}
       {pendingDelete && (
         <ConfirmDeleteModal
           productName={pendingDelete.name}
