@@ -33,9 +33,19 @@ app.use(cors({
 }));
 
 // Rate Limiting - Prevent brute force attacks
+//const limiter = rateLimit({
+  //windowMs: 15 * 60 * 1000, // 15 minutes
+  //max: 100, // Limit each IP to 100 requests per windowMs
+  //message: {
+    //success: false,
+    //error: 'Too many requests, please try again later.'
+  //}
+//});
+//app.use('/api', limiter); 
+
 const limiter = rateLimit({
-  windowMs: 15 * 60 * 1000, // 15 minutes
-  max: 100, // Limit each IP to 100 requests per windowMs
+  windowMs: 15 * 60 * 1000,
+  max: process.env.NODE_ENV === 'production' ? 100 : 1000, // higher limit in dev
   message: {
     success: false,
     error: 'Too many requests, please try again later.'

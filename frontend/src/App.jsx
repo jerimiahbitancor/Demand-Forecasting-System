@@ -4,6 +4,7 @@ import { Toaster } from 'react-hot-toast';
 import Register from '../src/features/auth/pages/register/Register';
 import Login from '../src/features/auth/pages/login/Login';
 import { useSetupGuard } from './hooks/useSetupGuard';
+import ProtectedRoute from './features/components/ProtectedRoute';
 import ForgotPassword from './features/auth/pages/forgotpass/forgotpass';
 import ForgotPassword2 from './features/auth/pages/forgotpass/forgotpass2';
 import ChefDuoLanding from './features/landing/ChefDuoLanding';
@@ -84,28 +85,28 @@ function App() {
       />
       
       <Routes>
-        {/* Auth Routes */}
+        {/* Auth Routes — public */}
         <Route path="/" element={<RootRedirect />} />
         <Route path="/login" element={<Login />} />
         <Route path="/register" element={<Register />} />
         <Route path="/forgot-password" element={<ForgotPassword />} />
         <Route path="/forgot-password/reset" element={<ForgotPassword2 />} />
         
-        {/* Landing Page */}
-        <Route path="/landing" element={<ChefDuoLanding />} />
+        {/* Landing Page — protected */}
+        <Route path="/landing" element={<ProtectedRoute><ChefDuoLanding /></ProtectedRoute>} />
         
-        {/* Main App Routes */}
-        <Route path="/dashboard" element={<Dashboard />} />
-        <Route path="/data-management" element={<DataManagement />} />
-        <Route path="/analytics" element={<Analytics />} />
+        {/* Main App Routes — protected */}
+        <Route path="/dashboard" element={<ProtectedRoute><Dashboard /></ProtectedRoute>} />
+        <Route path="/data-management" element={<ProtectedRoute><DataManagement /></ProtectedRoute>} />
+        <Route path="/analytics" element={<ProtectedRoute><Analytics /></ProtectedRoute>} />
         
-        {/* Analytics Routes */}
-        <Route path="/forecasting" element={<Forecasting />} />
-        <Route path="/product-performance" element={<ProductPerformance />} />
-        <Route path="/ingredient-demand" element={<IngredientDemand />} />
+        {/* Analytics Routes — protected */}
+        <Route path="/forecasting" element={<ProtectedRoute><Forecasting /></ProtectedRoute>} />
+        <Route path="/product-performance" element={<ProtectedRoute><ProductPerformance /></ProtectedRoute>} />
+        <Route path="/ingredient-demand" element={<ProtectedRoute><IngredientDemand /></ProtectedRoute>} />
         
-        {/* Settings */}
-        <Route path="/settings" element={<Settings />} />
+        {/* Settings — protected */}
+        <Route path="/settings" element={<ProtectedRoute><Settings /></ProtectedRoute>} />
         
         {/* Profile */}
         <Route path="/profile" element={<Navigate to="/settings" replace />} />

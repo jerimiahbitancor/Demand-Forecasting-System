@@ -21,7 +21,6 @@ const Login = () => {
   const [formData, setFormData] = useState({
     email: '',
     password: '',
-    rememberMe: false,
   });
 
   const [focusedInput, setFocusedInput] = useState(null);
@@ -60,11 +59,14 @@ const Login = () => {
     return Object.keys(newErrors).length === 0;
   };
 
+  // login.jsx - Update your handleSubmit function
+
   const handleSubmit = async (e) => {
     e.preventDefault();
     setError('');
     
     if (validateForm()) {
+      // Show loading
       Swal.fire({
         title: 'Logging in...',
         allowOutsideClick: false,
@@ -73,29 +75,40 @@ const Login = () => {
         },
       });
 
-      const result = await login(
-        formData.email, 
-        formData.password, 
-        formData.rememberMe
-      );
-
-      Swal.close();
-      
-      if (result.success) {
-        await Swal.fire({
-          icon: 'success',
-          title: 'Login successful',
-          text: 'Welcome back!',
-          timer: 1200,
-          showConfirmButton: false,
-        });
-        navigate('/dashboard');
-      } else {
-        setError(result.error || 'Login failed. Please try again.');
+      try {
+        const result = await login(formData.email, formData.password);
+        
+        Swal.close();
+        
+        if (result.success) {
+          // IMPORTANT: Wait a moment for state to update
+          await new Promise(resolve => setTimeout(resolve, 100));
+          
+          await Swal.fire({
+            icon: 'success',
+            title: 'Login successful',
+            text: 'Welcome back!',
+            timer: 1200,
+            showConfirmButton: false,
+          });
+          
+          // Navigate after everything is done
+          navigate('/dashboard');
+        } else {
+          setError(result.error || 'Login failed. Please try again.');
+          Swal.fire({
+            icon: 'error',
+            title: 'Login failed',
+            text: result.error || 'Please try again.',
+          });
+        }
+      } catch (error) {
+        Swal.close();
+        setError('An unexpected error occurred');
         Swal.fire({
           icon: 'error',
           title: 'Login failed',
-          text: result.error || 'Please try again.',
+          text: 'Please try again.',
         });
       }
     }
@@ -203,19 +216,6 @@ const Login = () => {
             </div>
 
             <div className="login-options">
-              <div className="remember-me">
-                <input
-                  className="checkbox-input"
-                  id="rememberMe"
-                  type="checkbox"
-                  checked={formData.rememberMe}
-                  onChange={handleChange}
-                  disabled={loading}
-                />
-                <label className="remember-label" htmlFor="rememberMe">
-                  Remember me
-                </label>
-              </div>
               <Link className="forgot-link" to="/forgot-password">
                 Forgot Password?
               </Link>
