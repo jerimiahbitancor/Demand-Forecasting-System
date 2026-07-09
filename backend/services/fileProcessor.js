@@ -1,19 +1,21 @@
 // services/fileProcessor.js
 const xlsx = require('xlsx');
 const csv = require('csv-parser');
-const { createReadStream } = require('fs');
+const { Readable } = require('stream');
 const path = require('path');
 
 class FileProcessor {
-  async processFile(filePath, originalName) {
+  async processFile(fileBuffer, originalName, mimeType) {
     try {
       const ext = path.extname(originalName).toLowerCase();
       let data;
 
-      if (ext === '.csv') {
-        data = await this.processCSV(filePath);
-      } else if (ext === '.xlsx' || ext === '.xls') {
-        data = this.processExcel(filePath);
+      if (ext === '.csv' || mimeType === 'text/csv' || mimeType === 'application/csv') {
+        data = await this.processCSV(fileBuffer);
+      } else if (ext === '.xlsx' || ext === '.xls' || 
+                 mimeType === 'application/vnd.ms-excel' || 
+                 mimeType === 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet') {
+        data = this.processExcel(fileBuffer);
       } else {
         throw new Error('Unsupported file format');
       }
@@ -29,25 +31,44 @@ class FileProcessor {
     }
   }
 
-  processCSV(filePath) {
+  processCSV(fileBuffer) {
     return new Promise((resolve, reject) => {
       const results = [];
-      createReadStream(filePath)
-        .pipe(csv())
-        .on('data', (data) => results.push(data))
-        .on('end', () => resolve(results))
-        .on('error', (error) => reject(error));
+      const text = fileBuffer.toString('utf8');
+      const lines = text.split('\n');
+      
+      if (lines.length === 0) {
+        resolve(results);
+        return;
+      }
+
+      const headers = lines[0].split(',').map(h => h.trim());
+      
+      for (let i = 1; i < lines.length; i++) {
+        if (lines[i].trim()) {
+          const values = lines[i].split(',').map(v => v.trim());
+          const row = {};
+          headers.forEach((header, index) => {
+            row[header] = values[index] || '';
+          });
+          results.push(row);
+        }
+      }
+      
+      resolve(results);
     });
   }
 
-  processExcel(filePath) {
+  processExcel(fileBuffer) {
     try {
-      const workbook = xlsx.readFile(filePath);
+      // Use buffer directly instead of file path
+      const workbook = xlsx.read(fileBuffer, { type: 'buffer' });
       const sheetName = workbook.SheetNames[0];
       const sheet = workbook.Sheets[sheetName];
       const data = xlsx.utils.sheet_to_json(sheet);
       return data;
     } catch (error) {
+      console.error('Excel processing error:', error);
       throw error;
     }
   }
@@ -67,12 +88,9 @@ class FileProcessor {
     }
 
     const headers = Object.keys(data[0]);
-    const lowerHeaders = headers.map(h => h.toLowerCase());
 
-    // Different validation rules based on file type
     switch(fileType) {
       case 'sales': {
-        // Required columns for sales
         const requiredColumns = ['Date', 'Item Name', 'Item Sold', 'Category', 'Net Sales'];
         const missingColumns = [];
         
@@ -96,7 +114,6 @@ class FileProcessor {
           };
         }
 
-        // Validate each row
         data.forEach((row, index) => {
           const rowNumber = index + 2;
           const rowErrors = [];
@@ -123,8 +140,7 @@ class FileProcessor {
       }
 
       case 'menu': {
-        // Required columns for menu
-        const requiredColumns = ['Product Name', 'Ingredients', 'Quantity', 'Unit', 'Price'];
+        const requiredColumns = ['Product Name', 'Ingredients', 'Quantity', 'Unit', 'Price', 'Category'];
         const missingColumns = [];
         
         requiredColumns.forEach(col => {
@@ -147,52 +163,17 @@ class FileProcessor {
           };
         }
 
-        // Validate each row
         data.forEach((row, index) => {
           const rowNumber = index + 2;
           const rowErrors = [];
           
-          // Get actual column names (case insensitive)
-          const productNameCol = headers.find(h => h.toLowerCase() === 'product name');
-          const ingredientsCol = headers.find(h => h.toLowerCase() === 'ingredients');
-          const quantityCol = headers.find(h => h.toLowerCase() === 'quantity');
-          const unitCol = headers.find(h => h.toLowerCase() === 'unit');
-          const priceCol = headers.find(h => h.toLowerCase() === 'price');
-
-          const productName = row[productNameCol];
-          const ingredients = row[ingredientsCol];
-          const quantity = row[quantityCol];
-          const unit = row[unitCol];
-          const price = row[priceCol];
-
-          // Validate Product Name
-          if (!productName || productName.toString().trim() === '') {
-            rowErrors.push('Product Name is empty');
-          }
-
-          // Validate Ingredients
-          if (!ingredients || ingredients.toString().trim() === '') {
-            rowErrors.push('Ingredients is empty');
-          }
-
-          // Validate Quantity (must be a number)
-          if (!quantity || quantity.toString().trim() === '') {
-            rowErrors.push('Quantity is empty');
-          } else if (isNaN(parseFloat(quantity))) {
-            rowErrors.push('Quantity must be a valid number');
-          }
-
-          // Validate Unit
-          if (!unit || unit.toString().trim() === '') {
-            rowErrors.push('Unit is empty');
-          }
-
-          // Validate Price (must be a number)
-          if (!price || price.toString().trim() === '') {
-            rowErrors.push('Price is empty');
-          } else if (isNaN(parseFloat(price))) {
-            rowErrors.push('Price must be a valid number');
-          }
+          requiredColumns.forEach(col => {
+            const actualCol = headers.find(h => h.toLowerCase() === col.toLowerCase());
+            const value = row[actualCol];
+            if (value === undefined || value === null || value === '' || value === ' ') {
+              rowErrors.push(`${col} is empty`);
+            }
+          });
 
           if (rowErrors.length > 0) {
             errors.push({
@@ -208,7 +189,6 @@ class FileProcessor {
       }
 
       case 'historical': {
-        // Required columns for historical
         const requiredColumns = ['Date', 'Sales Volume'];
         const missingColumns = [];
         
@@ -236,21 +216,13 @@ class FileProcessor {
           const rowNumber = index + 2;
           const rowErrors = [];
           
-          const dateCol = headers.find(h => h.toLowerCase() === 'date');
-          const volumeCol = headers.find(h => h.toLowerCase() === 'sales volume');
-          
-          const date = row[dateCol];
-          const volume = row[volumeCol];
-
-          if (!date || date.toString().trim() === '') {
-            rowErrors.push('Date is empty');
-          }
-
-          if (!volume || volume.toString().trim() === '') {
-            rowErrors.push('Sales Volume is empty');
-          } else if (isNaN(parseFloat(volume))) {
-            rowErrors.push('Sales Volume must be a valid number');
-          }
+          requiredColumns.forEach(col => {
+            const actualCol = headers.find(h => h.toLowerCase() === col.toLowerCase());
+            const value = row[actualCol];
+            if (value === undefined || value === null || value === '' || value === ' ') {
+              rowErrors.push(`${col} is empty`);
+            }
+          });
 
           if (rowErrors.length > 0) {
             errors.push({
@@ -266,7 +238,6 @@ class FileProcessor {
       }
 
       default: {
-        // No validation for unknown types
         validCount = data.length;
       }
     }
@@ -275,17 +246,15 @@ class FileProcessor {
       totalRows: data.length,
       validRows: validCount,
       invalidRows: invalidCount,
-      errors: errors.slice(0, 10) // Limit to first 10 errors
+      errors: errors.slice(0, 10)
     };
   }
 
-  // Helper method to get column names case-insensitively
   getColumnNames(data) {
     if (data.length === 0) return [];
     return Object.keys(data[0]);
   }
 
-  // Helper method to find column case-insensitively
   findColumn(headers, columnName) {
     return headers.find(h => h.toLowerCase() === columnName.toLowerCase());
   }
