@@ -3,6 +3,8 @@ const express = require('express');
 const router = express.Router();
 const bcrypt = require('bcrypt');
 const { supabase } = require('../config/supabase');
+const generateToken = require('../utils/generateToken');
+const requireAuth = require('../middleware/authMiddleware');
 
 // ============ REGISTER ============
 router.post('/register', async (req, res) => {
@@ -54,10 +56,13 @@ router.post('/register', async (req, res) => {
       throw insertError;
     }
 
+    const session = generateToken(newUser[0]);
+
     res.status(201).json({
       success: true,
       message: 'User registered successfully',
-      user: newUser[0]
+      user: newUser[0],
+      session
     });
 
   } catch (error) {
@@ -122,10 +127,13 @@ router.post('/login', async (req, res) => {
     // Remove password from response
     delete user.hashed_password;
 
+    const session = generateToken(user);
+
     res.json({
       success: true,
       message: 'Login successful',
-      user: user
+      user,
+      session
     });
 
   } catch (error) {
