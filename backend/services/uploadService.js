@@ -11,11 +11,9 @@ class UploadService {
   }
 
   isSupabaseReady() {
-    const ready = Boolean(isConfigured && supabase && typeof supabase.from === 'function');
-    return ready;
+    return Boolean(isConfigured && supabase && typeof supabase.from === 'function');
   }
 
-  // ----- Helper to validate userId -----
   isValidUserId(userId) {
     return userId && typeof userId === 'number' && Number.isInteger(userId) && userId > 0;
   }
@@ -172,22 +170,6 @@ class UploadService {
         status = 'pending';
       }
 
-      if (!this.isSupabaseReady()) {
-        const upload = {
-          id: this.memoryStore.uploads.length + 1,
-          filename: fileData.filename,
-          row_count: validation.totalRows,
-          status: status,
-          upload_date: new Date().toISOString()
-        };
-        if (this.isValidUserId(userId)) {
-          upload.user_id = userId;
-        }
-        this.memoryStore.uploads.push(upload);
-        console.log('📝 Upload saved to memory (ID:', upload.id, ')');
-        return upload.id;
-      }
-
       const insertData = {
         filename: fileData.filename,
         row_count: validation.totalRows,
@@ -196,6 +178,18 @@ class UploadService {
 
       if (this.isValidUserId(userId)) {
         insertData.user_id = userId;
+        console.log(`👤 Saving upload for user_id: ${userId}`);
+      }
+
+      if (!this.isSupabaseReady()) {
+        const upload = {
+          id: this.memoryStore.uploads.length + 1,
+          ...insertData,
+          upload_date: new Date().toISOString()
+        };
+        this.memoryStore.uploads.push(upload);
+        console.log('📝 Upload saved to memory (ID:', upload.id, ')');
+        return upload.id;
       }
 
       const { data, error } = await supabase
@@ -236,6 +230,7 @@ class UploadService {
 
       if (this.isValidUserId(options.userId)) {
         query = query.eq('user_id', options.userId);
+        console.log(`🔍 Filtering uploads for user_id: ${options.userId}`);
       }
 
       if (options.status) {
@@ -372,6 +367,7 @@ class UploadService {
 
       if (this.isValidUserId(userId)) {
         query = query.eq('user_id', userId);
+        console.log(`🔍 Fetching stats for user_id: ${userId}`);
       }
 
       const { data: uploads = [], error: uploadError } = await query;

@@ -57,12 +57,20 @@ const UploadData = ({
   const [salesToastId, setSalesToastId] = useState(null);
   const [menuToastId, setMenuToastId] = useState(null);
 
-  // Get auth token
+  // Get auth token from sessionStorage
   const getAuthToken = () => {
-    return localStorage.getItem('token');
+    const token = sessionStorage.getItem('token') || 
+                  sessionStorage.getItem('access_token');
+    
+    // Debug logging
+    if (!token) {
+      console.log('📋 sessionStorage keys:', Object.keys(sessionStorage));
+    }
+    
+    return token;
   };
 
-  // Axios instance
+  // Create axios instance with interceptor (only once)
   const apiClient = axios.create({
     baseURL: apiUrl || 'http://localhost:5000/api',
     headers: {
@@ -70,11 +78,15 @@ const UploadData = ({
     }
   });
 
+  // Add token to every request from sessionStorage
   apiClient.interceptors.request.use(
     (config) => {
       const token = getAuthToken();
       if (token) {
         config.headers.Authorization = `Bearer ${token}`;
+        console.log('✅ Token added to request:', config.url);
+      } else {
+        console.warn('⚠️ No token found in sessionStorage for request:', config.url);
       }
       return config;
     },
@@ -128,7 +140,7 @@ const UploadData = ({
     });
   };
 
-  // Validate sales data (no duplicate check)
+  // Validate sales data
   const validateSalesData = (data) => {
     const errors = [];
     let validCount = 0;
@@ -204,7 +216,7 @@ const UploadData = ({
     };
   };
 
-  // Validate menu data (no duplicate check within file)
+  // Validate menu data
   const validateMenuData = (data) => {
     const errors = [];
     let validCount = 0;
@@ -410,12 +422,14 @@ const UploadData = ({
         });
       }, 300);
       
-      const response = await (handleConfirmUpload ? handleConfirmUpload(salesFile, 'sales') : apiClient.post('/upload', (() => {
-        const formData = new FormData();
-        formData.append('file', salesFile);
-        formData.append('fileType', 'sales');
-        return formData;
-      })(), {
+      const formData = new FormData();
+      formData.append('file', salesFile);
+      formData.append('fileType', 'sales');
+
+      const token = getAuthToken();
+      console.log('🔑 Sending sales upload with token:', token ? 'Yes' : 'No');
+
+      const response = await apiClient.post('/upload', formData, {
         headers: {
           'Content-Type': 'multipart/form-data'
         },
@@ -423,15 +437,15 @@ const UploadData = ({
           const percentCompleted = Math.round((progressEvent.loaded * 100) / progressEvent.total);
           setSalesProgress(percentCompleted);
         }
-      }));
+      });
 
       clearInterval(progressInterval);
       setSalesProgress(100);
 
-      if (response?.data?.success || response?.success) {
+      if (response?.data?.success) {
         setSalesUploadStatus('success');
         
-        const summary = response?.data?.summary || response?.summary || {};
+        const summary = response?.data?.summary || {};
         setSalesPreviewData({
           totalRecords: summary.totalRows || 0,
           validRecords: summary.validRows || 0,
@@ -446,7 +460,7 @@ const UploadData = ({
         setSalesToastId(id);
         
         if (onUploadSuccess) {
-          onUploadSuccess(response.data || response);
+          onUploadSuccess(response.data);
         }
         
         setTimeout(() => {
@@ -618,12 +632,14 @@ const UploadData = ({
         });
       }, 300);
       
-      const response = await (handleConfirmUpload ? handleConfirmUpload(menuFile, 'menu') : apiClient.post('/upload', (() => {
-        const formData = new FormData();
-        formData.append('file', menuFile);
-        formData.append('fileType', 'menu');
-        return formData;
-      })(), {
+      const formData = new FormData();
+      formData.append('file', menuFile);
+      formData.append('fileType', 'menu');
+
+      const token = getAuthToken();
+      console.log('🔑 Sending menu upload with token:', token ? 'Yes' : 'No');
+
+      const response = await apiClient.post('/upload', formData, {
         headers: {
           'Content-Type': 'multipart/form-data'
         },
@@ -631,17 +647,15 @@ const UploadData = ({
           const percentCompleted = Math.round((progressEvent.loaded * 100) / progressEvent.total);
           setMenuProgress(percentCompleted);
         }
-      }));
+      });
 
       clearInterval(progressInterval);
       setMenuProgress(100);
 
-      if (response?.data?.success || response?.success) {
-        const summary = response?.data?.summary || response?.summary || {};
+      if (response?.data?.success) {
+        const summary = response?.data?.summary || {};
         
-        // Check for database duplicates
         if (summary.dbDuplicates && summary.dbDuplicates.length > 0) {
-          // Show duplicates from database
           setMenuValidated(false);
           setMenuValidationErrors(summary.dbDuplicates.map(d => ({
             row: 0,
@@ -680,7 +694,7 @@ const UploadData = ({
         setMenuToastId(id);
         
         if (onUploadSuccess) {
-          onUploadSuccess(response.data || response);
+          onUploadSuccess(response.data);
         }
         
         setTimeout(() => {

@@ -21,20 +21,15 @@ router.post(
       const { fileType } = req.body;
       const file = req.file;
       
-      // Validate userId - ensure it's a valid integer
-      let userId = null;
-      if (req.user?.id) {
-        const parsed = parseInt(req.user.id);
-        if (!isNaN(parsed) && parsed > 0) {
-          userId = parsed;
-        }
-      }
+      // Get userId from authenticated user
+      const userId = req.user?.id || null;
       
       if (!file) {
         return res.status(400).json({ error: 'No file uploaded' });
       }
 
       console.log('📄 Processing file:', file.originalname, 'Type:', fileType);
+      console.log('👤 User ID:', userId);
 
       const processedData = await fileProcessor.processFile(
         file.buffer,
@@ -48,7 +43,7 @@ router.post(
       let uploadId = null;
 
       if (fileType === 'menu') {
-        // Pass userId to menuService
+        // Pass userId to menuService - this will store user_id in products/ingredients
         result = await menuService.processMenuData(processedData.data, userId);
         
         console.log('✅ Menu data processed:', {
@@ -56,7 +51,8 @@ router.post(
           validRows: result.validation.validRows,
           invalidRows: result.validation.invalidRows,
           productsInserted: result.productsInserted || 0,
-          ingredientsInserted: result.ingredientsInserted || 0
+          ingredientsInserted: result.ingredientsInserted || 0,
+          userId: userId
         });
 
         return res.status(201).json({
@@ -70,7 +66,8 @@ router.post(
             errors: result.validation.errors,
             productsInserted: result.productsInserted || 0,
             ingredientsInserted: result.ingredientsInserted || 0,
-            productIngredientRelations: result.productIngredientRelations || 0
+            productIngredientRelations: result.productIngredientRelations || 0,
+            userId: userId
           }
         });
       } else {
