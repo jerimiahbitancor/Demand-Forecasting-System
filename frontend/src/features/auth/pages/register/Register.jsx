@@ -11,10 +11,12 @@ import {
 } from 'react-icons/fa';
 import { useAuth } from '../../../../context/AuthContext';
 import './Register.css';
+import { useSetupGuard } from '../../../../hooks/useSetupGuard';
 
 const Register = () => {
   const navigate = useNavigate();
   const { register, loading } = useAuth();
+  const checking = useSetupGuard('register'); 
   
   const [formData, setFormData] = useState({
     fullName: '',
@@ -130,6 +132,16 @@ const Register = () => {
     return focusedInput === inputId ? '#bb0114' : '#6c757d';
   };
 
+   if (checking) {
+    return (
+      <div className="register-container">
+        <main className="main-container">
+          <p>Checking session...</p>
+        </main>
+      </div>
+    );
+  }
+  
   return (
     <div className="register-container">
       <main className="main-container">
