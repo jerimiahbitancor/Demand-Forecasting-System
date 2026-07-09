@@ -9,6 +9,8 @@ import {
 } from 'react-icons/fa';
 import './forgotpass.css';
 
+const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:5000/api';
+
 const ForgotPassword = () => {
   const navigate = useNavigate();
   const [formData, setFormData] = useState({ email: '' });
@@ -49,7 +51,7 @@ const ForgotPassword = () => {
     return Object.keys(newErrors).length === 0;
   };
 
-  const handleSendCode = (e) => {
+  const handleSendCode = async (e) => {
     e.preventDefault();
     if (!validateEmail()) return;
 
@@ -62,7 +64,21 @@ const ForgotPassword = () => {
     });
 
     setLoading(true);
-    setTimeout(() => {
+    try {
+      const response = await fetch(`${API_URL}/auth/forgot-password/send-code`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ email: formData.email }),
+      });
+
+      const data = await response.json();
+
+      if (!response.ok) {
+        throw new Error(data.error || 'Failed to send code');
+      }
+
       setLoading(false);
       Swal.close();
       Swal.fire({
@@ -74,10 +90,19 @@ const ForgotPassword = () => {
       });
       setCodeSent(true);
       setStatusMessage(`A 6-digit verification code was sent to ${formData.email}.`);
-    }, 600);
+    } catch (error) {
+      setLoading(false);
+      Swal.close();
+      Swal.fire({
+        icon: 'error',
+        title: 'Error',
+        text: error.message || 'Failed to send verification code. Please try again.',
+      });
+      console.error('Send code error:', error);
+    }
   };
 
-  const handleVerifyCode = (e) => {
+  const handleVerifyCode = async (e) => {
     e.preventDefault();
     const newErrors = {};
 
@@ -99,7 +124,24 @@ const ForgotPassword = () => {
       });
 
       setLoading(true);
-      setTimeout(() => {
+      try {
+        const response = await fetch(`${API_URL}/auth/forgot-password/verify-code`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            email: formData.email,
+            code: code,
+          }),
+        });
+
+        const data = await response.json();
+
+        if (!response.ok) {
+          throw new Error(data.error || 'Code verification failed');
+        }
+
         setLoading(false);
         Swal.close();
         Swal.fire({
@@ -109,8 +151,24 @@ const ForgotPassword = () => {
           timer: 1300,
           showConfirmButton: false,
         });
-        navigate('/forgot-password/reset', { state: { email: formData.email } });
-      }, 500);
+        
+        // Navigate to reset password page with email and code
+        navigate('/forgot-password/reset', { 
+          state: { 
+            email: formData.email,
+            code: code 
+          } 
+        });
+      } catch (error) {
+        setLoading(false);
+        Swal.close();
+        Swal.fire({
+          icon: 'error',
+          title: 'Verification Failed',
+          text: error.message || 'Invalid or expired code. Please try again.',
+        });
+        console.error('Verify code error:', error);
+      }
     }
   };
 

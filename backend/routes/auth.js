@@ -5,6 +5,7 @@ const bcrypt = require('bcrypt');
 const { supabase } = require('../config/supabase');
 const generateToken = require('../utils/generateToken');
 const requireAuth = require('../middleware/authMiddleware');
+const { sendCode, verifyCode, resetPassword } = require('../controllers/passwordResetController');
 
 // ============ REGISTER ============
 router.post('/register', async (req, res) => {
@@ -262,5 +263,14 @@ router.put('/change-password/:id', async (req, res) => {
     res.status(500).json({ error: 'Failed to change password: ' + error.message });
   }
 });
+
+// ============ FORGOT PASSWORD: SEND CODE ============
+router.post('/forgot-password/send-code', sendCode);
+
+// ============ FORGOT PASSWORD: VERIFY CODE ============
+router.post('/forgot-password/verify-code', verifyCode);
+
+// ============ FORGOT PASSWORD: RESET PASSWORD ============
+router.post('/forgot-password/reset-password', resetPassword);
 
 module.exports = router;

@@ -10,10 +10,21 @@ import {
 } from 'react-icons/fa';
 import './forgotpass2.css';
 
+const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:5000/api';
+
+const getPasswordRules = (password) => [
+  { test: password.length >= 12, message: 'Minimum 12 characters' },
+  { test: /[A-Z]/.test(password), message: 'One uppercase letter' },
+  { test: /[a-z]/.test(password), message: 'One lowercase letter' },
+  { test: /\d/.test(password), message: 'One number' },
+  { test: /[^A-Za-z0-9]/.test(password), message: 'One special character' },
+];
+
 const ForgotPassword2 = () => {
   const navigate = useNavigate();
   const location = useLocation();
   const email = location.state?.email || 'your email';
+  const code = location.state?.code;
 
   const [formData, setFormData] = useState({
     password: '',
@@ -34,25 +45,15 @@ const ForgotPassword2 = () => {
     setSuccessMessage('');
   };
 
-  const validatePassword = (password) => {
-    const requirements = [
-      { test: password.length >= 12, message: 'Minimum 12 characters' },
-      { test: /[A-Z]/.test(password), message: 'One uppercase letter' },
-      { test: /[a-z]/.test(password), message: 'One lowercase letter' },
-      { test: /\d/.test(password), message: 'One number' },
-      { test: /[^A-Za-z0-9]/.test(password), message: 'One special character' },
-    ];
-
-    return requirements.filter((rule) => !rule.test);
-  };
-
   const validateForm = () => {
     const newErrors = {};
+    const passwordRules = getPasswordRules(formData.password);
+    const failedRequirements = passwordRules.filter((rule) => !rule.test);
 
-    const failedRequirements = validatePassword(formData.password);
-    if (failedRequirements.length) {
-      newErrors.password = 'Password must include:';
-      newErrors.passwordRequirements = failedRequirements.map((rule) => rule.message);
+    if (!formData.password) {
+      newErrors.password = 'Password is required';
+    } else if (failedRequirements.length) {
+      newErrors.password = 'Password must meet all requirements';
     }
 
     if (!formData.confirmPassword) {
@@ -69,6 +70,16 @@ const ForgotPassword2 = () => {
     e.preventDefault();
     if (!validateForm()) return;
 
+    if (!code) {
+      Swal.fire({
+        icon: 'error',
+        title: 'Invalid Request',
+        text: 'Verification code is missing. Please start the process again.',
+      });
+      navigate('/forgot-password');
+      return;
+    }
+
     Swal.fire({
       title: 'Updating password...',
       allowOutsideClick: false,
@@ -78,7 +89,25 @@ const ForgotPassword2 = () => {
     });
 
     setLoading(true);
-    setTimeout(async () => {
+    try {
+      const response = await fetch(`${API_URL}/auth/forgot-password/reset-password`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          email: email,
+          code: code,
+          password: formData.password,
+        }),
+      });
+
+      const data = await response.json();
+
+      if (!response.ok) {
+        throw new Error(data.error || 'Failed to reset password');
+      }
+
       setLoading(false);
       Swal.close();
       await Swal.fire({
@@ -89,8 +118,36 @@ const ForgotPassword2 = () => {
         showConfirmButton: false,
       });
       navigate('/login');
-    }, 800);
+    } catch (error) {
+      setLoading(false);
+      Swal.close();
+      Swal.fire({
+        icon: 'error',
+        title: 'Error',
+        text: error.message || 'Failed to reset password. Please try again.',
+      });
+      console.error('Reset password error:', error);
+    }
   };
+
+  const passwordRules = getPasswordRules(formData.password);
+  const failedPasswordRules = passwordRules.filter((rule) => !rule.test);
+  const passedPasswordRules = passwordRules.filter((rule) => rule.test).length;
+  const passwordStrengthPercent =
+    formData.password.length === 0
+      ? 0
+      : Math.min(100, Math.round((passedPasswordRules / passwordRules.length) * 100));
+  const showPasswordRequirements = formData.password.length > 0 && failedPasswordRules.length > 0;
+  const strengthLabel =
+    passwordStrengthPercent === 0
+      ? 'Very weak'
+      : passwordStrengthPercent < 40
+        ? 'Weak'
+        : passwordStrengthPercent < 80
+          ? 'Fair'
+          : passwordStrengthPercent < 100
+            ? 'Good'
+            : 'Strong';
 
   return (
     <div className="forgot-password2-container">
@@ -146,12 +203,42 @@ const ForgotPassword2 = () => {
               {errors.password && (
                 <div className="error-message">{errors.password}</div>
               )}
-              {errors.passwordRequirements && (
-                <ul className="requirements-list">
-                  {errors.passwordRequirements.map((requirement) => (
-                    <li key={requirement}>{requirement}</li>
-                  ))}
-                </ul>
+              {formData.password.length > 0 && (
+                <div className="password-strength-card">
+                  <div className="password-strength-header">
+                    <span className="strength-label">Password strength</span>
+                    <span className={`strength-value ${passwordStrengthPercent >= 100 ? 'strong' : ''}`}>
+                      {strengthLabel}
+                    </span>
+                  </div>
+                  <div className="strength-bar-track" aria-hidden="true">
+                    <div
+                      className={`strength-bar-fill ${
+                        passwordStrengthPercent >= 100
+                          ? 'strong'
+                          : passwordStrengthPercent >= 80
+                            ? 'good'
+                            : passwordStrengthPercent >= 40
+                              ? 'fair'
+                              : 'weak'
+                      }`}
+                      style={{ width: `${passwordStrengthPercent}%` }}
+                    />
+                  </div>
+                </div>
+              )}
+              {showPasswordRequirements && (
+                <div className="password-requirements">
+                  <p className="requirements-heading">Password must include:</p>
+                  <ul className="requirements-list">
+                    {passwordRules.map((rule) => (
+                      <li key={rule.message} className={`requirement-item ${rule.test ? 'valid' : 'invalid'}`}>
+                        <span className="requirement-icon">{rule.test ? '✓' : '•'}</span>
+                        <span>{rule.message}</span>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
               )}
             </div>
 
