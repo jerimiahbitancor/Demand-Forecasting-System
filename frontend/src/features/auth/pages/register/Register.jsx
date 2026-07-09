@@ -7,6 +7,8 @@ import {
   FaEnvelope, 
   FaLock, 
   FaKey,
+  FaEye,
+  FaEyeSlash,
   FaSpinner
 } from 'react-icons/fa';
 import { useAuth } from '../../../../context/AuthContext';
@@ -28,6 +30,8 @@ const Register = () => {
 
   const [focusedInput, setFocusedInput] = useState(null);
   const [errors, setErrors] = useState({});
+  const [showPassword, setShowPassword] = useState(false);
+  const [showConfirmPassword, setShowConfirmPassword] = useState(false);
   const [error, setError] = useState('');
 
   const handleChange = (e) => {
@@ -132,6 +136,14 @@ const Register = () => {
     return focusedInput === inputId ? '#bb0114' : '#6c757d';
   };
 
+  const togglePasswordVisibility = (field) => {
+    if (field === 'password') {
+      setShowPassword((prev) => !prev);
+    } else {
+      setShowConfirmPassword((prev) => !prev);
+    }
+  };
+
    if (checking) {
     return (
       <div className="register-container">
@@ -230,13 +242,22 @@ const Register = () => {
                     className={`form-input ${errors.password ? 'input-error' : ''}`}
                     id="password"
                     placeholder="Create a password"
-                    type="password"
+                    type={showPassword ? 'text' : 'password'}
                     value={formData.password}
                     onChange={handleChange}
                     onFocus={() => setFocusedInput('password')}
                     onBlur={() => setFocusedInput(null)}
                     disabled={loading}
                   />
+                  <button
+                    type="button"
+                    className="password-toggle"
+                    onClick={() => togglePasswordVisibility('password')}
+                    aria-label={showPassword ? 'Hide password' : 'Show password'}
+                    disabled={loading}
+                  >
+                    {showPassword ? <FaEyeSlash /> : <FaEye />}
+                  </button>
                 </div>
                 {errors.password && <span className="error-message">{errors.password}</span>}
                 {errors.passwordRequirements && (
@@ -260,13 +281,22 @@ const Register = () => {
                     className={`form-input ${errors.confirmPassword ? 'input-error' : ''}`}
                     id="confirmPassword"
                     placeholder="Re-enter password"
-                    type="password"
+                    type={showConfirmPassword ? 'text' : 'password'}
                     value={formData.confirmPassword}
                     onChange={handleChange}
                     onFocus={() => setFocusedInput('confirmPassword')}
                     onBlur={() => setFocusedInput(null)}
                     disabled={loading}
                   />
+                  <button
+                    type="button"
+                    className="password-toggle"
+                    onClick={() => togglePasswordVisibility('confirmPassword')}
+                    aria-label={showConfirmPassword ? 'Hide confirm password' : 'Show confirm password'}
+                    disabled={loading}
+                  >
+                    {showConfirmPassword ? <FaEyeSlash /> : <FaEye />}
+                  </button>
                 </div>
                 {errors.confirmPassword && <span className="error-message">{errors.confirmPassword}</span>}
               </div>

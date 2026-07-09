@@ -148,6 +148,29 @@
   gap: 4px;
 }
 
+.input-with-icon {
+  position: relative;
+}
+
+.password-toggle {
+  position: absolute;
+  right: 12px;
+  top: 50%;
+  transform: translateY(-50%);
+  background: none;
+  border: none;
+  color: #6c757d;
+  cursor: pointer;
+  padding: 4px;
+  font-size: 16px;
+  transition: color 0.3s ease;
+  z-index: 1;
+}
+
+.password-toggle:hover {
+  color: #bb0114;
+}
+
 .password-grid {
   display: flex;
   flex-direction: column;
