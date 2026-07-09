@@ -1,0 +1,118 @@
+/* frontend/src/features/datamanagement/components/ConfirmDeleteModal.css */
+/* Reuses the color variables already declared in MappingData.css (:root),
+   so this only needs to define its own layout — not a second palette. */
+
+.confirm-delete-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: rgba(28, 38, 50, 0.55);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1100; /* above the add/edit modal, in case both are ever mounted */
+  animation: confirmDeleteFadeIn 0.2s ease;
+}
+
+.confirm-delete-card {
+  background: var(--color-bg-white, #fff);
+  border-radius: 10px;
+  width: 380px;
+  max-width: 90vw;
+  box-shadow: 0 10px 40px rgba(0, 0, 0, 0.25);
+  padding: 28px 28px 24px;
+  text-align: center;
+  animation: confirmDeleteSlideUp 0.2s ease;
+}
+
+.confirm-delete-icon {
+  width: 56px;
+  height: 56px;
+  border-radius: 50%;
+  background: var(--color-red-light, #fde8e8);
+  color: var(--color-red-primary, #7a0101);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin: 0 auto 16px;
+}
+
+.confirm-delete-title {
+  margin: 0 0 8px;
+  font-size: 17px;
+  font-weight: 600;
+  color: var(--color-text-primary, #1c2632);
+}
+
+.confirm-delete-body {
+  margin: 0 0 20px;
+  font-size: 14px;
+  line-height: 1.5;
+  color: var(--color-text-secondary, #5c403c);
+}
+
+.confirm-delete-actions {
+  display: flex;
+  gap: 10px;
+}
+
+.confirm-delete-cancel,
+.confirm-delete-confirm {
+  flex: 1;
+  padding: 10px 0;
+  border-radius: 6px;
+  font-size: 14px;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+
+.confirm-delete-cancel {
+  background: var(--color-bg-light, #f8f9fa);
+  color: var(--color-text-primary, #1c2632);
+  border: 1px solid var(--color-border, #ced4da);
+  font-weight: 500;
+}
+
+.confirm-delete-cancel:hover {
+  background: var(--color-border-light, #e8e0dd);
+}
+
+.confirm-delete-confirm {
+  background: var(--color-red-primary, #7a0101);
+  color: var(--color-white, #fff);
+  border: none;
+  font-weight: 600;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+}
+
+.confirm-delete-confirm:hover {
+  background: var(--color-red-hover, #5a0101);
+}
+
+@keyframes confirmDeleteFadeIn {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+@keyframes confirmDeleteSlideUp {
+  from {
+    transform: translateY(12px);
+    opacity: 0;
+  }
+  to {
+    transform: translateY(0);
+    opacity: 1;
+  }
+}
+
+@media (max-width: 480px) {
+  .confirm-delete-card {
+    width: 320px;
+    padding: 24px 20px 20px;
+  }
+}

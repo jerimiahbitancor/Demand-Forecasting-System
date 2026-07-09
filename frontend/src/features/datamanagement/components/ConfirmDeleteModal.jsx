@@ -1,5 +1,7 @@
 // frontend/src/features/datamanagement/components/ConfirmDeleteModal.jsx
 import { useRef, useEffect } from "react";
+import { FiAlertTriangle, FiTrash2 } from "react-icons/fi";
+import "./ConfirmDeleteModal.css";
 
 const ConfirmDeleteModal = ({ productName, onCancel, onConfirm }) => {
   const cancelRef = useRef(null);
@@ -9,23 +11,45 @@ const ConfirmDeleteModal = ({ productName, onCancel, onConfirm }) => {
     cancelRef.current?.focus();
   }, []);
 
+  // Escape cancels — a confirmation dialog is safe to dismiss this way,
+  // unlike the add/edit form modal where an accidental Escape could
+  // discard unsaved work.
+  useEffect(() => {
+    const handleKeyDown = (e) => {
+      if (e.key === "Escape") onCancel();
+    };
+    document.addEventListener("keydown", handleKeyDown);
+    return () => document.removeEventListener("keydown", handleKeyDown);
+  }, [onCancel]);
+
   return (
-    <div className="modal-overlay" onClick={onCancel}>
-      <div className="modal-content" style={{ maxWidth: 420 }} onClick={(e) => e.stopPropagation()}>
-        <div className="modal-header">
-          <h3>Delete Product?</h3>
+    <div className="confirm-delete-overlay" onClick={onCancel}>
+      <div
+        className="confirm-delete-card"
+        role="alertdialog"
+        aria-modal="true"
+        aria-labelledby="confirm-delete-title"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="confirm-delete-icon">
+          <FiAlertTriangle size={26} />
         </div>
-        <div className="modal-body">
-          <p>
-            Are you sure you want to delete <strong>{productName}</strong>? This will
-            permanently remove its historical data and forecasting models.
-          </p>
-        </div>
-        <div className="modal-footer">
-          <button ref={cancelRef} className="btn-secondary" onClick={onCancel}>
+
+        <h3 id="confirm-delete-title" className="confirm-delete-title">
+          Delete {productName}?
+        </h3>
+
+        <p className="confirm-delete-body">
+          This permanently removes its historical sales data and forecasting
+          models. This can&rsquo;t be undone.
+        </p>
+
+        <div className="confirm-delete-actions">
+          <button ref={cancelRef} className="confirm-delete-cancel" onClick={onCancel}>
             Cancel
           </button>
-          <button className="btn-destructive" onClick={onConfirm}>
+          <button className="confirm-delete-confirm" onClick={onConfirm}>
+            <FiTrash2 size={16} />
             Delete
           </button>
         </div>
