@@ -14,6 +14,7 @@ import {
 import axios from 'axios';
 import toast from 'react-hot-toast';
 import "./MappingData.css";
+import ConfirmDeleteModal from "./ConfirmDeleteModal";
 
 const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:5000/api';
 
@@ -30,6 +31,10 @@ const MappingData = () => {
   const [mappingData, setMappingData] = useState([]);
   const [categories, setCategories] = useState(['All']);
   const [totalProducts, setTotalProducts] = useState(0);
+
+  // Delete confirmation — holds { id, name } of the product pending deletion,
+  // or null when no confirmation is showing.
+  const [pendingDelete, setPendingDelete] = useState(null);
 
   // Form state
   const [formData, setFormData] = useState({
@@ -222,24 +227,30 @@ const MappingData = () => {
     setIsModalOpen(true);
   };
 
-  // Delete product
-  const handleDeleteMapping = async (id, name) => {
-    if (!window.confirm(`Are you sure you want to delete "${name}"?`)) return;
+  // Ask for delete confirmation — opens the modal instead of window.confirm.
+  const requestDelete = (id, name) => {
+    setPendingDelete({ id, name });
+  };
 
+  // Runs only after the user confirms inside ConfirmDeleteModal.
+  const confirmDelete = async () => {
+    const { id, name } = pendingDelete;
     const deletingToast = toast.loading('Deleting product...');
 
     try {
       const response = await apiClient.delete(`/mapping/products/${id}`);
       toast.dismiss(deletingToast);
-      
+
       if (response.data.success) {
-        toast.success('✅ Product deleted successfully!');
+        toast.success(`✅ "${name}" has been removed.`);
         fetchData();
       }
     } catch (error) {
       toast.dismiss(deletingToast);
       console.error('Error deleting product:', error);
       toast.error('❌ Failed to delete product');
+    } finally {
+      setPendingDelete(null);
     }
   };
 
@@ -258,7 +269,9 @@ const MappingData = () => {
     setEditingId(null);
   };
 
-  // Close modal
+  // Close modal — only ever called from the X button or Cancel button now,
+  // never from a click on the overlay, so in-progress edits can't be lost
+  // by an accidental outside click.
   const closeModal = () => {
     if (isSaving) return;
     setIsModalOpen(false);
@@ -510,7 +523,7 @@ const MappingData = () => {
                       </button>
                       <button 
                         className="action-btn delete"
-                        onClick={() => handleDeleteMapping(item.id, item.name)}
+                        onClick={() => requestDelete(item.id, item.name)}
                         title="Delete product"
                       >
                         <FiTrash2 size={16} />
@@ -560,9 +573,10 @@ const MappingData = () => {
         )}
       </div>
 
-      {/* Modal for Add/Edit Product */}
+      {/* Modal for Add/Edit Product — overlay click no longer closes it,
+          so an accidental outside click can't discard the form. */}
       {isModalOpen && (
-        <div className="modal-overlay" onClick={closeModal}>
+        <div className="modal-overlay">
           <div className="modal-content" onClick={(e) => e.stopPropagation()}>
             <div className="modal-header">
               <h3>{isEditMode ? 'Edit Product' : 'Add New Product'}</h3>
@@ -756,6 +770,15 @@ const MappingData = () => {
             </div>
           </div>
         </div>
+      )}
+
+      {/* Delete confirmation — replaces window.confirm with the styled modal */}
+      {pendingDelete && (
+        <ConfirmDeleteModal
+          productName={pendingDelete.name}
+          onCancel={() => setPendingDelete(null)}
+          onConfirm={confirmDelete}
+        />
       )}
     </div>
   );
