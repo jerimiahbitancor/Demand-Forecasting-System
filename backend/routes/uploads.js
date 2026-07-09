@@ -4,15 +4,17 @@ const router = express.Router();
 const uploadService = require('../services/uploadService');
 const authenticate = require('../middleware/auth');
 
-// Get all uploads with pagination (protected)
+// Get all uploads with pagination (filtered by user)
 router.get('/', authenticate, async (req, res) => {
   try {
     const { status, limit = 50, offset = 0 } = req.query;
+    const userId = req.user.id; // Get userId from authenticated user
     
     const uploads = await uploadService.getUploads({
       status: status || null,
       limit: parseInt(limit),
-      offset: parseInt(offset)
+      offset: parseInt(offset),
+      userId: userId // Pass userId to filter
     });
 
     res.json({
@@ -35,7 +37,8 @@ router.get('/', authenticate, async (req, res) => {
 // Get single upload by ID (protected)
 router.get('/:id', authenticate, async (req, res) => {
   try {
-    const upload = await uploadService.getUploadById(parseInt(req.params.id));
+    const userId = req.user.id;
+    const upload = await uploadService.getUploadById(parseInt(req.params.id), userId);
     
     if (!upload) {
       return res.status(404).json({ error: 'Upload not found' });
@@ -58,6 +61,7 @@ router.get('/:id', authenticate, async (req, res) => {
 router.patch('/:id/status', authenticate, async (req, res) => {
   try {
     const { status } = req.body;
+    const userId = req.user.id;
     
     if (!status || !['pending', 'processing', 'processed', 'failed'].includes(status)) {
       return res.status(400).json({ 
@@ -68,7 +72,8 @@ router.patch('/:id/status', authenticate, async (req, res) => {
     const upload = await uploadService.updateUploadStatus(
       parseInt(req.params.id),
       status,
-      req.body.errorMessage || null
+      req.body.errorMessage || null,
+      userId // Pass userId for verification
     );
 
     if (!upload) {
@@ -92,7 +97,8 @@ router.patch('/:id/status', authenticate, async (req, res) => {
 // Delete upload (protected)
 router.delete('/:id', authenticate, async (req, res) => {
   try {
-    await uploadService.deleteUpload(parseInt(req.params.id));
+    const userId = req.user.id;
+    await uploadService.deleteUpload(parseInt(req.params.id), userId);
     
     res.json({
       success: true,
@@ -110,7 +116,8 @@ router.delete('/:id', authenticate, async (req, res) => {
 // Get upload statistics (protected)
 router.get('/stats/summary', authenticate, async (req, res) => {
   try {
-    const stats = await uploadService.getUploadStats();
+    const userId = req.user.id;
+    const stats = await uploadService.getUploadStats(userId);
     
     res.json({
       success: true,

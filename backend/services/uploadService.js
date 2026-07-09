@@ -1,8 +1,5 @@
 // services/uploadService.js
 const { supabase, isConfigured } = require('../config/supabase');
-const fs = require('fs');
-const path = require('path');
-const xlsx = require('xlsx');
 
 class UploadService {
   constructor() {
@@ -16,6 +13,11 @@ class UploadService {
   isSupabaseReady() {
     const ready = Boolean(isConfigured && supabase && typeof supabase.from === 'function');
     return ready;
+  }
+
+  // ----- Helper to validate userId -----
+  isValidUserId(userId) {
+    return userId && typeof userId === 'number' && Number.isInteger(userId) && userId > 0;
   }
 
   // Validate file columns
@@ -48,7 +50,6 @@ class UploadService {
     let validRows = 0;
     let invalidRows = 0;
     
-    // Get actual column names from the data (case insensitive matching)
     const headers = Object.keys(data[0] || {});
     const columnMap = {};
     
@@ -61,7 +62,7 @@ class UploadService {
 
     data.forEach((row, index) => {
       const rowErrors = [];
-      const rowNumber = index + 2; // +2 because 0-indexed and header row is 1
+      const rowNumber = index + 2;
 
       requiredColumns.forEach(col => {
         const actualCol = columnMap[col];
@@ -71,7 +72,6 @@ class UploadService {
         }
 
         const value = row[actualCol];
-        // Check if value is empty, undefined, null, or only whitespace
         if (value === undefined || value === null || value === '' || value === ' ') {
           rowErrors.push(`${col} is empty`);
         }
@@ -89,7 +89,7 @@ class UploadService {
     });
 
     return {
-      errors: errors.slice(0, 10), // Limit to first 10 errors
+      errors: errors.slice(0, 10),
       validRows,
       invalidRows,
       totalRows: data.length
@@ -100,10 +100,8 @@ class UploadService {
   async validateSalesData(data) {
     const requiredColumns = ['Date', 'Item Name', 'Item Sold', 'Category', 'Net Sales'];
     
-    // Get headers from data
     const headers = data.length > 0 ? Object.keys(data[0]) : [];
     
-    // Check if data is empty
     if (data.length === 0) {
       return {
         isValid: false,
@@ -122,7 +120,6 @@ class UploadService {
       };
     }
 
-    // Validate columns
     const columnValidation = this.validateFileColumns(headers, requiredColumns, 'sales');
     
     if (!columnValidation.isValid) {
@@ -138,7 +135,6 @@ class UploadService {
       };
     }
 
-    // Validate rows
     const rowValidation = this.validateFileData(data, requiredColumns);
 
     return {
@@ -157,10 +153,8 @@ class UploadService {
   // Save upload record with validation
   async saveUploadRecord(fileData, processedData, userId = null) {
     try {
-      // Validate the data before saving
       const validation = await this.validateSalesData(processedData.data || []);
       
-      // Log validation results
       console.log('📋 Validation Results:');
       console.log(`  Total Rows: ${validation.totalRows}`);
       console.log(`  Valid Rows: ${validation.validRows}`);
@@ -171,54 +165,38 @@ class UploadService {
         console.log('  Errors:', validation.errors);
       }
 
-      // Determine status based on validation
       let status = 'processed';
       if (!validation.isValid) {
         status = 'failed';
       } else if (validation.invalidRows > 0) {
-        status = 'pending'; // Some rows have issues but file is valid
+        status = 'pending';
       }
-
-      const record = {
-        filename: fileData.filename,
-        original_name: fileData.originalName || fileData.filename,
-        file_size: fileData.size || 0,
-        file_type: fileData.type || 'unknown',
-        row_count: validation.totalRows,
-        valid_rows: validation.validRows,
-        invalid_rows: validation.invalidRows,
-        status: status,
-        validation_errors: validation.errors.length > 0 ? JSON.stringify(validation.errors) : null
-      };
-
-      console.log('💾 Saving to uploads table:', {
-        filename: record.original_name,
-        rows: record.row_count,
-        valid: record.valid_rows,
-        invalid: record.invalid_rows,
-        status: record.status
-      });
 
       if (!this.isSupabaseReady()) {
         const upload = {
           id: this.memoryStore.uploads.length + 1,
-          ...record,
-          upload_date: new Date().toISOString(),
-          user_id: userId
+          filename: fileData.filename,
+          row_count: validation.totalRows,
+          status: status,
+          upload_date: new Date().toISOString()
         };
+        if (this.isValidUserId(userId)) {
+          upload.user_id = userId;
+        }
         this.memoryStore.uploads.push(upload);
         console.log('📝 Upload saved to memory (ID:', upload.id, ')');
         return upload.id;
       }
 
-      // Only insert columns that exist in your uploads table
       const insertData = {
         filename: fileData.filename,
         row_count: validation.totalRows,
-        status: status,
-        // Note: original_name, file_size, file_type, valid_rows, invalid_rows, validation_errors 
-        // are not in the uploads table schema, so we don't include them
+        status: status
       };
+
+      if (this.isValidUserId(userId)) {
+        insertData.user_id = userId;
+      }
 
       const { data, error } = await supabase
         .from('uploads')
@@ -239,49 +217,6 @@ class UploadService {
     }
   }
 
-  // Legacy method for compatibility
-  async saveUploadRecordOld(fileData, processedData, userId = null) {
-    try {
-      const record = {
-        filename: fileData.filename,
-        row_count: processedData.rowCount || 0,
-        status: 'processed'
-      };
-
-      console.log('💾 Saving sales data to uploads table:', record);
-
-      if (!this.isSupabaseReady()) {
-        const upload = {
-          id: this.memoryStore.uploads.length + 1,
-          ...record,
-          upload_date: new Date().toISOString(),
-          user_id: userId
-        };
-        this.memoryStore.uploads.push(upload);
-        console.log('📝 Sales upload saved to memory (ID:', upload.id, ')');
-        return upload.id;
-      }
-
-      const { data, error } = await supabase
-        .from('uploads')
-        .insert(record)
-        .select()
-        .single();
-
-      if (error) {
-        console.error('❌ Supabase insert error:', error);
-        throw error;
-      }
-      
-      console.log('✅ Sales upload saved to Supabase (ID:', data.id, ')');
-      return data.id;
-    } catch (error) {
-      console.error('❌ Error saving upload record:', error);
-      throw error;
-    }
-  }
-
-  // Rest of the methods remain the same...
   async getUploads(options = {}) {
     try {
       if (!this.isSupabaseReady()) {
@@ -298,6 +233,10 @@ class UploadService {
         .from('uploads')
         .select('*')
         .order('upload_date', { ascending: false });
+
+      if (this.isValidUserId(options.userId)) {
+        query = query.eq('user_id', options.userId);
+      }
 
       if (options.status) {
         query = query.eq('status', options.status);
@@ -320,17 +259,22 @@ class UploadService {
     }
   }
 
-  async getUploadById(id) {
+  async getUploadById(id, userId = null) {
     try {
       if (!this.isSupabaseReady()) {
         return this.memoryStore.uploads.find((upload) => upload.id === Number(id)) || null;
       }
 
-      const { data, error } = await supabase
+      let query = supabase
         .from('uploads')
         .select('*')
-        .eq('id', id)
-        .single();
+        .eq('id', id);
+
+      if (this.isValidUserId(userId)) {
+        query = query.eq('user_id', userId);
+      }
+
+      const { data, error } = await query.single();
 
       if (error) {
         if (error.code === 'PGRST116') {
@@ -345,7 +289,7 @@ class UploadService {
     }
   }
 
-  async updateUploadStatus(id, status, errorMessage = null) {
+  async updateUploadStatus(id, status, errorMessage = null, userId = null) {
     try {
       const updateData = { status: status };
 
@@ -356,12 +300,16 @@ class UploadService {
         return upload;
       }
 
-      const { data, error } = await supabase
+      let query = supabase
         .from('uploads')
         .update(updateData)
-        .eq('id', id)
-        .select()
-        .single();
+        .eq('id', id);
+
+      if (this.isValidUserId(userId)) {
+        query = query.eq('user_id', userId);
+      }
+
+      const { data, error } = await query.select().single();
 
       if (error) throw error;
       return data;
@@ -371,9 +319,9 @@ class UploadService {
     }
   }
 
-  async deleteUpload(id) {
+  async deleteUpload(id, userId = null) {
     try {
-      const upload = await this.getUploadById(id);
+      const upload = await this.getUploadById(id, userId);
       if (!upload) {
         throw new Error('Upload not found');
       }
@@ -383,10 +331,16 @@ class UploadService {
         return true;
       }
 
-      const { error } = await supabase
+      let query = supabase
         .from('uploads')
         .delete()
         .eq('id', id);
+
+      if (this.isValidUserId(userId)) {
+        query = query.eq('user_id', userId);
+      }
+
+      const { error } = await query;
 
       if (error) throw error;
       return true;
@@ -396,7 +350,7 @@ class UploadService {
     }
   }
 
-  async getUploadStats() {
+  async getUploadStats(userId = null) {
     try {
       if (!this.isSupabaseReady()) {
         const uploads = this.memoryStore.uploads;
@@ -412,19 +366,29 @@ class UploadService {
         return stats;
       }
 
-      // Get uploads stats - ONLY SALES DATA (everything in uploads table)
-      const { data: uploads = [], error: uploadError } = await supabase
+      let query = supabase
         .from('uploads')
         .select('status, row_count, upload_date');
 
+      if (this.isValidUserId(userId)) {
+        query = query.eq('user_id', userId);
+      }
+
+      const { data: uploads = [], error: uploadError } = await query;
+
       if (uploadError) throw uploadError;
 
-      // Get menu items count from products table (separate from sales)
+      let menuQuery = supabase
+        .from('products')
+        .select('*', { count: 'exact', head: true });
+
+      if (this.isValidUserId(userId)) {
+        menuQuery = menuQuery.eq('user_id', userId);
+      }
+
       let menuItemsCount = 0;
       try {
-        const { count, error: productError } = await supabase
-          .from('products')
-          .select('*', { count: 'exact', head: true });
+        const { count, error: productError } = await menuQuery;
 
         if (!productError) {
           menuItemsCount = count || 0;
