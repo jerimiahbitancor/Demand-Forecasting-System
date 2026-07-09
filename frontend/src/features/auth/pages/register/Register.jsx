@@ -1,6 +1,6 @@
 // register.jsx
 import { useState } from 'react';
-import { Link, useNavigate } from 'react-router-dom';
+import { useNavigate } from 'react-router-dom';
 import Swal from 'sweetalert2';
 import { 
   FaUser, 
@@ -9,11 +9,21 @@ import {
   FaKey,
   FaEye,
   FaEyeSlash,
-  FaSpinner
+  FaSpinner,
+  FaShieldAlt
 } from 'react-icons/fa';
+import { FiX } from 'react-icons/fi';
 import { useAuth } from '../../../../context/AuthContext';
 import './Register.css';
 import { useSetupGuard } from '../../../../hooks/useSetupGuard';
+
+const getPasswordRules = (password) => [
+  { test: password.length >= 12, message: 'Minimum 12 characters' },
+  { test: /[A-Z]/.test(password), message: 'One uppercase letter' },
+  { test: /[a-z]/.test(password), message: 'One lowercase letter' },
+  { test: /\d/.test(password), message: 'One number' },
+  { test: /[^A-Za-z0-9]/.test(password), message: 'One special character' },
+];
 
 const Register = () => {
   const navigate = useNavigate();
@@ -32,6 +42,8 @@ const Register = () => {
   const [errors, setErrors] = useState({});
   const [showPassword, setShowPassword] = useState(false);
   const [showConfirmPassword, setShowConfirmPassword] = useState(false);
+  const [showTerms, setShowTerms] = useState(false);
+  const [showPrivacy, setShowPrivacy] = useState(false);
   const [error, setError] = useState('');
 
   const handleChange = (e) => {
@@ -49,13 +61,7 @@ const Register = () => {
   const validateForm = () => {
     const newErrors = {};
     const password = formData.password;
-    const passwordRules = [
-      { test: password.length >= 8, message: 'Minimum 8 characters' },
-      { test: /[A-Z]/.test(password), message: 'One uppercase letter' },
-      { test: /[a-z]/.test(password), message: 'One lowercase letter' },
-      { test: /\d/.test(password), message: 'One number' },
-      { test: /[^A-Za-z0-9]/.test(password), message: 'One special character' },
-    ];
+    const passwordRules = getPasswordRules(password);
     const failedPasswordRules = passwordRules.filter((rule) => !rule.test);
 
     if (!formData.fullName.trim()) {
@@ -136,6 +142,22 @@ const Register = () => {
     return focusedInput === inputId ? '#bb0114' : '#6c757d';
   };
 
+  const passwordRules = getPasswordRules(formData.password);
+  const failedPasswordRules = passwordRules.filter((rule) => !rule.test);
+  const passedPasswordRules = passwordRules.filter((rule) => rule.test).length;
+  const passwordStrengthPercent = formData.password.length === 0 ? 0 : Math.min(100, Math.round((passedPasswordRules / passwordRules.length) * 100));
+  const showPasswordRequirements = formData.password.length > 0 && failedPasswordRules.length > 0;
+  const strengthLabel =
+    passwordStrengthPercent === 0
+      ? 'Very weak'
+      : passwordStrengthPercent < 40
+        ? 'Weak'
+        : passwordStrengthPercent < 80
+          ? 'Fair'
+          : passwordStrengthPercent < 100
+            ? 'Good'
+            : 'Strong';
+
   const togglePasswordVisibility = (field) => {
     if (field === 'password') {
       setShowPassword((prev) => !prev);
@@ -144,7 +166,12 @@ const Register = () => {
     }
   };
 
-   if (checking) {
+   const openTerms = () => setShowTerms(true);
+  const closeTerms = () => setShowTerms(false);
+  const openPrivacy = () => setShowPrivacy(true);
+  const closePrivacy = () => setShowPrivacy(false);
+
+  if (checking) {
     return (
       <div className="register-container">
         <main className="main-container">
@@ -260,12 +287,32 @@ const Register = () => {
                   </button>
                 </div>
                 {errors.password && <span className="error-message">{errors.password}</span>}
-                {errors.passwordRequirements && (
-                  <ul className="requirements-list">
-                    {errors.passwordRequirements.map((requirement) => (
-                      <li key={requirement}>{requirement}</li>
-                    ))}
-                  </ul>
+                {formData.password.length > 0 && (
+                  <div className="password-strength-card">
+                    <div className="password-strength-header">
+                      <span className="strength-label">Password strength</span>
+                      <span className={`strength-value ${passwordStrengthPercent >= 100 ? 'strong' : ''}`}>{strengthLabel}</span>
+                    </div>
+                    <div className="strength-bar-track" aria-hidden="true">
+                      <div
+                        className={`strength-bar-fill ${passwordStrengthPercent >= 100 ? 'strong' : passwordStrengthPercent >= 80 ? 'good' : passwordStrengthPercent >= 40 ? 'fair' : 'weak'}`}
+                        style={{ width: `${passwordStrengthPercent}%` }}
+                      />
+                    </div>
+                  </div>
+                )}
+                {showPasswordRequirements && (
+                  <div className="password-requirements">
+                    <p className="requirements-heading">Password must include:</p>
+                    <ul className="requirements-list">
+                      {passwordRules.map((rule) => (
+                        <li key={rule.message} className={`requirement-item ${rule.test ? 'valid' : 'invalid'}`}>
+                          <span className="requirement-icon">{rule.test ? '✓' : '•'}</span>
+                          <span>{rule.message}</span>
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
                 )}
               </div>
               <div className="form-group">
@@ -314,7 +361,7 @@ const Register = () => {
                 />
               </div>
               <label className="terms-label" htmlFor="terms">
-                I agree to the <Link className="terms-link" to="/terms">Terms &amp; Conditions</Link> and <Link className="terms-link" to="/privacy">Privacy Policy</Link>.
+                I agree to the <button type="button" className="terms-link" onClick={openTerms}>Terms &amp; Conditions</button> and <button type="button" className="terms-link" onClick={openPrivacy}>Privacy Policy</button>.
               </label>
               {errors.terms && <span className="error-message">{errors.terms}</span>}
             </div>
@@ -333,6 +380,98 @@ const Register = () => {
 
         </div>
       </main>
+
+      {showTerms && (
+        <div className="modal-overlay" onClick={closeTerms}>
+          <div className="modal-content" onClick={(e) => e.stopPropagation()}>
+            <div className="modal-header">
+              <div className="modal-header-left">
+                <FaLock className="modal-header-icon" />
+                <h2>Terms and Conditions</h2>
+              </div>
+              <button type="button" className="modal-close" onClick={closeTerms}>
+                <FiX />
+              </button>
+            </div>
+            <div className="modal-body">
+              <div className="modal-section">
+                <h3>1. Acceptance of Terms</h3>
+                <p>
+                  By creating an account with ChefDuo Forecast, you agree to use the service responsibly and to comply with our platform rules.
+                </p>
+              </div>
+              <div className="modal-section">
+                <h3>2. Account Responsibilities</h3>
+                <p>
+                  You are responsible for maintaining the confidentiality of your password, using a strong password, and notifying us of any unauthorized access.
+                </p>
+              </div>
+              <div className="modal-section">
+                <h3>3. Data Usage</h3>
+                <p>
+                  Your business and account information helps us provide forecasting insights and improve the experience. We do not sell your data for marketing purposes.
+                </p>
+              </div>
+              <div className="modal-section">
+                <h3>4. Limitation of Liability</h3>
+                <p>
+                  ChefDuo provides forecasting information for planning purposes and does not guarantee outcomes or business results.
+                </p>
+              </div>
+              <div className="modal-footer-text">
+                <p>Last updated: July 2026</p>
+                <button type="button" className="modal-agree-btn" onClick={closeTerms}>I Agree</button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {showPrivacy && (
+        <div className="modal-overlay" onClick={closePrivacy}>
+          <div className="modal-content" onClick={(e) => e.stopPropagation()}>
+            <div className="modal-header">
+              <div className="modal-header-left">
+                <FaShieldAlt className="modal-header-icon" />
+                <h2>Privacy Policy</h2>
+              </div>
+              <button type="button" className="modal-close" onClick={closePrivacy}>
+                <FiX />
+              </button>
+            </div>
+            <div className="modal-body">
+              <div className="modal-section">
+                <h3>1. Information We Collect</h3>
+                <p>
+                  We collect your name, email address, login credentials, and business data needed to generate forecasts and support your account.
+                </p>
+              </div>
+              <div className="modal-section">
+                <h3>2. How We Use Your Information</h3>
+                <p>
+                  Your information helps us operate the platform, improve forecasts, personalize your experience, and maintain account security.
+                </p>
+              </div>
+              <div className="modal-section">
+                <h3>3. Security</h3>
+                <p>
+                  We use industry-standard protections to safeguard your account and business information from unauthorized access.
+                </p>
+              </div>
+              <div className="modal-section">
+                <h3>4. Your Choices</h3>
+                <p>
+                  You may update your profile information or contact us if you want to review or delete personal data associated with your account.
+                </p>
+              </div>
+              <div className="modal-footer-text">
+                <p>Last updated: July 2026</p>
+                <button type="button" className="modal-agree-btn" onClick={closePrivacy}>Close</button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };
