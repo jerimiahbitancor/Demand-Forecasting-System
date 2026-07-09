@@ -11,6 +11,11 @@ class MenuService {
     return ready;
   }
 
+  // ----- Helper to validate userId -----
+  isValidUserId(userId) {
+    return userId && typeof userId === 'number' && Number.isInteger(userId) && userId > 0;
+  }
+
   // Validate file columns
   validateFileColumns(headers, requiredColumns) {
     const missingColumns = [];
@@ -41,7 +46,6 @@ class MenuService {
     let validRows = 0;
     let invalidRows = 0;
     
-    // Get actual column names from the data
     const headers = Object.keys(data[0] || {});
     const columnMap = {};
     
@@ -64,7 +68,6 @@ class MenuService {
         }
 
         const value = row[actualCol];
-        // Special validation for specific columns
         if (col === 'Quantity' || col === 'Price') {
           if (value === undefined || value === null || value === '' || value === ' ') {
             rowErrors.push(`${col} is empty`);
@@ -74,7 +77,6 @@ class MenuService {
             rowErrors.push(`${col} must be greater than 0`);
           }
         } else {
-          // For string columns (Product Name, Ingredients, Unit, Category)
           if (value === undefined || value === null || value === '' || value === ' ') {
             rowErrors.push(`${col} is empty`);
           }
@@ -119,7 +121,6 @@ class MenuService {
     const requiredColumns = ['Product Name', 'Ingredients', 'Quantity', 'Unit', 'Price', 'Category'];
     const headers = Object.keys(data[0]);
     
-    // Validate columns
     const columnValidation = this.validateFileColumns(headers, requiredColumns);
     
     if (!columnValidation.isValid) {
@@ -137,7 +138,6 @@ class MenuService {
       };
     }
 
-    // Validate rows
     const rowValidation = this.validateFileData(data, requiredColumns);
     
     return {
@@ -151,8 +151,25 @@ class MenuService {
     };
   }
 
-  async processMenuData(data) {
-    // First validate the data
+  // Check for duplicates in database
+  async checkDatabaseDuplicates(products, userId) {
+    const duplicates = [];
+    const seen = new Set();
+    for (const product of products) {
+      if (seen.has(product)) continue;
+      seen.add(product);
+      const existing = await this.getProductIdByNameAndUser(product, userId);
+      if (existing) {
+        duplicates.push({
+          name: product,
+          message: `Product "${product}" already exists in the database`
+        });
+      }
+    }
+    return duplicates;
+  }
+
+  async processMenuData(data, userId = null) {
     const validation = this.validateMenuData(data);
     
     console.log('📋 Menu Data Validation Results:');
@@ -165,7 +182,6 @@ class MenuService {
       console.log('  Errors:', validation.errors);
     }
 
-    // If validation fails, return validation results without processing
     if (!validation.isValid) {
       return {
         validation: validation,
@@ -177,7 +193,45 @@ class MenuService {
       };
     }
 
-    // Only proceed if validation passes
+    // Extract product names for duplicate checking
+    const productNames = [];
+    for (const row of data) {
+      const headers = Object.keys(row);
+      const productNameCol = headers.find(h => h.toLowerCase() === 'product name');
+      if (productNameCol && row[productNameCol]) {
+        productNames.push(row[productNameCol].trim());
+      }
+    }
+
+    // Only check duplicates if userId is valid
+    let dbDuplicates = [];
+    if (this.isValidUserId(userId)) {
+      dbDuplicates = await this.checkDatabaseDuplicates(productNames, userId);
+    }
+    
+    if (dbDuplicates.length > 0) {
+      const duplicateErrors = dbDuplicates.map((dup, index) => ({
+        row: index + 2,
+        message: dup.message
+      }));
+      
+      return {
+        validation: {
+          totalRows: data.length,
+          validRows: 0,
+          invalidRows: data.length,
+          errors: duplicateErrors,
+          isValid: false,
+          dbDuplicates: dbDuplicates
+        },
+        productsInserted: 0,
+        ingredientsInserted: 0,
+        productIngredientRelations: 0,
+        processed: false,
+        message: `Found ${dbDuplicates.length} duplicate product(s) in the database. Please remove them from the file.`
+      };
+    }
+
     const errors = [];
     let validCount = 0;
     let invalidCount = 0;
@@ -185,13 +239,11 @@ class MenuService {
     let ingredientsInserted = 0;
     let productIngredientRelations = 0;
 
-    // Process each row
     for (let i = 0; i < data.length; i++) {
       const row = data[i];
       const rowNumber = i + 2;
 
       try {
-        // Find the actual column names (case insensitive)
         const headers = Object.keys(row);
         const productNameCol = headers.find(h => h.toLowerCase() === 'product name');
         const ingredientsCol = headers.find(h => h.toLowerCase() === 'ingredients');
@@ -207,36 +259,31 @@ class MenuService {
         const price = parseFloat(row[priceCol]);
         const category = categoryCol ? row[categoryCol]?.trim() : 'Uncategorized';
 
-        // Check if product already exists
-        let productId = await this.getProductIdByName(productName);
+        let productId = await this.getProductIdByNameAndUser(productName, userId);
 
         if (!productId) {
-          // Insert new product with category
           productId = await this.insertProduct({
             name: productName,
             price: price,
             category: category || 'Uncategorized',
             serving_size_label: unit,
             is_active: true,
-            first_sold_date: null
+            first_sold_date: null,
+            user_id: userId
           });
           productsInserted++;
         } else {
-          // If product exists, check if category needs updating
           await this.updateProductCategoryIfNeeded(productId, category);
         }
 
-        // Process ingredients (assuming ingredients are comma-separated)
         if (ingredientsStr) {
           const ingredientList = ingredientsStr.split(',').map(i => i.trim());
           
           for (const ingredientName of ingredientList) {
             if (ingredientName) {
-              // Get or create ingredient with unit
-              const ingredientId = await this.getOrCreateIngredient(ingredientName, unit);
+              const ingredientId = await this.getOrCreateIngredient(ingredientName, unit, userId);
               
               if (ingredientId) {
-                // Insert product_ingredient relationship
                 await this.insertProductIngredient({
                   product_id: productId,
                   ingredient_id: ingredientId,
@@ -276,127 +323,23 @@ class MenuService {
     };
   }
 
-  // Legacy method for backward compatibility
-  async processMenuDataOld(data) {
-    const errors = [];
-    let validCount = 0;
-    let invalidCount = 0;
-    let productsInserted = 0;
-    let ingredientsInserted = 0;
-    let productIngredientRelations = 0;
-
-    // Validate data first
-    const validation = this.validateMenuData(data);
-    
-    if (validation.errors.length > 0) {
-      return {
-        validation: validation,
-        productsInserted: 0,
-        ingredientsInserted: 0,
-        productIngredientRelations: 0
-      };
-    }
-
-    // Process each row
-    for (let i = 0; i < data.length; i++) {
-      const row = data[i];
-      const rowNumber = i + 2;
-
-      try {
-        // Find the actual column names (case insensitive)
-        const headers = Object.keys(row);
-        const productNameCol = headers.find(h => h.toLowerCase() === 'product name');
-        const ingredientsCol = headers.find(h => h.toLowerCase() === 'ingredients');
-        const quantityCol = headers.find(h => h.toLowerCase() === 'quantity');
-        const unitCol = headers.find(h => h.toLowerCase() === 'unit');
-        const priceCol = headers.find(h => h.toLowerCase() === 'price');
-        const categoryCol = headers.find(h => h.toLowerCase() === 'category');
-
-        const productName = row[productNameCol]?.trim();
-        const ingredientsStr = row[ingredientsCol]?.trim();
-        const quantity = parseFloat(row[quantityCol]);
-        const unit = row[unitCol]?.trim();
-        const price = parseFloat(row[priceCol]);
-        const category = categoryCol ? row[categoryCol]?.trim() : 'Uncategorized';
-
-        // Check if product already exists
-        let productId = await this.getProductIdByName(productName);
-
-        if (!productId) {
-          // Insert new product with category
-          productId = await this.insertProduct({
-            name: productName,
-            price: price,
-            category: category || 'Uncategorized',
-            serving_size_label: unit,
-            is_active: true,
-            first_sold_date: null
-          });
-          productsInserted++;
-        } else {
-          // If product exists, check if category needs updating
-          await this.updateProductCategoryIfNeeded(productId, category);
-        }
-
-        // Process ingredients (assuming ingredients are comma-separated)
-        if (ingredientsStr) {
-          const ingredientList = ingredientsStr.split(',').map(i => i.trim());
-          
-          for (const ingredientName of ingredientList) {
-            if (ingredientName) {
-              // Get or create ingredient with unit
-              const ingredientId = await this.getOrCreateIngredient(ingredientName, unit);
-              
-              if (ingredientId) {
-                // Insert product_ingredient relationship
-                await this.insertProductIngredient({
-                  product_id: productId,
-                  ingredient_id: ingredientId,
-                  quantity_per_serving: quantity || 1
-                });
-                productIngredientRelations++;
-              }
-            }
-          }
-        }
-
-        validCount++;
-
-      } catch (error) {
-        console.error(`Error processing row ${rowNumber}:`, error);
-        errors.push({
-          row: rowNumber,
-          message: error.message || 'Failed to process row'
-        });
-        invalidCount++;
-      }
-    }
-
-    return {
-      validation: {
-        totalRows: data.length,
-        validRows: validCount,
-        invalidRows: invalidCount,
-        errors: errors.slice(0, 10)
-      },
-      productsInserted: productsInserted,
-      ingredientsInserted: ingredientsInserted,
-      productIngredientRelations: productIngredientRelations
-    };
-  }
-
-  // Rest of the methods remain the same...
-  async getProductIdByName(name) {
+  async getProductIdByNameAndUser(name, userId) {
     try {
       if (!this.isSupabaseReady()) {
         return null;
       }
 
-      const { data, error } = await supabase
+      let query = supabase
         .from('products')
         .select('id')
-        .ilike('name', name)
-        .maybeSingle();
+        .ilike('name', name);
+
+      // Only filter by user_id if it's valid
+      if (this.isValidUserId(userId)) {
+        query = query.eq('user_id', userId);
+      }
+
+      const { data, error } = await query.maybeSingle();
 
       if (error) {
         if (error.code === 'PGRST116') {
@@ -418,23 +361,30 @@ class MenuService {
         return Math.floor(Math.random() * 1000) + 1;
       }
 
+      const insertData = {
+        name: productData.name,
+        price: productData.price,
+        category: productData.category || 'Uncategorized',
+        serving_size_label: productData.serving_size_label || null,
+        is_active: productData.is_active !== undefined ? productData.is_active : true,
+        first_sold_date: productData.first_sold_date || null
+      };
+
+      // Only add user_id if it's valid
+      if (this.isValidUserId(productData.user_id)) {
+        insertData.user_id = productData.user_id;
+      }
+
       const { data, error } = await supabase
         .from('products')
-        .insert({
-          name: productData.name,
-          price: productData.price,
-          category: productData.category || 'Uncategorized',
-          serving_size_label: productData.serving_size_label || null,
-          is_active: productData.is_active !== undefined ? productData.is_active : true,
-          first_sold_date: productData.first_sold_date || null
-        })
+        .insert(insertData)
         .select()
         .single();
 
       if (error) {
         if (error.code === '23505') {
           console.log(`⚠️ Product already exists: ${productData.name}`);
-          const existing = await this.getProductIdByName(productData.name);
+          const existing = await this.getProductIdByNameAndUser(productData.name, productData.user_id);
           if (existing) return existing;
         }
         throw error;
@@ -482,18 +432,23 @@ class MenuService {
     }
   }
 
-  async getOrCreateIngredient(name, unit) {
+  async getOrCreateIngredient(name, unit, userId = null) {
     try {
       if (!this.isSupabaseReady()) {
         console.log(`📝 Ingredient would be created: ${name} (${unit})`);
         return Math.floor(Math.random() * 1000) + 1;
       }
 
-      const { data, error } = await supabase
+      let query = supabase
         .from('ingredients')
         .select('id, name, unit')
-        .ilike('name', name)
-        .maybeSingle();
+        .ilike('name', name);
+
+      if (this.isValidUserId(userId)) {
+        query = query.eq('user_id', userId);
+      }
+
+      const { data, error } = await query.maybeSingle();
 
       if (error && error.code !== 'PGRST116') {
         throw error;
@@ -515,12 +470,18 @@ class MenuService {
         return data.id;
       }
 
+      const insertData = { 
+        name: name,
+        unit: unit 
+      };
+
+      if (this.isValidUserId(userId)) {
+        insertData.user_id = userId;
+      }
+
       const { data: newData, error: insertError } = await supabase
         .from('ingredients')
-        .insert({ 
-          name: name,
-          unit: unit 
-        })
+        .insert(insertData)
         .select()
         .single();
 
@@ -576,13 +537,13 @@ class MenuService {
     }
   }
 
-  async getProductsWithIngredients() {
+  async getProductsWithIngredients(userId = null) {
     try {
       if (!this.isSupabaseReady()) {
         return [];
       }
 
-      const { data, error } = await supabase
+      let query = supabase
         .from('products')
         .select(`
           *,
@@ -597,6 +558,11 @@ class MenuService {
         `)
         .order('name');
 
+      if (this.isValidUserId(userId)) {
+        query = query.eq('user_id', userId);
+      }
+
+      const { data, error } = await query;
       if (error) throw error;
       return data;
     } catch (error) {
@@ -605,13 +571,13 @@ class MenuService {
     }
   }
 
-  async getProductsByCategory(category) {
+  async getProductsByCategory(category, userId = null) {
     try {
       if (!this.isSupabaseReady()) {
         return [];
       }
 
-      const { data, error } = await supabase
+      let query = supabase
         .from('products')
         .select(`
           *,
@@ -627,6 +593,11 @@ class MenuService {
         .ilike('category', category)
         .order('name');
 
+      if (this.isValidUserId(userId)) {
+        query = query.eq('user_id', userId);
+      }
+
+      const { data, error } = await query;
       if (error) throw error;
       return data;
     } catch (error) {
@@ -635,16 +606,21 @@ class MenuService {
     }
   }
 
-  async getCategories() {
+  async getCategories(userId = null) {
     try {
       if (!this.isSupabaseReady()) {
         return [];
       }
 
-      const { data, error } = await supabase
+      let query = supabase
         .from('products')
-        .select('category')
-        .order('category');
+        .select('category');
+
+      if (this.isValidUserId(userId)) {
+        query = query.eq('user_id', userId);
+      }
+
+      const { data, error } = await query.order('category');
 
       if (error) throw error;
       

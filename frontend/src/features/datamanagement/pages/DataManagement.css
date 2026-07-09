@@ -392,20 +392,20 @@
 .preview-stats {
   display: grid;
   grid-template-columns: 1fr;
-  gap: 16px;
-  margin-bottom: 24px;
+  gap: 10px;
+  margin-bottom: 20px;
 }
 
 @media (min-width: 768px) {
   .preview-stats {
-    grid-template-columns: repeat(3, 1fr);
+    grid-template-columns: repeat(4, 1fr);
   }
 }
 
 .stat-box {
   background-color: #faf8f7;
   border-radius: 8px;
-  padding: 16px;
+  padding: 12px;
   border: 1px solid #f0f0f0;
 }
 

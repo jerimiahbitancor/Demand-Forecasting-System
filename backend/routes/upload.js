@@ -9,7 +9,6 @@ const fileProcessor = require('../services/fileProcessor');
 const uploadService = require('../services/uploadService');
 const menuService = require('../services/menuService');
 
-// Upload file endpoint (protected)
 router.post(
   '/',
   authenticate,
@@ -21,7 +20,15 @@ router.post(
     try {
       const { fileType } = req.body;
       const file = req.file;
-      const userId = req.user?.id || null;
+      
+      // Validate userId - ensure it's a valid integer
+      let userId = null;
+      if (req.user?.id) {
+        const parsed = parseInt(req.user.id);
+        if (!isNaN(parsed) && parsed > 0) {
+          userId = parsed;
+        }
+      }
       
       if (!file) {
         return res.status(400).json({ error: 'No file uploaded' });
@@ -29,7 +36,6 @@ router.post(
 
       console.log('📄 Processing file:', file.originalname, 'Type:', fileType);
 
-      // Process file from memory buffer
       const processedData = await fileProcessor.processFile(
         file.buffer,
         file.originalname,
@@ -41,10 +47,9 @@ router.post(
       let result;
       let uploadId = null;
 
-      // Handle different file types
       if (fileType === 'menu') {
-        // Process menu data - insert into products and product_ingredients ONLY
-        result = await menuService.processMenuData(processedData.data);
+        // Pass userId to menuService
+        result = await menuService.processMenuData(processedData.data, userId);
         
         console.log('✅ Menu data processed:', {
           totalRows: result.validation.totalRows,
@@ -69,7 +74,6 @@ router.post(
           }
         });
       } else {
-        // Process sales data - ONLY goes to uploads table
         const validation = fileProcessor.validateData(processedData.data, fileType);
 
         uploadId = await uploadService.saveUploadRecord(

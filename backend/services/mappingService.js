@@ -11,7 +11,12 @@ class MappingService {
     return ready;
   }
 
-  async getProducts(category = null, search = null) {
+  // ----- Helper to validate userId -----
+  isValidUserId(userId) {
+    return userId && typeof userId === 'number' && Number.isInteger(userId) && userId > 0;
+  }
+
+  async getProducts(userId, category = null, search = null) {
     try {
       if (!this.isSupabaseReady()) {
         return [];
@@ -32,6 +37,10 @@ class MappingService {
         `)
         .order('name');
 
+      if (this.isValidUserId(userId)) {
+        query = query.eq('user_id', userId);
+      }
+
       if (category && category !== 'All') {
         query = query.eq('category', category);
       }
@@ -49,13 +58,13 @@ class MappingService {
     }
   }
 
-  async getProductById(id) {
+  async getProductById(id, userId) {
     try {
       if (!this.isSupabaseReady()) {
         return null;
       }
 
-      const { data, error } = await supabase
+      let query = supabase
         .from('products')
         .select(`
           *,
@@ -68,8 +77,13 @@ class MappingService {
             )
           )
         `)
-        .eq('id', id)
-        .single();
+        .eq('id', id);
+
+      if (this.isValidUserId(userId)) {
+        query = query.eq('user_id', userId);
+      }
+
+      const { data, error } = await query.single();
 
       if (error) {
         if (error.code === 'PGRST116') {
@@ -90,28 +104,30 @@ class MappingService {
         return { id: Date.now(), ...productData };
       }
 
-      // Insert product
+      const insertData = {
+        name: productData.name,
+        price: productData.price,
+        category: productData.category || 'Uncategorized',
+        serving_size_label: productData.serving_size_label || null,
+        is_active: true
+      };
+
+      if (this.isValidUserId(productData.user_id)) {
+        insertData.user_id = productData.user_id;
+      }
+
       const { data: product, error: productError } = await supabase
         .from('products')
-        .insert({
-          name: productData.name,
-          price: productData.price,
-          category: productData.category || 'Uncategorized',
-          serving_size_label: productData.serving_size_label || null,
-          is_active: true
-        })
+        .insert(insertData)
         .select()
         .single();
 
       if (productError) throw productError;
 
-      // Insert ingredients if provided
       if (productData.ingredients && productData.ingredients.length > 0) {
         for (const ingredient of productData.ingredients) {
-          // Get or create ingredient
-          const ingredientId = await this.getOrCreateIngredient(ingredient.name, ingredient.unit);
+          const ingredientId = await this.getOrCreateIngredient(ingredient.name, ingredient.unit, productData.user_id);
           
-          // Insert product_ingredient relationship
           await supabase
             .from('product_ingredients')
             .insert({
@@ -129,13 +145,17 @@ class MappingService {
     }
   }
 
-  async updateProduct(id, productData) {
+  async updateProduct(id, productData, userId) {
     try {
       if (!this.isSupabaseReady()) {
         return { id, ...productData };
       }
 
-      // Update product
+      const existingProduct = await this.getProductById(id, userId);
+      if (!existingProduct) {
+        return null;
+      }
+
       const { data: product, error: productError } = await supabase
         .from('products')
         .update({
@@ -151,18 +171,15 @@ class MappingService {
 
       if (productError) throw productError;
 
-      // If ingredients provided, update them
       if (productData.ingredients !== undefined) {
-        // Delete existing product_ingredients
         await supabase
           .from('product_ingredients')
           .delete()
           .eq('product_id', id);
 
-        // Insert new ingredients
         if (productData.ingredients && productData.ingredients.length > 0) {
           for (const ingredient of productData.ingredients) {
-            const ingredientId = await this.getOrCreateIngredient(ingredient.name, ingredient.unit);
+            const ingredientId = await this.getOrCreateIngredient(ingredient.name, ingredient.unit, userId);
             
             await supabase
               .from('product_ingredients')
@@ -182,10 +199,15 @@ class MappingService {
     }
   }
 
-  async deleteProduct(id) {
+  async deleteProduct(id, userId) {
     try {
       if (!this.isSupabaseReady()) {
         return true;
+      }
+
+      const existingProduct = await this.getProductById(id, userId);
+      if (!existingProduct) {
+        return false;
       }
 
       const { error } = await supabase
@@ -201,18 +223,22 @@ class MappingService {
     }
   }
 
-  async getOrCreateIngredient(name, unit) {
+  async getOrCreateIngredient(name, unit, userId) {
     try {
       if (!this.isSupabaseReady()) {
         return { id: Date.now() };
       }
 
-      // Try to find existing ingredient
-      const { data, error } = await supabase
+      let query = supabase
         .from('ingredients')
         .select('id')
-        .ilike('name', name)
-        .maybeSingle();
+        .ilike('name', name);
+
+      if (this.isValidUserId(userId)) {
+        query = query.eq('user_id', userId);
+      }
+
+      const { data, error } = await query.maybeSingle();
 
       if (error && error.code !== 'PGRST116') {
         throw error;
@@ -222,10 +248,14 @@ class MappingService {
         return data.id;
       }
 
-      // Create new ingredient
+      const insertData = { name, unit };
+      if (this.isValidUserId(userId)) {
+        insertData.user_id = userId;
+      }
+
       const { data: newData, error: insertError } = await supabase
         .from('ingredients')
-        .insert({ name, unit })
+        .insert(insertData)
         .select()
         .single();
 
@@ -237,16 +267,22 @@ class MappingService {
     }
   }
 
-  async getCategories() {
+  async getCategories(userId) {
     try {
       if (!this.isSupabaseReady()) {
         return [];
       }
 
-      const { data, error } = await supabase
+      let query = supabase
         .from('products')
         .select('category')
         .order('category');
+
+      if (this.isValidUserId(userId)) {
+        query = query.eq('user_id', userId);
+      }
+
+      const { data, error } = await query;
 
       if (error) throw error;
       

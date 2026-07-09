@@ -4,11 +4,13 @@ const router = express.Router();
 const authenticate = require('../middleware/auth');
 const mappingService = require('../services/mappingService');
 
-// Get all products with their ingredients
+// Get all products with their ingredients (filtered by user)
 router.get('/products', authenticate, async (req, res) => {
   try {
     const { category, search } = req.query;
-    const products = await mappingService.getProducts(category, search);
+    const userId = req.user.id;
+    
+    const products = await mappingService.getProducts(userId, category, search);
     
     res.json({
       success: true,
@@ -27,7 +29,8 @@ router.get('/products', authenticate, async (req, res) => {
 // Get a single product with its ingredients
 router.get('/products/:id', authenticate, async (req, res) => {
   try {
-    const product = await mappingService.getProductById(req.params.id);
+    const userId = req.user.id;
+    const product = await mappingService.getProductById(req.params.id, userId);
     
     if (!product) {
       return res.status(404).json({
@@ -54,6 +57,7 @@ router.get('/products/:id', authenticate, async (req, res) => {
 router.post('/products', authenticate, async (req, res) => {
   try {
     const { name, price, category, serving_size_label, ingredients } = req.body;
+    const userId = req.user.id;
     
     if (!name || !price) {
       return res.status(400).json({
@@ -67,7 +71,8 @@ router.post('/products', authenticate, async (req, res) => {
       price,
       category: category || 'Uncategorized',
       serving_size_label: serving_size_label || null,
-      ingredients: ingredients || []
+      ingredients: ingredients || [],
+      user_id: userId
     });
     
     res.status(201).json({
@@ -89,6 +94,7 @@ router.post('/products', authenticate, async (req, res) => {
 router.put('/products/:id', authenticate, async (req, res) => {
   try {
     const { name, price, category, serving_size_label, is_active, ingredients } = req.body;
+    const userId = req.user.id;
     
     const product = await mappingService.updateProduct(req.params.id, {
       name,
@@ -97,7 +103,7 @@ router.put('/products/:id', authenticate, async (req, res) => {
       serving_size_label,
       is_active,
       ingredients
-    });
+    }, userId);
     
     if (!product) {
       return res.status(404).json({
@@ -124,7 +130,8 @@ router.put('/products/:id', authenticate, async (req, res) => {
 // Delete a product
 router.delete('/products/:id', authenticate, async (req, res) => {
   try {
-    const success = await mappingService.deleteProduct(req.params.id);
+    const userId = req.user.id;
+    const success = await mappingService.deleteProduct(req.params.id, userId);
     
     if (!success) {
       return res.status(404).json({
@@ -150,7 +157,8 @@ router.delete('/products/:id', authenticate, async (req, res) => {
 // Get all categories
 router.get('/categories', authenticate, async (req, res) => {
   try {
-    const categories = await mappingService.getCategories();
+    const userId = req.user.id;
+    const categories = await mappingService.getCategories(userId);
     
     res.json({
       success: true,

@@ -23,7 +23,7 @@ const UploadData = ({
   // Sales upload state
   const [salesFile, setSalesFile] = useState(null);
   const [isSalesDragging, setIsSalesDragging] = useState(false);
-  const [salesUploadStatus, setSalesUploadStatus] = useState(null); // 'loading', 'success', 'error'
+  const [salesUploadStatus, setSalesUploadStatus] = useState(null);
   const [salesProgress, setSalesProgress] = useState(0);
   const [salesValidated, setSalesValidated] = useState(false);
   const [salesValidationErrors, setSalesValidationErrors] = useState([]);
@@ -31,10 +31,11 @@ const UploadData = ({
   // Menu upload state
   const [menuFile, setMenuFile] = useState(null);
   const [isMenuDragging, setIsMenuDragging] = useState(false);
-  const [menuUploadStatus, setMenuUploadStatus] = useState(null); // 'loading', 'success', 'error'
+  const [menuUploadStatus, setMenuUploadStatus] = useState(null);
   const [menuProgress, setMenuProgress] = useState(0);
   const [menuValidated, setMenuValidated] = useState(false);
   const [menuValidationErrors, setMenuValidationErrors] = useState([]);
+  const [menuDbDuplicates, setMenuDbDuplicates] = useState([]);
 
   // Dynamic preview data from API
   const [salesPreviewData, setSalesPreviewData] = useState({
@@ -69,7 +70,6 @@ const UploadData = ({
     }
   });
 
-  // Add token to requests
   apiClient.interceptors.request.use(
     (config) => {
       const token = getAuthToken();
@@ -128,7 +128,7 @@ const UploadData = ({
     });
   };
 
-  // Validate sales data - Check for required columns
+  // Validate sales data (no duplicate check)
   const validateSalesData = (data) => {
     const errors = [];
     let validCount = 0;
@@ -204,7 +204,7 @@ const UploadData = ({
     };
   };
 
-  // Validate menu data - Check for required columns
+  // Validate menu data (no duplicate check within file)
   const validateMenuData = (data) => {
     const errors = [];
     let validCount = 0;
@@ -255,7 +255,6 @@ const UploadData = ({
         const actualCol = headers.find(h => h.toLowerCase() === col.toLowerCase());
         const value = row[actualCol];
         
-        // Special validation for numeric fields
         if (col === 'Quantity' || col === 'Price') {
           if (value === undefined || value === null || value === '' || value === ' ') {
             rowErrors.push(`${col} is empty`);
@@ -265,7 +264,6 @@ const UploadData = ({
             rowErrors.push(`${col} must be greater than 0`);
           }
         } else {
-          // For string columns
           if (value === undefined || value === null || value === '' || value === ' ') {
             rowErrors.push(`${col} is empty`);
           }
@@ -350,11 +348,11 @@ const UploadData = ({
       
       if (validation.isValid) {
         if (salesToastId) toast.dismiss(salesToastId);
-        const id = toast.success(`File validated: ${validation.validRows} valid records found`);
+        const id = toast.success(`✅ File validated: ${validation.validRows} valid records found`);
         setSalesToastId(id);
       } else {
         if (salesToastId) toast.dismiss(salesToastId);
-        const id = toast.error(` File has ${validation.invalidRows} issues. Please review the preview below.`);
+        const id = toast.error(`❌ File has ${validation.invalidRows} issues. Please review the preview below.`);
         setSalesToastId(id);
       }
     } catch (error) {
@@ -376,7 +374,6 @@ const UploadData = ({
   };
 
   const handleSalesConfirm = async () => {
-    // Check if file is selected
     if (!salesFile) {
       if (salesToastId) toast.dismiss(salesToastId);
       const id = toast.error('Please select a file first');
@@ -384,7 +381,6 @@ const UploadData = ({
       return;
     }
 
-    // Check if file is validated
     if (!salesValidated) {
       if (salesToastId) toast.dismiss(salesToastId);
       const id = toast.error('Please wait for file validation to complete');
@@ -392,7 +388,6 @@ const UploadData = ({
       return;
     }
 
-    // Check if there are validation errors
     if (salesValidationErrors.length > 0) {
       if (salesToastId) toast.dismiss(salesToastId);
       const id = toast.error(`Cannot upload. Please fix ${salesValidationErrors.length} validation issue(s) first.`);
@@ -405,7 +400,6 @@ const UploadData = ({
       setSalesProgress(0);
       console.log("Sales upload confirmed");
       
-      // Simulate progress
       const progressInterval = setInterval(() => {
         setSalesProgress(prev => {
           if (prev >= 90) {
@@ -448,14 +442,13 @@ const UploadData = ({
         });
         
         if (salesToastId) toast.dismiss(salesToastId);
-        const id = toast.success(`Sales data uploaded successfully! ${summary.validRows || 0} records processed.`);
+        const id = toast.success(`✅ Sales data uploaded successfully! ${summary.validRows || 0} records processed.`);
         setSalesToastId(id);
         
         if (onUploadSuccess) {
           onUploadSuccess(response.data || response);
         }
         
-        // Reset after 3 seconds
         setTimeout(() => {
           setSalesUploadStatus(null);
           setSalesFile(null);
@@ -471,7 +464,7 @@ const UploadData = ({
       
       const errorMsg = error.response?.data?.error || error.message || 'Upload failed';
       if (salesToastId) toast.dismiss(salesToastId);
-      const id = toast.error(`Upload failed: ${errorMsg}`);
+      const id = toast.error(`❌ Upload failed: ${errorMsg}`);
       setSalesToastId(id);
       
       setTimeout(() => {
@@ -544,6 +537,7 @@ const UploadData = ({
     setMenuProgress(0);
     setMenuValidated(false);
     setMenuValidationErrors([]);
+    setMenuDbDuplicates([]);
     console.log("Menu file uploaded:", file.name);
 
     try {
@@ -562,11 +556,11 @@ const UploadData = ({
       
       if (validation.isValid) {
         if (menuToastId) toast.dismiss(menuToastId);
-        const id = toast.success(`Menu file validated: ${validation.validRows} items ready`);
+        const id = toast.success(`✅ Menu file validated: ${validation.validRows} items ready`);
         setMenuToastId(id);
       } else {
         if (menuToastId) toast.dismiss(menuToastId);
-        const id = toast.error(`Menu file has ${validation.invalidRows} issues. Please review the preview below.`);
+        const id = toast.error(`❌ Menu file has ${validation.invalidRows} issues. Please review the preview below.`);
         setMenuToastId(id);
       }
     } catch (error) {
@@ -588,7 +582,6 @@ const UploadData = ({
   };
 
   const handleMenuConfirm = async () => {
-    // Check if file is selected
     if (!menuFile) {
       if (menuToastId) toast.dismiss(menuToastId);
       const id = toast.error('Please select a file first');
@@ -596,7 +589,6 @@ const UploadData = ({
       return;
     }
 
-    // Check if file is validated
     if (!menuValidated) {
       if (menuToastId) toast.dismiss(menuToastId);
       const id = toast.error('Please wait for file validation to complete');
@@ -604,7 +596,6 @@ const UploadData = ({
       return;
     }
 
-    // Check if there are validation errors
     if (menuValidationErrors.length > 0) {
       if (menuToastId) toast.dismiss(menuToastId);
       const id = toast.error(`Cannot upload. Please fix ${menuValidationErrors.length} validation issue(s) first.`);
@@ -617,7 +608,6 @@ const UploadData = ({
       setMenuProgress(0);
       console.log("Menu upload confirmed");
       
-      // Simulate progress
       const progressInterval = setInterval(() => {
         setMenuProgress(prev => {
           if (prev >= 90) {
@@ -647,9 +637,34 @@ const UploadData = ({
       setMenuProgress(100);
 
       if (response?.data?.success || response?.success) {
-        setMenuUploadStatus('success');
-        
         const summary = response?.data?.summary || response?.summary || {};
+        
+        // Check for database duplicates
+        if (summary.dbDuplicates && summary.dbDuplicates.length > 0) {
+          // Show duplicates from database
+          setMenuValidated(false);
+          setMenuValidationErrors(summary.dbDuplicates.map(d => ({
+            row: 0,
+            message: d.message
+          })));
+          setMenuDbDuplicates(summary.dbDuplicates);
+          setMenuPreviewData({
+            totalItems: summary.totalRows || 0,
+            mappedItems: 0,
+            unmappedItems: summary.totalRows || 0,
+            issues: summary.dbDuplicates.map(d => ({
+              row: 0,
+              message: d.message
+            }))
+          });
+          
+          if (menuToastId) toast.dismiss(menuToastId);
+          const id = toast.error(`❌ Found ${summary.dbDuplicates.length} duplicate product(s) in the database. Please remove them from your file.`);
+          setMenuToastId(id);
+          return;
+        }
+        
+        setMenuUploadStatus('success');
         setMenuPreviewData({
           totalItems: summary.totalRows || 0,
           mappedItems: summary.validRows || 0,
@@ -661,7 +676,7 @@ const UploadData = ({
         const ingredientMsg = summary.ingredientsInserted ? ` ${summary.ingredientsInserted} ingredients added.` : '';
         
         if (menuToastId) toast.dismiss(menuToastId);
-        const id = toast.success(`Menu data uploaded successfully!${productMsg}${ingredientMsg}`);
+        const id = toast.success(`✅ Menu data uploaded successfully!${productMsg}${ingredientMsg}`);
         setMenuToastId(id);
         
         if (onUploadSuccess) {
@@ -674,6 +689,7 @@ const UploadData = ({
           setMenuProgress(0);
           setMenuValidated(false);
           setMenuValidationErrors([]);
+          setMenuDbDuplicates([]);
         }, 3000);
       }
     } catch (error) {
@@ -683,7 +699,7 @@ const UploadData = ({
       
       const errorMsg = error.response?.data?.error || error.message || 'Upload failed';
       if (menuToastId) toast.dismiss(menuToastId);
-      const id = toast.error(`Upload failed: ${errorMsg}`);
+      const id = toast.error(`❌ Upload failed: ${errorMsg}`);
       setMenuToastId(id);
       
       setTimeout(() => {
@@ -698,6 +714,7 @@ const UploadData = ({
     setMenuProgress(0);
     setMenuValidated(false);
     setMenuValidationErrors([]);
+    setMenuDbDuplicates([]);
     setMenuPreviewData({
       totalItems: 0,
       mappedItems: 0,
@@ -877,7 +894,7 @@ const UploadData = ({
                   <div className="preview-status">
                     <span className={`status-badge ${salesValidated ? "success" : salesFile ? "warning" : "warning"}`}>
                       <span className="status-dot"></span>
-                      {salesValidated ? "Validated" : salesFile ? "Needs Review" : "No file uploaded"}
+                      {salesValidated ? "✅ Validated" : salesFile ? "⚠️ Needs Review" : "No file uploaded"}
                     </span>
                     <span className="status-separator">|</span>
                     <span className="status-records">
@@ -1040,7 +1057,7 @@ const UploadData = ({
                   <div className="preview-status">
                     <span className={`status-badge ${menuValidated ? "success" : menuFile ? "warning" : "warning"}`}>
                       <span className="status-dot"></span>
-                      {menuValidated ? "Validated" : menuFile ? "Needs Review" : "No file uploaded"}
+                      {menuValidated ? "✅ Validated" : menuFile ? "⚠️ Needs Review" : "No file uploaded"}
                     </span>
                     <span className="status-separator">|</span>
                     <span className="status-records">
