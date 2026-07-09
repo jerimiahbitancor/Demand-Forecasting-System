@@ -11,10 +11,12 @@ import {
 } from 'react-icons/fa';
 import { useAuth } from '../../../../context/AuthContext';
 import './Login.css';
+import { useSetupGuard } from '../../../../hooks/useSetupGuard';
 
 const Login = () => {
   const navigate = useNavigate();
   const { login, loading } = useAuth();
+  const checking = useSetupGuard('login');
   
   const [formData, setFormData] = useState({
     email: '',
@@ -107,6 +109,16 @@ const Login = () => {
     setShowPassword(!showPassword);
   };
 
+  if (checking) {
+    return (
+      <div className="login-container">
+        <main className="main-container">
+          <p>Checking session...</p>
+        </main>
+      </div>
+    );
+  }
+  
   return (
     <div className="login-container">
       <main className="main-container">

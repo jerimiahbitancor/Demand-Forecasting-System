@@ -3,7 +3,7 @@ import { Routes, Route, Navigate } from 'react-router-dom';
 import { Toaster } from 'react-hot-toast';
 import Register from '../src/features/auth/pages/register/Register';
 import Login from '../src/features/auth/pages/login/Login';
-import AuthSetup from './features/auth/pages/AuthSetup';
+import { useSetupGuard } from './hooks/useSetupGuard';
 import ForgotPassword from './features/auth/pages/forgotpass/forgotpass';
 import ForgotPassword2 from './features/auth/pages/forgotpass/forgotpass2';
 import ChefDuoLanding from './features/landing/ChefDuoLanding';
@@ -15,6 +15,11 @@ import IngredientDemand from './features/Analytics/components/IngredientDemand';
 import Settings from './features/settings/Settings';
 import Analytics from './features/Analytics/pages/Analytics';
 import './App.css';
+
+function RootRedirect() {
+  useSetupGuard('entry');
+  return <p>Loading...</p>;
+}
 
 function App() {
   return (
@@ -80,7 +85,7 @@ function App() {
       
       <Routes>
         {/* Auth Routes */}
-        <Route path="/" element={<AuthSetup />} />
+        <Route path="/" element={<RootRedirect />} />
         <Route path="/login" element={<Login />} />
         <Route path="/register" element={<Register />} />
         <Route path="/forgot-password" element={<ForgotPassword />} />
