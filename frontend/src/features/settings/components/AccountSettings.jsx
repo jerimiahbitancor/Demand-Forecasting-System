@@ -1,8 +1,52 @@
-
-import { FiCheckCircle } from "react-icons/fi"
-import "./AccountSettings.css"
+import { useState, useEffect } from 'react';
+import { FiCheckCircle } from "react-icons/fi";
+import { useAuth } from '../../../context/AuthContext';
+import Swal from 'sweetalert2';
+import "./AccountSettings.css";
 
 function AccountSettings() {
+  const { user, loading } = useAuth();
+  const [email, setEmail] = useState('');
+  const [isLoading, setIsLoading] = useState(true);
+
+  useEffect(() => {
+    // When user data is available from context, set the email
+    if (user) {
+      setEmail(user.email || '');
+      setIsLoading(false);
+    } else if (!loading) {
+      // If loading is complete and no user, user is not authenticated
+      setIsLoading(false);
+    }
+  }, [user, loading]);
+
+  // Handle change password functionality
+  const handleChangePassword = async () => {
+    // You'll implement this later
+    Swal.fire({
+      title: 'Change Password',
+      text: 'This feature will be implemented soon',
+      icon: 'info',
+      confirmButtonColor: '#bb0114',
+    });
+  };
+
+  if (isLoading || loading) {
+    return (
+      <div className="account-settings-container">
+        <div className="loading-spinner">Loading account information...</div>
+      </div>
+    );
+  }
+
+  if (!user) {
+    return (
+      <div className="account-settings-container">
+        <div className="error-message">Please log in to view account settings.</div>
+      </div>
+    );
+  }
+
   return (
     <div className="account-settings-container">
       <section className="account-panel">
@@ -18,8 +62,9 @@ function AccountSettings() {
               type="email"
               className="form-input"
               placeholder="Enter your email address"
-              value="chef@duoexample.com"
+              value={email}
               readOnly
+              disabled
             />
           </div>
 
@@ -47,7 +92,7 @@ function AccountSettings() {
             <p>
               <strong>Last Changed:</strong>
             </p>
-            <p>June 25, 2025</p>
+            <p>{user.last_password_change || 'Not set'}</p>
           </div>
         </div>
 
@@ -62,10 +107,15 @@ function AccountSettings() {
           </ul>
         </div>
 
-        <button className="password-button">CHANGE PASSWORD</button>
+        <button 
+          className="password-button" 
+          onClick={handleChangePassword}
+        >
+          CHANGE PASSWORD
+        </button>
       </section>
     </div>
-  )
+  );
 }
 
-export default AccountSettings
+export default AccountSettings;
