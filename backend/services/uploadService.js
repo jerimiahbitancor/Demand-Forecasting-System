@@ -7,6 +7,8 @@ class UploadService {
       uploads: [],
       products: []
     };
+    // Track in-progress uploads to prevent duplicates
+    this.processingUploads = new Set();
     console.log(`📦 UploadService: Supabase ${isConfigured ? '✅ Connected' : '❌ Using Memory Fallback'}`);
   }
 
@@ -18,10 +20,27 @@ class UploadService {
     return userId && typeof userId === 'number' && Number.isInteger(userId) && userId > 0;
   }
 
+  // Check if an upload is already being processed
+  isUploadProcessing(filename, userId) {
+    const key = `${userId}-${filename}`;
+    return this.processingUploads.has(key);
+  }
+
+  // Mark upload as processing
+  markUploadProcessing(filename, userId) {
+    const key = `${userId}-${filename}`;
+    this.processingUploads.add(key);
+  }
+
+  // Mark upload as completed
+  markUploadComplete(filename, userId) {
+    const key = `${userId}-${filename}`;
+    this.processingUploads.delete(key);
+  }
+
   // Get current date in Philippines time (UTC+8) as ISO string
   getCurrentDatePhilippines() {
     const now = new Date();
-    // Get the timezone offset for Philippines (UTC+8)
     const phTime = new Date(now.getTime() + (8 * 60 * 60 * 1000));
     return phTime.toISOString();
   }
@@ -47,7 +66,6 @@ class UploadService {
     try {
       const nameWithoutExt = filename.replace(/\.[^/.]+$/, '');
       
-      // Try to find date pattern: YYYY-MM-DD
       const dateMatch = nameWithoutExt.match(/(\d{4}-\d{2}-\d{2})/);
       if (dateMatch) {
         const date = new Date(dateMatch[1]);
@@ -56,7 +74,6 @@ class UploadService {
         }
       }
       
-      // Try to find date pattern: MM-DD-YYYY or MM/DD/YYYY
       const altMatch = nameWithoutExt.match(/(\d{1,2})[-\/](\d{1,2})[-\/](\d{4})/);
       if (altMatch) {
         const month = altMatch[1].padStart(2, '0');
@@ -72,6 +89,43 @@ class UploadService {
     } catch (error) {
       console.error('Error extracting date from filename:', error);
       return null;
+    }
+  }
+
+  // Check for duplicate upload (same filename and user within last hour)
+  async checkDuplicateUpload(filename, userId) {
+    try {
+      if (!this.isSupabaseReady()) {
+        // Check memory store for duplicates
+        const existing = this.memoryStore.uploads.find(
+          u => u.filename === filename && u.user_id === userId
+        );
+        return !!existing;
+      }
+
+      // Check for existing upload with same filename in the last hour
+      const oneHourAgo = new Date();
+      oneHourAgo.setHours(oneHourAgo.getHours() - 1);
+
+      let query = supabase
+        .from('uploads')
+        .select('id, filename, upload_date')
+        .eq('filename', filename)
+        .eq('user_id', userId)
+        .gte('upload_date', oneHourAgo.toISOString())
+        .limit(1);
+
+      const { data, error } = await query;
+
+      if (error) {
+        console.error('Error checking duplicate:', error);
+        return false;
+      }
+
+      return data && data.length > 0;
+    } catch (error) {
+      console.error('Error checking duplicate upload:', error);
+      return false;
     }
   }
 
@@ -253,10 +307,27 @@ class UploadService {
     };
   }
 
-  // Save upload record
+  // Save upload record with duplicate prevention
   async saveUploadRecord(fileData, processedData, userId = null) {
     try {
       const filename = fileData.originalName || fileData.filename;
+      
+      // Check for duplicate upload
+      const isDuplicate = await this.checkDuplicateUpload(filename, userId);
+      if (isDuplicate) {
+        console.log(`⚠️ Duplicate upload detected: ${filename} for user ${userId}`);
+        throw new Error('Duplicate upload detected. This file has already been uploaded recently.');
+      }
+
+      // Check if already processing
+      if (this.isUploadProcessing(filename, userId)) {
+        console.log(`⏳ Upload already in progress: ${filename}`);
+        throw new Error('Upload already in progress. Please wait.');
+      }
+
+      // Mark as processing
+      this.markUploadProcessing(filename, userId);
+
       const uploadDate = this.getCurrentDatePhilippines();
       const philippinesDisplayTime = this.getCurrentDatePhilippinesDisplay();
       
@@ -283,7 +354,7 @@ class UploadService {
 
       const insertData = {
         filename: filename,
-        upload_date: uploadDate, // Store Philippines time
+        upload_date: uploadDate,
         row_count: validation.totalRows,
         status: status,
         error_message: JSON.stringify({
@@ -300,6 +371,7 @@ class UploadService {
         console.log(`👤 Saving upload for user_id: ${userId}`);
       }
 
+      let result;
       if (!this.isSupabaseReady()) {
         const upload = {
           id: this.memoryStore.uploads.length + 1,
@@ -308,24 +380,32 @@ class UploadService {
         };
         this.memoryStore.uploads.push(upload);
         console.log('📝 Upload saved to memory (ID:', upload.id, ')');
-        return upload.id;
+        result = upload.id;
+      } else {
+        const { data, error } = await supabase
+          .from('uploads')
+          .insert(insertData)
+          .select()
+          .single();
+
+        if (error) {
+          console.error('❌ Supabase insert error:', error);
+          throw error;
+        }
+        
+        console.log(`✅ Upload saved to Supabase (ID: ${data.id})`);
+        console.log(`   Upload Date (PH Time): ${philippinesDisplayTime}`);
+        result = data.id;
       }
 
-      const { data, error } = await supabase
-        .from('uploads')
-        .insert(insertData)
-        .select()
-        .single();
+      // Mark as complete
+      this.markUploadComplete(filename, userId);
+      return result;
 
-      if (error) {
-        console.error('❌ Supabase insert error:', error);
-        throw error;
-      }
-      
-      console.log(`✅ Upload saved to Supabase (ID: ${data.id})`);
-      console.log(`   Upload Date (PH Time): ${philippinesDisplayTime}`);
-      return data.id;
     } catch (error) {
+      // Mark as complete even on error to free the lock
+      const filename = fileData.originalName || fileData.filename;
+      this.markUploadComplete(filename, userId);
       console.error('❌ Error saving upload record:', error);
       throw error;
     }
