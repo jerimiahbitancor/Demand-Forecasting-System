@@ -22,12 +22,8 @@ export const AuthProvider = ({ children }) => {
       console.log('Checking authentication on app load...');
       
       try {
-        // ✅ Use sessionStorage
         const token = sessionStorage.getItem('token');
         const storedUser = sessionStorage.getItem('user');
-        
-        console.log('Stored token:', token ? 'exists' : 'none');
-        console.log('Stored user:', storedUser ? 'exists' : 'none');
         
         if (token && storedUser) {
           const userData = JSON.parse(storedUser);
@@ -54,33 +50,26 @@ export const AuthProvider = ({ children }) => {
     setLoading(true);
     setError(null);
     try {
-      console.log('AuthContext: Attempting login for:', email);
-      
       const result = await authService.login(email, password);
-      console.log('AuthContext: Login result:', result);
       
       if (result.success) {
         const userData = result.data.user;
         const token = result.data.access_token || result.data.session?.access_token;
         
-        // ✅ Store in sessionStorage
         if (token) {
           sessionStorage.setItem('token', token);
-          console.log('✅ Token stored in sessionStorage');
         }
         if (userData) {
           sessionStorage.setItem('user', JSON.stringify(userData));
         }
         
         setUser(userData);
-        console.log('AuthContext: User set:', userData);
         return { success: true };
       } else {
         setError(result.error);
         return { success: false, error: result.error };
       }
     } catch (error) {
-      console.error('AuthContext: Login error:', error);
       setError(error.message);
       return { success: false, error: error.message };
     } finally {
@@ -93,11 +82,23 @@ export const AuthProvider = ({ children }) => {
     setError(null);
     try {
       const result = await authService.register(userData);
+      
+      // ✅ Check if verification is required FIRST
+      if (result.requiresVerification) {
+        // ✅ DON'T store session or set user
+        // ✅ Just return the verification flag
+        return { 
+          success: true, 
+          requiresVerification: true,
+          email: result.email 
+        };
+      }
+      
+      // ✅ Only reach here if NO verification is required
       if (result.success) {
         const user = result.data.user;
         const token = result.data.access_token || result.data.session?.access_token;
         
-        // ✅ Store in sessionStorage
         if (token) {
           sessionStorage.setItem('token', token);
         }
@@ -123,7 +124,6 @@ export const AuthProvider = ({ children }) => {
     setLoading(true);
     try {
       await authService.logout();
-      // ✅ Clear sessionStorage
       sessionStorage.removeItem('token');
       sessionStorage.removeItem('user');
       sessionStorage.removeItem('token_expiry');
@@ -145,6 +145,7 @@ export const AuthProvider = ({ children }) => {
     login,
     register,
     logout,
+    setUser,
     isAuthenticated: !!user,
   };
 
