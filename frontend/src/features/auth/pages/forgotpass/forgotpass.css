@@ -201,6 +201,91 @@
   animation: spin 1s linear infinite;
 }
 
+/* frontend/src/features/auth/pages/forgot-password/forgotpass.css */
+
+/* Resend Section */
+.resend-section {
+  text-align: center;
+  margin-top: 12px;
+}
+
+.resend-btn {
+  background: none;
+  border: none;
+  color: #bb0114;
+  font-weight: 600;
+  cursor: pointer;
+  font-size: 14px;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 16px;
+  border-radius: 6px;
+  transition: all 0.2s;
+}
+
+.resend-btn:hover:not(:disabled) {
+  background: #fef0f0;
+  text-decoration: underline;
+}
+
+.resend-btn:disabled {
+  color: #999;
+  cursor: not-allowed;
+}
+
+.resend-icon {
+  font-size: 14px;
+}
+
+.timer-text {
+  color: #999;
+  font-size: 14px;
+  margin: 8px 0;
+}
+
+/* Info Text */
+.info-text {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  color: #666;
+  font-size: 13px;
+  padding: 12px;
+  background: #f9f9f9;
+  border-radius: 8px;
+  line-height: 1.5;
+  margin-top: 12px;
+}
+
+.info-icon {
+  color: #bb0114;
+  flex-shrink: 0;
+  margin-top: 2px;
+}
+
+.resend-link {
+  background: none;
+  border: none;
+  color: #bb0114;
+  font-weight: 600;
+  cursor: pointer;
+  padding: 0 4px;
+}
+
+.resend-link:hover:not(:disabled) {
+  text-decoration: underline;
+}
+
+.resend-link:disabled {
+  color: #999;
+  cursor: not-allowed;
+}
+
+.spinner {
+  animation: spin 1s linear infinite;
+}
+
 @keyframes spin {
   to {
     transform: rotate(360deg);

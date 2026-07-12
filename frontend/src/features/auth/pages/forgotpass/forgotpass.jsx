@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import Swal from 'sweetalert2';
 import {
@@ -6,10 +6,11 @@ import {
   FaKey,
   FaArrowLeft,
   FaSpinner,
+  FaRedo,
 } from 'react-icons/fa';
 import './forgotpass.css';
 
-const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:5000/api';
+const API_URL = import.meta.env.VITE_API_URL;
 
 const ForgotPassword = () => {
   const navigate = useNavigate();
@@ -20,6 +21,23 @@ const ForgotPassword = () => {
   const [statusMessage, setStatusMessage] = useState('');
   const [codeSent, setCodeSent] = useState(false);
   const [loading, setLoading] = useState(false);
+  const [resendLoading, setResendLoading] = useState(false);
+  
+  // Timer for resend button
+  const [timer, setTimer] = useState(60);
+  const [canResend, setCanResend] = useState(false);
+
+  // Timer effect
+  useEffect(() => {
+    if (codeSent && timer > 0) {
+      const interval = setInterval(() => {
+        setTimer((prev) => prev - 1);
+      }, 1000);
+      return () => clearInterval(interval);
+    } else if (timer === 0) {
+      setCanResend(true);
+    }
+  }, [codeSent, timer]);
 
   const handleChange = (e) => {
     const { value } = e.target;
@@ -81,6 +99,11 @@ const ForgotPassword = () => {
 
       setLoading(false);
       Swal.close();
+      
+      // Reset timer
+      setTimer(60);
+      setCanResend(false);
+      
       Swal.fire({
         icon: 'success',
         title: 'Code sent',
@@ -99,6 +122,52 @@ const ForgotPassword = () => {
         text: error.message || 'Failed to send verification code. Please try again.',
       });
       console.error('Send code error:', error);
+    }
+  };
+
+  // ✅ New: Resend Code function
+  const handleResendCode = async () => {
+    setResendLoading(true);
+    setErrors({});
+
+    try {
+      const response = await fetch(`${API_URL}/auth/forgot-password/send-code`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ email: formData.email }),
+      });
+
+      const data = await response.json();
+
+      if (!response.ok) {
+        throw new Error(data.error || 'Failed to resend code');
+      }
+
+      // Reset timer
+      setTimer(60);
+      setCanResend(false);
+      setCode(''); // Clear the old code
+
+      Swal.fire({
+        icon: 'success',
+        title: 'Code Resent',
+        text: `A new verification code was sent to ${formData.email}.`,
+        timer: 1600,
+        showConfirmButton: false,
+      });
+      
+      setStatusMessage(`A new verification code was sent to ${formData.email}.`);
+    } catch (error) {
+      Swal.fire({
+        icon: 'error',
+        title: 'Error',
+        text: error.message || 'Failed to resend code. Please try again.',
+      });
+      console.error('Resend code error:', error);
+    } finally {
+      setResendLoading(false);
     }
   };
 
@@ -277,6 +346,48 @@ const ForgotPassword = () => {
                   'Verify & Continue'
                 )}
               </button>
+
+              {/* ✅ NEW: Resend Code Section */}
+              <div className="resend-section">
+                {canResend ? (
+                  <button
+                    type="button"
+                    className="resend-btn"
+                    onClick={handleResendCode}
+                    disabled={resendLoading}
+                  >
+                    <FaRedo className="resend-icon" />
+                    {resendLoading ? (
+                      <>
+                        <FaSpinner className="spinner" />
+                        Sending...
+                      </>
+                    ) : (
+                      'Resend Code'
+                    )}
+                  </button>
+                ) : (
+                  <p className="timer-text">
+                    Resend available in {timer} seconds
+                  </p>
+                )}
+              </div>
+
+              {/* Info text */}
+              <div className="info-text">
+                <FaEnvelope className="info-icon" />
+                <p>
+                  Didn't receive the code? Check your spam folder or 
+                  <button 
+                    type="button" 
+                    className="resend-link"
+                    onClick={handleResendCode}
+                    disabled={resendLoading || !canResend}
+                  >
+                    request a new one
+                  </button>
+                </p>
+              </div>
             </form>
           )}
 

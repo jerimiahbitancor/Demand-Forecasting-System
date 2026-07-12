@@ -20,6 +20,7 @@ export const authService = {
     return token ? { Authorization: `Bearer ${token}` } : {};
   },
 
+  // src/services/authService.js - register function
   register: async (userData) => {
     try {
       const response = await fetch(`${API_URL}/auth/register`, {
@@ -33,20 +34,19 @@ export const authService = {
       });
       const data = await response.json();
 
-      console.log('Register response:', data); // Debug log
+      console.log('Register response:', data);
 
       if (!response.ok) {
         throw new Error(data.error || 'Registration failed');
       }
       
-      // Store session and user data
-      if (data.session) {
-        sessionStorage.setItem('supabase_session', JSON.stringify(data.session));
-        sessionStorage.setItem('user', JSON.stringify(data.user));
-        console.log('Session stored successfully:', data.session);
-      }
-      
-      return { success: true, data };
+      // ✅ Return the response WITHOUT storing session
+      return { 
+        success: true, 
+        requiresVerification: data.requiresVerification || false,
+        email: data.email || userData.email,
+        data 
+      };
     } catch (error) {
       console.error('Registration error:', error);
       return { success: false, error: error.message };

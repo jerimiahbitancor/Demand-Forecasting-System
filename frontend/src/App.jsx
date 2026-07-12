@@ -2,6 +2,7 @@
 import { Routes, Route, Navigate } from 'react-router-dom';
 import { Toaster } from 'react-hot-toast';
 import Register from '../src/features/auth/pages/register/Register';
+import VerifyEmail from './features/auth/pages/register/VerifyEmail';
 import Login from '../src/features/auth/pages/login/Login';
 import { useSetupGuard } from './hooks/useSetupGuard';
 import ProtectedRoute from './features/components/ProtectedRoute';
@@ -89,6 +90,7 @@ function App() {
         <Route path="/" element={<RootRedirect />} />
         <Route path="/login" element={<Login />} />
         <Route path="/register" element={<Register />} />
+        <Route path="/verify-email" element={<VerifyEmail />} />
         <Route path="/forgot-password" element={<ForgotPassword />} />
         <Route path="/forgot-password/reset" element={<ForgotPassword2 />} />
         

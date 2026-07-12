@@ -13,9 +13,9 @@ import {
   FaShieldAlt
 } from 'react-icons/fa';
 import { FiX } from 'react-icons/fi';
-import { useAuth } from '../../../../context/AuthContext';
+import { useAuth } from '../../../../context/AuthContext';  // ✅ 4 levels up
 import './Register.css';
-import { useSetupGuard } from '../../../../hooks/useSetupGuard';
+import { useSetupGuard } from '../../../../hooks/useSetupGuard';  // ✅ 4 levels up
 
 const getPasswordRules = (password) => [
   { test: password.length >= 12, message: 'Minimum 12 characters' },
@@ -97,6 +97,7 @@ const Register = () => {
     return Object.keys(newErrors).length === 0;
   };
 
+  // Register.jsx - handleSubmit
   const handleSubmit = async (e) => {
     e.preventDefault();
     setError('');
@@ -116,17 +117,31 @@ const Register = () => {
         password: formData.password,
       });
 
+      console.log('Register result:', result); // ← ADD THIS
+
       Swal.close();
       
       if (result.success) {
-        await Swal.fire({
-          icon: 'success',
-          title: 'Account created',
-          text: 'Welcome to ChefDuo!',
-          timer: 1200,
-          showConfirmButton: false,
-        });
-        navigate('/landing');
+        console.log('Requires verification?', result.requiresVerification); // ← ADD THIS
+        
+        if (result.requiresVerification) {
+          console.log('Navigating to /verify-email with email:', formData.email); // ← ADD THIS
+          navigate('/verify-email', { 
+            state: { 
+              email: formData.email 
+            }
+          });
+        } else {
+          // Fallback
+          await Swal.fire({
+            icon: 'success',
+            title: 'Account created',
+            text: 'Welcome to ChefDuo!',
+            timer: 1200,
+            showConfirmButton: false,
+          });
+          navigate('/landing');
+        }
       } else {
         setError(result.error || 'Registration failed. Please try again.');
         Swal.fire({
