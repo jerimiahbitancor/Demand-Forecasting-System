@@ -30,6 +30,32 @@ router.post(
       console.log('📄 Processing file:', file.originalname, 'Type:', fileType);
       console.log('👤 User ID:', userId);
 
+      // Check for duplicate upload (same filename within last hour)
+      try {
+        const isDuplicate = await uploadService.checkDuplicateUpload(file.originalname, userId);
+        if (isDuplicate) {
+          console.log(`⚠️ Duplicate upload detected: ${file.originalname} for user ${userId}`);
+          return res.status(409).json({
+            success: false,
+            error: 'Duplicate upload detected',
+            message: 'This file has already been uploaded recently. Please wait before uploading again.'
+          });
+        }
+      } catch (dupError) {
+        console.error('Error checking duplicate:', dupError);
+        // Continue with upload if duplicate check fails (fail open)
+      }
+
+      // Check if already processing
+      if (uploadService.isUploadProcessing(file.originalname, userId)) {
+        console.log(`⏳ Upload already in progress: ${file.originalname}`);
+        return res.status(409).json({
+          success: false,
+          error: 'Upload in progress',
+          message: 'This file is already being processed. Please wait.'
+        });
+      }
+
       const processedData = await fileProcessor.processFile(
         file.buffer,
         file.originalname,
@@ -42,82 +68,116 @@ router.post(
       let uploadId = null;
 
       if (fileType === 'menu') {
-        result = await menuService.processMenuData(processedData.data, userId);
+        // Mark as processing
+        uploadService.markUploadProcessing(file.originalname, userId);
         
-        console.log('✅ Menu data processed:', {
-          totalRows: result.validation.totalRows,
-          validRows: result.validation.validRows,
-          invalidRows: result.validation.invalidRows,
-          productsInserted: result.productsInserted || 0,
-          ingredientsInserted: result.ingredientsInserted || 0,
-          userId: userId
-        });
-
-        return res.status(201).json({
-          success: true,
-          message: 'Menu data uploaded and processed successfully',
-          uploadId: null,
-          summary: {
+        try {
+          result = await menuService.processMenuData(processedData.data, userId);
+          
+          console.log('✅ Menu data processed:', {
             totalRows: result.validation.totalRows,
             validRows: result.validation.validRows,
             invalidRows: result.validation.invalidRows,
-            errors: result.validation.errors,
             productsInserted: result.productsInserted || 0,
             ingredientsInserted: result.ingredientsInserted || 0,
-            productIngredientRelations: result.productIngredientRelations || 0,
             userId: userId
-          }
-        });
+          });
+
+          // Mark as complete
+          uploadService.markUploadComplete(file.originalname, userId);
+
+          return res.status(201).json({
+            success: true,
+            message: 'Menu data uploaded and processed successfully',
+            uploadId: null,
+            summary: {
+              totalRows: result.validation.totalRows,
+              validRows: result.validation.validRows,
+              invalidRows: result.validation.invalidRows,
+              errors: result.validation.errors,
+              productsInserted: result.productsInserted || 0,
+              ingredientsInserted: result.ingredientsInserted || 0,
+              productIngredientRelations: result.productIngredientRelations || 0,
+              userId: userId
+            }
+          });
+        } catch (menuError) {
+          // Mark as complete on error
+          uploadService.markUploadComplete(file.originalname, userId);
+          throw menuError;
+        }
       } else {
         // SALES DATA - Use updated validation with new columns
-        const validation = await uploadService.validateSalesData(
-          processedData.data, 
-          file.originalname
-        );
+        // Mark as processing
+        uploadService.markUploadProcessing(file.originalname, userId);
+        
+        try {
+          const validation = await uploadService.validateSalesData(
+            processedData.data, 
+            file.originalname
+          );
 
-        uploadId = await uploadService.saveUploadRecord(
-          {
-            filename: file.filename || `${Date.now()}-${file.originalname}`,
-            originalName: file.originalname,
-            size: file.size,
-            type: file.mimetype
-          },
-          {
-            rowCount: processedData.rowCount,
-            headers: processedData.headers,
-            data: processedData.data,
-            validation: validation
-          },
-          userId
-        );
+          uploadId = await uploadService.saveUploadRecord(
+            {
+              filename: file.filename || `${Date.now()}-${file.originalname}`,
+              originalName: file.originalname,
+              size: file.size,
+              type: file.mimetype
+            },
+            {
+              rowCount: processedData.rowCount,
+              headers: processedData.headers,
+              data: processedData.data,
+              validation: validation
+            },
+            userId
+          );
 
-        const summary = {
-          totalRows: processedData.rowCount,
-          validRows: validation.validRows || 0,
-          invalidRows: validation.invalidRows || 0,
-          errors: validation.errors || [],
-          uploadDate: validation.uploadDate || new Date().toISOString().split('T')[0],
-          totals: validation.totals || {
-            grossSales: 0,
-            netSales: 0,
-            itemsSold: 0
-          }
-        };
+          const summary = {
+            totalRows: processedData.rowCount,
+            validRows: validation.validRows || 0,
+            invalidRows: validation.invalidRows || 0,
+            errors: validation.errors || [],
+            uploadDate: validation.uploadDate || new Date().toISOString().split('T')[0]
+          };
 
-        console.log('✅ Sales data processed:', summary);
+          console.log('✅ Sales data processed:', summary);
 
-        return res.status(201).json({
-          success: true,
-          message: 'Sales data uploaded successfully',
-          uploadId: uploadId,
-          summary: summary
-        });
+          // Mark as complete
+          uploadService.markUploadComplete(file.originalname, userId);
+
+          return res.status(201).json({
+            success: true,
+            message: 'Sales data uploaded successfully',
+            uploadId: uploadId,
+            summary: summary
+          });
+        } catch (salesError) {
+          // Mark as complete on error
+          uploadService.markUploadComplete(file.originalname, userId);
+          throw salesError;
+        }
       }
 
     } catch (error) {
       console.error('❌ Upload error:', error);
       
-      if (error.message.includes('Invalid file format')) {
+      // Clean up processing lock if it exists
+      if (req.file) {
+        const userId = req.user?.id || null;
+        uploadService.markUploadComplete(req.file.originalname, userId);
+      }
+      
+      // Handle duplicate error
+      if (error.message && error.message.includes('Duplicate upload')) {
+        return res.status(409).json({
+          success: false,
+          error: 'Duplicate upload detected',
+          details: error.message
+        });
+      }
+      
+      if (error.message && error.message.includes('Invalid file format')) {
         return res.status(400).json({ 
           success: false,
           error: 'Invalid file format',
@@ -125,7 +185,7 @@ router.post(
         });
       }
       
-      if (error.message.includes('Missing required columns')) {
+      if (error.message && error.message.includes('Missing required columns')) {
         return res.status(400).json({ 
           success: false,
           error: 'Missing required columns',
@@ -139,6 +199,15 @@ router.post(
             'Refunds',
             'Net sales'
           ]
+        });
+      }
+      
+      // Check for duplicate from the service
+      if (error.message && error.message.includes('already been uploaded')) {
+        return res.status(409).json({ 
+          success: false,
+          error: 'Duplicate upload',
+          details: error.message 
         });
       }
       
@@ -169,7 +238,11 @@ router.get('/', authenticate, async (req, res) => {
     res.json({
       success: true,
       data: uploads,
-      count: uploads.length
+      count: uploads.length,
+      pagination: {
+        limit: parseInt(limit),
+        offset: parseInt(offset)
+      }
     });
   } catch (error) {
     console.error('Error fetching uploads:', error);
@@ -212,6 +285,56 @@ router.get('/:id', authenticate, async (req, res) => {
     res.status(500).json({
       success: false,
       error: 'Failed to fetch upload',
+      details: error.message
+    });
+  }
+});
+
+// PUT /api/upload/:id - Update upload (status, etc.)
+router.put('/:id', authenticate, async (req, res) => {
+  try {
+    const userId = req.user?.id || null;
+    const uploadId = parseInt(req.params.id);
+    const { status, errorMessage } = req.body;
+    
+    if (isNaN(uploadId)) {
+      return res.status(400).json({
+        success: false,
+        error: 'Invalid upload ID'
+      });
+    }
+    
+    if (!status) {
+      return res.status(400).json({
+        success: false,
+        error: 'Status is required'
+      });
+    }
+    
+    const upload = await uploadService.updateUploadStatus(
+      uploadId,
+      status,
+      errorMessage || null,
+      userId
+    );
+    
+    if (!upload) {
+      return res.status(404).json({
+        success: false,
+        error: 'Upload not found or you do not have permission'
+      });
+    }
+    
+    res.json({
+      success: true,
+      data: upload,
+      message: 'Upload updated successfully'
+    });
+  } catch (error) {
+    console.error('Error updating upload:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Failed to update upload',
       details: error.message
     });
   }
@@ -271,6 +394,36 @@ router.get('/stats/summary', authenticate, async (req, res) => {
     res.status(500).json({
       success: false,
       error: 'Failed to fetch statistics',
+      details: error.message
+    });
+  }
+});
+
+// GET /api/upload/check-duplicate - Check if upload exists
+router.get('/check-duplicate', authenticate, async (req, res) => {
+  try {
+    const userId = req.user?.id || null;
+    const { filename } = req.query;
+    
+    if (!filename) {
+      return res.status(400).json({
+        success: false,
+        error: 'Filename is required'
+      });
+    }
+    
+    const isDuplicate = await uploadService.checkDuplicateUpload(filename, userId);
+    
+    res.json({
+      success: true,
+      isDuplicate: isDuplicate,
+      filename: filename
+    });
+  } catch (error) {
+    console.error('Error checking duplicate:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Failed to check duplicate',
       details: error.message
     });
   }
