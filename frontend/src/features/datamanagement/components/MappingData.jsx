@@ -9,7 +9,9 @@ import {
   FiX,
   FiSave,
   FiSearch,
-  FiRefreshCw
+  FiRefreshCw,
+  FiArrowUp,
+  FiArrowDown
 } from "react-icons/fi";
 import axios from 'axios';
 import toast from 'react-hot-toast';
@@ -112,9 +114,6 @@ const MappingData = () => {
         const token = getAuthToken();
         if (token) {
           config.headers.Authorization = `Bearer ${token}`;
-          console.log('✅ MappingData - Token added to request:', config.url);
-        } else {
-          console.warn('⚠️ MappingData - No token found for request:', config.url);
         }
         return config;
       },
@@ -176,12 +175,9 @@ const MappingData = () => {
         setCategories(parsedCategories);
         setTotalProducts(parsedTotal);
         setLoading(false);
-        console.log('📦 Using cached mapping data from sessionStorage');
         return;
       }
 
-      console.log('🔄 Fetching fresh mapping data from API...');
-      
       // Fetch products
       const productsResponse = await apiClient.get('/mapping/products', {
         params: {
@@ -195,7 +191,6 @@ const MappingData = () => {
         const data = productsResponse.data.data || [];
         setMappingData(data);
         setTotalProducts(data.length);
-        // Save to sessionStorage
         sessionStorage.setItem(STORAGE_KEYS.MAPPING_DATA, JSON.stringify(data));
         sessionStorage.setItem(STORAGE_KEYS.TOTAL_PRODUCTS, data.length.toString());
         sessionStorage.setItem(STORAGE_KEYS.LAST_FETCH, Date.now().toString());
@@ -216,7 +211,6 @@ const MappingData = () => {
 
     } catch (error) {
       console.error('Error fetching mapping data:', error);
-      // If unauthorized, clear session
       if (error.response?.status === 401) {
         sessionStorage.removeItem('token');
         sessionStorage.removeItem('user');
@@ -231,13 +225,11 @@ const MappingData = () => {
 
   // Initial load - check sessionStorage first
   useEffect(() => {
-    // Check if we have cached data
     const hasStoredData = sessionStorage.getItem(STORAGE_KEYS.MAPPING_DATA) !== null;
     const lastFetch = sessionStorage.getItem(STORAGE_KEYS.LAST_FETCH);
     const cacheValid = lastFetch && (Date.now() - parseInt(lastFetch)) < 5 * 60 * 1000;
     
     if (hasStoredData && cacheValid) {
-      // Use cached data
       const storedData = sessionStorage.getItem(STORAGE_KEYS.MAPPING_DATA);
       const storedCategories = sessionStorage.getItem(STORAGE_KEYS.CATEGORIES);
       const storedTotal = sessionStorage.getItem(STORAGE_KEYS.TOTAL_PRODUCTS);
@@ -246,19 +238,15 @@ const MappingData = () => {
       if (storedCategories) setCategories(JSON.parse(storedCategories));
       if (storedTotal) setTotalProducts(parseInt(storedTotal));
       setLoading(false);
-      console.log('📦 Loaded mapping data from sessionStorage cache');
     } else {
-      // No cached data or cache expired, fetch from API
       fetchData(false);
     }
   }, [fetchData]);
 
-  // Refresh data when tab becomes active (triggered by DataManagement)
+  // Refresh data when tab becomes active
   useEffect(() => {
-    // Listen for tab visibility changes to refresh data
     const handleVisibilityChange = () => {
       if (!document.hidden) {
-        // Check if data is stale (older than 5 minutes)
         const lastFetch = sessionStorage.getItem(STORAGE_KEYS.LAST_FETCH);
         const cacheValid = lastFetch && (Date.now() - parseInt(lastFetch)) < 5 * 60 * 1000;
         if (!cacheValid) {
@@ -346,10 +334,9 @@ const MappingData = () => {
       toast.dismiss(savingToast);
 
       if (response.data.success) {
-        toast.success(isEditMode ? '✅ Product updated successfully!' : '✅ Product added successfully!');
+        toast.success(isEditMode ? 'Product updated successfully!' : 'Product added successfully!');
         resetForm();
         setIsModalOpen(false);
-        // Force refresh from API to get latest data
         await fetchData(true);
       }
     } catch (error) {
@@ -357,7 +344,7 @@ const MappingData = () => {
       console.error('Error saving product:', error);
       
       const errorMsg = error.response?.data?.error || error.message || 'Failed to save product';
-      toast.error(`❌ ${errorMsg}`);
+      toast.error(errorMsg);
     } finally {
       setIsSaving(false);
     }
@@ -397,14 +384,13 @@ const MappingData = () => {
       toast.dismiss(deletingToast);
 
       if (response.data.success) {
-        toast.success(`✅ "${name}" has been removed.`);
-        // Force refresh from API
+        toast.success(`"${name}" has been removed.`);
         await fetchData(true);
       }
     } catch (error) {
       toast.dismiss(deletingToast);
       console.error('Error deleting product:', error);
-      toast.error('❌ Failed to delete product');
+      toast.error('Failed to delete product');
     } finally {
       setPendingDelete(null);
     }
@@ -483,21 +469,38 @@ const MappingData = () => {
     }
   };
 
-  // Filter and sort data locally (without API call)
+  // Sort options with arrow indicators
+  const sortOptions = [
+    { value: "Newest First", label: "Newest First" },
+    { value: "Oldest First", label: "Oldest First" },
+    { value: "A-Z", label: "A to Z" },
+    { value: "Z-A", label: "Z to A" },
+    { value: "Price: Low to High", label: "Price: Low to High" },
+    { value: "Price: High to Low", label: "Price: High to Low" },
+  ];
+
+  // Filter and sort data locally
   const getFilteredData = useMemo(() => {
     let filtered = [...mappingData];
     
+    // Apply search filter
     if (searchTerm) {
+      const searchLower = searchTerm.toLowerCase();
       filtered = filtered.filter(item =>
-        item.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
-        item.category?.toLowerCase().includes(searchTerm.toLowerCase())
+        item.name.toLowerCase().includes(searchLower) ||
+        item.category?.toLowerCase().includes(searchLower) ||
+        item.product_ingredients?.some(pi => 
+          pi.ingredients.name.toLowerCase().includes(searchLower)
+        )
       );
     }
 
+    // Apply category filter
     if (selectedCategory !== 'All') {
       filtered = filtered.filter(item => item.category === selectedCategory);
     }
 
+    // Apply sorting
     switch(sortBy) {
       case 'Price: Low to High':
         filtered.sort((a, b) => a.price - b.price);
@@ -507,6 +510,9 @@ const MappingData = () => {
         break;
       case 'A-Z':
         filtered.sort((a, b) => a.name.localeCompare(b.name));
+        break;
+      case 'Z-A':
+        filtered.sort((a, b) => b.name.localeCompare(a.name));
         break;
       case 'Oldest First':
         filtered.sort((a, b) => new Date(a.created_at) - new Date(b.created_at));
@@ -595,11 +601,11 @@ const MappingData = () => {
             value={sortBy}
             onChange={(e) => setSortBy(e.target.value)}
           >
-            <option>Newest First</option>
-            <option>Oldest First</option>
-            <option>Price: Low to High</option>
-            <option>Price: High to Low</option>
-            <option>A-Z</option>
+            {sortOptions.map(option => (
+              <option key={option.value} value={option.value}>
+                {option.label}
+              </option>
+            ))}
           </select>
           <button 
             className="btn-refresh" 

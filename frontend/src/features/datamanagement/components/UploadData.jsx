@@ -84,9 +84,9 @@ const UploadData = ({
       const token = getAuthToken();
       if (token) {
         config.headers.Authorization = `Bearer ${token}`;
-        console.log('✅ Token added to request:', config.url);
+        console.log('Token added to request:', config.url);
       } else {
-        console.warn('⚠️ No token found in sessionStorage for request:', config.url);
+        console.warn(' No token found in sessionStorage for request:', config.url);
       }
       return config;
     },
@@ -140,7 +140,26 @@ const UploadData = ({
     });
   };
 
-  // Validate sales data
+  // Normalize column name for flexible matching
+  const normalizeColumnName = (name) => {
+    if (!name) return '';
+    let normalized = name.toString().trim().replace(/\s+/g, ' ');
+    
+    const mappings = {
+      'item name': 'Item name',
+      'category': 'Category',
+      'items sold': 'Items sold',
+      'gross sales': 'Gross sales',
+      'items refunded': 'Items refunded',
+      'refunds': 'Refunds',
+      'net sales': 'Net sales'
+    };
+    
+    const lowerKey = normalized.toLowerCase();
+    return mappings[lowerKey] || normalized;
+  };
+
+  // Validate sales data - UPDATED with new columns
   const validateSalesData = (data) => {
     const errors = [];
     let validCount = 0;
@@ -156,23 +175,48 @@ const UploadData = ({
       };
     }
 
-    const requiredColumns = ['Date', 'Item Name', 'Item Sold', 'Category', 'Net Sales'];
+    // Updated required columns
+    const requiredColumns = ['Item name', 'Category', 'Items sold', 'Gross sales', 'Items refunded', 'Refunds', 'Net sales'];
     const headers = Object.keys(data[0]);
     
+    console.log('📋 Headers found:', headers);
+    console.log('📋 Required columns:', requiredColumns);
+    
     const missingColumns = [];
+    const columnMap = {};
+    
     requiredColumns.forEach(col => {
-      const found = headers.some(h => h.toLowerCase() === col.toLowerCase());
+      // Try exact match first
+      let found = headers.some(h => h.trim() === col);
+      
+      // Try case-insensitive match
+      if (!found) {
+        found = headers.some(h => h.toLowerCase().trim() === col.toLowerCase().trim());
+      }
+      
+      // Try normalized match
+      if (!found) {
+        const normalizedCol = normalizeColumnName(col);
+        found = headers.some(h => normalizeColumnName(h) === normalizedCol);
+      }
+      
       if (!found) {
         missingColumns.push(col);
+      } else {
+        // Find the actual column name in the headers
+        const actualCol = headers.find(h => 
+          h.trim() === col || 
+          h.toLowerCase().trim() === col.toLowerCase().trim() ||
+          normalizeColumnName(h) === normalizeColumnName(col)
+        );
+        columnMap[col] = actualCol || col;
       }
     });
     
     if (missingColumns.length > 0) {
       errors.push({
         row: 1,
-        message: `Missing required columns: ${missingColumns.join(', ')}. 
-                  Your file has: ${headers.join(', ')}. 
-                  Required columns: ${requiredColumns.join(', ')}`
+        message: `Missing required columns: ${missingColumns.join(', ')}. Your file has: ${headers.join(', ')}. Required columns: ${requiredColumns.join(', ')}`
       });
       return {
         totalRows: data.length,
@@ -188,11 +232,21 @@ const UploadData = ({
       const rowErrors = [];
       
       requiredColumns.forEach(col => {
-        const actualCol = headers.find(h => h.toLowerCase() === col.toLowerCase());
+        const actualCol = columnMap[col];
+        if (!actualCol) {
+          rowErrors.push(`${col} column not found`);
+          return;
+        }
+        
         const value = row[actualCol];
         
         if (value === undefined || value === null || value === '' || value === ' ') {
           rowErrors.push(`${col} is empty`);
+        } else if (['Items sold', 'Gross sales', 'Items refunded', 'Refunds', 'Net sales'].includes(col)) {
+          const numValue = parseFloat(value);
+          if (isNaN(numValue) && value.toString().trim() !== '') {
+            rowErrors.push(`${col} must be a valid number`);
+          }
         }
       });
       
@@ -486,6 +540,19 @@ const UploadData = ({
       }, 3000);
     }
   };
+
+const formatPhilippinesTime = (dateString) => {
+  const date = new Date(dateString);
+  return date.toLocaleString('en-PH', {
+    timeZone: 'Asia/Manila',
+    year: 'numeric',
+    month: 'short',
+    day: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: false
+  });
+};
 
   const handleSalesDiscard = () => {
     setSalesFile(null);
@@ -826,7 +893,7 @@ const UploadData = ({
                 <div>
                   <h2 className="upload-title">Upload New Sales Data</h2>
                   <p className="upload-subtitle">
-                    Drag and drop your sales export below. For Sales Data your file must have these columns: <strong>Date, Item Name, Item Sold, Category, Net Sales</strong>
+                    Drag and drop your sales export below. For Sales Data your file must have these columns: <strong>Item name, Category, Items sold, Gross sales, Items refunded, Refunds, Net sales</strong>
                   </p>
                 </div>
               </div>
@@ -908,7 +975,7 @@ const UploadData = ({
                   <div className="preview-status">
                     <span className={`status-badge ${salesValidated ? "success" : salesFile ? "warning" : "warning"}`}>
                       <span className="status-dot"></span>
-                      {salesValidated ? "✅ Validated" : salesFile ? "⚠️ Needs Review" : "No file uploaded"}
+                      {salesValidated ? " Validated" : salesFile ? " Needs Review" : "No file uploaded"}
                     </span>
                     <span className="status-separator">|</span>
                     <span className="status-records">
@@ -1071,7 +1138,7 @@ const UploadData = ({
                   <div className="preview-status">
                     <span className={`status-badge ${menuValidated ? "success" : menuFile ? "warning" : "warning"}`}>
                       <span className="status-dot"></span>
-                      {menuValidated ? "✅ Validated" : menuFile ? "⚠️ Needs Review" : "No file uploaded"}
+                      {menuValidated ? "Validated" : menuFile ? " Needs Review" : "No file uploaded"}
                     </span>
                     <span className="status-separator">|</span>
                     <span className="status-records">
