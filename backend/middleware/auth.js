@@ -1,68 +1,61 @@
-// middleware/auth.js
-const jwt = require('jsonwebtoken');
-const { supabase, isConfigured } = require('../config/supabase');
+const { supabase } = require('../config/supabase');
 
+/**
+ * Middleware to authenticate requests using Supabase JWT
+ */
 const authenticate = async (req, res, next) => {
   try {
     const authHeader = req.headers.authorization;
     
     if (!authHeader || !authHeader.startsWith('Bearer ')) {
-      console.warn('⚠️ No token provided');
-      return res.status(401).json({ 
+      return res.status(401).json({
         success: false,
-        error: 'No token provided. Please login first.' 
+        error: 'No token provided. Please login first.'
       });
     }
 
     const token = authHeader.split(' ')[1];
     
-    try {
-      const decoded = jwt.verify(token, process.env.JWT_SECRET || 'dev-secret');
-      
-      // Set user from token (ensure id is a number)
-      req.user = {
-        id: parseInt(decoded.id) || decoded.id,
-        email: decoded.email
-      };
-
-      // If Supabase is configured, get full user data
-      if (isConfigured && supabase) {
-        const { data: user, error } = await supabase
-          .from('users')
-          .select('id, email, name, created_at')
-          .eq('id', req.user.id)
-          .single();
-
-        if (!error && user) {
-          req.user = user;
-        }
-      }
-
-      console.log('✅ User authenticated:', req.user.id, req.user.email);
-      next();
-      
-    } catch (jwtError) {
-      if (jwtError.name === 'JsonWebTokenError') {
-        console.warn('⚠️ Invalid token:', jwtError.message);
-        return res.status(401).json({ 
+    // Verify token with Supabase
+    const { data: { user }, error } = await supabase.auth.getUser(token);
+    
+    if (error || !user) {
+      if (error?.message?.includes('expired')) {
+        return res.status(401).json({
           success: false,
-          error: 'Invalid token. Please login again.' 
+          error: 'Token expired. Please login again.'
         });
       }
-      if (jwtError.name === 'TokenExpiredError') {
-        console.warn('⚠️ Token expired');
-        return res.status(401).json({ 
-          success: false,
-          error: 'Token expired. Please login again.' 
-        });
-      }
-      throw jwtError;
+      return res.status(401).json({
+        success: false,
+        error: 'Invalid token. Please login again.'
+      });
     }
+
+    // Get user from custom users table
+    const { data: userData, error: userError } = await supabase
+      .from('users')
+      .select('*')
+      .eq('auth_id', user.id)
+      .single();
+
+    if (userError && userError.code !== 'PGRST116') {
+      console.error('Error fetching user data:', userError);
+    }
+
+    // Attach user to request
+    req.user = userData || user;
+    req.authUser = user;
+    req.token = token;
+
+    console.log('✅ User authenticated:', req.user.email || req.user.id);
+    next();
+
   } catch (error) {
     console.error('❌ Auth error:', error);
-    return res.status(500).json({ 
+    return res.status(500).json({
       success: false,
-      error: 'Authentication failed' 
+      error: 'Authentication failed'
     });
   }
 };

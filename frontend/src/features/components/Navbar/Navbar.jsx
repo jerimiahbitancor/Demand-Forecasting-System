@@ -20,12 +20,12 @@ const Navbar = () => {
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
   const [isMobileProfileOpen, setIsMobileProfileOpen] = useState(false);
   const navigate = useNavigate();
-  const { logout, user, hasUploadedData } = useAuth();   // NEW: pull the flag
+  const { logout, user, hasUploadedData } = useAuth();
 
-   const handleGatedNav = (path, e) => {
+  const handleGatedNav = (path, e) => {
     if (!hasUploadedData) {
       e.preventDefault();
-      toast.error('Please upload your sales data first to unlock this page');   // or Swal
+      // toast.error('Please upload your sales data first to unlock this page');
       return;
     }
     setIsMobileMenuOpen(false);
@@ -112,6 +112,10 @@ const Navbar = () => {
     setIsMobileMenuOpen(false);
   };
 
+  // ✅ Get user's display name
+  const displayName = user?.name || user?.email?.split('@')[0] || 'User';
+  const userInitial = displayName.charAt(0).toUpperCase();
+
   return (
     <header className="navbar">
       {/* Logo and Brand */}
@@ -181,10 +185,10 @@ const Navbar = () => {
         <div className="nav-dropdown">
           <button className="profile-section" type="button" onClick={toggleDropdown}>
             <div className="profile-avatar">
-              <FaUser className="profile-icon" />
+              <span className="profile-initial">{userInitial}</span>
             </div>
             <div className="profile-info">
-              <span className="profile-name">{user?.name || 'Owner'}</span>
+              <span className="profile-name">{displayName}</span>
               <span className="profile-role">Administrator</span>
             </div>
             <FaChevronDown className={`dropdown-arrow ${isDropdownOpen ? 'open' : ''}`} />
@@ -253,7 +257,7 @@ const Navbar = () => {
             type="button" 
             onClick={() => setIsMobileProfileOpen(!isMobileProfileOpen)}
           >
-            <span>{user?.name || 'Owner'}</span>
+            <span>{displayName}</span>
             <FaChevronDown className={`dropdown-arrow ${isMobileProfileOpen ? 'open' : ''}`} />
           </button>
           {isMobileProfileOpen && (

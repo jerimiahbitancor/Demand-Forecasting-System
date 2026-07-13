@@ -10,6 +10,7 @@
     "preview": "vite preview"
   },
   "dependencies": {
+    "@supabase/supabase-js": "^2.110.2",
     "@tippyjs/react": "^4.2.6",
     "axios": "^1.18.1",
     "react": "^19.2.6",
