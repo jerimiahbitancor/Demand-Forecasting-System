@@ -21,6 +21,7 @@
     "react-router-dom": "^7.18.1",
     "react-tooltip": "^6.0.8",
     "recharts": "^3.9.2",
+    "supabase": "^2.109.1",
     "sweetalert2": "^11.26.25",
     "xlsx": "^0.18.5"
   },
