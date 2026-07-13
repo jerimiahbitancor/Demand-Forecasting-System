@@ -10,10 +10,10 @@ import {
 import axios from 'axios';
 import toast from 'react-hot-toast';
 import "./HistoricalData.css";
+import { useAuth } from "../../../context/AuthContext";
 
 const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:5000/api';
 
-// Session storage keys
 const STORAGE_KEYS = {
   HISTORICAL_DATA: 'historical_data',
   SEARCH_TERM: 'historical_search_term',
@@ -23,7 +23,8 @@ const STORAGE_KEYS = {
 };
 
 const HistoricalData = () => {
-  // Load from sessionStorage or use defaults
+  const { getToken } = useAuth();
+
   const [searchTerm, setSearchTerm] = useState(() => {
     return sessionStorage.getItem(STORAGE_KEYS.SEARCH_TERM) || "";
   });
@@ -42,12 +43,6 @@ const HistoricalData = () => {
     return stored ? JSON.parse(stored) : [];
   });
 
-  // Get auth token from sessionStorage
-  const getAuthToken = useCallback(() => {
-    return sessionStorage.getItem('token') || sessionStorage.getItem('access_token');
-  }, []);
-
-  // Axios instance
   const apiClient = useMemo(() => {
     const client = axios.create({
       baseURL: API_URL,
@@ -57,8 +52,8 @@ const HistoricalData = () => {
     });
 
     client.interceptors.request.use(
-      (config) => {
-        const token = getAuthToken();
+      async (config) => {
+        const token = await getToken();
         if (token) {
           config.headers.Authorization = `Bearer ${token}`;
         }
@@ -68,9 +63,8 @@ const HistoricalData = () => {
     );
 
     return client;
-  }, [getAuthToken]);
+  }, [getToken]);
 
-  // Save to sessionStorage whenever state changes
   useEffect(() => {
     sessionStorage.setItem(STORAGE_KEYS.HISTORICAL_DATA, JSON.stringify(historicalData));
   }, [historicalData]);
@@ -87,16 +81,13 @@ const HistoricalData = () => {
     sessionStorage.setItem(STORAGE_KEYS.CURRENT_PAGE, currentPage.toString());
   }, [currentPage]);
 
-  // Fetch historical data from uploads table
   const fetchHistoricalData = useCallback(async (forceRefresh = false) => {
     try {
       setLoading(true);
       
-      // Check if we have valid cached data
       const storedData = sessionStorage.getItem(STORAGE_KEYS.HISTORICAL_DATA);
       const lastFetch = sessionStorage.getItem(STORAGE_KEYS.LAST_FETCH);
       
-      // Cache is valid for 5 minutes
       const cacheValid = lastFetch && (Date.now() - parseInt(lastFetch)) < 5 * 60 * 1000;
       
       if (!forceRefresh && storedData && cacheValid) {
@@ -106,7 +97,6 @@ const HistoricalData = () => {
         return;
       }
 
-      // Fetch uploads from the uploads table
       const response = await apiClient.get('/uploads', {
         params: {
           limit: 100,
@@ -119,7 +109,6 @@ const HistoricalData = () => {
         uploads = response.data.data;
       }
 
-      // Transform uploads data to match the table structure
       const transformedData = uploads.map(upload => ({
         id: upload.id,
         uploadDate: upload.upload_date || upload.created_at || new Date().toISOString(),
@@ -128,7 +117,6 @@ const HistoricalData = () => {
         status: upload.status || 'pending'
       }));
 
-      // Sort by date (newest first)
       transformedData.sort((a, b) => new Date(b.uploadDate) - new Date(a.uploadDate));
 
       setHistoricalData(transformedData);
@@ -138,8 +126,6 @@ const HistoricalData = () => {
     } catch (error) {
       console.error('Error fetching historical data:', error);
       if (error.response?.status === 401) {
-        sessionStorage.removeItem('token');
-        sessionStorage.removeItem('user');
         toast.error('Session expired. Please login again.');
       } else {
         toast.error('Failed to load historical data');
@@ -150,7 +136,6 @@ const HistoricalData = () => {
     }
   }, [apiClient]);
 
-  // Initial load - check sessionStorage first
   useEffect(() => {
     const hasStoredData = sessionStorage.getItem(STORAGE_KEYS.HISTORICAL_DATA) !== null;
     const lastFetch = sessionStorage.getItem(STORAGE_KEYS.LAST_FETCH);
@@ -167,7 +152,6 @@ const HistoricalData = () => {
     }
   }, [fetchHistoricalData]);
 
-  // Refresh data when tab becomes active
   useEffect(() => {
     const handleVisibilityChange = () => {
       if (!document.hidden) {
@@ -185,7 +169,6 @@ const HistoricalData = () => {
     };
   }, [fetchHistoricalData]);
 
-  // Sort options
   const sortOptions = [
     { value: "Newest First", label: "Newest First" },
     { value: "Oldest First", label: "Oldest First" },
@@ -195,11 +178,9 @@ const HistoricalData = () => {
     { value: "Records: High to Low", label: "Records: High to Low" },
   ];
 
-  // Filter and sort data
   const filteredData = useMemo(() => {
     let filtered = [...historicalData];
     
-    // Apply search filter
     if (searchTerm) {
       const searchLower = searchTerm.toLowerCase();
       filtered = filtered.filter(item =>
@@ -209,7 +190,6 @@ const HistoricalData = () => {
       );
     }
 
-    // Apply sorting
     switch(sortBy) {
       case 'Oldest First':
         filtered.sort((a, b) => new Date(a.uploadDate) - new Date(b.uploadDate));
@@ -235,13 +215,11 @@ const HistoricalData = () => {
     return filtered;
   }, [historicalData, searchTerm, sortBy]);
 
-  // Pagination
   const itemsPerPage = 5;
   const totalPages = Math.ceil(filteredData.length / itemsPerPage) || 1;
   const startIndex = (currentPage - 1) * itemsPerPage;
   const currentData = filteredData.slice(startIndex, startIndex + itemsPerPage);
 
-  // Get page numbers for pagination
   const getPageNumbers = useMemo(() => {
     const pages = [];
     if (totalPages <= 7) {
@@ -260,7 +238,6 @@ const HistoricalData = () => {
     return pages;
   }, [totalPages, currentPage]);
 
-  // Format date
   const formatDate = (dateString) => {
     if (!dateString) return 'N/A';
     try {
@@ -277,7 +254,6 @@ const HistoricalData = () => {
     }
   };
 
-  // Get status badge class
   const getStatusBadgeClass = (status) => {
     switch(status) {
       case 'processed':
@@ -291,14 +267,12 @@ const HistoricalData = () => {
     }
   };
 
-  // Handle download
   const handleDownload = (item) => {
     toast.success(`Downloading ${item.fileName}...`);
   };
 
   return (
     <div className="historical-container">
-      {/* Header */}
       <div className="historical-header">
         <h2 className="historical-title">Historical Data Storage</h2>
         <button 
@@ -310,9 +284,9 @@ const HistoricalData = () => {
         </button>
       </div>
 
-      {/* Search and Filter */}
       <div className="historical-controls">
         <div className="search-wrapper">
+          <FiSearch className="search-icon" />
           <input
             type="text"
             placeholder="Search file name, date, or status..."
@@ -339,7 +313,6 @@ const HistoricalData = () => {
         </div>
       </div>
 
-      {/* Historical Data Table */}
       <div className="historical-section">
         <div className="historical-table-wrapper">
           {loading ? (
@@ -386,7 +359,6 @@ const HistoricalData = () => {
           )}
         </div>
 
-        {/* Pagination */}
         {totalPages > 1 && !loading && (
           <div className="pagination">
             <div className="pagination-left">

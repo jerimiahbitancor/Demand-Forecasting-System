@@ -10,9 +10,16 @@ class MappingService {
     return Boolean(isConfigured && supabase && typeof supabase.from === 'function');
   }
 
-  isValidUserId(userId) {
-    return userId && typeof userId === 'number' && Number.isInteger(userId) && userId > 0;
+isValidUserId(userId) {
+  if (!userId) return false;
+  if (typeof userId === 'number' && Number.isInteger(userId) && userId > 0) {
+    return true;
   }
+  if (typeof userId === 'string' && userId.length === 36) {
+    return true;
+  }
+  return false;
+}
 
   // Session storage helpers
   getSessionKey(userId, key) {

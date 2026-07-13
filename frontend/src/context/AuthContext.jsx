@@ -21,10 +21,43 @@ export const AuthProvider = ({ children }) => {
 
   const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:5000/api';
 
+  const syncUser = async () => {
+    try {
+      const { data: { session } } = await supabase.auth.getSession();
+      const token = session?.access_token;
+      
+      if (!token) {
+        console.log('No token available for sync');
+        return null;
+      }
+
+      const response = await fetch(`${API_URL}/auth/sync-user`, {
+        method: 'POST',
+        headers: { 
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`
+        }
+      });
+
+      if (!response.ok) {
+        console.error('Sync user failed:', response.status);
+        return null;
+      }
+
+      const data = await response.json();
+      if (data.success) {
+        return data.user;
+      }
+      return null;
+    } catch (error) {
+      console.error('Sync user error:', error);
+      return null;
+    }
+  };
+
   const checkUploadStatus = async () => {
     setCheckingUpload(true);
     try {
-      // ✅ Get token from Supabase session (localStorage)
       const { data: { session } } = await supabase.auth.getSession();
       const token = session?.access_token;
       
@@ -33,9 +66,21 @@ export const AuthProvider = ({ children }) => {
         return false;
       }
       
-      const res = await fetch(`${API_URL}/uploads/status/check`, {
+      let res = await fetch(`${API_URL}/upload/status/check`, {
         headers: { Authorization: `Bearer ${token}` }
       });
+      
+      if (res.status === 404) {
+        res = await fetch(`${API_URL}/uploads/status/check`, {
+          headers: { Authorization: `Bearer ${token}` }
+        });
+      }
+      
+      if (res.status === 404 || res.status === 401) {
+        setHasUploadedData(false);
+        return false;
+      }
+      
       const data = await res.json();
       const hasUploaded = !!data.hasUploaded;
       setHasUploadedData(hasUploaded);
@@ -54,25 +99,15 @@ export const AuthProvider = ({ children }) => {
       console.log('Checking authentication on app load...');
 
       try {
-        // ✅ Supabase automatically reads from localStorage
         const { data: { session } } = await supabase.auth.getSession();
         
         if (session?.user) {
-          // ✅ Get user from Supabase Auth
           const userData = session.user;
+          setUser(userData);
+          console.log('User authenticated:', userData.email);
           
-          // ✅ Try to get additional user data from custom users table
-          const { data: customUser } = await supabase
-            .from('users')
-            .select('*')
-            .eq('auth_id', userData.id)
-            .single();
-          
-          // ✅ Combine Supabase user with custom data
-          const finalUser = customUser || userData;
-          setUser(finalUser);
-          console.log('User authenticated:', finalUser);
-          
+          // Sync user with custom table
+          await syncUser();
           await checkUploadStatus();
         } else {
           console.log('No stored session found');
@@ -90,21 +125,17 @@ export const AuthProvider = ({ children }) => {
 
     checkAuth();
 
-    // ✅ Listen for auth changes from Supabase
     const { data: { subscription } } = supabase.auth.onAuthStateChange(
       async (event, session) => {
         console.log('Auth state changed:', event);
         
         if (session?.user) {
           const userData = session.user;
-          const { data: customUser } = await supabase
-            .from('users')
-            .select('*')
-            .eq('auth_id', userData.id)
-            .single();
-          
-          setUser(customUser || userData);
-          await checkUploadStatus();
+          setUser(userData);
+          if (event === 'SIGNED_IN') {
+            await syncUser();
+            await checkUploadStatus();
+          }
         } else {
           setUser(null);
           setHasUploadedData(false);
@@ -116,39 +147,41 @@ export const AuthProvider = ({ children }) => {
     return () => subscription.unsubscribe();
   }, []);
 
-  // ============================================
-  // REGISTER (Custom OTP flow)
-  // ============================================
   const register = async (userData) => {
     setLoading(true);
     setError(null);
     try {
-      const response = await fetch(`${API_URL}/auth/register`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          name: userData.fullName,
-          email: userData.email,
-          password: userData.password,
-        }),
+      const { data, error } = await supabase.auth.signUp({
+        email: userData.email,
+        password: userData.password,
+        options: {
+          data: {
+            full_name: userData.fullName,
+          },
+        },
       });
-      
-      const data = await response.json();
-      console.log('Register response:', data);
 
-      if (!response.ok) {
-        throw new Error(data.error || 'Registration failed');
+      if (error) {
+        throw new Error(error.message);
       }
 
-      if (data.requiresVerification) {
+      console.log('Register response:', data);
+
+      if (data.user && !data.session) {
         return {
           success: true,
           requiresVerification: true,
-          email: data.email || userData.email
+          email: userData.email
         };
       }
 
-      return { success: true };
+      setUser(data.user);
+      await syncUser();
+      return { 
+        success: true, 
+        user: data.user,
+        session: data.session
+      };
     } catch (error) {
       console.error('Registration error:', error);
       setError(error.message);
@@ -158,30 +191,22 @@ export const AuthProvider = ({ children }) => {
     }
   };
 
-  // ============================================
-  // VERIFY EMAIL (Custom OTP)
-  // ============================================
   const verifyEmail = async (email, otp) => {
     setLoading(true);
     setError(null);
     try {
-      const response = await fetch(`${API_URL}/auth/verify-email`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ email, otp }),
+      const { data, error } = await supabase.auth.verifyOtp({
+        email,
+        token: otp,
+        type: 'signup',
       });
-      
-      const data = await response.json();
-      console.log('Verify email response:', data);
 
-      if (!response.ok) {
-        throw new Error(data.error || 'Verification failed');
+      if (error) {
+        throw new Error(error.message);
       }
 
-      // ✅ Supabase automatically stores session in localStorage
-      // No need to manually store anything!
-      
       setUser(data.user);
+      await syncUser();
       return { success: true, user: data.user };
     } catch (error) {
       console.error('Verify email error:', error);
@@ -192,23 +217,17 @@ export const AuthProvider = ({ children }) => {
     }
   };
 
-  // ============================================
-  // RESEND OTP
-  // ============================================
   const resendOTP = async (email) => {
     setLoading(true);
     setError(null);
     try {
-      const response = await fetch(`${API_URL}/auth/resend-otp`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ email }),
+      const { error } = await supabase.auth.resend({
+        type: 'signup',
+        email: email,
       });
-      
-      const data = await response.json();
 
-      if (!response.ok) {
-        throw new Error(data.error || 'Failed to resend OTP');
+      if (error) {
+        throw new Error(error.message);
       }
 
       return { success: true };
@@ -221,14 +240,10 @@ export const AuthProvider = ({ children }) => {
     }
   };
 
-  // ============================================
-  // LOGIN (Supabase Auth)
-  // ============================================
   const login = async (email, password) => {
     setLoading(true);
     setError(null);
     try {
-      // ✅ Use Supabase Auth
       const { data, error } = await supabase.auth.signInWithPassword({
         email,
         password
@@ -246,24 +261,13 @@ export const AuthProvider = ({ children }) => {
         throw error;
       }
 
-      // ✅ Supabase automatically stores session in localStorage
-      // No manual storage needed!
-
-      // Get custom user data
-      const { data: customUser } = await supabase
-        .from('users')
-        .select('*')
-        .eq('auth_id', data.user.id)
-        .single();
-
-      const finalUser = customUser || data.user;
-      setUser(finalUser);
-      
+      setUser(data.user);
+      await syncUser();
       await checkUploadStatus();
       
       return { 
         success: true, 
-        user: finalUser,
+        user: data.user,
         session: data.session
       };
     } catch (error) {
@@ -275,13 +279,9 @@ export const AuthProvider = ({ children }) => {
     }
   };
 
-  // ============================================
-  // LOGOUT (Supabase Auth)
-  // ============================================
   const logout = async () => {
     setLoading(true);
     try {
-      // ✅ Supabase automatically clears localStorage
       await supabase.auth.signOut();
       
       setUser(null);
@@ -297,17 +297,70 @@ export const AuthProvider = ({ children }) => {
     }
   };
 
-  // ============================================
-  // HELPER: Get current token
-  // ============================================
-  const getToken = async () => {
-    const { data: { session } } = await supabase.auth.getSession();
-    return session?.access_token || null;
+  const resetPassword = async (email) => {
+    setLoading(true);
+    setError(null);
+    try {
+      const { error } = await supabase.auth.resetPasswordForEmail(email, {
+        redirectTo: `${window.location.origin}/reset-password`,
+      });
+
+      if (error) {
+        throw new Error(error.message);
+      }
+
+      return { success: true };
+    } catch (error) {
+      console.error('Reset password error:', error);
+      setError(error.message);
+      return { success: false, error: error.message };
+    } finally {
+      setLoading(false);
+    }
   };
 
-  // ============================================
-  // VALUE
-  // ============================================
+  const updatePassword = async (newPassword) => {
+    setLoading(true);
+    setError(null);
+    try {
+      const { error } = await supabase.auth.updateUser({
+        password: newPassword
+      });
+
+      if (error) {
+        throw new Error(error.message);
+      }
+
+      return { success: true };
+    } catch (error) {
+      console.error('Update password error:', error);
+      setError(error.message);
+      return { success: false, error: error.message };
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const getToken = async () => {
+    try {
+      const { data: { session } } = await supabase.auth.getSession();
+      return session?.access_token || null;
+    } catch (error) {
+      console.error('Error getting token:', error);
+      return null;
+    }
+  };
+
+  const getCurrentUser = async () => {
+    try {
+      const { data: { user } } = await supabase.auth.getUser();
+      return user;
+    } catch (error) {
+      console.error('Error getting user:', error);
+      return null;
+    }
+  };
+
   const value = {
     user,
     loading,
@@ -317,8 +370,12 @@ export const AuthProvider = ({ children }) => {
     verifyEmail,
     resendOTP,
     logout,
+    resetPassword,
+    updatePassword,
     getToken,
+    getCurrentUser,
     setUser,
+    syncUser,
     isAuthenticated: !!user,
     hasUploadedData,
     checkingUpload,

@@ -1,8 +1,6 @@
+// middleware/auth.js
 const { supabase } = require('../config/supabase');
 
-/**
- * Middleware to authenticate requests using Supabase JWT
- */
 const authenticate = async (req, res, next) => {
   try {
     const authHeader = req.headers.authorization;
@@ -16,7 +14,6 @@ const authenticate = async (req, res, next) => {
 
     const token = authHeader.split(' ')[1];
     
-    // Verify token with Supabase
     const { data: { user }, error } = await supabase.auth.getUser(token);
     
     if (error || !user) {
@@ -32,27 +29,43 @@ const authenticate = async (req, res, next) => {
       });
     }
 
-    // Get user from custom users table
-    const { data: userData, error: userError } = await supabase
-      .from('users')
-      .select('*')
-      .eq('auth_id', user.id)
-      .single();
+    let customUser = null;
+    let customUserId = null;
+    
+    try {
+      const { data: userData, error: userError } = await supabase
+        .from('users')
+        .select('*')
+        .eq('auth_id', user.id)
+        .maybeSingle();
 
-    if (userError && userError.code !== 'PGRST116') {
-      console.error('Error fetching user data:', userError);
+      if (!userError && userData) {
+        customUser = userData;
+        customUserId = userData.id;
+        console.log('Custom user found:', customUserId);
+      } else {
+        console.log('No custom user found for auth_id:', user.id);
+      }
+    } catch (err) {
+      console.error('Error fetching custom user:', err);
     }
 
-    // Attach user to request
-    req.user = userData || user;
+    req.user = {
+      ...user,
+      ...customUser,
+      id: customUserId || user.id,
+      auth_id: user.id,
+      user_id: customUserId
+    };
     req.authUser = user;
-    req.token = token;
 
-    console.log('✅ User authenticated:', req.user.email || req.user.id);
+    console.log('User authenticated:', req.user.email);
+    console.log('User ID:', req.user.id);
+    console.log('User user_id:', req.user.user_id);
     next();
 
   } catch (error) {
-    console.error('❌ Auth error:', error);
+    console.error('Auth error:', error);
     return res.status(500).json({
       success: false,
       error: 'Authentication failed'
