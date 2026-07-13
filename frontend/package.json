@@ -13,6 +13,8 @@
     "@supabase/supabase-js": "^2.110.2",
     "@tippyjs/react": "^4.2.6",
     "axios": "^1.18.1",
+    "jspdf": "^4.2.1",
+    "jspdf-autotable": "^5.0.8",
     "react": "^19.2.6",
     "react-dom": "^19.2.6",
     "react-hot-toast": "^2.6.0",

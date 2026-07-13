@@ -4,15 +4,16 @@ import { FiUploadCloud, FiCheckCircle, FiSave, FiEdit } from "react-icons/fi";
 import axios from 'axios';
 import toast from 'react-hot-toast';
 import "./BusinessProfile.css";
+import { authService } from '../../../services/authService';
 
 const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:5000/api';
 
 function BusinessProfile() {
   const [formData, setFormData] = useState({
-    businessName: "",
-    businessAddress: "",
-    businessEmail: "",
-    businessContactNumber: "",
+    business_name: "",
+    business_address: "",
+    business_email: "",
+    business_contact_number: "",
   });
 
   const [logoFile, setLogoFile] = useState(null);
@@ -21,12 +22,7 @@ function BusinessProfile() {
   const [isLoading, setIsLoading] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
 
-  // Get auth token
-  const getAuthToken = () => {
-    return localStorage.getItem('token');
-  };
-
-  // Axios instance
+  // Axios instance — created first
   const apiClient = axios.create({
     baseURL: API_URL,
     headers: {
@@ -34,12 +30,10 @@ function BusinessProfile() {
     }
   });
 
+  // One interceptor, attached after apiClient exists
   apiClient.interceptors.request.use(
     (config) => {
-      const token = getAuthToken();
-      if (token) {
-        config.headers.Authorization = `Bearer ${token}`;
-      }
+      Object.assign(config.headers, authService.getAuthHeaders());
       return config;
     },
     (error) => Promise.reject(error)
@@ -50,12 +44,12 @@ function BusinessProfile() {
     try {
       setIsLoading(true);
       const response = await apiClient.get('/settings/business-profile');
-      if (response.data.success) {
+      if (response.data.success && response.data.data) {
         setFormData(response.data.data);
       }
+      // else: no profile saved yet — formData keeps its empty default
     } catch (error) {
       console.error('Error fetching business profile:', error);
-      // If no profile exists, use default/empty
       toast.error('Failed to load business profile');
     } finally {
       setIsLoading(false);
@@ -132,7 +126,7 @@ function BusinessProfile() {
   // Save changes handler
   const handleSaveChanges = async () => {
     // Validate required fields
-    if (!formData.businessName || !formData.businessAddress) {
+    if (!formData.business_name || !formData.business_address) {
       toast.error('Business name and address are required');
       return;
     }
@@ -184,10 +178,10 @@ function BusinessProfile() {
             <input
               type="text"
               id="businessName"
-              name="businessName"
+              name="business_name"
               className="form-input"
               placeholder="Enter business name"
-              value={formData.businessName}
+              value={formData.business_name}
               onChange={handleInputChange}
             />
           </div>
@@ -199,10 +193,10 @@ function BusinessProfile() {
             <input
               type="text"
               id="businessAddress"
-              name="businessAddress"
+              name="business_address"
               className="form-input"
               placeholder="Enter business address"
-              value={formData.businessAddress}
+              value={formData.business_address}
               onChange={handleInputChange}
             />
           </div>
@@ -214,10 +208,10 @@ function BusinessProfile() {
             <input
               type="email"
               id="businessEmail"
-              name="businessEmail"
+              name="business_email"
               className="form-input"
               placeholder="Enter business email"
-              value={formData.businessEmail}
+              value={formData.business_email}
               onChange={handleInputChange}
             />
           </div>
@@ -229,10 +223,10 @@ function BusinessProfile() {
             <input
               type="tel"
               id="businessContactNumber"
-              name="businessContactNumber"
+              name="business_contact_number"
               className="form-input"
               placeholder="Enter contact number"
-              value={formData.businessContactNumber}
+              value={formData.business_contact_number}
               onChange={handleInputChange}
             />
           </div>

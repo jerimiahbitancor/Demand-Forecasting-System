@@ -1,0 +1,131 @@
+.report-modal-overlay {
+  position: fixed;
+  top: 0; left: 0; right: 0; bottom: 0;
+  background: rgba(28, 38, 50, 0.55);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+}
+
+.report-modal-card {
+  background: var(--color-bg-white, #fff);
+  border-radius: 12px;
+  width: 560px;
+  max-width: 92vw;
+  max-height: 90vh;
+  overflow-y: auto;
+  box-shadow: 0 14px 48px rgba(0, 0, 0, 0.2);
+}
+
+.report-modal-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 16px 20px;
+  border-bottom: 1px solid var(--color-border-light, #e8e0dd);
+}
+
+.report-modal-header h3 {
+  margin: 0;
+  font-size: 17px;
+  font-weight: 600;
+  color: var(--color-text-primary, #1c2632);
+}
+
+.report-modal-close {
+  background: none;
+  border: none;
+  color: var(--color-text-light, #6c757d);
+  cursor: pointer;
+}
+
+.report-modal-body {
+  padding: 20px 24px;
+}
+
+.report-modal-subtitle {
+  font-size: 13px;
+  color: var(--color-text-light, #6c757d);
+  margin: 0 0 16px;
+}
+
+.report-format-toggle {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 18px;
+}
+
+.report-format-btn {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 10px 0;
+  border: 1px solid var(--color-border, #ced4da);
+  border-radius: 6px;
+  background: var(--color-bg-white, #fff);
+  color: var(--color-text-primary, #1c2632);
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+}
+
+.report-format-btn.active {
+  border-color: var(--color-red-primary, #7a0101);
+  background: var(--color-bg-primary, #ede9de);
+  color: var(--color-red-primary, #7a0101);
+}
+
+.report-field {
+  margin-bottom: 14px;
+}
+
+.report-field label {
+  display: block;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--color-text-primary, #1c2632);
+  margin-bottom: 6px;
+}
+
+.report-hint {
+  font-size: 12px;
+  color: var(--color-text-light, #6c757d);
+  margin: 4px 0 0;
+}
+
+.report-table-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  max-height: 180px;
+  overflow-y: auto;
+  border: 1px solid var(--color-border-light, #e8e0dd);
+  border-radius: 6px;
+  padding: 10px 12px;
+}
+
+.report-table-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  color: var(--color-text-primary, #1c2632);
+  cursor: pointer;
+}
+
+.report-error-text {
+  font-size: 12px;
+  color: var(--color-error, #ef4444);
+  margin: 6px 0 0;
+}
+
+.report-modal-footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  padding: 14px 20px;
+  border-top: 1px solid var(--color-border-light, #e8e0dd);
+}

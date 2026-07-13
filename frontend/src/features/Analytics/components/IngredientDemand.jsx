@@ -1,6 +1,8 @@
 // components/IngredientDemand.jsx
 import { useState } from "react";
 import { FiSearch, FiInfo, FiDownload } from "react-icons/fi";
+import GenerateReportModal from "../../components/Reports/GenerateReportModal.jsx";
+import { buildIngredientDemandPDF, generateExcel } from "./../../../services/reportService.js";
 import DatePicker from "./shared/DatePicker.jsx";
 import Tippy from '@tippyjs/react';
 import 'tippy.js/dist/tippy.css';
@@ -134,6 +136,61 @@ function cellLevel(dayIndex, highDay) {
 // ---------------------------------------------------------------------
 function IngredientDemand() {
   const [selectedRange, setSelectedRange] = useState([new Date(), new Date()]);
+  const [isReportModalOpen, setIsReportModalOpen] = useState(false);
+
+  const availableTables = [
+    { id: "shopping", label: "Shopping List" },
+    { id: "heatmap", label: "Weekly Ingredient Planner" },
+    { id: "ingredients", label: "Ingredient List" },
+  ];
+
+  const handleGenerateReport = async ({ format, dateRange, selectedTableIds }) => {
+    const metrics = [
+      { label: "Tracked Items", value: ingredientList.length, caption: "ingredients" },
+      { label: "High Demand", value: ingredientList.filter((item) => item.isHigh).length, caption: "items above usual" },
+      { label: "Main Buy Item", value: buyList[0]?.ingredient || "—", caption: "for tomorrow" },
+      { label: "High-Day Alerts", value: demandGrid.filter((row) => row.highDay === 4).length, caption: "ingredients flagged" },
+    ];
+
+    if (format === "pdf") {
+      const doc = await buildIngredientDemandPDF({
+        dateRange,
+        business: null,
+        metrics,
+        insightText: `This report summarizes the ingredient demand outlook for the selected period. ${buyList[0]?.ingredient || "Pork"} is the main item to prepare for tomorrow's shopping list.`,
+        shoppingListRows: buyList,
+        highDemandRows: demandGrid.slice(0, 3).map((row) => ({
+          day: weekDays[row.highDay] || "—",
+          reason: "High demand day",
+          affected: row.ingredient,
+        })),
+        disclaimer: "Disclaimer — Ingredient estimates are based on forecasted demand and should still be checked against actual stock before purchasing.",
+      });
+      doc.save("ingredient-demand-report.pdf");
+    } else {
+      const sheetMap = {
+        shopping: { sheetName: "Shopping List", rows: buyList.map((row) => ({ ...row })) },
+        heatmap: {
+          sheetName: "Weekly Planner",
+          rows: demandGrid.map((row) => ({
+            ingredient: row.ingredient,
+            values: row.values.join(" | "),
+            highDay: weekDays[row.highDay] || "—",
+          })),
+        },
+        ingredients: { sheetName: "Ingredient List", rows: ingredientList.map((row) => ({ ...row })) },
+      };
+
+      generateExcel(
+        Object.entries(sheetMap)
+          .filter(([id]) => selectedTableIds.includes(id))
+          .map(([, value]) => value),
+        "ingredient-demand-report.xlsx"
+      );
+    }
+
+    setIsReportModalOpen(false);
+  };
 
   return (
     <>
@@ -281,6 +338,10 @@ function IngredientDemand() {
       </div>
 
       <div className="analytics-col-side">
+        <button type="button" className="btn-generate-report" onClick={() => setIsReportModalOpen(true)}>
+          Generate Report
+        </button>
+
         <section className="analytics-card">
           <div className="ingredient-list-header">
             <h2 className="analytics-card-title">
@@ -348,6 +409,14 @@ function IngredientDemand() {
           </Tippy>
         </section>
       </div>
+      {isReportModalOpen && (
+        <GenerateReportModal
+          reportTitle="Ingredient Demand Report"
+          availableTables={availableTables}
+          onCancel={() => setIsReportModalOpen(false)}
+          onGenerate={handleGenerateReport}
+        />
+      )}
     </>
   );
 }

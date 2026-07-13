@@ -1,6 +1,8 @@
 // components/Forecasting.jsx
 import { useState } from "react";
 import { FiChevronDown, FiSearch, FiCalendar, FiInfo, FiZap } from "react-icons/fi";
+import GenerateReportModal from "../../components/Reports/GenerateReportModal.jsx";
+import { buildSalesForecastPDF, generateExcel } from "./../../../services/reportService.js";
 import DatePicker from "./shared/DatePicker.jsx";
 import Tippy from '@tippyjs/react';
 import 'tippy.js/dist/tippy.css';
@@ -318,6 +320,56 @@ function Forecasting() {
   const errorRate = (100 - latestAccuracy).toFixed(1);
   const [mode, setMode] = useState("Sales");
   const [selectedRange, setSelectedRange] = useState([new Date(), new Date()]);
+  const [isReportModalOpen, setIsReportModalOpen] = useState(false);
+
+  const availableTables = [
+    { id: "sales", label: "Sales Forecast Table" },
+    { id: "demand", label: "Demand Forecast Table" },
+    { id: "model", label: "Model Insights" },
+  ];
+
+  const handleGenerateReport = async ({ format, dateRange, selectedTableIds }) => {
+    const metrics = [
+      { label: "Forecast Accuracy", value: `${latestAccuracy}%`, caption: "current model accuracy" },
+      { label: "Error Rate", value: `${errorRate}%`, caption: "average forecast error" },
+      { label: "Forecast Days", value: salesPrediction.points.length, caption: "tracked sales points" },
+      { label: "Demand Days", value: demandPrediction.points.length, caption: "tracked demand points" },
+    ];
+
+    if (format === "pdf") {
+      const doc = await buildSalesForecastPDF({
+        dateRange,
+        business: null,
+        metrics,
+        insightText: `The ${mode.toLowerCase()} forecast highlights the expected business movement for the selected period. Current model accuracy sits at ${latestAccuracy}% with an estimated error rate of ${errorRate}%.`,
+        disclaimer: "Disclaimer — Forecast values are estimates based on available history and may change as new sales data is uploaded.",
+      });
+      doc.save("sales-demand-forecast-report.pdf");
+    } else {
+      const sheetMap = {
+        sales: { sheetName: "Sales Forecast", rows: salesPrediction.rows.map((row) => ({ ...row })) },
+        demand: { sheetName: "Demand Forecast", rows: demandPrediction.rows.map((row) => ({ ...row })) },
+        model: {
+          sheetName: "Model Insights",
+          rows: [
+            {
+              ...trainingInfo,
+              featureImportance: featureImportance.map((item) => `${item.label}: ${item.value}%`).join(" | "),
+            },
+          ],
+        },
+      };
+
+      generateExcel(
+        Object.entries(sheetMap)
+          .filter(([id]) => selectedTableIds.includes(id))
+          .map(([, value]) => value),
+        "sales-demand-forecast-report.xlsx"
+      );
+    }
+
+    setIsReportModalOpen(false);
+  };
 
   const chartPoints = mode === "Sales" ? salesPrediction.points : demandPrediction.points;
 
@@ -462,7 +514,7 @@ function Forecasting() {
       </div>
 
       <div className="analytics-col-side">
-        <button type="button" className="btn-generate-report">
+        <button type="button" className="btn-generate-report" onClick={() => setIsReportModalOpen(true)}>
           Generate Report
         </button>
 
@@ -550,6 +602,14 @@ function Forecasting() {
           </div>
         </section>
       </div>
+      {isReportModalOpen && (
+        <GenerateReportModal
+          reportTitle="Forecasting Report"
+          availableTables={availableTables}
+          onCancel={() => setIsReportModalOpen(false)}
+          onGenerate={handleGenerateReport}
+        />
+      )}
     </>
   );
 }
