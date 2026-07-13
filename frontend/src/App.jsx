@@ -6,6 +6,7 @@ import VerifyEmail from './features/auth/pages/register/VerifyEmail';
 import Login from '../src/features/auth/pages/login/Login';
 import { useSetupGuard } from './hooks/useSetupGuard';
 import ProtectedRoute from './features/components/ProtectedRoute';
+import RequireUpload from './features/components/RequireUpload'; // adjust path if placed elsewhere
 import ForgotPassword from './features/auth/pages/forgotpass/forgotpass';
 import ForgotPassword2 from './features/auth/pages/forgotpass/forgotpass2';
 import ChefDuoLanding from './features/landing/ChefDuoLanding';
@@ -21,6 +22,15 @@ import './App.css';
 function RootRedirect() {
   useSetupGuard('entry');
   return <p>Loading...</p>;
+}
+
+// Combines auth check + upload-status check for routes that need both
+function Gated({ children }) {
+  return (
+    <ProtectedRoute>
+      <RequireUpload>{children}</RequireUpload>
+    </ProtectedRoute>
+  );
 }
 
 function App() {
@@ -84,7 +94,7 @@ function App() {
           },
         }}
       />
-      
+
       <Routes>
         {/* Auth Routes — public */}
         <Route path="/" element={<RootRedirect />} />
@@ -93,23 +103,25 @@ function App() {
         <Route path="/verify-email" element={<VerifyEmail />} />
         <Route path="/forgot-password" element={<ForgotPassword />} />
         <Route path="/forgot-password/reset" element={<ForgotPassword2 />} />
-        
-        {/* Landing Page — protected */}
+
+        {/* Landing Page — protected, NOT gated by upload (this is where users land pre-upload) */}
         <Route path="/landing" element={<ProtectedRoute><ChefDuoLanding /></ProtectedRoute>} />
-        
-        {/* Main App Routes — protected */}
-        <Route path="/dashboard" element={<ProtectedRoute><Dashboard /></ProtectedRoute>} />
+
+        {/* Data Management — protected, NOT gated (this is where uploads happen) */}
         <Route path="/data-management" element={<ProtectedRoute><DataManagement /></ProtectedRoute>} />
-        <Route path="/analytics" element={<ProtectedRoute><Analytics /></ProtectedRoute>} />
-        
-        {/* Analytics Routes — protected */}
-        <Route path="/forecasting" element={<ProtectedRoute><Forecasting /></ProtectedRoute>} />
-        <Route path="/product-performance" element={<ProtectedRoute><ProductPerformance /></ProtectedRoute>} />
-        <Route path="/ingredient-demand" element={<ProtectedRoute><IngredientDemand /></ProtectedRoute>} />
-        
-        {/* Settings — protected */}
+
+        {/* Main App Routes — protected AND gated by upload status */}
+        <Route path="/dashboard" element={<Gated><Dashboard /></Gated>} />
+        <Route path="/analytics" element={<Gated><Analytics /></Gated>} />
+
+        {/* Analytics sub-routes — also gated */}
+        <Route path="/forecasting" element={<Gated><Forecasting /></Gated>} />
+        <Route path="/product-performance" element={<Gated><ProductPerformance /></Gated>} />
+        <Route path="/ingredient-demand" element={<Gated><IngredientDemand /></Gated>} />
+
+        {/* Settings — protected, NOT gated */}
         <Route path="/settings" element={<ProtectedRoute><Settings /></ProtectedRoute>} />
-        
+
         {/* Profile */}
         <Route path="/profile" element={<Navigate to="/settings" replace />} />
       </Routes>
