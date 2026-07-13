@@ -1,5 +1,5 @@
 // DataManagement.jsx
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState, useRef } from "react";
 import "./DataManagement.css";
 import Navbar from "../../components/Navbar/Navbar";
 import UploadData from "../components/UploadData";
@@ -21,6 +21,11 @@ const DataManagement = () => {
     last_sync: null
   });
   const [loading, setLoading] = useState(true);
+  const [lastRefreshed, setLastRefreshed] = useState(null);
+  
+  // Refs for auto-refresh
+  const refreshIntervalRef = useRef(null);
+  const isMountedRef = useRef(true);
 
   // Get auth token from sessionStorage
   const getAuthToken = () => {
@@ -54,12 +59,15 @@ const DataManagement = () => {
     return client;
   }, []);
 
-  const fetchStats = useCallback(async () => {
+  const fetchStats = useCallback(async (showLoader = true) => {
     try {
-      setLoading(true);
+      if (showLoader) {
+        setLoading(true);
+      }
+      
       const response = await apiClient.get('/uploads/stats/summary');
       
-      if (response.data.success) {
+      if (response.data.success && isMountedRef.current) {
         setStats({
           total_uploads: response.data.data.total_uploads || 0,
           processed: response.data.data.processed || 0,
@@ -69,6 +77,7 @@ const DataManagement = () => {
           menu_items: response.data.data.menu_items || 0,
           last_sync: response.data.data.last_sync || new Date().toISOString()
         });
+        setLastRefreshed(new Date());
       }
     } catch (error) {
       console.error('Error fetching stats:', error);
@@ -76,28 +85,114 @@ const DataManagement = () => {
       if (error.response?.status === 401) {
         sessionStorage.removeItem('token');
         sessionStorage.removeItem('user');
+        // Stop auto-refresh on auth error
+        if (refreshIntervalRef.current) {
+          clearInterval(refreshIntervalRef.current);
+          refreshIntervalRef.current = null;
+        }
       }
-      setStats({
-        total_uploads: 0,
-        processed: 0,
-        pending: 0,
-        failed: 0,
-        sales_records: 0,
-        menu_items: 0,
-        last_sync: new Date().toISOString()
-      });
+      if (isMountedRef.current) {
+        setStats({
+          total_uploads: 0,
+          processed: 0,
+          pending: 0,
+          failed: 0,
+          sales_records: 0,
+          menu_items: 0,
+          last_sync: new Date().toISOString()
+        });
+      }
     } finally {
-      setLoading(false);
+      if (showLoader && isMountedRef.current) {
+        setLoading(false);
+      }
     }
   }, [apiClient]);
 
-  useEffect(() => {
-    const timeoutId = window.setTimeout(() => {
-      void fetchStats();
-    }, 0);
-
-    return () => window.clearTimeout(timeoutId);
+  // Handle visibility change - pause/resume auto-refresh when tab is hidden/shown
+  const handleVisibilityChange = useCallback(() => {
+    if (document.hidden) {
+      // Tab is hidden, pause auto-refresh
+      if (refreshIntervalRef.current) {
+        clearInterval(refreshIntervalRef.current);
+        refreshIntervalRef.current = null;
+        console.log('⏸️ Auto-refresh paused (tab hidden)');
+      }
+    } else {
+      // Tab is visible again, resume auto-refresh
+      if (!refreshIntervalRef.current) {
+        // Immediate refresh when tab becomes visible
+        fetchStats(false);
+        
+        // Restart interval
+        refreshIntervalRef.current = setInterval(() => {
+          if (isMountedRef.current) {
+            fetchStats(false);
+          }
+        }, 5000);
+        console.log('▶️ Auto-refresh resumed (tab visible)');
+      }
+    }
   }, [fetchStats]);
+
+  // Setup auto-refresh on mount
+  useEffect(() => {
+    isMountedRef.current = true;
+    
+    // Initial fetch with loader
+    fetchStats(true);
+    
+    // Set interval for auto-refresh without loader
+    refreshIntervalRef.current = setInterval(() => {
+      if (isMountedRef.current) {
+        fetchStats(false);
+      }
+    }, 5000); // 5 seconds
+    
+    console.log('🔄 Auto-refresh started (every 5 seconds)');
+    
+    // Add visibility change listener
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+    
+    // Cleanup on unmount
+    return () => {
+      isMountedRef.current = false;
+      if (refreshIntervalRef.current) {
+        clearInterval(refreshIntervalRef.current);
+        refreshIntervalRef.current = null;
+      }
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+      console.log('⏹️ Auto-refresh stopped');
+    };
+  }, [fetchStats, handleVisibilityChange]);
+
+  // Force refresh when upload completes
+  const handleConfirmUpload = async (file, fileType) => {
+    try {
+      const formData = new FormData();
+      formData.append('file', file);
+      formData.append('fileType', fileType);
+
+      const token = getAuthToken();
+      console.log('🔑 DataManagement - Upload with token:', token ? 'Yes' : 'No');
+
+      const response = await apiClient.post('/upload', formData, {
+        headers: {
+          'Content-Type': 'multipart/form-data'
+        }
+      });
+
+      if (response.data.success) {
+        // Immediate refresh after upload
+        await fetchStats(true);
+        return response.data;
+      }
+      throw new Error('Upload failed');
+    } catch (error) {
+      console.error('Upload error:', error);
+      throw error;
+    }
+  };
 
   const handleFileDrop = (e) => {
     e.preventDefault();
@@ -125,33 +220,6 @@ const DataManagement = () => {
   const handleDragLeave = (e) => {
     e.preventDefault();
     setIsDragging(false);
-  };
-
-  const handleConfirmUpload = async (file, fileType) => {
-    try {
-      const formData = new FormData();
-      formData.append('file', file);
-      formData.append('fileType', fileType);
-
-      const token = getAuthToken();
-      console.log('🔑 DataManagement - Upload with token:', token ? 'Yes' : 'No');
-
-      const response = await apiClient.post('/upload', formData, {
-        headers: {
-          'Content-Type': 'multipart/form-data'
-        }
-      });
-
-      if (response.data.success) {
-        // Refresh stats after successful upload
-        await fetchStats();
-        return response.data;
-      }
-      throw new Error('Upload failed');
-    } catch (error) {
-      console.error('Upload error:', error);
-      throw error;
-    }
   };
 
   const handleDiscard = () => {
@@ -192,6 +260,23 @@ const DataManagement = () => {
     }
   };
 
+  // Format last refreshed time
+  const formatLastRefreshed = (date) => {
+    if (!date) return 'Waiting...';
+    return date.toLocaleTimeString('en-US', {
+      hour: '2-digit',
+      minute: '2-digit',
+      second: '2-digit'
+    });
+  };
+
+  // Get status text
+  const getStatusText = () => {
+    if (loading) return 'Loading...';
+    if (stats.total_uploads === 0) return 'No uploads yet';
+    return `${stats.total_uploads} upload${stats.total_uploads > 1 ? 's' : ''}`;
+  };
+
   return (
     <div className="data-management-wrapper">
       <Navbar />
@@ -205,6 +290,8 @@ const DataManagement = () => {
               Upload, manage, and review your sales and mapping datasets.
             </p>
           </div>
+          {/* Auto-refresh indicator */}
+         
         </div>
 
         <div className="content-grid">
@@ -251,6 +338,8 @@ const DataManagement = () => {
           />
         </div>
       </main>
+
+  
     </div>
   );
 };
