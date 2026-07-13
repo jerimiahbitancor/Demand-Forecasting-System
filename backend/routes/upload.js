@@ -114,4 +114,35 @@ router.post(
   }
 );
 
+router.get('/status/check', authenticate, async (req, res) => {
+  try {
+    if (!req.user) {
+      return res.status(401).json({
+        success: false,
+        error: 'User not authenticated'
+      });
+    }
+
+    const userId = req.user.id;
+
+    const processedUploads = await uploadService.getUploads({
+      userId,
+      status: 'processed',
+      limit: 1
+    });
+
+    res.json({
+      success: true,
+      hasUploaded: processedUploads.length > 0
+    });
+  } catch (error) {
+    console.error('Error checking upload status:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Failed to check upload status',
+      details: error.message
+    });
+  }
+});
+
 module.exports = router;

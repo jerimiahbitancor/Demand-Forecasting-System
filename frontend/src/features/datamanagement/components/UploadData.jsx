@@ -11,6 +11,7 @@ import MappingData from "./MappingData";
 import axios from 'axios';
 import * as XLSX from 'xlsx';
 import toast from 'react-hot-toast';
+import { useAuth } from "../../../context/AuthContext";
 
 const UploadData = ({
   activeTab,
@@ -443,34 +444,37 @@ const UploadData = ({
       setSalesProgress(100);
 
       if (response?.data?.success) {
-        setSalesUploadStatus('success');
-        
-        const summary = response?.data?.summary || {};
-        setSalesPreviewData({
-          totalRecords: summary.totalRows || 0,
-          validRecords: summary.validRows || 0,
-          invalidRecords: summary.invalidRows || 0,
-          systemMatch: summary.validRows && summary.totalRows ? 
-            `${Math.round((summary.validRows / summary.totalRows) * 100)}%` : '0%',
-          issues: summary.errors || []
-        });
-        
-        if (salesToastId) toast.dismiss(salesToastId);
-        const id = toast.success(`✅ Sales data uploaded successfully! ${summary.validRows || 0} records processed.`);
-        setSalesToastId(id);
-        
-        if (onUploadSuccess) {
-          onUploadSuccess(response.data);
-        }
-        
-        setTimeout(() => {
-          setSalesUploadStatus(null);
-          setSalesFile(null);
-          setSalesProgress(0);
-          setSalesValidated(false);
-          setSalesValidationErrors([]);
-        }, 3000);
+      setSalesUploadStatus('success');
+      
+      const summary = response?.data?.summary || {};
+      setSalesPreviewData({
+        totalRecords: summary.totalRows || 0,
+        validRecords: summary.validRows || 0,
+        invalidRecords: summary.invalidRows || 0,
+        systemMatch: summary.validRows && summary.totalRows ? 
+          `${Math.round((summary.validRows / summary.totalRows) * 100)}%` : '0%',
+        issues: summary.errors || []
+      });
+      
+      if (salesToastId) toast.dismiss(salesToastId);
+      const id = toast.success(`✅ Sales data uploaded successfully! ${summary.validRows || 0} records processed.`);
+      setSalesToastId(id);
+      
+      // NEW: Re-sync the flag from the DB
+      await checkUploadStatus();
+      
+      if (onUploadSuccess) {
+        onUploadSuccess(response.data);
       }
+      
+      setTimeout(() => {
+        setSalesUploadStatus(null);
+        setSalesFile(null);
+        setSalesProgress(0);
+        setSalesValidated(false);
+        setSalesValidationErrors([]);
+      }, 3000);
+    }
     } catch (error) {
       console.error('Upload error:', error);
       setSalesUploadStatus('error');

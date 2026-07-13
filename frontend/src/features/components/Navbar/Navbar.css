@@ -356,6 +356,12 @@
   justify-content: center;
 }
 
+.nav-link-disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+  pointer-events: none; 
+}
+
 .hamburger-icon {
   font-size: 24px;
   line-height: 1;

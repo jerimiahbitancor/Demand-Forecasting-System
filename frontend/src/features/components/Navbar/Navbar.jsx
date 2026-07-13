@@ -20,7 +20,16 @@ const Navbar = () => {
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
   const [isMobileProfileOpen, setIsMobileProfileOpen] = useState(false);
   const navigate = useNavigate();
-  const { logout, user } = useAuth();
+  const { logout, user, hasUploadedData } = useAuth();   // NEW: pull the flag
+
+   const handleGatedNav = (path, e) => {
+    if (!hasUploadedData) {
+      e.preventDefault();
+      toast.error('Please upload your sales data first to unlock this page');   // or Swal
+      return;
+    }
+    setIsMobileMenuOpen(false);
+  };
 
   // Close dropdown when clicking outside
   useEffect(() => {
@@ -119,10 +128,12 @@ const Navbar = () => {
 
       {/* Navigation */}
       <nav className="navbar-nav">
-        <NavLink 
-          to="/dashboard" 
-          className={({ isActive }) => `nav-link ${isActive ? 'active' : ''}`}
-          onClick={() => setIsMobileMenuOpen(false)}
+        <NavLink
+          to="/dashboard"
+          className={({ isActive }) =>
+            `nav-link ${isActive ? 'active' : ''} ${!hasUploadedData ? 'nav-link-disabled' : ''}`
+          }
+          onClick={(e) => handleGatedNav('/dashboard', e)}
         >
           <FaChartBar className="nav-icon" />
           Dashboard
@@ -139,8 +150,10 @@ const Navbar = () => {
         
         <NavLink
           to="/analytics"
-          className={({ isActive }) => `nav-link ${isActive ? 'active' : ''}`}
-          onClick={() => setIsMobileMenuOpen(false)}
+          className={({ isActive }) =>
+            `nav-link ${isActive ? 'active' : ''} ${!hasUploadedData ? 'nav-link-disabled' : ''}`
+          }
+          onClick={(e) => handleGatedNav('/analytics', e)}
         >
           <FaChartPie className="nav-icon" />
           Analytics
