@@ -1,7 +1,9 @@
 // components/ProductPerformance.jsx
 import { useState } from "react";
-import DatePicker from "./shared/DatePicker.jsx";
 import { FiChevronDown, FiSearch, FiCalendar, FiInfo } from "react-icons/fi";
+import GenerateReportModal from "../../components/Reports/GenerateReportModal.jsx";
+import { buildProductPerformancePDF, generateExcel } from "./../../../services/reportService.js";
+import DatePicker from "./shared/DatePicker.jsx";
 import Tippy from '@tippyjs/react';
 import 'tippy.js/dist/tippy.css';
 import 'tippy.js/animations/scale.css';
@@ -187,6 +189,55 @@ function RatioBar({ label, ratio }) {
 function ProductPerformance() {
   const maxQty = Math.max(...demandRows.map((r) => r.forecastQty));
   const [selectedRange, setSelectedRange] = useState([new Date(), new Date()]);
+  const [isReportModalOpen, setIsReportModalOpen] = useState(false);
+
+  const availableTables = [
+    { id: "demand", label: "Demand Classification" },
+    { id: "ratio", label: "Performance Ratio Analysis" },
+    { id: "status", label: "Product Status (Active/New/Inactive)" },
+  ];
+
+  // Note: selectedTableIds must be destructured here — the modal passes it
+  // alongside format and dateRange, and the Excel branch below depends on it.
+  const handleGenerateReport = async ({ format, dateRange, selectedTableIds }) => {
+    const topPerformers = performanceRows.filter((r) => r.ratio >= 1).slice(0, 2);
+    const needsReview = performanceRows.filter((r) => r.ratio < 1).slice(0, 2);
+
+    if (format === "pdf") {
+      const doc = await buildProductPerformancePDF({
+        dateRange,
+        business: null, // wire to your business_profile fetch — see prior note
+        metrics: [
+          { label: "Active Products", value: activeProducts.length, caption: "menu products" },
+          { label: "High Demand", value: demandRows.filter(r => r.demandLevel === "High Demand").length, caption: "products" },
+          { label: "Below Average", value: performanceRows.filter(r => r.ratio < 1).length, valueColor: [15, 153, 24], caption: "products" },
+          { label: "New Products", value: newProducts.length, caption: "product" },
+        ],
+        statusBullets: [
+          `${activeProducts.length} active menu`,
+          `${newProducts.length} new (${newProducts[0]?.product}, forecast in ${newProducts[0]?.forecastStatus.match(/\d+/)?.[0]} days)`,
+          `${inactiveProducts.length} inactive (${inactiveProducts[0]?.product}, last sale ${inactiveProducts[0]?.lastSale})`,
+        ],
+        narrativeText: `${topPerformers[0]?.product} was the top performer this week. ${needsReview[0]?.product} underperformed and may need a promo or menu review.`,
+        topPerformers, needsReview, demandRows,
+        disclaimer: "Disclaimer \u2014 Performance ratio compares each product's sales against the store average across all active products.",
+      });
+      doc.save("product-performance-report.pdf");
+    } else {
+      const sheetMap = {
+        demand: { sheetName: "Demand Classification", rows: demandRows },
+        ratio: { sheetName: "Performance Ratio", rows: performanceRows },
+        status: { sheetName: "Product Status", rows: [...activeProducts, ...newProducts, ...inactiveProducts] },
+      };
+      generateExcel(
+        Object.entries(sheetMap).filter(([id]) => selectedTableIds.includes(id)).map(([, v]) => v),
+        "product-performance-report.xlsx"
+      );
+    }
+    setIsReportModalOpen(false);
+  };
+
+
 
   return (
     <>
@@ -353,7 +404,7 @@ function ProductPerformance() {
       </div>
 
       <div className="analytics-col-side">
-        <button type="button" className="btn-generate-report">
+        <button type="button" className="btn-generate-report" onClick={() => setIsReportModalOpen(true)}>
           Generate Report
         </button>
 
@@ -461,7 +512,15 @@ function ProductPerformance() {
           </div>
         </section>
       </div>
-    </>
+    {isReportModalOpen && (
+        <GenerateReportModal
+          reportTitle="Product Performance Report"
+          availableTables={availableTables}
+          onCancel={() => setIsReportModalOpen(false)}
+          onGenerate={handleGenerateReport}
+        />
+      )}
+    </> 
   );
 }
 

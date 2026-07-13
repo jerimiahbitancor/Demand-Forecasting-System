@@ -12,6 +12,7 @@ const userRoutes = require('./routes/users');
 const uploadRoutes = require('./routes/upload');
 const uploadsRoutes = require('./routes/uploads');
 const mappingRoutes = require('./routes/mapping');
+const settingsRoutes = require('./routes/settings');
 
 // Load environment variables
 dotenv.config({ path: path.join(__dirname, '.env') });
@@ -71,6 +72,7 @@ app.use('/api/users', userRoutes);
 app.use('/api/upload', uploadRoutes);
 app.use('/api/uploads', uploadsRoutes);
 app.use('/api/mapping', mappingRoutes);
+app.use('/api/settings', settingsRoutes);
 
 // ============= HEALTH CHECK =============
 app.get('/health', (req, res) => {
