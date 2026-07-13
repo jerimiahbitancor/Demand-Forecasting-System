@@ -25,13 +25,15 @@ function RootRedirect() {
 }
 
 // Combines auth check + upload-status check for routes that need both
-function Gated({ children }) {
-  return (
-    <ProtectedRoute>
-      <RequireUpload>{children}</RequireUpload>
-    </ProtectedRoute>
-  );
-}
+// function Gated({ children }) {
+//   return (
+//     <ProtectedRoute>
+//       <RequireUpload>{children}</RequireUpload>
+//     </ProtectedRoute>
+//   );
+// 
+
+
 
 function App() {
   return (
@@ -110,14 +112,20 @@ function App() {
         {/* Data Management — protected, NOT gated (this is where uploads happen) */}
         <Route path="/data-management" element={<ProtectedRoute><DataManagement /></ProtectedRoute>} />
 
-        {/* Main App Routes — protected AND gated by upload status */}
-        <Route path="/dashboard" element={<Gated><Dashboard /></Gated>} />
-        <Route path="/analytics" element={<Gated><Analytics /></Gated>} />
+        <Route path="/dashboard" element={<ProtectedRoute><Dashboard /></ProtectedRoute>} />
+        <Route path="/analytics" element={<ProtectedRoute><Analytics /></ProtectedRoute>} />
+        <Route path="/forecasting" element={<ProtectedRoute><Forecasting /></ProtectedRoute>} />
+        <Route path="/product-performance" element={<ProtectedRoute><ProductPerformance /></ProtectedRoute>} />
+        <Route path="/ingredient-demand" element={<ProtectedRoute><IngredientDemand /></ProtectedRoute>} />
+        
+        {/* Main App Routes — protected AND gated by upload status 
+        {/*<Route path="/dashboard" element={<Gated><Dashboard /></Gated>} />
+        <Route path="/analytics" element={<Gated><Analytics /></Gated>} />*/}
 
-        {/* Analytics sub-routes — also gated */}
+        {/* Analytics sub-routes — also gated 
         <Route path="/forecasting" element={<Gated><Forecasting /></Gated>} />
         <Route path="/product-performance" element={<Gated><ProductPerformance /></Gated>} />
-        <Route path="/ingredient-demand" element={<Gated><IngredientDemand /></Gated>} />
+        <Route path="/ingredient-demand" element={<Gated><IngredientDemand /></Gated>} />*/}
 
         {/* Settings — protected, NOT gated */}
         <Route path="/settings" element={<ProtectedRoute><Settings /></ProtectedRoute>} />
