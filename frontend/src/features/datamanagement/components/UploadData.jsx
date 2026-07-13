@@ -21,7 +21,8 @@ const UploadData = ({
   onUploadSuccess,
   handleConfirmUpload
 }) => {
-  // Sales upload state
+  const { getToken, checkUploadStatus } = useAuth();
+
   const [salesFile, setSalesFile] = useState(null);
   const [isSalesDragging, setIsSalesDragging] = useState(false);
   const [salesUploadStatus, setSalesUploadStatus] = useState(null);
@@ -30,7 +31,6 @@ const UploadData = ({
   const [salesValidationErrors, setSalesValidationErrors] = useState([]);
   const [salesIsValid, setIsSalesValid] = useState(false);
 
-  // Menu upload state
   const [menuFile, setMenuFile] = useState(null);
   const [isMenuDragging, setIsMenuDragging] = useState(false);
   const [menuUploadStatus, setMenuUploadStatus] = useState(null);
@@ -40,7 +40,6 @@ const UploadData = ({
   const [menuDbDuplicates, setMenuDbDuplicates] = useState([]);
   const [menuIsValid, setMenuIsValid] = useState(false);
 
-  // Dynamic preview data from API
   const [salesPreviewData, setSalesPreviewData] = useState({
     totalRecords: 0,
     validRecords: 0,
@@ -56,23 +55,9 @@ const UploadData = ({
     issues: []
   });
 
-  // Toast container refs
   const [salesToastId, setSalesToastId] = useState(null);
   const [menuToastId, setMenuToastId] = useState(null);
 
-  // Get auth token from sessionStorage
-  const getAuthToken = () => {
-    const token = sessionStorage.getItem('token') || 
-                  sessionStorage.getItem('access_token');
-    
-    if (!token) {
-      console.log('sessionStorage keys:', Object.keys(sessionStorage));
-    }
-    
-    return token;
-  };
-
-  // Create axios instance with interceptor (only once)
   const apiClient = axios.create({
     baseURL: apiUrl || 'http://localhost:5000/api',
     headers: {
@@ -80,22 +65,20 @@ const UploadData = ({
     }
   });
 
-  // Add token to every request from sessionStorage
   apiClient.interceptors.request.use(
-    (config) => {
-      const token = getAuthToken();
+    async (config) => {
+      const token = await getToken();
       if (token) {
         config.headers.Authorization = `Bearer ${token}`;
         console.log('Token added to request:', config.url);
       } else {
-        console.warn('No token found in sessionStorage for request:', config.url);
+        console.warn('No token found for request:', config.url);
       }
       return config;
     },
     (error) => Promise.reject(error)
   );
 
-  // Function to read file client-side
   const readFileData = (file) => {
     return new Promise((resolve, reject) => {
       const reader = new FileReader();
@@ -142,7 +125,6 @@ const UploadData = ({
     });
   };
 
-  // Normalize column name for flexible matching
   const normalizeColumnName = (name) => {
     if (!name) return '';
     let normalized = name.toString().trim().replace(/\s+/g, ' ');
@@ -161,7 +143,6 @@ const UploadData = ({
     return mappings[lowerKey] || normalized;
   };
 
-  // Validate sales data - UPDATED with new columns
   const validateSalesData = (data) => {
     const errors = [];
     let validCount = 0;
@@ -177,11 +158,10 @@ const UploadData = ({
       };
     }
 
-    // Updated required columns
     const requiredColumns = ['Item name', 'Category', 'Items sold', 'Gross sales', 'Items refunded', 'Refunds', 'Net sales'];
     const headers = Object.keys(data[0]);
     
-    console.log('Headers found:', headers);
+    console.log('Sales Headers found:', headers);
     console.log('Required columns:', requiredColumns);
     
     const missingColumns = [];
@@ -268,7 +248,6 @@ const UploadData = ({
     };
   };
 
-  // Validate menu data
   const validateMenuData = (data) => {
     const errors = [];
     let validCount = 0;
@@ -352,7 +331,6 @@ const UploadData = ({
     };
   };
 
-  // Sales handlers
   const handleSalesFileDrop = (e) => {
     e.preventDefault();
     setIsSalesDragging(false);
@@ -391,7 +369,6 @@ const UploadData = ({
     setSalesValidated(false);
     setSalesValidationErrors([]);
     setIsSalesValid(false);
-    console.log("Sales file uploaded:", file.name);
 
     try {
       const data = await readFileData(file);
@@ -454,7 +431,7 @@ const UploadData = ({
 
     if (!salesIsValid) {
       if (salesToastId) toast.dismiss(salesToastId);
-      const id = toast.error(`Cannot upload. Please fix ${salesValidationErrors.length} validation issue(s) first.`);
+      const id = toast.error('Cannot upload. Please fix validation issue(s) first.');
       setSalesToastId(id);
       return;
     }
@@ -462,7 +439,6 @@ const UploadData = ({
     try {
       setSalesUploadStatus('loading');
       setSalesProgress(0);
-      console.log("Sales upload confirmed");
       
       const progressInterval = setInterval(() => {
         setSalesProgress(prev => {
@@ -478,8 +454,7 @@ const UploadData = ({
       formData.append('file', salesFile);
       formData.append('fileType', 'sales');
 
-      const token = getAuthToken();
-      console.log('Sending sales upload with token:', token ? 'Yes' : 'No');
+      console.log('Sending sales upload request...');
 
       const response = await apiClient.post('/upload', formData, {
         headers: {
@@ -494,53 +469,64 @@ const UploadData = ({
       clearInterval(progressInterval);
       setSalesProgress(100);
 
+      console.log('Upload response:', response.data);
+
       if (response?.data?.success) {
-      setSalesUploadStatus('success');
-      
-      const summary = response?.data?.summary || {};
-      setSalesPreviewData({
-        totalRecords: summary.totalRows || 0,
-        validRecords: summary.validRows || 0,
-        invalidRecords: summary.invalidRows || 0,
-        systemMatch: summary.validRows && summary.totalRows ? 
-          `${Math.round((summary.validRows / summary.totalRows) * 100)}%` : '0%',
-        issues: summary.errors || []
-      });
-      
-      if (salesToastId) toast.dismiss(salesToastId);
-      const id = toast.success(`Sales data uploaded successfully! ${summary.validRows || 0} records processed.`);
-      setSalesToastId(id);
-      
-      // NEW: Re-sync the flag from the DB
-      await checkUploadStatus();
-      
-      if (onUploadSuccess) {
-        onUploadSuccess(response.data);
-      }
-      
-      setTimeout(() => {
-        setSalesUploadStatus(null);
-        setSalesFile(null);
-        setSalesProgress(0);
-        setSalesValidated(false);
-        setSalesValidationErrors([]);
+        setSalesUploadStatus('success');
+        
+        const summary = response?.data?.summary || {};
+        setSalesPreviewData({
+          totalRecords: summary.totalRows || 0,
+          validRecords: summary.validRows || 0,
+          invalidRecords: summary.invalidRows || 0,
+          systemMatch: summary.validRows && summary.totalRows ? 
+            `${Math.round((summary.validRows / summary.totalRows) * 100)}%` : '0%',
+          issues: summary.errors || []
+        });
+        
+        if (salesToastId) toast.dismiss(salesToastId);
+        const id = toast.success(`Sales data uploaded successfully! ${summary.validRows || 0} records processed.`);
+        setSalesToastId(id);
+        
+        await checkUploadStatus();
+        
+        if (onUploadSuccess) {
+          onUploadSuccess(response.data);
+        }
+        
+        setTimeout(() => {
+          setSalesUploadStatus(null);
+          setSalesFile(null);
+          setSalesProgress(0);
+          setSalesValidated(false);
+          setSalesValidationErrors([]);
           setIsSalesValid(false);
-      }, 3000);
-    }
+        }, 3000);
+      } else {
+        throw new Error(response?.data?.error || 'Upload failed');
+      }
     } catch (error) {
       console.error('Upload error:', error);
+      console.error('Error response:', error.response?.data);
+      
       setSalesUploadStatus('error');
       setSalesProgress(0);
       
-      // Check for duplicate error
       const errorMsg = error.response?.data?.error || error.message || 'Upload failed';
+      const details = error.response?.data?.details || '';
+      
+      if (salesToastId) toast.dismiss(salesToastId);
       
       if (error.response?.status === 409) {
-        if (salesToastId) toast.dismiss(salesToastId);
         const id = toast.error(`Upload failed: ${error.response?.data?.message || 'Duplicate file detected'}`);
         setSalesToastId(id);
+      } else if (error.response?.status === 400) {
+        const id = toast.error(`Validation error: ${details || errorMsg}`);
+        setSalesToastId(id);
+      } else if (error.response?.status === 500) {
+        const id = toast.error(`Server error: ${details || errorMsg}`);
+        setSalesToastId(id);
       } else {
-        if (salesToastId) toast.dismiss(salesToastId);
         const id = toast.error(`Upload failed: ${errorMsg}`);
         setSalesToastId(id);
       }
@@ -568,17 +554,14 @@ const UploadData = ({
     if (salesToastId) toast.dismiss(salesToastId);
     const id = toast('File discarded');
     setSalesToastId(id);
-    console.log("Sales upload discarded");
   };
 
   const handleSalesFixIssue = (row) => {
-    console.log(`Fixing sales issue at row ${row}`);
     if (salesToastId) toast.dismiss(salesToastId);
     const id = toast(`Fixing issue at row ${row}...`);
     setSalesToastId(id);
   };
 
-  // Menu handlers
   const handleMenuFileDrop = (e) => {
     e.preventDefault();
     setIsMenuDragging(false);
@@ -618,7 +601,6 @@ const UploadData = ({
     setMenuValidationErrors([]);
     setMenuDbDuplicates([]);
     setMenuIsValid(false);
-    console.log("Menu file uploaded:", file.name);
 
     try {
       const data = await readFileData(file);
@@ -679,7 +661,7 @@ const UploadData = ({
 
     if (!menuIsValid) {
       if (menuToastId) toast.dismiss(menuToastId);
-      const id = toast.error(`Cannot upload. Please fix ${menuValidationErrors.length} validation issue(s) first.`);
+      const id = toast.error('Cannot upload. Please fix validation issue(s) first.');
       setMenuToastId(id);
       return;
     }
@@ -687,7 +669,6 @@ const UploadData = ({
     try {
       setMenuUploadStatus('loading');
       setMenuProgress(0);
-      console.log("Menu upload confirmed");
       
       const progressInterval = setInterval(() => {
         setMenuProgress(prev => {
@@ -703,8 +684,7 @@ const UploadData = ({
       formData.append('file', menuFile);
       formData.append('fileType', 'menu');
 
-      const token = getAuthToken();
-      console.log('Sending menu upload with token:', token ? 'Yes' : 'No');
+      console.log('Sending menu upload request...');
 
       const response = await apiClient.post('/upload', formData, {
         headers: {
@@ -773,9 +753,13 @@ const UploadData = ({
           setMenuDbDuplicates([]);
           setMenuIsValid(false);
         }, 3000);
+      } else {
+        throw new Error(response?.data?.error || 'Upload failed');
       }
     } catch (error) {
-      console.error('Upload error:', error);
+      console.error('Menu upload error:', error);
+      console.error('Error response:', error.response?.data);
+      
       setMenuUploadStatus('error');
       setMenuProgress(0);
       
@@ -807,10 +791,8 @@ const UploadData = ({
     if (menuToastId) toast.dismiss(menuToastId);
     const id = toast('File discarded');
     setMenuToastId(id);
-    console.log("Menu upload discarded");
   };
 
-  // Progress bar component
   const ProgressBar = ({ progress, status }) => {
     const getColor = () => {
       if (status === 'error') return '#ef4444';
@@ -872,7 +854,6 @@ const UploadData = ({
 
   return (
     <div className="tabbed-container">
-      {/* Tabs Header */}
       <div className="tabs-header1">
         {tabs.map((tab) => (
           <button
@@ -885,11 +866,9 @@ const UploadData = ({
         ))}
       </div>
 
-      {/* Tab Content: Sales Data Upload */}
       {activeTab === "upload" && (
         <div className="tab-content">
           <div className="upload-row">
-            {/* First Upload Section - Sales Data */}
             <div className="upload">
               <div className="upload-header">
                 <div>
@@ -900,7 +879,6 @@ const UploadData = ({
                 </div>
               </div>
 
-              {/* Drag and Drop Zone */}
               <div
                 className={`drop-zone ${isSalesDragging ? "dragging" : ""} ${salesFile ? "uploaded" : ""}`}
                 onDrop={handleSalesFileDrop}
@@ -947,7 +925,6 @@ const UploadData = ({
                 />
               </div>
 
-              {/* Upload Status with Progress Bar */}
               {salesUploadStatus === 'loading' && (
                 <div className="upload-status loading">
                   <span className="spinner"></span>
@@ -970,7 +947,6 @@ const UploadData = ({
                 </div>
               )}
 
-              {/* Data Preview for Sales - Always shown */}
               <div className="data-preview">
                 <div className="preview-header">
                   <h3 className="preview-title">Preview & Validation</h3>
@@ -1001,7 +977,6 @@ const UploadData = ({
                   </div>
                 </div>
 
-                {/* Validation Issues */}
                 {salesPreviewData.issues && salesPreviewData.issues.length > 0 && (
                   <div className="validation-issues">
                     <div className="issues-header">
@@ -1030,7 +1005,6 @@ const UploadData = ({
                   </div>
                 )}
 
-                {/* Action Buttons */}
                 <div className="action-buttons">
                   <div className="buttonsact">
                     <button 
@@ -1052,7 +1026,6 @@ const UploadData = ({
               </div>
             </div>
 
-            {/* Second Upload Section - Menu Data */}
             <div className="upload">
               <div className="upload-header">
                 <div>
@@ -1063,7 +1036,6 @@ const UploadData = ({
                 </div>
               </div>
 
-              {/* Drag and Drop Zone */}
               <div
                 className={`drop-zone ${isMenuDragging ? "dragging" : ""} ${menuFile ? "uploaded" : ""}`}
                 onDrop={handleMenuFileDrop}
@@ -1110,7 +1082,6 @@ const UploadData = ({
                 />
               </div>
 
-              {/* Upload Status with Progress Bar */}
               {menuUploadStatus === 'loading' && (
                 <div className="upload-status loading">
                   <span className="spinner"></span>
@@ -1133,7 +1104,6 @@ const UploadData = ({
                 </div>
               )}
 
-              {/* Data Preview for Menu - Always shown */}
               <div className="data-preview">
                 <div className="preview-header">
                   <h3 className="preview-title">Menu Preview & Validation</h3>
@@ -1164,7 +1134,6 @@ const UploadData = ({
                   </div>
                 </div>
 
-                {/* Menu Validation Issues */}
                 {menuPreviewData.issues && menuPreviewData.issues.length > 0 && (
                   <div className="validation-issues">
                     <div className="issues-header">
@@ -1190,7 +1159,6 @@ const UploadData = ({
                   </div>
                 )}
 
-                {/* Action Buttons */}
                 <div className="action-buttons">
                   <div className="buttonsact">
                     <button 
@@ -1215,14 +1183,12 @@ const UploadData = ({
         </div>
       )}
 
-      {/* Historical Data Tab */}
       {activeTab === "historical" && (
         <div className="tab-content">
           <HistoricalData />
         </div>
       )}
 
-      {/* Menu & Ingredient Mapping Tab */}
       {activeTab === "mapping" && (
         <div className="tab-content">
           <MappingData />

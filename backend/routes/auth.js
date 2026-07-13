@@ -1,3 +1,4 @@
+// routes/auth.js
 const express = require('express');
 const router = express.Router();
 const { supabase, supabaseAdmin } = require('../config/supabase');
@@ -12,6 +13,79 @@ const {
   toPH
 } = require('../services/otpService');
 const authenticate = require('../middleware/auth');
+
+// ============================================
+// SYNC USER - Create user in custom table if not exists
+// ============================================
+router.post('/sync-user', async (req, res) => {
+  try {
+    const authHeader = req.headers.authorization;
+    if (!authHeader || !authHeader.startsWith('Bearer ')) {
+      return res.status(401).json({ 
+        success: false, 
+        error: 'No token provided' 
+      });
+    }
+
+    const token = authHeader.split(' ')[1];
+    const { data: { user }, error } = await supabase.auth.getUser(token);
+    
+    if (error || !user) {
+      return res.status(401).json({ 
+        success: false, 
+        error: 'Invalid token' 
+      });
+    }
+
+    // Check if user exists in custom table
+    let { data: existingUser, error: findError } = await supabase
+      .from('users')
+      .select('*')
+      .eq('auth_id', user.id)
+      .maybeSingle();
+
+    // If not found, create user in custom table
+    if (!existingUser) {
+      const { data: newUser, error: insertError } = await supabase
+        .from('users')
+        .insert({
+          auth_id: user.id,
+          email: user.email,
+          name: user.user_metadata?.full_name || user.email.split('@')[0] || 'User',
+          is_verified: user.email_confirmed_at ? true : false,
+          verified_at: user.email_confirmed_at || null
+        })
+        .select()
+        .single();
+
+      if (insertError) {
+        console.error('Error creating user in custom table:', insertError);
+        return res.status(500).json({ 
+          success: false, 
+          error: 'Failed to sync user: ' + insertError.message 
+        });
+      }
+
+      return res.json({
+        success: true,
+        message: 'User synced successfully',
+        user: newUser
+      });
+    }
+
+    res.json({
+      success: true,
+      message: 'User already exists',
+      user: existingUser
+    });
+  } catch (error) {
+    console.error('Sync user error:', error);
+    res.status(500).json({ 
+      success: false, 
+      error: 'Failed to sync user: ' + error.message 
+    });
+  }
+});
 
 // ============================================
 // REGISTER
@@ -34,7 +108,7 @@ router.post('/register', async (req, res) => {
       .from('users')
       .select('id, email, is_verified')
       .eq('email', normalizedEmail)
-      .single();
+      .maybeSingle();
 
     if (existingUser) {
       if (existingUser.is_verified) {
@@ -279,7 +353,7 @@ router.post('/login', async (req, res) => {
           .from('users')
           .select('*')
           .eq('email', normalizedEmail)
-          .single();
+          .maybeSingle();
 
         if (user && user.is_verified && !user.auth_id) {
           return res.status(403).json({
@@ -306,7 +380,7 @@ router.post('/login', async (req, res) => {
       .from('users')
       .select('*')
       .eq('auth_id', data.user.id)
-      .single();
+      .maybeSingle();
 
     if (userError && userError.code !== 'PGRST116') {
       console.error('Error fetching user data:', userError);
@@ -343,7 +417,7 @@ router.post('/forgot-password/send-code', async (req, res) => {
       .from('users')
       .select('id, email')
       .eq('email', normalizedEmail)
-      .single();
+      .maybeSingle();
 
     if (userError || !user) {
       return res.status(200).json({

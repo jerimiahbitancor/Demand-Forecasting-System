@@ -9,18 +9,16 @@ import {
   FiX,
   FiSave,
   FiSearch,
-  FiRefreshCw,
-  FiArrowUp,
-  FiArrowDown
+  FiRefreshCw
 } from "react-icons/fi";
 import axios from 'axios';
 import toast from 'react-hot-toast';
 import "./MappingData.css";
 import ConfirmDeleteModal from "./ConfirmDeleteModal";
+import { useAuth } from "../../../context/AuthContext";
 
 const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:5000/api';
 
-// Session storage keys - consistent with DataManagement
 const STORAGE_KEYS = {
   MAPPING_DATA: 'mapping_data',
   CATEGORIES: 'mapping_categories',
@@ -33,7 +31,8 @@ const STORAGE_KEYS = {
 };
 
 const MappingData = () => {
-  // Load from sessionStorage or use defaults
+  const { getToken } = useAuth();
+
   const [searchTerm, setSearchTerm] = useState(() => {
     return sessionStorage.getItem(STORAGE_KEYS.SEARCH_TERM) || "";
   });
@@ -56,7 +55,6 @@ const MappingData = () => {
   const [loading, setLoading] = useState(true);
   const [isSaving, setIsSaving] = useState(false);
   
-  // Load from sessionStorage or use defaults
   const [mappingData, setMappingData] = useState(() => {
     const stored = sessionStorage.getItem(STORAGE_KEYS.MAPPING_DATA);
     return stored ? JSON.parse(stored) : [];
@@ -73,7 +71,6 @@ const MappingData = () => {
 
   const [pendingDelete, setPendingDelete] = useState(null);
 
-  // Form state
   const [formData, setFormData] = useState({
     productName: "",
     price: "",
@@ -95,12 +92,6 @@ const MappingData = () => {
     ingredients: ""
   });
 
-  // Get auth token from sessionStorage (same as DataManagement)
-  const getAuthToken = useCallback(() => {
-    return sessionStorage.getItem('token') || sessionStorage.getItem('access_token');
-  }, []);
-
-  // Create axios instance (same as DataManagement)
   const apiClient = useMemo(() => {
     const client = axios.create({
       baseURL: API_URL,
@@ -110,8 +101,8 @@ const MappingData = () => {
     });
 
     client.interceptors.request.use(
-      (config) => {
-        const token = getAuthToken();
+      async (config) => {
+        const token = await getToken();
         if (token) {
           config.headers.Authorization = `Bearer ${token}`;
         }
@@ -121,9 +112,8 @@ const MappingData = () => {
     );
 
     return client;
-  }, [getAuthToken]);
+  }, [getToken]);
 
-  // Save to sessionStorage whenever state changes
   useEffect(() => {
     sessionStorage.setItem(STORAGE_KEYS.MAPPING_DATA, JSON.stringify(mappingData));
   }, [mappingData]);
@@ -152,18 +142,15 @@ const MappingData = () => {
     sessionStorage.setItem(STORAGE_KEYS.CURRENT_PAGE, currentPage.toString());
   }, [currentPage]);
 
-  // Fetch data with sessionStorage support
   const fetchData = useCallback(async (forceRefresh = false) => {
     try {
       setLoading(true);
       
-      // Check if we have valid cached data
       const storedData = sessionStorage.getItem(STORAGE_KEYS.MAPPING_DATA);
       const storedCategories = sessionStorage.getItem(STORAGE_KEYS.CATEGORIES);
       const storedTotal = sessionStorage.getItem(STORAGE_KEYS.TOTAL_PRODUCTS);
       const lastFetch = sessionStorage.getItem(STORAGE_KEYS.LAST_FETCH);
       
-      // Cache is valid for 5 minutes
       const cacheValid = lastFetch && (Date.now() - parseInt(lastFetch)) < 5 * 60 * 1000;
       
       if (!forceRefresh && storedData && storedCategories && storedTotal && cacheValid) {
@@ -178,7 +165,6 @@ const MappingData = () => {
         return;
       }
 
-      // Fetch products
       const productsResponse = await apiClient.get('/mapping/products', {
         params: {
           category: selectedCategory === 'All' ? null : selectedCategory,
@@ -196,7 +182,6 @@ const MappingData = () => {
         sessionStorage.setItem(STORAGE_KEYS.LAST_FETCH, Date.now().toString());
       }
 
-      // Fetch categories
       const categoriesResponse = await apiClient.get('/mapping/categories', {
         params: {
           forceRefresh: forceRefresh ? 'true' : 'false'
@@ -212,8 +197,6 @@ const MappingData = () => {
     } catch (error) {
       console.error('Error fetching mapping data:', error);
       if (error.response?.status === 401) {
-        sessionStorage.removeItem('token');
-        sessionStorage.removeItem('user');
         toast.error('Session expired. Please login again.');
       } else {
         toast.error('Failed to load mapping data');
@@ -223,7 +206,6 @@ const MappingData = () => {
     }
   }, [apiClient, selectedCategory, searchTerm]);
 
-  // Initial load - check sessionStorage first
   useEffect(() => {
     const hasStoredData = sessionStorage.getItem(STORAGE_KEYS.MAPPING_DATA) !== null;
     const lastFetch = sessionStorage.getItem(STORAGE_KEYS.LAST_FETCH);
@@ -243,7 +225,6 @@ const MappingData = () => {
     }
   }, [fetchData]);
 
-  // Refresh data when tab becomes active
   useEffect(() => {
     const handleVisibilityChange = () => {
       if (!document.hidden) {
@@ -261,7 +242,6 @@ const MappingData = () => {
     };
   }, [fetchData]);
 
-  // Validate form
   const validateForm = () => {
     const errors = {
       productName: "",
@@ -298,7 +278,6 @@ const MappingData = () => {
     return isValid;
   };
 
-  // Handle add/update mapping
   const handleSaveMapping = async () => {
     if (!validateForm()) {
       const firstError = document.querySelector('.form-group .error-text');
@@ -350,7 +329,6 @@ const MappingData = () => {
     }
   };
 
-  // Edit product
   const handleEdit = (product) => {
     setIsEditMode(true);
     setEditingId(product.id);
@@ -369,12 +347,10 @@ const MappingData = () => {
     setIsModalOpen(true);
   };
 
-  // Ask for delete confirmation
   const requestDelete = (id, name) => {
     setPendingDelete({ id, name });
   };
 
-  // Confirm delete
   const confirmDelete = async () => {
     const { id, name } = pendingDelete;
     const deletingToast = toast.loading('Deleting product...');
@@ -396,7 +372,6 @@ const MappingData = () => {
     }
   };
 
-  // Reset form
   const resetForm = () => {
     setFormData({
       productName: "",
@@ -411,14 +386,12 @@ const MappingData = () => {
     setEditingId(null);
   };
 
-  // Close modal
   const closeModal = () => {
     if (isSaving) return;
     setIsModalOpen(false);
     resetForm();
   };
 
-  // Add ingredient to list
   const handleAddIngredient = () => {
     if (!newIngredient.name || newIngredient.name.trim() === "") {
       toast.error('Please enter ingredient name');
@@ -459,7 +432,6 @@ const MappingData = () => {
     }
   };
 
-  // Remove ingredient from list
   const handleRemoveIngredient = (index) => {
     const updatedIngredients = formData.ingredients.filter((_, i) => i !== index);
     setFormData({ ...formData, ingredients: updatedIngredients });
@@ -469,7 +441,6 @@ const MappingData = () => {
     }
   };
 
-  // Sort options with arrow indicators
   const sortOptions = [
     { value: "Newest First", label: "Newest First" },
     { value: "Oldest First", label: "Oldest First" },
@@ -479,11 +450,9 @@ const MappingData = () => {
     { value: "Price: High to Low", label: "Price: High to Low" },
   ];
 
-  // Filter and sort data locally
   const getFilteredData = useMemo(() => {
     let filtered = [...mappingData];
     
-    // Apply search filter
     if (searchTerm) {
       const searchLower = searchTerm.toLowerCase();
       filtered = filtered.filter(item =>
@@ -495,12 +464,10 @@ const MappingData = () => {
       );
     }
 
-    // Apply category filter
     if (selectedCategory !== 'All') {
       filtered = filtered.filter(item => item.category === selectedCategory);
     }
 
-    // Apply sorting
     switch(sortBy) {
       case 'Price: Low to High':
         filtered.sort((a, b) => a.price - b.price);
@@ -531,7 +498,6 @@ const MappingData = () => {
   const startIndex = (currentPage - 1) * itemsPerPage;
   const currentData = getFilteredData.slice(startIndex, startIndex + itemsPerPage);
 
-  // Get page numbers for pagination
   const getPageNumbers = useMemo(() => {
     const pages = [];
     if (totalPages <= 7) {
@@ -554,7 +520,6 @@ const MappingData = () => {
 
   return (
     <div className="mapping-container">
-      {/* Header */}
       <div className="mapping-header">
         <h2 className="mapping-title">
           Current Ingredient Mapping ({totalProducts} Active Products)
@@ -572,9 +537,9 @@ const MappingData = () => {
         </button>
       </div>
 
-      {/* Search and Filter */}
       <div className="mapping-controls">
         <div className="search-wrapper">
+          <FiSearch className="search-icon" />
           <input
             type="text"
             placeholder="Search product or ingredient..."
@@ -617,7 +582,6 @@ const MappingData = () => {
         </div>
       </div>
 
-      {/* Product Mapping Table */}
       <div className="mapping-section">
         <div className="mapping-table-wrapper">
           {loading ? (
@@ -683,7 +647,6 @@ const MappingData = () => {
           )}
         </div>
 
-        {/* Pagination */}
         {totalPages > 1 && !loading && (
           <div className="pagination">
             <div className="pagination-left">
@@ -720,7 +683,6 @@ const MappingData = () => {
         )}
       </div>
 
-      {/* Modal for Add/Edit Product */}
       {isModalOpen && (
         <div className="modal-overlay">
           <div className="modal-content" onClick={(e) => e.stopPropagation()}>
@@ -808,7 +770,6 @@ const MappingData = () => {
               <div className="form-group">
                 <label>Ingredients <span className="required">*</span></label>
                 
-                {/* Ingredient Input Row */}
                 <div className="ingredient-input-row">
                   <input
                     type="text"
@@ -850,7 +811,6 @@ const MappingData = () => {
                   </button>
                 </div>
 
-                {/* Ingredients Table */}
                 <div className={`ingredients-table-wrapper ${formErrors.ingredients ? 'error-border' : ''}`}>
                   <table className="ingredients-modal-table">
                     <thead>
@@ -918,7 +878,6 @@ const MappingData = () => {
         </div>
       )}
 
-      {/* Delete confirmation */}
       {pendingDelete && (
         <ConfirmDeleteModal
           productName={pendingDelete.name}

@@ -4,7 +4,6 @@ const router = express.Router();
 const uploadService = require('../services/uploadService');
 const authenticate = require('../middleware/auth');
 
-// Get all uploads with pagination (filtered by user)
 router.get('/', authenticate, async (req, res) => {
   try {
     if (!req.user) {
@@ -14,16 +13,16 @@ router.get('/', authenticate, async (req, res) => {
       });
     }
 
+    const userId = req.user?.user_id || req.user?.id || null;
     const { status, limit = 50, offset = 0 } = req.query;
-    const userId = req.user.id;
     
-    console.log('📊 Fetching uploads for user:', userId);
+    console.log('Fetching uploads for user:', userId);
     
     const uploads = await uploadService.getUploads({
+      userId: userId,
       status: status || null,
       limit: parseInt(limit),
-      offset: parseInt(offset),
-      userId: userId
+      offset: parseInt(offset)
     });
 
     res.json({
@@ -44,7 +43,6 @@ router.get('/', authenticate, async (req, res) => {
   }
 });
 
-// Get single upload by ID (protected)
 router.get('/:id', authenticate, async (req, res) => {
   try {
     if (!req.user) {
@@ -54,7 +52,7 @@ router.get('/:id', authenticate, async (req, res) => {
       });
     }
 
-    const userId = req.user.id;
+    const userId = req.user?.user_id || req.user?.id || null;
     const upload = await uploadService.getUploadById(parseInt(req.params.id), userId);
     
     if (!upload) {
@@ -78,7 +76,6 @@ router.get('/:id', authenticate, async (req, res) => {
   }
 });
 
-// Update upload status (protected)
 router.patch('/:id/status', authenticate, async (req, res) => {
   try {
     if (!req.user) {
@@ -89,7 +86,7 @@ router.patch('/:id/status', authenticate, async (req, res) => {
     }
 
     const { status } = req.body;
-    const userId = req.user.id;
+    const userId = req.user?.user_id || req.user?.id || null;
     
     if (!status || !['pending', 'processing', 'processed', 'failed'].includes(status)) {
       return res.status(400).json({ 
@@ -127,7 +124,6 @@ router.patch('/:id/status', authenticate, async (req, res) => {
   }
 });
 
-// Delete upload (protected)
 router.delete('/:id', authenticate, async (req, res) => {
   try {
     if (!req.user) {
@@ -137,7 +133,7 @@ router.delete('/:id', authenticate, async (req, res) => {
       });
     }
 
-    const userId = req.user.id;
+    const userId = req.user?.user_id || req.user?.id || null;
     await uploadService.deleteUpload(parseInt(req.params.id), userId);
     
     res.json({
@@ -154,7 +150,6 @@ router.delete('/:id', authenticate, async (req, res) => {
   }
 });
 
-// Get upload statistics (protected)
 router.get('/stats/summary', authenticate, async (req, res) => {
   try {
     if (!req.user) {
@@ -164,8 +159,8 @@ router.get('/stats/summary', authenticate, async (req, res) => {
       });
     }
 
-    const userId = req.user.id;
-    console.log('📊 Fetching stats for user:', userId);
+    const userId = req.user?.user_id || req.user?.id || null;
+    console.log('Fetching stats for user:', userId);
     
     const stats = await uploadService.getUploadStats(userId);
     
@@ -179,6 +174,36 @@ router.get('/stats/summary', authenticate, async (req, res) => {
       success: false,
       error: 'Failed to fetch statistics',
       details: error.message 
+    });
+  }
+});
+
+router.get('/status/check', authenticate, async (req, res) => {
+  try {
+    if (!req.user) {
+      return res.status(401).json({
+        success: false,
+        error: 'User not authenticated'
+      });
+    }
+
+    const userId = req.user?.user_id || req.user?.id || null;
+    
+    const uploads = await uploadService.getUploads({
+      userId: userId,
+      limit: 1,
+      offset: 0
+    });
+
+    res.json({
+      success: true,
+      hasUploaded: uploads && uploads.length > 0
+    });
+  } catch (error) {
+    console.error('Error checking upload status:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Failed to check upload status'
     });
   }
 });
