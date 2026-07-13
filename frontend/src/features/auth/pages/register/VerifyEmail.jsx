@@ -3,7 +3,7 @@ import { useState, useEffect } from 'react';
 import { useNavigate, useLocation } from 'react-router-dom';
 import Swal from 'sweetalert2';
 import { FaEnvelope, FaKey, FaSpinner, FaArrowLeft } from 'react-icons/fa';
-import { useAuth } from '../../../../context/AuthContext';  // ← Add this
+import { useAuth } from '../../../../context/AuthContext';
 import './VerifyEmail.css';
 
 const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:5000/api';
@@ -11,7 +11,7 @@ const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:5000/api';
 const VerifyEmail = () => {
   const navigate = useNavigate();
   const location = useLocation();
-  const { login, setUser } = useAuth();  // ← Add this
+  const { setUser } = useAuth();
   
   const [email, setEmail] = useState('');
   const [otp, setOtp] = useState('');
@@ -97,25 +97,12 @@ const VerifyEmail = () => {
       setLoading(false);
       Swal.close();
 
-      // ✅ Store session if provided
-      if (data.session) {
-        sessionStorage.setItem('supabase_session', JSON.stringify(data.session));
-        sessionStorage.setItem('user', JSON.stringify(data.user));
-        
-        // ✅ Also store in your auth context format
-        if (data.session.access_token) {
-          sessionStorage.setItem('token', data.session.access_token);
-        }
-      }
-
-      // ✅ Update auth context user state
-      if (data.user) {
-        // If you have setUser in your AuthContext, use it
-        // Otherwise, the user will be loaded on next page load
-        // You might need to add setUser to your AuthContext
-        if (setUser) {
-          setUser(data.user);
-        }
+      // ✅ Supabase auto-stores session in localStorage!
+      // No need for manual sessionStorage.setItem()
+      
+      // ✅ Just update auth context user state
+      if (data.user && setUser) {
+        setUser(data.user);
       }
 
       await Swal.fire({
@@ -126,7 +113,6 @@ const VerifyEmail = () => {
         showConfirmButton: false,
       });
 
-      // ✅ Redirect to LANDING, not login!
       navigate('/landing', { replace: true });
 
     } catch (error) {
@@ -145,7 +131,7 @@ const VerifyEmail = () => {
     setErrors({});
 
     try {
-      const response = await fetch(`${API_URL}/auth/resend-email-otp`, {
+      const response = await fetch(`${API_URL}/auth/resend-otp`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',

@@ -13,9 +13,9 @@ import {
   FaShieldAlt
 } from 'react-icons/fa';
 import { FiX } from 'react-icons/fi';
-import { useAuth } from '../../../../context/AuthContext';  // ✅ 4 levels up
+import { useAuth } from '../../../../context/AuthContext';  
 import './Register.css';
-import { useSetupGuard } from '../../../../hooks/useSetupGuard';  // ✅ 4 levels up
+import { useSetupGuard } from '../../../../hooks/useSetupGuard'; 
 
 const getPasswordRules = (password) => [
   { test: password.length >= 12, message: 'Minimum 12 characters' },

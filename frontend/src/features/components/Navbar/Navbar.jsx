@@ -20,7 +20,16 @@ const Navbar = () => {
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
   const [isMobileProfileOpen, setIsMobileProfileOpen] = useState(false);
   const navigate = useNavigate();
-  const { logout, user } = useAuth();
+  const { logout, user, hasUploadedData } = useAuth();
+
+  const handleGatedNav = (path, e) => {
+    if (!hasUploadedData) {
+      e.preventDefault();
+      // toast.error('Please upload your sales data first to unlock this page');
+      return;
+    }
+    setIsMobileMenuOpen(false);
+  };
 
   // Close dropdown when clicking outside
   useEffect(() => {
@@ -103,6 +112,10 @@ const Navbar = () => {
     setIsMobileMenuOpen(false);
   };
 
+  // ✅ Get user's display name
+  const displayName = user?.name || user?.email?.split('@')[0] || 'User';
+  const userInitial = displayName.charAt(0).toUpperCase();
+
   return (
     <header className="navbar">
       {/* Logo and Brand */}
@@ -119,10 +132,12 @@ const Navbar = () => {
 
       {/* Navigation */}
       <nav className="navbar-nav">
-        <NavLink 
-          to="/dashboard" 
-          className={({ isActive }) => `nav-link ${isActive ? 'active' : ''}`}
-          onClick={() => setIsMobileMenuOpen(false)}
+        <NavLink
+          to="/dashboard"
+          className={({ isActive }) =>
+            `nav-link ${isActive ? 'active' : ''} ${!hasUploadedData ? 'nav-link-disabled' : ''}`
+          }
+          onClick={(e) => handleGatedNav('/dashboard', e)}
         >
           <FaChartBar className="nav-icon" />
           Dashboard
@@ -139,8 +154,10 @@ const Navbar = () => {
         
         <NavLink
           to="/analytics"
-          className={({ isActive }) => `nav-link ${isActive ? 'active' : ''}`}
-          onClick={() => setIsMobileMenuOpen(false)}
+          className={({ isActive }) =>
+            `nav-link ${isActive ? 'active' : ''} ${!hasUploadedData ? 'nav-link-disabled' : ''}`
+          }
+          onClick={(e) => handleGatedNav('/analytics', e)}
         >
           <FaChartPie className="nav-icon" />
           Analytics
@@ -168,10 +185,10 @@ const Navbar = () => {
         <div className="nav-dropdown">
           <button className="profile-section" type="button" onClick={toggleDropdown}>
             <div className="profile-avatar">
-              <FaUser className="profile-icon" />
+              <span className="profile-initial">{userInitial}</span>
             </div>
             <div className="profile-info">
-              <span className="profile-name">{user?.name || 'Owner'}</span>
+              <span className="profile-name">{displayName}</span>
               <span className="profile-role">Administrator</span>
             </div>
             <FaChevronDown className={`dropdown-arrow ${isDropdownOpen ? 'open' : ''}`} />
@@ -240,7 +257,7 @@ const Navbar = () => {
             type="button" 
             onClick={() => setIsMobileProfileOpen(!isMobileProfileOpen)}
           >
-            <span>{user?.name || 'Owner'}</span>
+            <span>{displayName}</span>
             <FaChevronDown className={`dropdown-arrow ${isMobileProfileOpen ? 'open' : ''}`} />
           </button>
           {isMobileProfileOpen && (

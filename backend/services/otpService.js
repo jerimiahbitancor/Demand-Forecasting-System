@@ -10,6 +10,7 @@ const PH_TZ = 'Asia/Manila';
 
 const nowPH = () => dayjs().tz(PH_TZ);
 const toPH = (dbTimestamp) => {
+  if (!dbTimestamp) return dayjs();
   const hasOffset = /Z|[+-]\d{2}:\d{2}$/.test(dbTimestamp);
   const safe = hasOffset ? dbTimestamp : `${dbTimestamp}Z`;
   return dayjs(safe).tz(PH_TZ);
@@ -43,7 +44,7 @@ const createTransporter = () => {
   });
 };
 
-// Send OTP Email (Unified for both flows)
+// Send OTP Email
 const sendOTPEmail = async (email, otp, type) => {
   try {
     const transporter = createTransporter();
@@ -114,114 +115,152 @@ const sendOTPEmail = async (email, otp, type) => {
       `
     };
 
-    const info = await transporter.sendMail(mailOptions);
-    console.log(`${type} email sent:`, info.messageId);
+    await transporter.sendMail(mailOptions);
     return { success: true };
 
   } catch (error) {
-    console.error('Email sending error:', error);
     throw new Error('Failed to send email: ' + error.message);
   }
 };
 
-// Store OTP in database (Unified)
+// Delete old OTPs first, then insert new one
 const storeOTP = async (userId, email, otp, type) => {
   const expiresAt = nowPH().add(10, 'minute').toISOString();
-  
-  // Determine which table to use
   const table = type === 'verification' ? 'email_verifications' : 'password_resets';
   
-  const { error } = await supabase
+  const { data, error } = await supabase
     .from(table)
-    .upsert(
-      {
-        user_id: userId,
-        email: email,
-        verification_code: otp,
-        expires_at: expiresAt,
-        is_used: false,
-        created_at: nowPH().toISOString()
-      },
-      { onConflict: 'user_id' }
-    );
+    .upsert({
+      user_id: userId,
+      email: email.trim().toLowerCase(),
+      verification_code: otp,
+      expires_at: expiresAt,
+      is_used: false,
+      used_at: null,
+      created_at: nowPH().toISOString()
+    }, {
+      onConflict: 'user_id'  // ← Uses the UNIQUE constraint!
+    })
+    .select();
 
-  if (error) throw error;
+  if (error) {
+    console.error('❌ Error storing OTP:', error);
+    throw error;
+  }
+
   return { success: true };
 };
 
-  const verifyOTP = async (email, otp, type, markAsUsed = false) => {
-    const normalizedEmail = email.trim().toLowerCase();
+// services/otpService.js - FIXED
+const storeOTPWithPassword = async (userId, email, otp, password) => {
+  const expiresAt = nowPH().add(10, 'minute').toISOString();
+  
+  // ✅ UPSERT: Update if exists, Insert if not
+  const { data, error } = await supabase
+    .from('email_verifications')
+    .upsert({
+      user_id: userId,
+      email: email.trim().toLowerCase(),
+      verification_code: otp,
+      password: password,
+      expires_at: expiresAt,
+      is_used: false,
+      used_at: null,
+      created_at: nowPH().toISOString()
+    }, {
+      onConflict: 'user_id'
+    })
+    .select();
 
-    // Get user
-    const { data: user, error: userError } = await supabase
-      .from('users')
-      .select('id, is_verified')
-      .ilike('email', normalizedEmail)
-      .single();
+  if (error) {
+    console.error('❌ Error storing OTP:', error);
+    throw error;
+  }
 
-    if (userError || !user) {
-      return { valid: false, error: 'User not found' };
-    }
+  console.log(`✅ OTP ${data ? 'UPDATED' : 'INSERTED'} for user:`, userId);
+  return { success: true };
+};
 
-    // For verification, check if already verified
-    if (type === 'verification' && user.is_verified) {
-      return { valid: false, error: 'Account is already verified' };
-    }
+// verifyOTP with proper error handling
+const verifyOTP = async (email, otp, type, markAsUsed = false) => {
+  const normalizedEmail = email.trim().toLowerCase();
+  const trimmedOtp = String(otp).trim();
 
-    // Determine which table to use
-    const table = type === 'verification' ? 'email_verifications' : 'password_resets';
+  const table = type === 'verification' ? 'email_verifications' : 'password_resets';
 
-    // Get OTP record
-    const { data: otpRecord, error: otpError } = await supabase
+  const { data: otpRecord, error: otpError } = await supabase
+    .from(table)
+    .select('*')
+    .eq('email', normalizedEmail)
+    .order('created_at', { ascending: false })
+    .limit(1)
+    .single();
+
+  if (otpError || !otpRecord) {
+    return { valid: false, error: 'No verification code found. Please request a new one.' };
+  }
+
+  if (otpRecord.is_used) {
+    return { valid: false, error: 'This code has already been used' };
+  }
+
+  // Check if expires_at exists
+  if (!otpRecord.expires_at) {
+    return { valid: false, error: 'Invalid OTP record. Please request a new one.' };
+  }
+
+  const currentTime = nowPH();
+  const expiresTime = toPH(otpRecord.expires_at);
+  
+  if (expiresTime.isBefore(currentTime)) {
+    return { valid: false, error: 'Verification code has expired' };
+  }
+
+  const dbCode = String(otpRecord.verification_code).trim();
+
+  if (dbCode !== trimmedOtp) {
+    return { valid: false, error: 'Invalid verification code' };
+  }
+
+  const { data: user, error: userError } = await supabase
+    .from('users')
+    .select('id, is_verified')
+    .eq('id', otpRecord.user_id)
+    .single();
+
+  if (userError || !user) {
+    return { valid: false, error: 'User not found' };
+  }
+
+  if (type === 'verification' && user.is_verified) {
+    return { valid: false, error: 'Account is already verified' };
+  }
+
+  if (markAsUsed) {
+    const { error: markError } = await supabase
       .from(table)
-      .select('id, verification_code, expires_at, is_used')
-      .eq('user_id', user.id)
-      .single();
+      .update({ 
+        is_used: true, 
+        used_at: nowPH().toISOString() 
+      })
+      .eq('id', otpRecord.id);
 
-    if (otpError || !otpRecord) {
-      return { valid: false, error: 'Invalid or expired code' };
+    if (markError) {
+      throw markError;
     }
+  }
 
-    // Check if used
-    if (otpRecord.is_used) {
-      return { valid: false, error: 'This code has already been used' };
-    }
-
-    // Check expiration
-    const currentTime = nowPH();
-    const expiresTime = toPH(otpRecord.expires_at);
-    const timeDiff = expiresTime.diff(currentTime);
-
-    if (timeDiff <= 0) {
-      return { valid: false, error: 'Verification code has expired' };
-    }
-
-    // Check code match
-    const dbCode = String(otpRecord.verification_code).trim();
-    const userCode = String(otp).trim();
-
-    if (dbCode !== userCode) {
-      return { valid: false, error: 'Invalid code' };
-    }
-
-    // ✅ Only mark as used if markAsUsed is true
-    if (markAsUsed) {
-      const { error: markError } = await supabase
-        .from(table)
-        .update({ is_used: true, used_at: nowPH().toISOString() })
-        .eq('id', otpRecord.id);
-
-      if (markError) throw markError;
-    }
-
-    return { valid: true, userId: user.id };
+  return { 
+    valid: true, 
+    userId: user.id,
+    record: otpRecord
   };
+};
 
-// Resend OTP (Unified)
+// Resend OTP
 const resendOTP = async (email, type) => {
   const normalizedEmail = email.trim().toLowerCase();
 
-  // Find user
   const { data: user, error: userError } = await supabase
     .from('users')
     .select('id, is_verified')
@@ -232,12 +271,10 @@ const resendOTP = async (email, type) => {
     return { success: false, error: 'User not found' };
   }
 
-  // For verification, check if already verified
   if (type === 'verification' && user.is_verified) {
     return { success: false, error: 'Account is already verified' };
   }
 
-  // Generate new OTP
   const otp = generateOTP();
   await storeOTP(user.id, normalizedEmail, otp, type);
   await sendOTPEmail(normalizedEmail, otp, type);
@@ -249,6 +286,7 @@ module.exports = {
   generateOTP,
   sendOTPEmail,
   storeOTP,
+  storeOTPWithPassword, 
   verifyOTP,
   resendOTP,
   nowPH,
