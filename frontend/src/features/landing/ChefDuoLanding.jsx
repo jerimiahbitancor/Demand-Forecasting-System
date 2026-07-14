@@ -492,7 +492,7 @@ const ChefDuoLanding = () => {
           </div>
         </div>
       </section>
-
+{/**
       <section className="upload-section">
         <div className="upload-container">
           <div className="upload-header-landing">
@@ -513,6 +513,8 @@ const ChefDuoLanding = () => {
           </div>  
         </div>
       </section>
+
+       */}
       
       <Footer />
 
