@@ -123,14 +123,29 @@ const sendOTPEmail = async (email, otp, type) => {
   }
 };
 
-// Delete old OTPs first, then insert new one
+// ✅ Store OTP (NO PASSWORD!)
 const storeOTP = async (userId, email, otp, type) => {
   const expiresAt = nowPH().add(10, 'minute').toISOString();
   const table = type === 'verification' ? 'email_verifications' : 'password_resets';
   
-  const { data, error } = await supabase
+  // ✅ First, mark ALL old OTPs as used
+  const { error: updateError } = await supabase
     .from(table)
-    .upsert({
+    .update({ 
+      is_used: true,
+      used_at: nowPH().toISOString()
+    })
+    .eq('user_id', userId)
+    .eq('is_used', false);
+
+  if (updateError) {
+    console.error('Error marking old OTPs:', updateError);
+  }
+
+  // ✅ Then insert the NEW OTP
+  const { error: insertError } = await supabase
+    .from(table)
+    .insert({
       user_id: userId,
       email: email.trim().toLowerCase(),
       verification_code: otp,
@@ -138,50 +153,18 @@ const storeOTP = async (userId, email, otp, type) => {
       is_used: false,
       used_at: null,
       created_at: nowPH().toISOString()
-    }, {
-      onConflict: 'user_id'  // ← Uses the UNIQUE constraint!
-    })
-    .select();
+    });
 
-  if (error) {
-    console.error('❌ Error storing OTP:', error);
-    throw error;
+  if (insertError) {
+    console.error('Error storing new OTP:', insertError);
+    throw insertError;
   }
 
+  console.log('✅ New OTP stored for user:', userId, 'OTP:', otp);
   return { success: true };
 };
 
-// services/otpService.js - FIXED
-const storeOTPWithPassword = async (userId, email, otp, password) => {
-  const expiresAt = nowPH().add(10, 'minute').toISOString();
-  
-  // ✅ UPSERT: Update if exists, Insert if not
-  const { data, error } = await supabase
-    .from('email_verifications')
-    .upsert({
-      user_id: userId,
-      email: email.trim().toLowerCase(),
-      verification_code: otp,
-      password: password,
-      expires_at: expiresAt,
-      is_used: false,
-      used_at: null,
-      created_at: nowPH().toISOString()
-    }, {
-      onConflict: 'user_id'
-    })
-    .select();
-
-  if (error) {
-    console.error('❌ Error storing OTP:', error);
-    throw error;
-  }
-
-  console.log(`✅ OTP ${data ? 'UPDATED' : 'INSERTED'} for user:`, userId);
-  return { success: true };
-};
-
-// verifyOTP with proper error handling
+// ✅ Verify OTP
 const verifyOTP = async (email, otp, type, markAsUsed = false) => {
   const normalizedEmail = email.trim().toLowerCase();
   const trimmedOtp = String(otp).trim();
@@ -192,16 +175,13 @@ const verifyOTP = async (email, otp, type, markAsUsed = false) => {
     .from(table)
     .select('*')
     .eq('email', normalizedEmail)
+    .eq('is_used', false)
     .order('created_at', { ascending: false })
     .limit(1)
     .single();
 
   if (otpError || !otpRecord) {
     return { valid: false, error: 'No verification code found. Please request a new one.' };
-  }
-
-  if (otpRecord.is_used) {
-    return { valid: false, error: 'This code has already been used' };
   }
 
   // Check if expires_at exists
@@ -257,14 +237,15 @@ const verifyOTP = async (email, otp, type, markAsUsed = false) => {
   };
 };
 
-// Resend OTP
-const resendOTP = async (email, type) => {
+// ✅ Resend OTP
+const resendOTP = async (email, userId, type) => {
   const normalizedEmail = email.trim().toLowerCase();
 
   const { data: user, error: userError } = await supabase
     .from('users')
     .select('id, is_verified')
-    .ilike('email', normalizedEmail)
+    .eq('id', userId)
+    .eq('email', normalizedEmail)
     .single();
 
   if (userError || !user) {
@@ -286,7 +267,6 @@ module.exports = {
   generateOTP,
   sendOTPEmail,
   storeOTP,
-  storeOTPWithPassword, 
   verifyOTP,
   resendOTP,
   nowPH,

@@ -1,30 +1,22 @@
 const express = require('express');
 const router = express.Router();
 const { supabase, supabaseAdmin } = require('../config/supabase');
-const { 
-  storeOTP,
-  storeOTPWithPassword,
-  verifyOTP, 
-  resendOTP, 
-  sendOTPEmail,
-  generateOTP,
-  nowPH,
-  toPH
-} = require('../services/otpService');
+const { generateOTP, sendOTPEmail, storeOTP, toPH, nowPH } = require('../services/otpService');
+const passwordResetController = require('../controllers/passwordResetController');
 const authenticate = require('../middleware/auth');
 
 // ============================================
-// REGISTER
+// STEP 1: REGISTER (NO PASSWORD!)
 // ============================================
 router.post('/register', async (req, res) => {
-  const { email, password, fullName } = req.body;
+  const { email, fullName, terms } = req.body;
 
-  if (!email || !password) {
-    return res.status(400).json({ error: 'Email and password are required' });
+  if (!email || !fullName) {
+    return res.status(400).json({ error: 'Email and full name are required' });
   }
 
-  if (password.length < 6) {
-    return res.status(400).json({ error: 'Password must be at least 6 characters' });
+  if (!terms) {
+    return res.status(400).json({ error: 'You must agree to the terms and conditions' });
   }
 
   const normalizedEmail = email.trim().toLowerCase();
@@ -34,14 +26,15 @@ router.post('/register', async (req, res) => {
       .from('users')
       .select('id, email, is_verified')
       .eq('email', normalizedEmail)
-      .single();
+      .maybeSingle();
 
     if (existingUser) {
       if (existingUser.is_verified) {
-        return res.status(400).json({ 
-          error: 'User with this email already exists and is verified' 
-        });
+        return res.status(400).json({ error: 'User with this email already exists and is verified' });
       }
+
+      await supabase.from('email_verifications').delete().eq('user_id', existingUser.id);
+      await supabase.from('users').delete().eq('id', existingUser.id);
     }
 
     const { data: user, error: insertError } = await supabase
@@ -50,16 +43,16 @@ router.post('/register', async (req, res) => {
         email: normalizedEmail,
         name: fullName.trim(),
         is_verified: false,
-        created_at: new Date().toISOString()
       })
       .select()
       .single();
 
-    if (insertError) throw insertError;
+    if (insertError) throw new Error(insertError.message);
 
     const otp = generateOTP();
-    
-    await storeOTPWithPassword(user.id, normalizedEmail, otp, password);
+    const expiresAt = nowPH().add(10, 'minute');
+
+    await storeOTP(user.id, normalizedEmail, otp, 'verification');
 
     await sendOTPEmail(normalizedEmail, otp, 'verification');
 
@@ -67,31 +60,34 @@ router.post('/register', async (req, res) => {
       success: true,
       message: 'OTP sent to your email',
       requiresVerification: true,
+      userId: user.id,
       email: normalizedEmail
     });
 
   } catch (error) {
+    console.error('Registration error:', error);
     res.status(500).json({ error: 'Registration failed: ' + error.message });
   }
 });
 
 // ============================================
-// VERIFY EMAIL
+// STEP 2: VERIFY OTP
 // ============================================
-router.post('/verify-email', async (req, res) => {
-  const { email, otp } = req.body;
+router.post('/verify-otp', async (req, res) => {
+  const { email, otp, userId } = req.body;
 
-  if (!email || !otp) {
-    return res.status(400).json({ error: 'Email and OTP are required' });
+  if (!email || !otp || !userId) {
+    return res.status(400).json({ error: 'Email, OTP, and user ID are required' });
   }
 
   const normalizedEmail = email.trim().toLowerCase();
   const trimmedOtp = String(otp).trim();
 
   try {
-    const { data: user, error: userError } = await supabaseAdmin
+    const { data: user, error: userError } = await supabase
       .from('users')
-      .select('*')
+      .select('id, email, is_verified')
+      .eq('id', userId)
       .eq('email', normalizedEmail)
       .single();
 
@@ -99,130 +95,207 @@ router.post('/verify-email', async (req, res) => {
       return res.status(404).json({ error: 'User not found' });
     }
 
-    const { data: otpRecords, error: otpError } = await supabaseAdmin
+    if (user.is_verified) {
+      return res.status(400).json({ error: 'Account is already verified' });
+    }
+
+    const { data: verification, error: otpError } = await supabase
       .from('email_verifications')
       .select('*')
-      .eq('user_id', user.id)
+      .eq('user_id', userId)
+      .eq('email', normalizedEmail)
+      .eq('verification_code', trimmedOtp)
       .eq('is_used', false)
-      .order('created_at', { ascending: false });
+      .order('created_at', { ascending: false })
+      .limit(1)
+      .single();
 
-    if (otpError) {
-      return res.status(500).json({ error: 'Failed to fetch OTP' });
-    }
-
-    if (!otpRecords || otpRecords.length === 0) {
-      return res.status(400).json({ 
-        error: 'No verification code found. Please request a new one.' 
-      });
-    }
-
-    let matchedOTP = null;
-    for (const record of otpRecords) {
-      if (String(record.verification_code).trim() === trimmedOtp) {
-        matchedOTP = record;
-        break;
-      }
-    }
-
-    if (!matchedOTP) {
+    if (otpError || !verification) {
       return res.status(400).json({ error: 'Invalid verification code' });
     }
 
-    if (!matchedOTP.expires_at) {
-      return res.status(400).json({ 
-        error: 'Invalid OTP. Please request a new one.' 
-      });
+    const currentTime = nowPH();
+    const expiresAt = toPH(verification.expires_at);
+
+    if (expiresAt.isBefore(currentTime)) {
+      return res.status(400).json({ error: 'Verification code has expired' });
     }
 
-    const currentTime = nowPH();
-    const expiresTime = toPH(matchedOTP.expires_at);
-    const timeDiff = expiresTime.diff(currentTime);
+    // ✅ ONLY mark OTP as used (NOT verified_at - that doesn't exist!)
+    const { error: updateError } = await supabase
+      .from('email_verifications')
+      .update({ 
+        is_used: true,
+        used_at: nowPH().toISOString()
+      })
+      .eq('id', verification.id);
 
-    if (timeDiff <= 0) {
-      return res.status(400).json({ error: 'Verification code has expired' });
+    if (updateError) {
+      console.error('❌ Update error:', updateError);
+      return res.status(500).json({ error: 'Failed to verify OTP' });
+    }
+
+    console.log('✅ OTP verified for user:', userId);
+
+    res.json({
+      success: true,
+      message: 'OTP verified successfully',
+      userId: userId,
+      email: normalizedEmail
+    });
+
+  } catch (error) {
+    console.error('OTP verification error:', error);
+    res.status(500).json({ error: 'Verification failed: ' + error.message });
+  }
+});
+
+// ============================================
+// STEP 3: CREATE PASSWORD
+// ============================================
+router.post('/create-password', async (req, res) => {
+  const { userId, email, password } = req.body;
+
+  if (!userId || !email || !password) {
+    return res.status(400).json({ error: 'User ID, email, and password are required' });
+  }
+
+  if (password.length < 8) {
+    return res.status(400).json({ error: 'Password must be at least 8 characters' });
+  }
+
+  const normalizedEmail = email.trim().toLowerCase();
+
+  try {
+    const { data: user, error: userError } = await supabase
+      .from('users')
+      .select('*')
+      .eq('id', userId)
+      .eq('email', normalizedEmail)
+      .single();
+
+    if (userError || !user) {
+      return res.status(404).json({ error: 'User not found' });
     }
 
     if (user.is_verified) {
       return res.status(400).json({ error: 'Account is already verified' });
     }
 
+    // ✅ Check OTP was used (is_used = true)
+    const { data: verification, error: verifyError } = await supabase
+      .from('email_verifications')
+      .select('*')
+      .eq('user_id', userId)
+      .eq('email', normalizedEmail)
+      .eq('is_used', true)  // ✅ Check is_used = true
+      .order('created_at', { ascending: false })
+      .limit(1)
+      .single();
+
+    console.log('🔍 OTP used check:', verification);
+
+    if (verifyError || !verification) {
+      return res.status(400).json({ 
+        error: 'Email not verified. Please verify your OTP first.' 
+      });
+    }
+
+    const usedAt = toPH(verification.used_at);
+    const now = nowPH();
+    const timeDiff = now.diff(usedAt, 'minute');
+
+    if (timeDiff > 10) {
+      return res.status(400).json({
+        error: 'OTP verification expired. Please request a new OTP.'
+      });
+    }
+
+    // ✅ CREATE SUPABASE AUTH USER
     const { data: authUser, error: authError } = await supabaseAdmin.auth.admin.createUser({
       email: user.email,
-      password: matchedOTP.password,
+      password: password,
       email_confirm: true,
-      user_metadata: { name: user.name || null }
+      user_metadata: { 
+        name: user.name || null,
+        full_name: user.name || null
+      }
     });
 
     if (authError) {
+      console.error('Auth user creation error:', authError);
+      
       if (authError.message.includes('already exists')) {
         const { data: existingAuth } = await supabaseAdmin.auth.admin.getUserByEmail(user.email);
         if (existingAuth) {
-          await supabaseAdmin
+          await supabaseAdmin.auth.admin.updateUserById(
+            existingAuth.user.id,
+            { password: password }
+          );
+          
+          await supabase
             .from('users')
             .update({
               auth_id: existingAuth.user.id,
               is_verified: true,
-              verified_at: new Date().toISOString()
+              verified_at: new Date().toISOString(),
             })
-            .eq('id', user.id);
-
-          await supabaseAdmin
-            .from('email_verifications')
-            .update({
-              is_used: true,
-              used_at: new Date().toISOString(),
-              password: null
-            })
-            .eq('id', matchedOTP.id);
+            .eq('id', userId);
 
           const { data: loginData } = await supabase.auth.signInWithPassword({
             email: user.email,
-            password: matchedOTP.password
+            password: password
           });
 
           return res.json({
             success: true,
-            message: 'Email verified!',
-            user: user,
-            session: loginData.session
+            message: 'Account created successfully',
+            session: loginData.session,
+            user: user
           });
         }
       }
+      
       throw authError;
     }
 
-    await supabaseAdmin
+    // ✅ Update user with auth_id and is_verified = true
+    await supabase
       .from('users')
       .update({
         auth_id: authUser.user.id,
         is_verified: true,
-        verified_at: new Date().toISOString()
+        verified_at: new Date().toISOString(),
       })
-      .eq('id', user.id);
+      .eq('id', userId);
 
-    await supabaseAdmin
-      .from('email_verifications')
-      .update({
-        is_used: true,
-        used_at: new Date().toISOString(),
-        password: null
-      })
-      .eq('id', matchedOTP.id);
-
-    const { data: loginData } = await supabase.auth.signInWithPassword({
+    const { data: loginData, error: loginError } = await supabase.auth.signInWithPassword({
       email: user.email,
-      password: matchedOTP.password
+      password: password
     });
+
+    if (loginError) {
+      console.error('Auto-login error:', loginError);
+      return res.json({
+        success: true,
+        accountCreated: true,
+        requiresLogin: true,
+        message: 'Account created successfully. Please log in.',
+        user: user
+        // no session key — frontend must not pretend one exists
+      });
+    }
 
     res.json({
       success: true,
-      message: 'Email verified successfully!',
-      user: user,
-      session: loginData.session
+      message: 'Account created successfully',
+      session: loginData.session,
+      user: user
     });
 
   } catch (error) {
-    res.status(500).json({ error: 'Verification failed: ' + error.message });
+    console.error('Create password error:', error);
+    res.status(500).json({ error: 'Failed to create account: ' + error.message });
   }
 });
 
@@ -230,246 +303,134 @@ router.post('/verify-email', async (req, res) => {
 // RESEND OTP
 // ============================================
 router.post('/resend-otp', async (req, res) => {
-  const { email } = req.body;
+  const { email, userId } = req.body;
 
-  if (!email) {
-    return res.status(400).json({ error: 'Email is required' });
+  if (!email || !userId) {
+    return res.status(400).json({ error: 'Email and user ID are required' });
   }
 
+  const normalizedEmail = email.trim().toLowerCase();
+
   try {
-    const result = await resendOTP(email, 'verification');
-    
-    if (!result.success) {
-      return res.status(400).json({ error: result.error });
+    const { data: user, error: userError } = await supabase
+      .from('users')
+      .select('id')
+      .eq('id', userId)
+      .eq('email', normalizedEmail)
+      .eq('is_verified', false)
+      .single();
+
+    if (userError || !user) {
+      return res.status(404).json({ error: 'User not found or already verified' });
     }
+
+    const otp = generateOTP();
+    
+    // ✅ Use nowPH() for PH time
+    const expiresAt = nowPH().add(10, 'minute');
+
+    console.log('📧 New OTP:', otp);
+    console.log('⏰ Expires at (PH):', expiresAt.format());
+
+    const { error: upsertError } = await supabase
+      .from('email_verifications')
+      .upsert({
+        user_id: userId,
+        email: normalizedEmail,
+        verification_code: otp,
+        expires_at: expiresAt.toISOString(),
+        is_used: false,
+        used_at: null,
+        created_at: nowPH().toISOString()
+      }, {
+        onConflict: 'user_id'
+      });
+
+    if (upsertError) {
+      console.error('❌ OTP upsert error:', upsertError);
+      return res.status(500).json({ error: 'Failed to update OTP' });
+    }
+
+    await sendOTPEmail(normalizedEmail, otp, 'verification');
 
     res.json({
       success: true,
-      message: 'New verification code sent to your email'
+      message: 'New OTP sent to your email'
     });
 
   } catch (error) {
+    console.error('Resend OTP error:', error);
     res.status(500).json({ error: 'Failed to resend OTP: ' + error.message });
   }
 });
 
 // ============================================
-// LOGIN
+// PASSWORD RESET
 // ============================================
-router.post('/login', async (req, res) => {
-  const { email, password } = req.body;
+router.post('/forgot-password/send-code', passwordResetController.sendCode);
+router.post('/forgot-password/verify-code', passwordResetController.verifyCode);
+router.post('/forgot-password/reset-password', passwordResetController.resetPassword);
 
-  if (!email || !password) {
-    return res.status(400).json({ 
-      error: 'Email and password are required' 
-    });
-  }
-
-  const normalizedEmail = email.trim().toLowerCase();
-
+// ============================================
+// SYNC USER
+// ============================================
+router.post('/sync-user', authenticate, async (req, res) => {
   try {
-    const { data, error } = await supabase.auth.signInWithPassword({
-      email: normalizedEmail,
-      password
-    });
+    // ✅ User already authenticated + enriched by middleware!
+    const authUser = req.authUser;  // Original Supabase Auth user
+    const customUser = req.user;     // Enriched with custom user data
 
-    if (error) {
-      if (error.message.includes('Invalid login credentials')) {
-        const { data: user } = await supabase
-          .from('users')
-          .select('*')
-          .eq('email', normalizedEmail)
-          .single();
+    console.log('🔄 Syncing user:', customUser.email);
+    console.log('📋 Custom user exists?', !!customUser.id);
 
-        if (user && user.is_verified && !user.auth_id) {
-          return res.status(403).json({
-            error: 'Please verify your email first',
-            requiresVerification: true,
-            email: normalizedEmail
-          });
-        }
-        throw error;
-      }
-
-      if (error.message.includes('Email not confirmed')) {
-        return res.status(403).json({
-          error: 'Please verify your email before logging in',
-          requiresVerification: true,
-          email: normalizedEmail
-        });
-      }
-
-      throw error;
-    }
-
-    const { data: user, error: userError } = await supabase
-      .from('users')
-      .select('*')
-      .eq('auth_id', data.user.id)
-      .single();
-
-    if (userError && userError.code !== 'PGRST116') {
-      console.error('Error fetching user data:', userError);
-    }
-
-    res.json({
-      success: true,
-      message: 'Login successful',
-      user: user || data.user,
-      session: data.session
-    });
-
-  } catch (error) {
-    res.status(401).json({ 
-      error: 'Invalid email or password' 
-    });
-  }
-});
-
-// ============================================
-// FORGOT PASSWORD
-// ============================================
-router.post('/forgot-password/send-code', async (req, res) => {
-  const { email } = req.body;
-
-  if (!email) {
-    return res.status(400).json({ error: 'Email is required' });
-  }
-
-  const normalizedEmail = email.trim().toLowerCase();
-
-  try {
-    const { data: user, error: userError } = await supabase
-      .from('users')
-      .select('id, email')
-      .eq('email', normalizedEmail)
-      .single();
-
-    if (userError || !user) {
-      return res.status(200).json({
+    // If custom user already exists, return it
+    if (customUser.id && customUser.auth_id === authUser.id) {
+      return res.json({
         success: true,
-        message: 'If an account exists, a reset code will be sent'
+        message: 'User already exists',
+        user: customUser
       });
     }
 
-    const otp = generateOTP();
-    await storeOTP(user.id, normalizedEmail, otp, 'reset');
-    await sendOTPEmail(normalizedEmail, otp, 'reset');
-
-    res.status(200).json({
-      success: true,
-      message: 'Verification code sent to your email'
-    });
-
-  } catch (error) {
-    res.status(500).json({ error: 'Failed to send verification code: ' + error.message });
-  }
-});
-
-router.post('/forgot-password/verify-code', async (req, res) => {
-  const { email, code } = req.body;
-
-  if (!email || !code) {
-    return res.status(400).json({ error: 'Email and code are required' });
-  }
-
-  try {
-    const result = await verifyOTP(email, code, 'reset', false);
-    
-    if (!result.valid) {
-      return res.status(401).json({ error: result.error });
-    }
-
-    res.status(200).json({
-      success: true,
-      message: 'Code verified successfully',
-      recordId: result.record.id
-    });
-
-  } catch (error) {
-    res.status(500).json({ error: 'Failed to verify code: ' + error.message });
-  }
-});
-
-router.post('/forgot-password/reset-password', async (req, res) => {
-  const { email, code, password } = req.body;
-
-  if (!email || !code || !password) {
-    return res.status(400).json({ error: 'Email, code, and password are required' });
-  }
-
-  if (password.length < 6) {
-    return res.status(400).json({ error: 'Password must be at least 6 characters' });
-  }
-
-  const normalizedEmail = email.trim().toLowerCase();
-
-  try {
-    const result = await verifyOTP(normalizedEmail, code, 'reset', true);
-    
-    if (!result.valid) {
-      return res.status(401).json({ error: result.error });
-    }
-
-    const { data: user, error: userError } = await supabase
+    // ✅ User exists in Auth but NOT in custom users table
+    // Create custom user record
+    const { data: newUser, error: insertError } = await supabaseAdmin
       .from('users')
-      .select('*')
-      .eq('id', result.userId)
+      .insert({
+        auth_id: authUser.id,
+        email: authUser.email,
+        name: authUser.user_metadata?.full_name || 
+              authUser.user_metadata?.name || 
+              authUser.email.split('@')[0] || 
+              'User',
+        is_verified: authUser.email_confirmed_at ? true : false,
+        verified_at: authUser.email_confirmed_at || null
+      })
+      .select()
       .single();
 
-    if (userError || !user) {
-      return res.status(404).json({ error: 'User not found' });
-    }
-
-    if (user.auth_id) {
-      const { error: authError } = await supabaseAdmin.auth.admin.updateUserById(
-        user.auth_id,
-        { password: password }
-      );
-
-      if (authError) throw authError;
-    } else {
-      return res.status(400).json({ 
-        error: 'User account not properly set up. Please contact support.' 
+    if (insertError) {
+      console.error('❌ Error creating user:', insertError);
+      return res.status(500).json({ 
+        success: false, 
+        error: 'Failed to sync user: ' + insertError.message 
       });
     }
 
-    res.status(200).json({
-      success: true,
-      message: 'Password reset successfully'
-    });
+    console.log('✅ New custom user created:', newUser.id);
 
-  } catch (error) {
-    res.status(500).json({ error: 'Failed to reset password: ' + error.message });
-  }
-});
-
-// ============================================
-// GET CURRENT USER
-// ============================================
-router.get('/me', authenticate, async (req, res) => {
-  try {
     res.json({
       success: true,
-      user: req.user
+      message: 'User synced successfully',
+      user: newUser
     });
-  } catch (error) {
-    res.status(500).json({ error: 'Failed to get user data' });
-  }
-});
 
-// ============================================
-// LOGOUT
-// ============================================
-router.post('/logout', authenticate, async (req, res) => {
-  try {
-    await supabase.auth.signOut();
-    res.json({ 
-      success: true, 
-      message: 'Logged out successfully' 
-    });
   } catch (error) {
-    res.status(500).json({ error: 'Logout failed: ' + error.message });
+    console.error('❌ Sync user error:', error);
+    res.status(500).json({ 
+      success: false, 
+      error: 'Failed to sync user: ' + error.message 
+    });
   }
 });
 
@@ -478,18 +439,26 @@ router.post('/logout', authenticate, async (req, res) => {
 // ============================================
 router.get('/setup', async (req, res) => {
   try {
-    const { data, error } = await supabase
+    const { data, error } = await supabaseAdmin
       .from('users')
       .select('id')
+      .eq('is_verified', true)
       .limit(1);
 
-    if (error) throw error;
+    if (error) {
+      console.error('❌ Setup check error (custom users):', error);
+      return res.status(500).json({ error: 'Failed to check setup' });
+    }
 
     const hasUser = Array.isArray(data) && data.length > 0;
+
+    console.log('🔍 Setup check - hasUser:', hasUser);
     res.json({ success: true, hasUser });
   } catch (error) {
-    res.status(500).json({ error: 'Failed to check setup: ' + error.message });
+    console.error('Setup check failed:', error);
+    res.status(500).json({ error: 'Failed to check setup' });
   }
 });
+
 
 module.exports = router;

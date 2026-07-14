@@ -1,19 +1,19 @@
 // frontend/src/features/auth/pages/register/VerifyEmail.jsx
 import { useState, useEffect } from 'react';
-import { useNavigate, useLocation } from 'react-router-dom';
+import { useNavigate } from 'react-router-dom';
 import Swal from 'sweetalert2';
 import { FaEnvelope, FaKey, FaSpinner, FaArrowLeft } from 'react-icons/fa';
 import { useAuth } from '../../../../context/AuthContext';
 import './VerifyEmail.css';
 
-const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:5000/api';
-
 const VerifyEmail = () => {
   const navigate = useNavigate();
-  const location = useLocation();
-  const { setUser } = useAuth();
+  const { verifyOTP, resendOTP, registrationData, user } = useAuth();
   
-  const [email, setEmail] = useState('');
+  // ✅ Get data from AuthContext
+  const email = registrationData?.email;
+  const userId = registrationData?.userId;
+  
   const [otp, setOtp] = useState('');
   const [loading, setLoading] = useState(false);
   const [resendLoading, setResendLoading] = useState(false);
@@ -22,12 +22,8 @@ const VerifyEmail = () => {
   const [errors, setErrors] = useState({});
   const [focusedInput, setFocusedInput] = useState(null);
 
-  // Get email from navigation state
   useEffect(() => {
-    const state = location.state;
-    if (state && state.email) {
-      setEmail(state.email);
-    } else {
+    if (!email || !userId) {
       Swal.fire({
         icon: 'error',
         title: 'Session Expired',
@@ -36,10 +32,10 @@ const VerifyEmail = () => {
         showConfirmButton: false,
       });
       navigate('/register');
+      return;
     }
-  }, [location, navigate]);
+  }, [email, userId, navigate]);
 
-  // Timer for resend button
   useEffect(() => {
     if (timer > 0) {
       const interval = setInterval(() => {
@@ -76,44 +72,27 @@ const VerifyEmail = () => {
     });
 
     setLoading(true);
+    
     try {
-      const response = await fetch(`${API_URL}/auth/verify-email`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          email: email,
-          otp: otp
-        })
-      });
-
-      const data = await response.json();
-
-      if (!response.ok) {
-        throw new Error(data.error || 'Verification failed');
-      }
+      const result = await verifyOTP(email, otp, userId);
 
       setLoading(false);
       Swal.close();
 
-      // ✅ Supabase auto-stores session in localStorage!
-      // No need for manual sessionStorage.setItem()
-      
-      // ✅ Just update auth context user state
-      if (data.user && setUser) {
-        setUser(data.user);
+      if (result.success) {
+        await Swal.fire({
+          icon: 'success',
+          title: 'Verified!',
+          text: 'Your email has been verified. Continue to create your password.',
+          timer: 1700,
+          showConfirmButton: false,
+        });
+
+        // ✅ No state needed! AuthContext has the data
+        navigate('/create-password');
+      } else {
+        throw new Error(result.error);
       }
-
-      await Swal.fire({
-        icon: 'success',
-        title: 'Email Verified! 🎉',
-        text: 'Your account has been successfully verified.',
-        timer: 1500,
-        showConfirmButton: false,
-      });
-
-      navigate('/landing', { replace: true });
 
     } catch (error) {
       setLoading(false);
@@ -131,31 +110,23 @@ const VerifyEmail = () => {
     setErrors({});
 
     try {
-      const response = await fetch(`${API_URL}/auth/resend-otp`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({ email })
-      });
+      const result = await resendOTP(email, userId);
 
-      const data = await response.json();
-
-      if (!response.ok) {
-        throw new Error(data.error || 'Failed to resend OTP');
+      if (result.success) {
+        setTimer(60);
+        setCanResend(false);
+        setOtp('');
+        
+        await Swal.fire({
+          icon: 'info',
+          title: 'OTP Resent',
+          text: 'A new verification code has been sent to your email.',
+          timer: 2000,
+          showConfirmButton: false,
+        });
+      } else {
+        throw new Error(result.error);
       }
-
-      setTimer(60);
-      setCanResend(false);
-      setOtp('');
-      
-      await Swal.fire({
-        icon: 'info',
-        title: 'OTP Resent',
-        text: 'A new verification code has been sent to your email.',
-        timer: 2000,
-        showConfirmButton: false,
-      });
 
     } catch (error) {
       Swal.fire({
@@ -221,7 +192,7 @@ const VerifyEmail = () => {
                 Verifying...
               </>
             ) : (
-              'Verify & Continue'
+              'Verify Code'
             )}
           </button>
 
@@ -258,21 +229,6 @@ const VerifyEmail = () => {
               <FaArrowLeft />
               Back to Registration
             </button>
-          </div>
-
-          <div className="info-text">
-            <FaEnvelope className="info-icon" />
-            <p>
-              Didn't receive the code? Check your spam folder or 
-              <button 
-                type="button" 
-                className="resend-link"
-                onClick={handleResend}
-                disabled={resendLoading || !canResend}
-              >
-                request a new one
-              </button>
-            </p>
           </div>
         </form>
       </div>

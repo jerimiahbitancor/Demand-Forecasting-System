@@ -3,11 +3,13 @@ import { useCallback, useEffect, useMemo, useState, useRef } from "react";
 import "./DataManagement.css";
 import Navbar from "../../components/Navbar/Navbar";
 import UploadData from "../components/UploadData";
+import { useAuth } from "../../../context/AuthContext";
 import axios from 'axios';
 
 const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:5000/api';
 
 const DataManagement = () => {
+  const { getToken, isAuthenticated } = useAuth();
   const [uploadedFile, setUploadedFile] = useState(null);
   const [isDragging, setIsDragging] = useState(false);
   const [activeTab, setActiveTab] = useState("upload");
@@ -23,16 +25,9 @@ const DataManagement = () => {
   const [loading, setLoading] = useState(true);
   const [lastRefreshed, setLastRefreshed] = useState(null);
   
-  // Refs for auto-refresh
   const refreshIntervalRef = useRef(null);
   const isMountedRef = useRef(true);
 
-  // Get auth token from sessionStorage
-  const getAuthToken = () => {
-    return sessionStorage.getItem('token') || sessionStorage.getItem('access_token');
-  };
-
-  // Create axios instance
   const apiClient = useMemo(() => {
     const client = axios.create({
       baseURL: API_URL,
@@ -41,15 +36,11 @@ const DataManagement = () => {
       }
     });
 
-    // Add token to requests from sessionStorage
     client.interceptors.request.use(
-      (config) => {
-        const token = getAuthToken();
+      async (config) => {
+        const token = await getToken();
         if (token) {
           config.headers.Authorization = `Bearer ${token}`;
-          console.log('✅ DataManagement - Token added to request:', config.url);
-        } else {
-          console.warn('⚠️ DataManagement - No token found for request:', config.url);
         }
         return config;
       },
@@ -57,7 +48,7 @@ const DataManagement = () => {
     );
 
     return client;
-  }, []);
+  }, [getToken]);
 
   const fetchStats = useCallback(async (showLoader = true) => {
     try {
@@ -65,7 +56,7 @@ const DataManagement = () => {
         setLoading(true);
       }
       
-      const response = await apiClient.get('/uploads/stats/summary');
+      const response = await apiClient.get('/upload/stats/summary');
       
       if (response.data.success && isMountedRef.current) {
         setStats({
@@ -81,11 +72,7 @@ const DataManagement = () => {
       }
     } catch (error) {
       console.error('Error fetching stats:', error);
-      // If unauthorized, clear session
       if (error.response?.status === 401) {
-        sessionStorage.removeItem('token');
-        sessionStorage.removeItem('user');
-        // Stop auto-refresh on auth error
         if (refreshIntervalRef.current) {
           clearInterval(refreshIntervalRef.current);
           refreshIntervalRef.current = null;
@@ -109,52 +96,39 @@ const DataManagement = () => {
     }
   }, [apiClient]);
 
-  // Handle visibility change - pause/resume auto-refresh when tab is hidden/shown
   const handleVisibilityChange = useCallback(() => {
     if (document.hidden) {
-      // Tab is hidden, pause auto-refresh
       if (refreshIntervalRef.current) {
         clearInterval(refreshIntervalRef.current);
         refreshIntervalRef.current = null;
-        console.log('⏸️ Auto-refresh paused (tab hidden)');
       }
     } else {
-      // Tab is visible again, resume auto-refresh
-      if (!refreshIntervalRef.current) {
-        // Immediate refresh when tab becomes visible
+      if (!refreshIntervalRef.current && isAuthenticated) {
         fetchStats(false);
-        
-        // Restart interval
         refreshIntervalRef.current = setInterval(() => {
-          if (isMountedRef.current) {
+          if (isMountedRef.current && isAuthenticated) {
             fetchStats(false);
           }
         }, 5000);
-        console.log('▶️ Auto-refresh resumed (tab visible)');
       }
     }
-  }, [fetchStats]);
+  }, [fetchStats, isAuthenticated]);
 
-  // Setup auto-refresh on mount
   useEffect(() => {
     isMountedRef.current = true;
     
-    // Initial fetch with loader
-    fetchStats(true);
+    if (isAuthenticated) {
+      fetchStats(true);
+      
+      refreshIntervalRef.current = setInterval(() => {
+        if (isMountedRef.current && isAuthenticated) {
+          fetchStats(false);
+        }
+      }, 5000);
+    }
     
-    // Set interval for auto-refresh without loader
-    refreshIntervalRef.current = setInterval(() => {
-      if (isMountedRef.current) {
-        fetchStats(false);
-      }
-    }, 5000); // 5 seconds
-    
-    console.log('🔄 Auto-refresh started (every 5 seconds)');
-    
-    // Add visibility change listener
     document.addEventListener('visibilitychange', handleVisibilityChange);
     
-    // Cleanup on unmount
     return () => {
       isMountedRef.current = false;
       if (refreshIntervalRef.current) {
@@ -162,19 +136,14 @@ const DataManagement = () => {
         refreshIntervalRef.current = null;
       }
       document.removeEventListener('visibilitychange', handleVisibilityChange);
-      console.log('⏹️ Auto-refresh stopped');
     };
-  }, [fetchStats, handleVisibilityChange]);
+  }, [fetchStats, handleVisibilityChange, isAuthenticated]);
 
-  // Force refresh when upload completes
   const handleConfirmUpload = async (file, fileType) => {
     try {
       const formData = new FormData();
       formData.append('file', file);
       formData.append('fileType', fileType);
-
-      const token = getAuthToken();
-      console.log('🔑 DataManagement - Upload with token:', token ? 'Yes' : 'No');
 
       const response = await apiClient.post('/upload', formData, {
         headers: {
@@ -183,7 +152,6 @@ const DataManagement = () => {
       });
 
       if (response.data.success) {
-        // Immediate refresh after upload
         await fetchStats(true);
         return response.data;
       }
@@ -200,7 +168,6 @@ const DataManagement = () => {
     const file = e.dataTransfer.files[0];
     if (file) {
       setUploadedFile(file);
-      console.log("File uploaded:", file.name);
     }
   };
 
@@ -208,7 +175,6 @@ const DataManagement = () => {
     const file = e.target.files[0];
     if (file) {
       setUploadedFile(file);
-      console.log("File selected:", file.name);
     }
   };
 
@@ -224,21 +190,18 @@ const DataManagement = () => {
 
   const handleDiscard = () => {
     setUploadedFile(null);
-    console.log("Upload discarded");
   };
 
   const handleFixIssue = (row) => {
-    console.log(`Fixing issue at row ${row}`);
+    console.log('Fixing issue at row', row);
   };
 
-  // Define tabs configuration
   const tabs = [
     { id: "upload", label: "Sales Data Upload" },
     { id: "mapping", label: "Menu & Ingredient Mapping" },
     { id: "historical", label: "Historical Data Storage" },
   ];
 
-  // Format last sync date
   const formatLastSync = (dateString) => {
     if (!dateString) return 'N/A';
     try {
@@ -260,7 +223,6 @@ const DataManagement = () => {
     }
   };
 
-  // Format last refreshed time
   const formatLastRefreshed = (date) => {
     if (!date) return 'Waiting...';
     return date.toLocaleTimeString('en-US', {
@@ -270,7 +232,6 @@ const DataManagement = () => {
     });
   };
 
-  // Get status text
   const getStatusText = () => {
     if (loading) return 'Loading...';
     if (stats.total_uploads === 0) return 'No uploads yet';
@@ -281,7 +242,6 @@ const DataManagement = () => {
     <div className="data-management-wrapper">
       <Navbar />
 
-      {/* Main Content */}
       <main className="data-management-main">
         <div className="data-management-header">
           <div>
@@ -290,12 +250,15 @@ const DataManagement = () => {
               Upload, manage, and review your sales and mapping datasets.
             </p>
           </div>
-          {/* Auto-refresh indicator */}
-         
+          <div className="auto-refresh-indicator">
+            <span className="refresh-dot active"></span>
+            <span className="refresh-status">
+            </span>
+          
+          </div>
         </div>
 
         <div className="content-grid">
-          {/* Summary Cards - Dynamic */}
           <div className="summary-cards">
             <div className="summary-card">
               <div className="summary-card-content">
@@ -320,7 +283,6 @@ const DataManagement = () => {
             </div>
           </div>
 
-          {/* Tabbed Container */}
           <UploadData  
             activeTab={activeTab} 
             setActiveTab={setActiveTab}
@@ -338,8 +300,6 @@ const DataManagement = () => {
           />
         </div>
       </main>
-
-  
     </div>
   );
 };

@@ -21,20 +21,31 @@ router.post(
       const { fileType } = req.body;
       const file = req.file;
       
-      const userId = req.user?.id || null;
+      const userId = req.user?.user_id || req.user?.id || null;
       
       if (!file) {
         return res.status(400).json({ error: 'No file uploaded' });
       }
 
-      console.log('📄 Processing file:', file.originalname, 'Type:', fileType);
-      console.log('👤 User ID:', userId);
+      console.log('Processing file:', file.originalname, 'Type:', fileType);
+      console.log('User ID:', userId);
 
-      // Check for duplicate upload (same filename within last hour)
+      // Get numeric ID first to validate user exists
+      const numericId = await uploadService.getNumericUserId(userId);
+      console.log('Numeric ID:', numericId);
+      
+      if (!numericId) {
+        return res.status(400).json({
+          success: false,
+          error: 'User not found in system',
+          message: 'Please login again or contact support.'
+        });
+      }
+
       try {
-        const isDuplicate = await uploadService.checkDuplicateUpload(file.originalname, userId);
+        const isDuplicate = await uploadService.checkDuplicateUpload(file.originalname, numericId);
         if (isDuplicate) {
-          console.log(`⚠️ Duplicate upload detected: ${file.originalname} for user ${userId}`);
+          console.log('Duplicate upload detected:', file.originalname);
           return res.status(409).json({
             success: false,
             error: 'Duplicate upload detected',
@@ -43,17 +54,12 @@ router.post(
         }
       } catch (dupError) {
         console.error('Error checking duplicate:', dupError);
-        // Continue with upload if duplicate check fails (fail open)
       }
 
-      // Check if already processing
-      if (uploadService.isUploadProcessing(file.originalname, userId)) {
-        console.log(`⏳ Upload already in progress: ${file.originalname}`);
-        return res.status(409).json({
-          success: false,
-          error: 'Upload in progress',
-          message: 'This file is already being processed. Please wait.'
-        });
+      // Check if already processing - clear stale lock
+      if (uploadService.isUploadProcessing(file.originalname, numericId)) {
+        console.log('Stale processing lock found, clearing...');
+        uploadService.clearProcessing(file.originalname, numericId);
       }
 
       const processedData = await fileProcessor.processFile(
@@ -62,29 +68,27 @@ router.post(
         file.mimetype
       );
 
-      console.log('📊 File processed:', processedData.rowCount, 'rows');
+      console.log('File processed:', processedData.rowCount, 'rows');
 
       let result;
       let uploadId = null;
 
       if (fileType === 'menu') {
-        // Mark as processing
-        uploadService.markUploadProcessing(file.originalname, userId);
+        uploadService.markUploadProcessing(file.originalname, numericId);
         
         try {
-          result = await menuService.processMenuData(processedData.data, userId);
+          result = await menuService.processMenuData(processedData.data, numericId);
           
-          console.log('✅ Menu data processed:', {
+          console.log('Menu data processed:', {
             totalRows: result.validation.totalRows,
             validRows: result.validation.validRows,
             invalidRows: result.validation.invalidRows,
             productsInserted: result.productsInserted || 0,
             ingredientsInserted: result.ingredientsInserted || 0,
-            userId: userId
+            userId: numericId
           });
 
-          // Mark as complete
-          uploadService.markUploadComplete(file.originalname, userId);
+          uploadService.markUploadComplete(file.originalname, numericId);
 
           return res.status(201).json({
             success: true,
@@ -98,18 +102,15 @@ router.post(
               productsInserted: result.productsInserted || 0,
               ingredientsInserted: result.ingredientsInserted || 0,
               productIngredientRelations: result.productIngredientRelations || 0,
-              userId: userId
+              userId: numericId
             }
           });
         } catch (menuError) {
-          // Mark as complete on error
-          uploadService.markUploadComplete(file.originalname, userId);
+          uploadService.markUploadComplete(file.originalname, numericId);
           throw menuError;
         }
       } else {
-        // SALES DATA - Use updated validation with new columns
-        // Mark as processing
-        uploadService.markUploadProcessing(file.originalname, userId);
+        uploadService.markUploadProcessing(file.originalname, numericId);
         
         try {
           const validation = await uploadService.validateSalesData(
@@ -130,7 +131,7 @@ router.post(
               data: processedData.data,
               validation: validation
             },
-            userId
+            numericId
           );
 
           const summary = {
@@ -141,10 +142,9 @@ router.post(
             uploadDate: validation.uploadDate || new Date().toISOString().split('T')[0]
           };
 
-          console.log('✅ Sales data processed:', summary);
+          console.log('Sales data processed:', summary);
 
-          // Mark as complete
-          uploadService.markUploadComplete(file.originalname, userId);
+          uploadService.markUploadComplete(file.originalname, numericId);
 
           return res.status(201).json({
             success: true,
@@ -153,22 +153,20 @@ router.post(
             summary: summary
           });
         } catch (salesError) {
-          // Mark as complete on error
-          uploadService.markUploadComplete(file.originalname, userId);
+          uploadService.markUploadComplete(file.originalname, numericId);
           throw salesError;
         }
       }
 
     } catch (error) {
-      console.error('❌ Upload error:', error);
+      console.error('Upload error:', error);
       
-      // Clean up processing lock if it exists
       if (req.file) {
-        const userId = req.user?.id || null;
-        uploadService.markUploadComplete(req.file.originalname, userId);
+        const userId = req.user?.user_id || req.user?.id || null;
+        const numericId = await uploadService.getNumericUserId(userId);
+        uploadService.markUploadComplete(req.file.originalname, numericId || userId);
       }
       
-      // Handle duplicate error
       if (error.message && error.message.includes('Duplicate upload')) {
         return res.status(409).json({
           success: false,
@@ -202,7 +200,6 @@ router.post(
         });
       }
       
-      // Check for duplicate from the service
       if (error.message && error.message.includes('already been uploaded')) {
         return res.status(409).json({ 
           success: false,
@@ -223,10 +220,10 @@ router.post(
 // GET /api/upload - Get all uploads
 router.get('/', authenticate, async (req, res) => {
   try {
-    const userId = req.user?.id || null;
+    const userId = req.user?.user_id || req.user?.id || null;
     const { status, limit = 50, offset = 0 } = req.query;
     
-    console.log('📋 Fetching uploads for user:', userId);
+    console.log('Fetching uploads for user:', userId);
     
     const uploads = await uploadService.getUploads({
       userId,
@@ -257,7 +254,7 @@ router.get('/', authenticate, async (req, res) => {
 // GET /api/upload/:id - Get specific upload
 router.get('/:id', authenticate, async (req, res) => {
   try {
-    const userId = req.user?.id || null;
+    const userId = req.user?.user_id || req.user?.id || null;
     const uploadId = parseInt(req.params.id);
     
     if (isNaN(uploadId)) {
@@ -290,10 +287,10 @@ router.get('/:id', authenticate, async (req, res) => {
   }
 });
 
-// PUT /api/upload/:id - Update upload (status, etc.)
+// PUT /api/upload/:id - Update upload
 router.put('/:id', authenticate, async (req, res) => {
   try {
-    const userId = req.user?.id || null;
+    const userId = req.user?.user_id || req.user?.id || null;
     const uploadId = parseInt(req.params.id);
     const { status, errorMessage } = req.body;
     
@@ -343,7 +340,7 @@ router.put('/:id', authenticate, async (req, res) => {
 // DELETE /api/upload/:id - Delete upload
 router.delete('/:id', authenticate, async (req, res) => {
   try {
-    const userId = req.user?.id || null;
+    const userId = req.user?.user_id || req.user?.id || null;
     const uploadId = parseInt(req.params.id);
     
     if (isNaN(uploadId)) {
@@ -379,9 +376,9 @@ router.delete('/:id', authenticate, async (req, res) => {
 // GET /api/upload/stats/summary - Get upload statistics
 router.get('/stats/summary', authenticate, async (req, res) => {
   try {
-    const userId = req.user?.id || null;
+    const userId = req.user?.user_id || req.user?.id || null;
     
-    console.log('📊 Fetching stats for user:', userId);
+    console.log('Fetching stats for user:', userId);
     
     const stats = await uploadService.getUploadStats(userId);
     
@@ -399,10 +396,41 @@ router.get('/stats/summary', authenticate, async (req, res) => {
   }
 });
 
+// GET /api/upload/status/check - Check if user has uploaded data
+router.get('/status/check', authenticate, async (req, res) => {
+  try {
+    const userId = req.user?.user_id || req.user?.id || null;
+    
+    if (!userId) {
+      return res.status(401).json({
+        success: false,
+        error: 'User not authenticated'
+      });
+    }
+
+    const uploads = await uploadService.getUploads({
+      userId,
+      limit: 1,
+      offset: 0
+    });
+
+    res.json({
+      success: true,
+      hasUploaded: uploads && uploads.length > 0
+    });
+  } catch (error) {
+    console.error('Error checking upload status:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Failed to check upload status'
+    });
+  }
+});
+
 // GET /api/upload/check-duplicate - Check if upload exists
 router.get('/check-duplicate', authenticate, async (req, res) => {
   try {
-    const userId = req.user?.id || null;
+    const userId = req.user?.user_id || req.user?.id || null;
     const { filename } = req.query;
     
     if (!filename) {

@@ -1,20 +1,5 @@
-const bcrypt = require('bcrypt');
-const { supabase } = require('../config/supabase');
-const { generateVerificationCode, sendVerificationCode } = require('../services/emailService');
-
-const dayjs = require('dayjs');
-const utc = require('dayjs/plugin/utc');
-const timezone = require('dayjs/plugin/timezone');
-dayjs.extend(utc);
-dayjs.extend(timezone);
-const PH_TZ = 'Asia/Manila';
-
-const nowPH = () => dayjs().tz(PH_TZ);
-const toPH = (dbTimestamp) => {
-  const hasOffset = /Z|[+-]\d{2}:\d{2}$/.test(dbTimestamp);
-  const safe = hasOffset ? dbTimestamp : `${dbTimestamp}Z`;
-  return dayjs(safe).tz(PH_TZ);
-};
+const { supabase, supabaseAdmin } = require('../config/supabase');
+const { generateOTP, sendOTPEmail, toPH, nowPH } = require('../services/otpService');
 
 // ============ SEND VERIFICATION CODE ============
 const sendCode = async (req, res) => {
@@ -37,7 +22,7 @@ const sendCode = async (req, res) => {
       return res.status(404).json({ error: 'No account found with that email' });
     }
 
-    const verificationCode = generateVerificationCode();
+    const verificationCode = generateOTP();
     const expiresAt = nowPH().add(15, 'minute').toISOString();
 
     const { error: upsertError } = await supabase
@@ -57,7 +42,7 @@ const sendCode = async (req, res) => {
       throw upsertError;
     }
 
-    await sendVerificationCode(normalizedEmail, verificationCode);
+    await sendOTPEmail(normalizedEmail, verificationCode, 'reset');
 
     res.status(200).json({
       success: true,
@@ -147,8 +132,8 @@ const resetPassword = async (req, res) => {
     return res.status(400).json({ error: 'Email, code, and password are required' });
   }
 
-  if (password.length < 12) {
-    return res.status(400).json({ error: 'Password must be at least 12 characters' });
+  if (password.length < 8) {
+    return res.status(400).json({ error: 'Password must be at least 8 characters' });
   }
 
   const normalizedEmail = email.trim().toLowerCase();
@@ -156,7 +141,7 @@ const resetPassword = async (req, res) => {
   try {
     const { data: user, error: userError } = await supabase
       .from('users')
-      .select('id')
+      .select('id, auth_id')
       .ilike('email', normalizedEmail)
       .single();
 
@@ -193,13 +178,48 @@ const resetPassword = async (req, res) => {
       return res.status(401).json({ error: 'Invalid code' });
     }
 
-    const saltRounds = 10;
-    const hashedPassword = await bcrypt.hash(password, saltRounds);
+    if (!user.auth_id) {
+      const { data: existingAuth, error: existingAuthError } = await supabaseAdmin.auth.admin.getUserByEmail(normalizedEmail);
+      if (existingAuthError) {
+        throw existingAuthError;
+      }
 
-    const { error: updateError } = await supabase
-      .from('users')
-      .update({ hashed_password: hashedPassword })
-      .eq('id', user.id);
+      if (existingAuth && existingAuth.user) {
+        user.auth_id = existingAuth.user.id;
+        const { error: syncError } = await supabase
+          .from('users')
+          .update({ auth_id: user.auth_id })
+          .eq('id', user.id);
+
+        if (syncError) {
+          throw syncError;
+        }
+      } else {
+        const { data: authUser, error: authUserError } = await supabaseAdmin.auth.admin.createUser({
+          email: normalizedEmail,
+          password,
+          email_confirm: true,
+        });
+
+        if (authUserError) {
+          throw authUserError;
+        }
+
+        user.auth_id = authUser.user.id;
+        const { error: syncError } = await supabase
+          .from('users')
+          .update({ auth_id: user.auth_id })
+          .eq('id', user.id);
+
+        if (syncError) {
+          throw syncError;
+        }
+      }
+    }
+
+    const { error: updateError } = await supabaseAdmin.auth.admin.updateUserById(user.auth_id, {
+      password,
+    });
 
     if (updateError) {
       throw updateError;

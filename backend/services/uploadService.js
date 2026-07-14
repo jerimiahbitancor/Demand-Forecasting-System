@@ -7,9 +7,8 @@ class UploadService {
       uploads: [],
       products: []
     };
-    // Track in-progress uploads to prevent duplicates
     this.processingUploads = new Set();
-    console.log(`📦 UploadService: Supabase ${isConfigured ? '✅ Connected' : '❌ Using Memory Fallback'}`);
+    console.log(`UploadService: Supabase ${isConfigured ? 'Connected' : 'Using Memory Fallback'}`);
   }
 
   isSupabaseReady() {
@@ -17,35 +16,80 @@ class UploadService {
   }
 
   isValidUserId(userId) {
-    return userId && typeof userId === 'number' && Number.isInteger(userId) && userId > 0;
+    if (!userId) return false;
+    if (typeof userId === 'number' && Number.isInteger(userId) && userId > 0) {
+      return true;
+    }
+    if (typeof userId === 'string' && userId.length === 36) {
+      return true;
+    }
+    return false;
   }
 
-  // Check if an upload is already being processed
+  async getNumericUserId(userId) {
+    if (!userId) return null;
+    
+    if (typeof userId === 'number') {
+      return userId;
+    }
+    
+    if (typeof userId === 'string' && userId.length === 36) {
+      try {
+        const { data, error } = await supabase
+          .from('users')
+          .select('id')
+          .eq('auth_id', userId)
+          .maybeSingle();
+        
+        if (!error && data) {
+          console.log('Found user in custom table with ID:', data.id);
+          return data.id;
+        }
+        
+        console.log('User not found in custom table for auth_id:', userId);
+        return null;
+      } catch (error) {
+        console.error('Error getting numeric user ID:', error);
+        return null;
+      }
+    }
+    
+    return null;
+  }
+
+  getProcessingKey(filename, userId) {
+    return `${userId}-${filename}`;
+  }
+
   isUploadProcessing(filename, userId) {
-    const key = `${userId}-${filename}`;
+    const key = this.getProcessingKey(filename, userId);
     return this.processingUploads.has(key);
   }
 
-  // Mark upload as processing
   markUploadProcessing(filename, userId) {
-    const key = `${userId}-${filename}`;
+    const key = this.getProcessingKey(filename, userId);
     this.processingUploads.add(key);
+    console.log(`Marked as processing: ${key}`);
   }
 
-  // Mark upload as completed
   markUploadComplete(filename, userId) {
-    const key = `${userId}-${filename}`;
+    const key = this.getProcessingKey(filename, userId);
     this.processingUploads.delete(key);
+    console.log(`Marked as complete: ${key}`);
   }
 
-  // Get current date in Philippines time (UTC+8) as ISO string
+  clearProcessing(filename, userId) {
+    const key = this.getProcessingKey(filename, userId);
+    this.processingUploads.delete(key);
+    console.log(`Cleared processing: ${key}`);
+  }
+
   getCurrentDatePhilippines() {
     const now = new Date();
     const phTime = new Date(now.getTime() + (8 * 60 * 60 * 1000));
     return phTime.toISOString();
   }
 
-  // Get current date for display in Philippines time
   getCurrentDatePhilippinesDisplay() {
     const now = new Date();
     const options = {
@@ -61,7 +105,6 @@ class UploadService {
     return now.toLocaleString('en-PH', options);
   }
 
-  // Extract date from filename - KEPT FOR REFERENCE BUT NOT USED FOR upload_date
   extractDateFromFilename(filename) {
     try {
       const nameWithoutExt = filename.replace(/\.[^/.]+$/, '');
@@ -92,30 +135,30 @@ class UploadService {
     }
   }
 
-  // Check for duplicate upload (same filename and user within last hour)
   async checkDuplicateUpload(filename, userId) {
     try {
+      const numericId = await this.getNumericUserId(userId);
+      if (!numericId) {
+        return false;
+      }
+
       if (!this.isSupabaseReady()) {
-        // Check memory store for duplicates
         const existing = this.memoryStore.uploads.find(
-          u => u.filename === filename && u.user_id === userId
+          u => u.filename === filename && u.user_id === numericId
         );
         return !!existing;
       }
 
-      // Check for existing upload with same filename in the last hour
       const oneHourAgo = new Date();
       oneHourAgo.setHours(oneHourAgo.getHours() - 1);
 
-      let query = supabase
+      const { data, error } = await supabase
         .from('uploads')
         .select('id, filename, upload_date')
         .eq('filename', filename)
-        .eq('user_id', userId)
+        .eq('user_id', numericId)
         .gte('upload_date', oneHourAgo.toISOString())
         .limit(1);
-
-      const { data, error } = await query;
 
       if (error) {
         console.error('Error checking duplicate:', error);
@@ -129,7 +172,6 @@ class UploadService {
     }
   }
 
-  // Normalize column name
   normalizeColumnName(name) {
     if (!name) return '';
     let normalized = name.toString().trim().replace(/\s+/g, ' ');
@@ -148,7 +190,6 @@ class UploadService {
     return mappings[lowerKey] || normalized;
   }
 
-  // Validate file columns with flexible matching
   validateFileColumns(headers, requiredColumns, fileType) {
     const missingColumns = [];
     const validColumns = [];
@@ -192,7 +233,6 @@ class UploadService {
     };
   }
 
-  // Validate file data rows - ONLY VALIDATE, NO TOTALS
   validateFileData(data, requiredColumns, columnMap) {
     const errors = [];
     let validRows = 0;
@@ -239,7 +279,6 @@ class UploadService {
     };
   }
 
-  // Process and validate sales data
   async validateSalesData(data, filename) {
     const requiredColumns = [
       'Item name',
@@ -253,8 +292,8 @@ class UploadService {
     
     const headers = data.length > 0 ? Object.keys(data[0]) : [];
     
-    console.log('📋 Headers found:', headers);
-    console.log('📋 Required columns:', requiredColumns);
+    console.log('Headers found:', headers);
+    console.log('Required columns:', requiredColumns);
     
     if (data.length === 0) {
       return {
@@ -307,39 +346,46 @@ class UploadService {
     };
   }
 
-  // Save upload record with duplicate prevention
   async saveUploadRecord(fileData, processedData, userId = null) {
+    let filename = fileData.originalName || fileData.filename;
+    let numericId = null;
+    
     try {
-      const filename = fileData.originalName || fileData.filename;
+      numericId = await this.getNumericUserId(userId);
       
-      // Check for duplicate upload
-      const isDuplicate = await this.checkDuplicateUpload(filename, userId);
+      console.log('Saving upload - userId:', userId, 'numericId:', numericId);
+      
+      if (!numericId) {
+        console.error('User not found in custom users table.');
+        throw new Error('User not found. Please login again.');
+      }
+
+      // Check if already processing - if so, clear it first (stale lock)
+      if (this.isUploadProcessing(filename, numericId)) {
+        console.log(`Stale processing lock found for ${filename}, clearing...`);
+        this.clearProcessing(filename, numericId);
+      }
+
+      const isDuplicate = await this.checkDuplicateUpload(filename, numericId);
       if (isDuplicate) {
-        console.log(`⚠️ Duplicate upload detected: ${filename} for user ${userId}`);
+        console.log(`Duplicate upload detected: ${filename}`);
         throw new Error('Duplicate upload detected. This file has already been uploaded recently.');
       }
 
-      // Check if already processing
-      if (this.isUploadProcessing(filename, userId)) {
-        console.log(`⏳ Upload already in progress: ${filename}`);
-        throw new Error('Upload already in progress. Please wait.');
-      }
-
-      // Mark as processing
-      this.markUploadProcessing(filename, userId);
+      this.markUploadProcessing(filename, numericId);
 
       const uploadDate = this.getCurrentDatePhilippines();
       const philippinesDisplayTime = this.getCurrentDatePhilippinesDisplay();
       
       const validation = await this.validateSalesData(processedData.data || [], filename);
       
-      console.log('📋 Validation Results:');
+      console.log('Validation Results:');
       console.log(`  Filename: ${filename}`);
       console.log(`  Upload Date (PH Time): ${philippinesDisplayTime}`);
       console.log(`  Total Rows: ${validation.totalRows}`);
       console.log(`  Valid Rows: ${validation.validRows}`);
       console.log(`  Invalid Rows: ${validation.invalidRows}`);
-      console.log(`  Valid: ${validation.isValid ? '✅' : '❌'}`);
+      console.log(`  Valid: ${validation.isValid ? 'Yes' : 'No'}`);
       
       if (validation.errors.length > 0) {
         console.log('  Errors:', validation.errors);
@@ -366,9 +412,9 @@ class UploadService {
         })
       };
 
-      if (this.isValidUserId(userId)) {
-        insertData.user_id = userId;
-        console.log(`👤 Saving upload for user_id: ${userId}`);
+      if (numericId) {
+        insertData.user_id = numericId;
+        console.log(`Saving upload for user_id: ${numericId}`);
       }
 
       let result;
@@ -379,9 +425,10 @@ class UploadService {
           created_at: new Date().toISOString()
         };
         this.memoryStore.uploads.push(upload);
-        console.log('📝 Upload saved to memory (ID:', upload.id, ')');
+        console.log('Upload saved to memory (ID:', upload.id, ')');
         result = upload.id;
       } else {
+        console.log('Inserting into Supabase:', insertData);
         const { data, error } = await supabase
           .from('uploads')
           .insert(insertData)
@@ -389,34 +436,44 @@ class UploadService {
           .single();
 
         if (error) {
-          console.error('❌ Supabase insert error:', error);
+          console.error('Supabase insert error:', error);
           throw error;
         }
         
-        console.log(`✅ Upload saved to Supabase (ID: ${data.id})`);
+        console.log(`Upload saved to Supabase (ID: ${data.id})`);
         console.log(`   Upload Date (PH Time): ${philippinesDisplayTime}`);
         result = data.id;
       }
 
-      // Mark as complete
-      this.markUploadComplete(filename, userId);
+      this.markUploadComplete(filename, numericId);
       return result;
 
     } catch (error) {
-      // Mark as complete even on error to free the lock
-      const filename = fileData.originalName || fileData.filename;
-      this.markUploadComplete(filename, userId);
-      console.error('❌ Error saving upload record:', error);
+      // Always clear processing lock on error
+      if (filename && numericId) {
+        this.clearProcessing(filename, numericId);
+      } else if (filename && userId) {
+        const numId = await this.getNumericUserId(userId);
+        if (numId) {
+          this.clearProcessing(filename, numId);
+        }
+      }
+      console.error('Error saving upload record:', error);
       throw error;
     }
   }
 
   async getUploads(options = {}) {
     try {
+      const numericId = await this.getNumericUserId(options.userId);
+
       if (!this.isSupabaseReady()) {
         let uploads = [...this.memoryStore.uploads].sort((a, b) => new Date(b.upload_date || 0) - new Date(a.upload_date || 0));
         if (options.status) {
           uploads = uploads.filter((upload) => upload.status === options.status);
+        }
+        if (numericId) {
+          uploads = uploads.filter((upload) => upload.user_id === numericId);
         }
         const offset = Number(options.offset) || 0;
         const limit = Number(options.limit) || 50;
@@ -428,9 +485,9 @@ class UploadService {
         .select('*')
         .order('upload_date', { ascending: false });
 
-      if (this.isValidUserId(options.userId)) {
-        query = query.eq('user_id', options.userId);
-        console.log(`🔍 Filtering uploads for user_id: ${options.userId}`);
+      if (numericId) {
+        query = query.eq('user_id', numericId);
+        console.log(`Filtering uploads for user_id: ${numericId}`);
       }
 
       if (options.status) {
@@ -466,6 +523,8 @@ class UploadService {
 
   async getUploadById(id, userId = null) {
     try {
+      const numericId = await this.getNumericUserId(userId);
+
       if (!this.isSupabaseReady()) {
         return this.memoryStore.uploads.find((upload) => upload.id === Number(id)) || null;
       }
@@ -475,11 +534,11 @@ class UploadService {
         .select('*')
         .eq('id', id);
 
-      if (this.isValidUserId(userId)) {
-        query = query.eq('user_id', userId);
+      if (numericId) {
+        query = query.eq('user_id', numericId);
       }
 
-      const { data, error } = await query.single();
+      const { data, error } = await query.maybeSingle();
 
       if (error) {
         if (error.code === 'PGRST116') {
@@ -503,10 +562,11 @@ class UploadService {
 
   async updateUploadStatus(id, status, errorMessage = null, userId = null) {
     try {
+      const numericId = await this.getNumericUserId(userId);
       const updateData = { status: status };
 
       if (errorMessage) {
-        const existing = await this.getUploadById(id, userId);
+        const existing = await this.getUploadById(id, numericId);
         let metadata = {};
         if (existing && existing.error_message) {
           try {
@@ -530,11 +590,11 @@ class UploadService {
         .update(updateData)
         .eq('id', id);
 
-      if (this.isValidUserId(userId)) {
-        query = query.eq('user_id', userId);
+      if (numericId) {
+        query = query.eq('user_id', numericId);
       }
 
-      const { data, error } = await query.select().single();
+      const { data, error } = await query.select().maybeSingle();
 
       if (error) throw error;
       return data;
@@ -546,7 +606,8 @@ class UploadService {
 
   async deleteUpload(id, userId = null) {
     try {
-      const upload = await this.getUploadById(id, userId);
+      const numericId = await this.getNumericUserId(userId);
+      const upload = await this.getUploadById(id, numericId);
       if (!upload) {
         throw new Error('Upload not found');
       }
@@ -561,8 +622,8 @@ class UploadService {
         .delete()
         .eq('id', id);
 
-      if (this.isValidUserId(userId)) {
-        query = query.eq('user_id', userId);
+      if (numericId) {
+        query = query.eq('user_id', numericId);
       }
 
       const { error } = await query;
@@ -577,16 +638,19 @@ class UploadService {
 
   async getUploadStats(userId = null) {
     try {
+      const numericId = await this.getNumericUserId(userId);
+
       if (!this.isSupabaseReady()) {
         const uploads = this.memoryStore.uploads;
+        const filtered = numericId ? uploads.filter(u => u.user_id === numericId) : uploads;
         const stats = {
-          total_uploads: uploads.length,
-          processed: uploads.filter((upload) => upload.status === 'processed').length,
-          pending: uploads.filter((upload) => upload.status === 'pending').length,
-          failed: uploads.filter((upload) => upload.status === 'failed').length,
-          sales_records: uploads.reduce((sum, upload) => sum + (upload.row_count || 0), 0),
+          total_uploads: filtered.length,
+          processed: filtered.filter((upload) => upload.status === 'processed').length,
+          pending: filtered.filter((upload) => upload.status === 'pending').length,
+          failed: filtered.filter((upload) => upload.status === 'failed').length,
+          sales_records: filtered.reduce((sum, upload) => sum + (upload.row_count || 0), 0),
           menu_items: this.memoryStore.products.length,
-          last_sync: uploads[uploads.length - 1]?.upload_date || null
+          last_sync: filtered[filtered.length - 1]?.upload_date || null
         };
         return stats;
       }
@@ -595,9 +659,9 @@ class UploadService {
         .from('uploads')
         .select('status, row_count, upload_date');
 
-      if (this.isValidUserId(userId)) {
-        query = query.eq('user_id', userId);
-        console.log(`🔍 Fetching stats for user_id: ${userId}`);
+      if (numericId) {
+        query = query.eq('user_id', numericId);
+        console.log(`Fetching stats for user_id: ${numericId}`);
       }
 
       const { data: uploads = [], error: uploadError } = await query;
@@ -608,8 +672,8 @@ class UploadService {
         .from('products')
         .select('*', { count: 'exact', head: true });
 
-      if (this.isValidUserId(userId)) {
-        menuQuery = menuQuery.eq('user_id', userId);
+      if (numericId) {
+        menuQuery = menuQuery.eq('user_id', numericId);
       }
 
       let menuItemsCount = 0;
@@ -633,7 +697,7 @@ class UploadService {
         last_sync: uploads[uploads.length - 1]?.upload_date || new Date().toISOString()
       };
 
-      console.log('📊 Stats calculated:', stats);
+      console.log('Stats calculated:', stats);
       return stats;
     } catch (error) {
       console.error('Error fetching stats:', error);
