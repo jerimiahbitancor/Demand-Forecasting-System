@@ -516,7 +516,6 @@ const ChefDuoLanding = () => {
 
        */}
       
-      <Footer />
 
       {/* Terms and Conditions Modal */}
     {/* Terms and Conditions Modal */}
