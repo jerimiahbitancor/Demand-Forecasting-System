@@ -3,54 +3,86 @@ const { supabase, isConfigured } = require('../config/supabase');
 
 class MappingService {
   constructor() {
-    console.log(`📦 MappingService: Supabase ${isConfigured ? '✅ Connected' : '❌ Using Memory Fallback'}`);
+    console.log(`MappingService: Supabase ${isConfigured ? 'Connected' : 'Using Memory Fallback'}`);
   }
 
   isSupabaseReady() {
     return Boolean(isConfigured && supabase && typeof supabase.from === 'function');
   }
 
-isValidUserId(userId) {
-  if (!userId) return false;
-  if (typeof userId === 'number' && Number.isInteger(userId) && userId > 0) {
-    return true;
+  isValidUserId(userId) {
+    if (!userId) return false;
+    if (typeof userId === 'number' && Number.isInteger(userId) && userId > 0) {
+      return true;
+    }
+    if (typeof userId === 'string' && userId.length === 36) {
+      return true;
+    }
+    return false;
   }
-  if (typeof userId === 'string' && userId.length === 36) {
-    return true;
-  }
-  return false;
-}
 
-  // Session storage helpers
+  async getNumericUserId(userId) {
+    if (!userId) return null;
+    
+    if (typeof userId === 'number') {
+      return userId;
+    }
+    
+    if (typeof userId === 'string') {
+      const num = parseInt(userId);
+      if (!isNaN(num) && num > 0) {
+        return num;
+      }
+      if (userId.length === 36) {
+        try {
+          const { data, error } = await supabase
+            .from('users')
+            .select('id')
+            .eq('auth_id', userId)
+            .maybeSingle();
+          
+          if (!error && data) {
+            return data.id;
+          }
+          return null;
+        } catch (error) {
+          console.error('Error getting numeric user ID:', error);
+          return null;
+        }
+      }
+    }
+    
+    return null;
+  }
+
   getSessionKey(userId, key) {
     return `mapping_${userId}_${key}`;
   }
 
   saveToSession(userId, key, data) {
     try {
-      if (!userId) return;
+      if (!userId || typeof sessionStorage === 'undefined') return;
       const sessionKey = this.getSessionKey(userId, key);
       sessionStorage.setItem(sessionKey, JSON.stringify(data));
     } catch (error) {
-      console.warn('Failed to save to sessionStorage:', error);
+      // Silently fail - sessionStorage not available in Node.js
     }
   }
 
   getFromSession(userId, key) {
     try {
-      if (!userId) return null;
+      if (!userId || typeof sessionStorage === 'undefined') return null;
       const sessionKey = this.getSessionKey(userId, key);
       const stored = sessionStorage.getItem(sessionKey);
       return stored ? JSON.parse(stored) : null;
     } catch (error) {
-      console.warn('Failed to read from sessionStorage:', error);
       return null;
     }
   }
 
   clearSession(userId) {
     try {
-      if (!userId) return;
+      if (!userId || typeof sessionStorage === 'undefined') return;
       const keys = [
         'products',
         'categories',
@@ -64,25 +96,23 @@ isValidUserId(userId) {
         sessionStorage.removeItem(this.getSessionKey(userId, key));
       });
     } catch (error) {
-      console.warn('Failed to clear sessionStorage:', error);
+      // Silently fail
     }
   }
 
   async getProducts(userId, category = null, search = null, forceRefresh = false) {
     try {
-      // Validate userId
-      if (!this.isValidUserId(userId)) {
-        console.warn('⚠️ Invalid userId provided to getProducts');
+      const numericId = await this.getNumericUserId(userId);
+      if (!numericId) {
+        console.warn('Invalid userId provided to getProducts');
         return [];
       }
 
-      // Try to get from sessionStorage first (unless force refresh)
       if (!forceRefresh) {
-        const cached = this.getFromSession(userId, 'products');
+        const cached = this.getFromSession(numericId, 'products');
         if (cached && Array.isArray(cached)) {
-          console.log(`📦 Using cached products from sessionStorage (${cached.length} items)`);
+          console.log(`Using cached products from sessionStorage (${cached.length} items)`);
           
-          // Filter cached data if category or search is specified
           let filtered = [...cached];
           if (category && category !== 'All') {
             filtered = filtered.filter(item => item.category === category);
@@ -97,13 +127,12 @@ isValidUserId(userId) {
         }
       }
 
-      // Fetch from Supabase
       if (!this.isSupabaseReady()) {
-        console.warn('⚠️ Supabase not ready, returning empty array');
+        console.warn('Supabase not ready, returning empty array');
         return [];
       }
 
-      console.log(`🔍 Fetching products for user_id: ${userId}${forceRefresh ? ' (forced refresh)' : ''}`);
+      console.log(`Fetching products for user_id: ${numericId}${forceRefresh ? ' (forced refresh)' : ''}`);
 
       let query = supabase
         .from('products')
@@ -118,7 +147,7 @@ isValidUserId(userId) {
             )
           )
         `)
-        .eq('user_id', userId)
+        .eq('user_id', numericId)
         .order('name');
 
       if (category && category !== 'All') {
@@ -132,53 +161,50 @@ isValidUserId(userId) {
       const { data, error } = await query;
       
       if (error) {
-        console.error('❌ Supabase error fetching products:', error);
+        console.error('Supabase error fetching products:', error);
         throw error;
       }
 
-      // Save to sessionStorage
       if (data && Array.isArray(data)) {
-        this.saveToSession(userId, 'products', data);
-        this.saveToSession(userId, 'totalProducts', data.length);
+        this.saveToSession(numericId, 'products', data);
+        this.saveToSession(numericId, 'totalProducts', data.length);
         
-        // Also save categories
         const categories = ['All', ...new Set(data.map(item => item.category).filter(Boolean))];
-        this.saveToSession(userId, 'categories', categories);
+        this.saveToSession(numericId, 'categories', categories);
       }
 
-      console.log(`✅ Fetched ${data?.length || 0} products from database`);
+      console.log(`Fetched ${data?.length || 0} products from database`);
       return data || [];
 
     } catch (error) {
-      console.error('❌ Error fetching products:', error);
+      console.error('Error fetching products:', error);
       throw error;
     }
   }
 
   async getProductById(id, userId) {
     try {
-      if (!this.isValidUserId(userId)) {
-        console.warn('⚠️ Invalid userId provided to getProductById');
+      const numericId = await this.getNumericUserId(userId);
+      if (!numericId) {
+        console.warn('Invalid userId provided to getProductById');
         return null;
       }
 
-      // Check cache first
-      const cached = this.getFromSession(userId, 'products');
+      const cached = this.getFromSession(numericId, 'products');
       if (cached && Array.isArray(cached)) {
         const found = cached.find(p => p.id === id);
         if (found) {
-          console.log(`📦 Found product ${id} in cache`);
+          console.log(`Found product ${id} in cache`);
           return found;
         }
       }
 
-      // Fetch from Supabase
       if (!this.isSupabaseReady()) {
-        console.warn('⚠️ Supabase not ready');
+        console.warn('Supabase not ready');
         return null;
       }
 
-      console.log(`🔍 Fetching product ${id} for user_id: ${userId}`);
+      console.log(`Fetching product ${id} for user_id: ${numericId}`);
 
       const { data, error } = await supabase
         .from('products')
@@ -194,12 +220,12 @@ isValidUserId(userId) {
           )
         `)
         .eq('id', id)
-        .eq('user_id', userId)
+        .eq('user_id', numericId)
         .single();
 
       if (error) {
         if (error.code === 'PGRST116') {
-          console.log(`ℹ️ Product ${id} not found`);
+          console.log(`Product ${id} not found`);
           return null;
         }
         throw error;
@@ -208,7 +234,7 @@ isValidUserId(userId) {
       return data;
 
     } catch (error) {
-      console.error('❌ Error fetching product:', error);
+      console.error('Error fetching product:', error);
       throw error;
     }
   }
@@ -216,23 +242,22 @@ isValidUserId(userId) {
   async createProduct(productData) {
     try {
       const userId = productData.user_id;
+      const numericId = await this.getNumericUserId(userId);
       
-      if (!this.isValidUserId(userId)) {
+      if (!numericId) {
         throw new Error('Valid User ID is required to create a product');
       }
 
       if (!this.isSupabaseReady()) {
-        // Fallback: create in-memory product with ID
         const mockProduct = {
           id: Date.now(),
           ...productData,
-          created_at: new Date().toISOString(),
-          updated_at: new Date().toISOString()
+          created_at: new Date().toISOString()
         };
         return mockProduct;
       }
 
-      console.log(`👤 Creating product for user_id: ${userId}`);
+      console.log(`Creating product for user_id: ${numericId}`);
 
       const insertData = {
         name: productData.name.trim(),
@@ -240,7 +265,7 @@ isValidUserId(userId) {
         category: productData.category || 'Uncategorized',
         serving_size_label: productData.serving_size_label || null,
         is_active: true,
-        user_id: userId
+        user_id: numericId
       };
 
       const { data: product, error: productError } = await supabase
@@ -250,20 +275,19 @@ isValidUserId(userId) {
         .single();
 
       if (productError) {
-        console.error('❌ Error creating product:', productError);
+        console.error('Error creating product:', productError);
         throw productError;
       }
 
-      // Add ingredients if provided
       if (productData.ingredients && productData.ingredients.length > 0) {
-        console.log(`📝 Adding ${productData.ingredients.length} ingredients to product ${product.id}`);
+        console.log(`Adding ${productData.ingredients.length} ingredients to product ${product.id}`);
         
         for (const ingredient of productData.ingredients) {
           try {
             const ingredientId = await this.getOrCreateIngredient(
               ingredient.name,
               ingredient.unit || 'kg',
-              userId
+              numericId
             );
 
             const { error: piError } = await supabase
@@ -275,71 +299,85 @@ isValidUserId(userId) {
               });
 
             if (piError) {
-              console.error(`❌ Error adding ingredient ${ingredient.name}:`, piError);
-              // Continue with other ingredients even if one fails
+              console.error(`Error adding ingredient ${ingredient.name}:`, piError);
             }
           } catch (ingredientError) {
-            console.error(`❌ Error processing ingredient ${ingredient.name}:`, ingredientError);
+            console.error(`Error processing ingredient ${ingredient.name}:`, ingredientError);
           }
         }
       }
 
-      // Clear cache to force refresh
-      this.clearSession(userId);
+      this.clearSession(numericId);
 
-      // Fetch the complete product with ingredients
-      const completeProduct = await this.getProductById(product.id, userId, true);
+      const completeProduct = await this.getProductById(product.id, numericId);
       return completeProduct || product;
 
     } catch (error) {
-      console.error('❌ Error creating product:', error);
+      console.error('Error creating product:', error);
       throw error;
     }
   }
 
   async updateProduct(id, productData, userId) {
     try {
-      if (!this.isValidUserId(userId)) {
+      console.log('Update product called with:', { id, userId });
+      
+      const numericId = await this.getNumericUserId(userId);
+      console.log('Numeric ID resolved to:', numericId);
+      
+      if (!numericId) {
         throw new Error('Valid User ID is required to update a product');
       }
 
-      // Check if product exists and belongs to user
-      const existingProduct = await this.getProductById(id, userId);
+      const existingProduct = await this.getProductById(id, numericId);
+      console.log('Existing product found:', existingProduct ? 'Yes' : 'No');
+      
       if (!existingProduct) {
-        console.log(`⚠️ Product ${id} not found or does not belong to user ${userId}`);
+        console.log(`Product ${id} not found or does not belong to user ${numericId}`);
         return null;
       }
 
       if (!this.isSupabaseReady()) {
-        // Fallback: return updated mock data
-        return { ...existingProduct, ...productData, updated_at: new Date().toISOString() };
+        return { ...existingProduct, ...productData };
       }
 
-      console.log(`✏️ Updating product ${id} for user_id: ${userId}`);
+      console.log(`Updating product ${id} for user_id: ${numericId}`);
 
-      const updateData = {
-        name: productData.name.trim(),
-        price: parseFloat(productData.price),
-        category: productData.category || 'Uncategorized',
-        serving_size_label: productData.serving_size_label || null,
-        is_active: productData.is_active !== undefined ? productData.is_active : true,
-        updated_at: new Date().toISOString()
-      };
+      // Build update data - only include fields that exist in the table
+      const updateData = {};
+      
+      if (productData.name !== undefined) {
+        updateData.name = productData.name.trim();
+      }
+      if (productData.price !== undefined) {
+        updateData.price = parseFloat(productData.price);
+      }
+      if (productData.category !== undefined) {
+        updateData.category = productData.category || 'Uncategorized';
+      }
+      if (productData.serving_size_label !== undefined) {
+        updateData.serving_size_label = productData.serving_size_label || null;
+      }
+      if (productData.is_active !== undefined) {
+        updateData.is_active = productData.is_active;
+      }
+
+      console.log('Update data:', updateData);
 
       const { data: product, error: productError } = await supabase
         .from('products')
         .update(updateData)
         .eq('id', id)
-        .eq('user_id', userId)
+        .eq('user_id', numericId)
         .select()
         .single();
 
       if (productError) {
-        console.error('❌ Error updating product:', productError);
+        console.error('Error updating product:', productError);
         throw productError;
       }
 
-      // Update ingredients if provided
+      // Handle ingredients update
       if (productData.ingredients !== undefined) {
         // Delete existing ingredients
         const { error: deleteError } = await supabase
@@ -348,20 +386,20 @@ isValidUserId(userId) {
           .eq('product_id', id);
 
         if (deleteError) {
-          console.error('❌ Error deleting old ingredients:', deleteError);
+          console.error('Error deleting old ingredients:', deleteError);
           throw deleteError;
         }
 
         // Add new ingredients
         if (productData.ingredients && productData.ingredients.length > 0) {
-          console.log(`📝 Updating ${productData.ingredients.length} ingredients for product ${id}`);
+          console.log(`Updating ${productData.ingredients.length} ingredients for product ${id}`);
           
           for (const ingredient of productData.ingredients) {
             try {
               const ingredientId = await this.getOrCreateIngredient(
                 ingredient.name,
                 ingredient.unit || 'kg',
-                userId
+                numericId
               );
 
               const { error: piError } = await supabase
@@ -373,88 +411,84 @@ isValidUserId(userId) {
                 });
 
               if (piError) {
-                console.error(`❌ Error adding ingredient ${ingredient.name}:`, piError);
+                console.error(`Error adding ingredient ${ingredient.name}:`, piError);
               }
             } catch (ingredientError) {
-              console.error(`❌ Error processing ingredient ${ingredient.name}:`, ingredientError);
+              console.error(`Error processing ingredient ${ingredient.name}:`, ingredientError);
             }
           }
         }
       }
 
-      // Clear cache to force refresh
-      this.clearSession(userId);
+      this.clearSession(numericId);
 
-      // Fetch the complete updated product
-      const completeProduct = await this.getProductById(product.id, userId, true);
+      const completeProduct = await this.getProductById(product.id, numericId);
       return completeProduct || product;
 
     } catch (error) {
-      console.error('❌ Error updating product:', error);
+      console.error('Error updating product:', error);
       throw error;
     }
   }
 
   async deleteProduct(id, userId) {
     try {
-      if (!this.isValidUserId(userId)) {
+      const numericId = await this.getNumericUserId(userId);
+      if (!numericId) {
         throw new Error('Valid User ID is required to delete a product');
       }
 
-      // Check if product exists and belongs to user
-      const existingProduct = await this.getProductById(id, userId);
+      const existingProduct = await this.getProductById(id, numericId);
       if (!existingProduct) {
-        console.log(`⚠️ Product ${id} not found or does not belong to user ${userId}`);
+        console.log(`Product ${id} not found or does not belong to user ${numericId}`);
         return false;
       }
 
       if (!this.isSupabaseReady()) {
-        console.log(`ℹ️ Supabase not ready, simulating deletion of product ${id}`);
+        console.log(`Supabase not ready, simulating deletion of product ${id}`);
         return true;
       }
 
-      console.log(`🗑️ Deleting product ${id} for user_id: ${userId}`);
+      console.log(`Deleting product ${id} for user_id: ${numericId}`);
 
       const { error } = await supabase
         .from('products')
         .delete()
         .eq('id', id)
-        .eq('user_id', userId);
+        .eq('user_id', numericId);
 
       if (error) {
-        console.error('❌ Error deleting product:', error);
+        console.error('Error deleting product:', error);
         throw error;
       }
 
-      // Clear cache
-      this.clearSession(userId);
+      this.clearSession(numericId);
 
-      console.log(`✅ Product ${id} deleted successfully`);
+      console.log(`Product ${id} deleted successfully`);
       return true;
 
     } catch (error) {
-      console.error('❌ Error deleting product:', error);
+      console.error('Error deleting product:', error);
       throw error;
     }
   }
 
   async getOrCreateIngredient(name, unit, userId) {
     try {
-      if (!this.isValidUserId(userId)) {
+      const numericId = await this.getNumericUserId(userId);
+      if (!numericId) {
         throw new Error('Valid User ID is required to create an ingredient');
       }
 
       if (!this.isSupabaseReady()) {
-        // Fallback: return mock ID
         return Date.now();
       }
 
-      // Try to find existing ingredient
       const { data, error } = await supabase
         .from('ingredients')
         .select('id')
         .ilike('name', name)
-        .eq('user_id', userId)
+        .eq('user_id', numericId)
         .maybeSingle();
 
       if (error && error.code !== 'PGRST116') {
@@ -465,13 +499,12 @@ isValidUserId(userId) {
         return data.id;
       }
 
-      // Create new ingredient
-      console.log(`➕ Creating new ingredient: ${name} (${unit})`);
+      console.log(`Creating new ingredient: ${name} (${unit})`);
 
       const insertData = {
         name: name.trim(),
         unit: unit || 'kg',
-        user_id: userId
+        user_id: numericId
       };
 
       const { data: newData, error: insertError } = await supabase
@@ -481,36 +514,35 @@ isValidUserId(userId) {
         .single();
 
       if (insertError) {
-        console.error('❌ Error creating ingredient:', insertError);
+        console.error('Error creating ingredient:', insertError);
         throw insertError;
       }
 
       return newData.id;
 
     } catch (error) {
-      console.error('❌ Error getting/creating ingredient:', error);
+      console.error('Error getting/creating ingredient:', error);
       throw error;
     }
   }
 
   async getCategories(userId, forceRefresh = false) {
     try {
-      if (!this.isValidUserId(userId)) {
-        console.warn('⚠️ Invalid userId provided to getCategories');
+      const numericId = await this.getNumericUserId(userId);
+      if (!numericId) {
+        console.warn('Invalid userId provided to getCategories');
         return ['All'];
       }
 
-      // Get from cache first
       if (!forceRefresh) {
-        const cached = this.getFromSession(userId, 'categories');
+        const cached = this.getFromSession(numericId, 'categories');
         if (cached && Array.isArray(cached) && cached.length > 0) {
-          console.log(`📦 Using cached categories from sessionStorage (${cached.length} items)`);
+          console.log(`Using cached categories from sessionStorage (${cached.length} items)`);
           return cached;
         }
       }
 
-      // Get products to extract categories
-      const products = await this.getProducts(userId, null, null, forceRefresh);
+      const products = await this.getProducts(numericId, null, null, forceRefresh);
       
       if (!products || products.length === 0) {
         return ['All'];
@@ -518,39 +550,38 @@ isValidUserId(userId) {
 
       const categories = ['All', ...new Set(products.map(item => item.category).filter(Boolean))];
       
-      // Save to cache
-      this.saveToSession(userId, 'categories', categories);
+      this.saveToSession(numericId, 'categories', categories);
 
-      console.log(`✅ Found ${categories.length} categories`);
+      console.log(`Found ${categories.length} categories`);
       return categories;
 
     } catch (error) {
-      console.error('❌ Error fetching categories:', error);
+      console.error('Error fetching categories:', error);
       return ['All'];
     }
   }
 
-  // Method to get total product count from cache or database
   async getTotalProducts(userId, forceRefresh = false) {
     try {
-      if (!this.isValidUserId(userId)) {
+      const numericId = await this.getNumericUserId(userId);
+      if (!numericId) {
         return 0;
       }
 
       if (!forceRefresh) {
-        const cached = this.getFromSession(userId, 'totalProducts');
+        const cached = this.getFromSession(numericId, 'totalProducts');
         if (cached !== null && typeof cached === 'number') {
           return cached;
         }
       }
 
-      const products = await this.getProducts(userId, null, null, forceRefresh);
+      const products = await this.getProducts(numericId, null, null, forceRefresh);
       const count = products?.length || 0;
-      this.saveToSession(userId, 'totalProducts', count);
+      this.saveToSession(numericId, 'totalProducts', count);
       return count;
 
     } catch (error) {
-      console.error('❌ Error getting total products:', error);
+      console.error('Error getting total products:', error);
       return 0;
     }
   }
