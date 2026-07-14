@@ -42,11 +42,14 @@ const sendCode = async (req, res) => {
       throw upsertError;
     }
 
-    await sendOTPEmail(normalizedEmail, verificationCode, 'reset');
-
+    // respond immediately, send email in background to avoid blocking
     res.status(200).json({
       success: true,
       message: 'Verification code sent to your email',
+    });
+
+    sendOTPEmail(normalizedEmail, verificationCode, 'reset').catch((err) => {
+      console.error('Background sendOTPEmail error (forgot-password):', err);
     });
   } catch (error) {
     console.error('Send code error:', error);
