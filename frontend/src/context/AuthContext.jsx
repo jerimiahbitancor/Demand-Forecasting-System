@@ -18,7 +18,7 @@ export const AuthProvider = ({ children }) => {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
 
-  // ✅ Registration flow state (stored in context + sessionStorage for refresh)
+  // Registration flow state (stored in context + sessionStorage for refresh)
   const [registrationData, setRegistrationData] = useState(() => {
     const saved = sessionStorage.getItem('registration_data');
     return saved ? JSON.parse(saved) : {
@@ -28,7 +28,7 @@ export const AuthProvider = ({ children }) => {
     };
   });
 
-  // ✅ Sync user with custom table
+  // Sync user with custom table
   const syncUser = async () => {
     try {
       const { data: { session } } = await supabase.auth.getSession();
@@ -52,16 +52,28 @@ export const AuthProvider = ({ children }) => {
           ...prev,
           ...data.user,
         }));
+        return data.user;
       }
 
-      return data.user;
+      return null;
     } catch (error) {
       console.error('Sync user error:', error);
       return null;
     }
   };
 
-  // ✅ Check auth on mount
+  // Get current token
+  const getToken = async () => {
+    try {
+      const { data: { session } } = await supabase.auth.getSession();
+      return session?.access_token || null;
+    } catch (error) {
+      console.error('Error getting token:', error);
+      return null;
+    }
+  };
+
+  // Check auth on mount
   useEffect(() => {
     const checkAuth = async () => {
       try {
@@ -100,7 +112,7 @@ export const AuthProvider = ({ children }) => {
     return () => subscription.unsubscribe();
   }, []);
 
-  // ✅ Update registration data (saves to sessionStorage too)
+  // Update registration data (saves to sessionStorage too)
   const updateRegistrationData = (data) => {
     setRegistrationData((prev) => {
       const newData = { ...prev, ...data };
@@ -109,7 +121,7 @@ export const AuthProvider = ({ children }) => {
     });
   };
 
-  // ✅ Clear registration data
+  // Clear registration data
   const clearRegistrationData = () => {
     setRegistrationData({
       email: null,
@@ -145,7 +157,7 @@ export const AuthProvider = ({ children }) => {
         throw new Error(data.error || 'Registration failed');
       }
 
-      // ✅ Store registration data in context + sessionStorage
+      // Store registration data in context + sessionStorage
       updateRegistrationData({
         email: data.email,
         userId: data.userId,
@@ -194,7 +206,7 @@ export const AuthProvider = ({ children }) => {
         throw new Error(data.error || 'Verification failed');
       }
 
-      // ✅ Mark OTP as verified
+      // Mark OTP as verified
       updateRegistrationData({
         otpVerified: true,
       });
@@ -217,36 +229,47 @@ export const AuthProvider = ({ children }) => {
   // ============================================
   // STEP 3: CREATE PASSWORD
   // ============================================
- const createPassword = async (userId, email, password) => {
-  setLoading(true);
-  setError(null);
-  
-  try {
-    const response = await fetch(`${API_URL}/auth/create-password`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ userId, email, password })
-    });
-
-    const data = await response.json();
-    if (!response.ok) throw new Error(data.error || 'Failed to create password');
-
-    if (data.session) {
-      // ✅ Set session
-      const { data: sessionData, error: setSessionError } = await supabase.auth.setSession({
-        access_token: data.session.access_token,
-        refresh_token: data.session.refresh_token,
+  const createPassword = async (userId, email, password) => {
+    setLoading(true);
+    setError(null);
+    
+    try {
+      const response = await fetch(`${API_URL}/auth/create-password`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ userId, email, password })
       });
-      
-      if (!setSessionError && sessionData?.session?.user) {
-        setUser(sessionData.session.user);
+
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error || 'Failed to create password');
+
+      if (data.session) {
+        // Set session
+        const { data: sessionData, error: setSessionError } = await supabase.auth.setSession({
+          access_token: data.session.access_token,
+          refresh_token: data.session.refresh_token,
+        });
         
-        // ✅ Verify session was set
-        const { data: verifySession } = await supabase.auth.getSession();
-        console.log('✅ Session verified:', !!verifySession.session);
-        
-        if (!verifySession.session) {
-          console.warn('⚠️ Session not found after setSession');
+        if (!setSessionError && sessionData?.session?.user) {
+          setUser(sessionData.session.user);
+          
+          // Verify session was set
+          const { data: verifySession } = await supabase.auth.getSession();
+          console.log('Session verified:', !!verifySession.session);
+          
+          if (!verifySession.session) {
+            console.warn('Session not found after setSession');
+            return {
+              success: true,
+              session: data.session,
+              user: data.user,
+              requiresLogin: true,
+            };
+          }
+
+          await syncUser();
+        } else if (setSessionError) {
+          console.error('Session error:', setSessionError);
           return {
             success: true,
             session: data.session,
@@ -254,34 +277,23 @@ export const AuthProvider = ({ children }) => {
             requiresLogin: true,
           };
         }
-
-        await syncUser();
-      } else if (setSessionError) {
-        console.error('❌ Session error:', setSessionError);
-        return {
-          success: true,
-          session: data.session,
-          user: data.user,
-          requiresLogin: true,
-        };
       }
+
+      return {
+        success: true,
+        session: data.session,
+        user: data.user,
+        requiresLogin: !data.session,
+      };
+
+    } catch (error) {
+      console.error('Create password error:', error);
+      setError(error.message);
+      return { success: false, error: error.message };
+    } finally {
+      setLoading(false);
     }
-
-    return {
-      success: true,
-      session: data.session,
-      user: data.user,
-      requiresLogin: !data.session,
-    };
-
-  } catch (error) {
-    console.error('Create password error:', error);
-    setError(error.message);
-    return { success: false, error: error.message };
-  } finally {
-    setLoading(false);
-  }
-};
+  };
 
   // ============================================
   // RESEND OTP
@@ -381,6 +393,36 @@ export const AuthProvider = ({ children }) => {
     }
   };
 
+  // ============================================
+  // CHECK UPLOAD STATUS
+  // ============================================
+  const checkUploadStatus = async () => {
+    try {
+      const token = await getToken();
+      if (!token) return false;
+
+      let res = await fetch(`${API_URL}/upload/status/check`, {
+        headers: { Authorization: `Bearer ${token}` }
+      });
+      
+      if (res.status === 404) {
+        res = await fetch(`${API_URL}/uploads/status/check`, {
+          headers: { Authorization: `Bearer ${token}` }
+        });
+      }
+      
+      if (res.status === 404 || res.status === 401) {
+        return false;
+      }
+      
+      const data = await res.json();
+      return !!data.hasUploaded;
+    } catch (err) {
+      console.error('checkUploadStatus failed:', err);
+      return false;
+    }
+  };
+
   const value = {
     user,
     loading,
@@ -389,6 +431,8 @@ export const AuthProvider = ({ children }) => {
     registrationData,
     updateRegistrationData,
     clearRegistrationData,
+    getToken, // <-- ADDED THIS
+    checkUploadStatus, // <-- ADDED THIS
     register,
     verifyOTP,
     createPassword,
