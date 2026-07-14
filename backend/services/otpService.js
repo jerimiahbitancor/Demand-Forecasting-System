@@ -1,5 +1,5 @@
 // services/otpService.js
-const { supabase } = require('../config/supabase');
+const { supabase, supabaseAdmin } = require('../config/supabase');
 const nodemailer = require('nodemailer');
 const dayjs = require('dayjs');
 const utc = require('dayjs/plugin/utc');
@@ -128,8 +128,8 @@ const storeOTP = async (userId, email, otp, type) => {
   const expiresAt = nowPH().add(10, 'minute').toISOString();
   const table = type === 'verification' ? 'email_verifications' : 'password_resets';
   
-  // ✅ First, mark ALL old OTPs as used
-  const { error: updateError } = await supabase
+  // ✅ First, mark ALL old OTPs as used (use admin client for writes)
+  const { error: updateError } = await supabaseAdmin
     .from(table)
     .update({ 
       is_used: true,
@@ -142,23 +142,28 @@ const storeOTP = async (userId, email, otp, type) => {
     console.error('Error marking old OTPs:', updateError);
   }
 
-  // ✅ Then insert the NEW OTP
-  const { error: insertError } = await supabase
+  // ✅ Then insert or upsert the NEW OTP (avoid unique constraint on user_id)
+  const { data: upsertData, error: upsertError } = await supabaseAdmin
     .from(table)
-    .insert({
-      user_id: userId,
-      email: email.trim().toLowerCase(),
-      verification_code: otp,
-      expires_at: expiresAt,
-      is_used: false,
-      used_at: null,
-      created_at: nowPH().toISOString()
-    });
+    .upsert(
+      {
+        user_id: userId,
+        email: email.trim().toLowerCase(),
+        verification_code: otp,
+        expires_at: expiresAt,
+        is_used: false,
+        used_at: null,
+        created_at: nowPH().toISOString()
+      },
+      { onConflict: 'user_id' }
+    );
 
-  if (insertError) {
-    console.error('Error storing new OTP:', insertError);
-    throw insertError;
+  if (upsertError) {
+    console.error('Error storing new OTP (upsert):', upsertError);
+    throw upsertError;
   }
+
+  console.log('Upsert result:', { table, upsertData });
 
   console.log('✅ New OTP stored for user:', userId, 'OTP:', otp);
   return { success: true };
@@ -217,7 +222,7 @@ const verifyOTP = async (email, otp, type, markAsUsed = false) => {
   }
 
   if (markAsUsed) {
-    const { error: markError } = await supabase
+    const { error: markError } = await supabaseAdmin
       .from(table)
       .update({ 
         is_used: true, 
