@@ -19,13 +19,30 @@ import IngredientDemand from './features/Analytics/components/IngredientDemand';
 import Settings from './features/settings/Settings';
 import Analytics from './features/Analytics/pages/Analytics';
 import './App.css';
+import './RouteGuard.css'
 
-// ✅ RouteGuard wrapper
 function RouteGuard({ children, mode }) {
   const checking = useSetupGuard(mode);
-  if (checking) return <p>Loading...</p>;
+  
+  if (checking) {
+    return (
+      <div className="route-guard-loading">
+        <div className="route-guard-card">
+          <div className="route-guard-spinner">
+            <div className="route-guard-spinner-ring"></div>
+          </div>
+          <h3 className="route-guard-title">Loading</h3>
+          <p className="route-guard-subtitle route-guard-dots">
+            Please wait
+          </p>
+        </div>
+      </div>
+    );
+  }
+  
   return children;
 }
+
 
 function RootRedirect() {
   useSetupGuard('entry');
