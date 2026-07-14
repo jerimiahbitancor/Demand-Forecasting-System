@@ -13,7 +13,7 @@ import './forgotpass2.css';
 const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:5000/api';
 
 const getPasswordRules = (password) => [
-  { test: password.length >= 12, message: 'Minimum 12 characters' },
+  { test: password.length >= 8, message: 'Minimum 8 characters' },
   { test: /[A-Z]/.test(password), message: 'One uppercase letter' },
   { test: /[a-z]/.test(password), message: 'One lowercase letter' },
   { test: /\d/.test(password), message: 'One number' },

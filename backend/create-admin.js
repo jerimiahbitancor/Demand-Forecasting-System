@@ -1,6 +1,5 @@
 // create-admin.js
-const bcrypt = require('bcrypt');
-const { supabase } = require('./config/supabase');
+const { supabase, supabaseAdmin } = require('./config/supabase');
 
 async function createAdminUser() {
   console.log('🔧 Creating admin user...\n');
@@ -24,17 +23,25 @@ async function createAdminUser() {
       return;
     }
 
-    // Hash the password
-    const saltRounds = 10;
-    const hashedPassword = await bcrypt.hash(password, saltRounds);
+    const { data: authUser, error: authError } = await supabaseAdmin.auth.admin.createUser({
+      email,
+      password,
+      email_confirm: true,
+      user_metadata: {
+        name,
+      },
+    });
 
-    // Insert admin user
+    if (authError) {
+      throw authError;
+    }
+
     const { data: newUser, error: insertError } = await supabase
       .from('users')
       .insert({
-        email: email,
-        hashed_password: hashedPassword,
-        created_at: new Date()
+        email,
+        auth_id: authUser.user.id,
+        created_at: new Date(),
       })
       .select('id, email, created_at');
 

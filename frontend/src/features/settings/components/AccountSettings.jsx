@@ -99,7 +99,7 @@ function AccountSettings() {
         <div>
           <p className="form-label">Password Requirements:</p>
           <ul className="requirements-list">
-            <li>Minimum 12 characters</li>
+            <li>Minimum 8 characters</li>
             <li>One uppercase letter</li>
             <li>One lowercase letter</li>
             <li>One number</li>

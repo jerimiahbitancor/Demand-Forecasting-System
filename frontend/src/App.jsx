@@ -1,12 +1,13 @@
 // App.jsx
 import { Routes, Route, Navigate } from 'react-router-dom';
 import { Toaster } from 'react-hot-toast';
-import Register from '../src/features/auth/pages/register/Register';
+import Register from './features/auth/pages/register/Register';
 import VerifyEmail from './features/auth/pages/register/VerifyEmail';
-import Login from '../src/features/auth/pages/login/Login';
+import CreatePassword from './features/auth/pages/register/CreatePassword';
+import Login from './features/auth/pages/login/Login';
 import { useSetupGuard } from './hooks/useSetupGuard';
 import ProtectedRoute from './features/components/ProtectedRoute';
-import RequireUpload from './features/components/RequireUpload'; // adjust path if placed elsewhere
+import RequireUpload from './features/components/RequireUpload';
 import ForgotPassword from './features/auth/pages/forgotpass/forgotpass';
 import ForgotPassword2 from './features/auth/pages/forgotpass/forgotpass2';
 import ChefDuoLanding from './features/landing/ChefDuoLanding';
@@ -19,26 +20,29 @@ import Settings from './features/settings/Settings';
 import Analytics from './features/Analytics/pages/Analytics';
 import './App.css';
 
+// ✅ RouteGuard wrapper
+function RouteGuard({ children, mode }) {
+  const checking = useSetupGuard(mode);
+  if (checking) return <p>Loading...</p>;
+  return children;
+}
+
 function RootRedirect() {
   useSetupGuard('entry');
   return <p>Loading...</p>;
 }
 
-// Combines auth check + upload-status check for routes that need both
-// function Gated({ children }) {
-//   return (
-//     <ProtectedRoute>
-//       <RequireUpload>{children}</RequireUpload>
-//     </ProtectedRoute>
-//   );
-// 
-
-
+function Gated({ children }) {
+  return (
+    <ProtectedRoute>
+      <RequireUpload>{children}</RequireUpload>
+    </ProtectedRoute>
+  );
+}
 
 function App() {
   return (
     <div className="app-container">
-      {/* Toast Notifications with custom styling */}
       <Toaster
         position="top-right"
         reverseOrder={false}
@@ -46,7 +50,6 @@ function App() {
         containerClassName=""
         containerStyle={{}}
         toastOptions={{
-          // Default options for all toasts
           className: '',
           duration: 5000,
           style: {
@@ -59,7 +62,6 @@ function App() {
             boxShadow: '0 10px 25px rgba(0, 0, 0, 0.2)',
             border: '1px solid rgba(255, 255, 255, 0.05)',
           },
-          // Success toast options
           success: {
             duration: 4000,
             iconTheme: {
@@ -72,7 +74,6 @@ function App() {
               border: '1px solid #10b981',
             },
           },
-          // Error toast options
           error: {
             duration: 5000,
             iconTheme: {
@@ -85,7 +86,6 @@ function App() {
               border: '1px solid #ef4444',
             },
           },
-          // Loading toast options
           loading: {
             duration: 3000,
             style: {
@@ -98,36 +98,47 @@ function App() {
       />
 
       <Routes>
-        {/* Auth Routes — public */}
+        {/* Auth Routes - WITH GUARDS */}
         <Route path="/" element={<RootRedirect />} />
-        <Route path="/login" element={<Login />} />
-        <Route path="/register" element={<Register />} />
-        <Route path="/verify-email" element={<VerifyEmail />} />
+        <Route path="/login" element={
+          <RouteGuard mode="login">
+            <Login />
+          </RouteGuard>
+        } />
+        <Route path="/register" element={
+          <RouteGuard mode="register">
+            <Register />
+          </RouteGuard>
+        } />
+        <Route path="/verify-email" element={
+          <RouteGuard mode="verify">
+            <VerifyEmail />
+          </RouteGuard>
+        } />
+        <Route path="/create-password" element={
+          <RouteGuard mode="create-password">
+            <CreatePassword />
+          </RouteGuard>
+        } />
         <Route path="/forgot-password" element={<ForgotPassword />} />
         <Route path="/forgot-password/reset" element={<ForgotPassword2 />} />
 
-        {/* Landing Page — protected, NOT gated by upload (this is where users land pre-upload) */}
+        {/* Landing Page - Protected */}
         <Route path="/landing" element={<ProtectedRoute><ChefDuoLanding /></ProtectedRoute>} />
 
-        {/* Data Management — protected, NOT gated (this is where uploads happen) */}
+        {/* Data Management - Protected */}
         <Route path="/data-management" element={<ProtectedRoute><DataManagement /></ProtectedRoute>} />
 
-        <Route path="/dashboard" element={<ProtectedRoute><Dashboard /></ProtectedRoute>} />
-        <Route path="/analytics" element={<ProtectedRoute><Analytics /></ProtectedRoute>} />
-        <Route path="/forecasting" element={<ProtectedRoute><Forecasting /></ProtectedRoute>} />
-        <Route path="/product-performance" element={<ProtectedRoute><ProductPerformance /></ProtectedRoute>} />
-        <Route path="/ingredient-demand" element={<ProtectedRoute><IngredientDemand /></ProtectedRoute>} />
-        
-        {/* Main App Routes — protected AND gated by upload status 
-        {/*<Route path="/dashboard" element={<Gated><Dashboard /></Gated>} />
-        <Route path="/analytics" element={<Gated><Analytics /></Gated>} />*/}
+        {/* Main App Routes - Protected + Gated */}
+        <Route path="/dashboard" element={<Gated><Dashboard /></Gated>} />
+        <Route path="/analytics" element={<Gated><Analytics /></Gated>} />
 
-        {/* Analytics sub-routes — also gated 
+        {/* Analytics sub-routes */}
         <Route path="/forecasting" element={<Gated><Forecasting /></Gated>} />
         <Route path="/product-performance" element={<Gated><ProductPerformance /></Gated>} />
-        <Route path="/ingredient-demand" element={<Gated><IngredientDemand /></Gated>} />*/}
+        <Route path="/ingredient-demand" element={<Gated><IngredientDemand /></Gated>} />
 
-        {/* Settings — protected, NOT gated */}
+        {/* Settings - Protected */}
         <Route path="/settings" element={<ProtectedRoute><Settings /></ProtectedRoute>} />
 
         {/* Profile */}
