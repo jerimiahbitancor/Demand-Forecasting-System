@@ -1010,7 +1010,6 @@ const ChefDuoLanding = () => {
         </div>
 
         <div className="modal-footer-text">
-          <p>Last updated: January 2026</p>
           <button className="modal-agree-btn" onClick={closePrivacy}>
             I Understand
           </button>
