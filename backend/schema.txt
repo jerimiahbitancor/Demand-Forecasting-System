@@ -46,6 +46,8 @@ CREATE TABLE public.products (
   first_sold_date date,
   created_at timestamp without time zone DEFAULT now(),
   user_id integer,
+  inactive_reason USER-DEFINED,
+  inactive_since timestamp without time zone,
   CONSTRAINT products_pkey PRIMARY KEY (id),
   CONSTRAINT fk_products_user FOREIGN KEY (user_id) REFERENCES public.users(id)
 );

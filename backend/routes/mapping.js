@@ -15,14 +15,14 @@ router.get('/products', authenticate, async (req, res) => {
       });
     }
 
-    const { category, search, forceRefresh } = req.query;
+    const { category, search, status, forceRefresh } = req.query;
     const userId = req.user?.user_id || req.user?.id;
     
     console.log('Fetching products for user:', userId);
     console.log('User object:', JSON.stringify(req.user, null, 2));
     
     const force = forceRefresh === 'true';
-    const products = await mappingService.getProducts(userId, category, search, force);
+    const products = await mappingService.getProducts(userId, category, search, force, status || 'active');
     
     res.json({
       success: true,
@@ -35,6 +35,113 @@ router.get('/products', authenticate, async (req, res) => {
     res.status(500).json({
       success: false,
       error: 'Failed to fetch products',
+      details: process.env.NODE_ENV === 'development' ? error.message : undefined
+    });
+  }
+});
+
+router.post('/products/:id/archive', authenticate, async (req, res) => {
+  try {
+    if (!req.user) {
+      return res.status(401).json({
+        success: false,
+        error: 'User not authenticated'
+      });
+    }
+
+    const productId = parseInt(req.params.id);
+    const { reason } = req.body;
+    const userId = req.user?.user_id || req.user?.id;
+
+    if (isNaN(productId)) {
+      return res.status(400).json({
+        success: false,
+        error: 'Invalid product ID'
+      });
+    }
+
+    if (!reason || reason.trim() === '') {
+      return res.status(400).json({
+        success: false,
+        error: 'Archive reason is required'
+      });
+    }
+
+    const product = await mappingService.archiveProduct(productId, reason, userId);
+
+    res.json({
+      success: true,
+      data: product,
+      message: 'Product archived successfully'
+    });
+  } catch (error) {
+    console.error('Error archiving product:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Failed to archive product',
+      details: process.env.NODE_ENV === 'development' ? error.message : undefined
+    });
+  }
+});
+
+router.post('/products/:id/reactivate', authenticate, async (req, res) => {
+  try {
+    if (!req.user) {
+      return res.status(401).json({
+        success: false,
+        error: 'User not authenticated'
+      });
+    }
+
+    const productId = parseInt(req.params.id);
+    const { forceReactivate } = req.body;
+    const userId = req.user?.user_id || req.user?.id;
+
+    if (isNaN(productId)) {
+      return res.status(400).json({
+        success: false,
+        error: 'Invalid product ID'
+      });
+    }
+
+    const product = await mappingService.reactivateProduct(productId, userId, {
+      forceReactivate: forceReactivate === true || forceReactivate === 'true'
+    });
+
+    res.json({
+      success: true,
+      data: product,
+      message: 'Product reactivated successfully'
+    });
+  } catch (error) {
+    console.error('Error reactivating product:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Failed to reactivate product',
+      details: process.env.NODE_ENV === 'development' ? error.message : undefined
+    });
+  }
+});
+
+router.get('/archive-reasons', authenticate, async (req, res) => {
+  try {
+    if (!req.user) {
+      return res.status(401).json({
+        success: false,
+        error: 'User not authenticated'
+      });
+    }
+
+    const reasons = mappingService.getAllowedArchiveReasons();
+    res.json({
+      success: true,
+      data: reasons
+    });
+  } catch (error) {
+    console.error('Error fetching archive reasons:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Failed to fetch archive reasons',
       details: process.env.NODE_ENV === 'development' ? error.message : undefined
     });
   }
@@ -225,18 +332,21 @@ router.put('/products/:id', authenticate, async (req, res) => {
     
     console.log(`Updating product ${productId} for user: ${userId}`);
     
-    const product = await mappingService.updateProduct(productId, {
-      name: name?.trim(),
-      price: price !== undefined ? parseFloat(price) : undefined,
-      category: category?.trim() || 'Uncategorized',
-      serving_size_label: serving_size_label?.trim() || null,
-      is_active: is_active !== undefined ? is_active : true,
-      ingredients: ingredients !== undefined ? ingredients.map(ing => ({
+    const payload = {};
+    if (name !== undefined) payload.name = name.trim();
+    if (price !== undefined) payload.price = parseFloat(price);
+    if (category !== undefined) payload.category = category.trim() || 'Uncategorized';
+    if (serving_size_label !== undefined) payload.serving_size_label = serving_size_label?.trim() || null;
+    if (is_active !== undefined) payload.is_active = is_active;
+    if (ingredients !== undefined) {
+      payload.ingredients = ingredients.map(ing => ({
         name: ing.name.trim(),
         quantity: parseFloat(ing.quantity) || 1,
         unit: ing.unit || 'kg'
-      })) : undefined
-    }, userId);
+      }));
+    }
+    
+    const product = await mappingService.updateProduct(productId, payload, userId);
     
     if (!product) {
       return res.status(404).json({
@@ -329,12 +439,13 @@ router.get('/categories', authenticate, async (req, res) => {
     }
 
     const userId = req.user?.user_id || req.user?.id;
-    const { forceRefresh } = req.query;
+    const { forceRefresh, status } = req.query;
     const force = forceRefresh === 'true';
+    const effectiveStatus = status === 'inactive' ? 'inactive' : 'active';
     
-    console.log(`Fetching categories for user: ${userId}${force ? ' (force refresh)' : ''}`);
+    console.log(`Fetching categories for user: ${userId}${force ? ' (force refresh)' : ''} status=${effectiveStatus}`);
     
-    const categories = await mappingService.getCategories(userId, force);
+    const categories = await mappingService.getCategories(userId, force, effectiveStatus);
     
     res.json({
       success: true,
