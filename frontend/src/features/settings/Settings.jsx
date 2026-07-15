@@ -1,4 +1,4 @@
-// components/Settings.jsx
+// frontend/src/features/settings/Settings.jsx
 import { useState } from 'react';
 import { 
   FiSave, 

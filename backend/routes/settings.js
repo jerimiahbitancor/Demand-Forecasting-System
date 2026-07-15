@@ -4,9 +4,18 @@ const router = express.Router();
 const authenticate = require('../middleware/auth');
 const BusinessProfileController = require('../controllers/businessProfile');
 const AccountController = require('../controllers/accountController');
+const uploadLogo = require('../middleware/uploadLogo');
+const virusScan = require('../middleware/virus-scan'); // generic buffer scanner, reused as-is
 
 router.get('/business-profile', authenticate, BusinessProfileController.get);
 router.post('/business-profile', authenticate, BusinessProfileController.save);
+router.post(
+  '/business-profile/logo',
+  authenticate,
+  uploadLogo.single('logo'), // dedicated, image-only multer — see middleware/uploadLogo.js
+  virusScan,                 // same scanner routes/upload.js already uses for CSVs
+  BusinessProfileController.uploadLogo
+);
 
 // Account settings: change password flow (OTP -> verify -> change)
 router.post('/account/change-password/send-code', authenticate, AccountController.sendChangePasswordCode);

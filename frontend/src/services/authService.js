@@ -11,8 +11,16 @@ export const authService = {
 
   // Get auth headers
   getAuthHeaders: async () => {
-    const token = await authService.getToken();
-    return token ? { Authorization: `Bearer ${token}` } : {};
+    try {
+      const token = await authService.getToken();
+      if (token) return { Authorization: `Bearer ${token}` };
+    } catch (e) {
+      // ignore and fallback to sessionStorage
+    }
+
+    // Fallback: some components set token in sessionStorage for legacy reasons
+    const fallback = sessionStorage.getItem('access_token') || sessionStorage.getItem('token');
+    return fallback ? { Authorization: `Bearer ${fallback}` } : {};
   },
 
   // STEP 1: Register (NO PASSWORD!)

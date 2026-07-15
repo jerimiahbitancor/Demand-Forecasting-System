@@ -1,4 +1,4 @@
-// components/Navbar.jsx
+// frontend/src/features/components/Navbar/Navbar.jsx
 import { useState, useEffect } from 'react';
 import { NavLink, useNavigate, } from 'react-router-dom';
 import Swal from 'sweetalert2';

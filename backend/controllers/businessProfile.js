@@ -1,5 +1,10 @@
 // backend/controllers/businessProfile.js
 const { supabase } = require('../config/supabase');
+const { createClient } = require('@supabase/supabase-js');
+
+const SUPABASE_URL = process.env.SUPABASE_URL;
+const SUPABASE_ANON_KEY = process.env.SUPABASE_ANON_KEY;
+const LOGO_BUCKET = 'business-logo';
 
 // The DB schema now matches the frontend's field names exactly
 // (business_name, business_address, business_email,
@@ -12,8 +17,6 @@ function toDbRow(payload) {
     business_email: payload.business_email || null,
     business_contact_number: payload.business_contact_number || null,
   };
-  // Only touch logo_url if a logo was actually sent — otherwise an
-  // upsert would null out an existing logo on every unrelated edit.
   if (payload.logo !== undefined) {
     row.logo_url = payload.logo;
   }
@@ -32,20 +35,37 @@ function toApiShape(row) {
   };
 }
 
+// Used for business_profile reads/writes — PostgREST reliably forwards
+// this client's global Authorization header, so this pattern is fine here.
+function userScopedClient(req) {
+  return createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
+    global: { headers: { Authorization: `Bearer ${req.accessToken}` } },
+  });
+}
+
 class BusinessProfileController {
   // GET /api/settings/business-profile
   static async get(req, res) {
     try {
-      const { data, error } = await supabase
+      const token = req.accessToken;
+      if (!token) {
+        return res.status(401).json({ success: false, error: 'Missing access token' });
+      }
+
+      const numericUserId = req.user?.user_id;
+      if (!numericUserId) {
+        return res.json({ success: true, data: null });
+      }
+
+      const userClient = userScopedClient(req);
+      const { data, error } = await userClient
         .from('business_profile')
         .select('*')
-        .eq('user_id', req.user.id)
+        .eq('user_id', numericUserId)
         .maybeSingle();
 
       if (error) throw error;
 
-      // No row yet isn't an error — a brand-new user just hasn't saved a
-      // profile. data: null tells the frontend to render an empty form.
       res.json({ success: true, data: toApiShape(data) });
     } catch (error) {
       res.status(500).json({
@@ -67,13 +87,24 @@ class BusinessProfileController {
     }
 
     try {
+      const token = req.accessToken;
+      if (!token) {
+        return res.status(401).json({ success: false, error: 'Missing access token' });
+      }
+
+      const numericUserId = req.user?.user_id;
+      if (!numericUserId) {
+        return res.status(400).json({ success: false, error: 'User not found in users table' });
+      }
+
+      const userClient = userScopedClient(req);
       const row = {
         ...toDbRow(req.body),
-        user_id: req.user.id,
+        user_id: numericUserId,
         updated_at: new Date(),
       };
 
-      const { data, error } = await supabase
+      const { data, error } = await userClient
         .from('business_profile')
         .upsert(row, { onConflict: 'user_id' })
         .select()
@@ -90,6 +121,63 @@ class BusinessProfileController {
       res.status(500).json({
         success: false,
         error: 'Failed to save business profile: ' + error.message,
+      });
+    }
+  }
+
+  // POST /api/settings/business-profile/logo  (multipart, field name "logo")
+  //
+  // Uses the Supabase Storage client with the user's JWT so Storage RLS
+  // policies run in the authenticated user context instead of via service role.
+  static async uploadLogo(req, res) {
+    try {
+      const token = req.accessToken;
+      if (!token) {
+        return res.status(401).json({ success: false, error: 'Missing access token' });
+      }
+      if (!req.file) {
+        return res.status(400).json({ success: false, error: 'No file uploaded' });
+      }
+
+      const userClient = userScopedClient(req);
+
+      const { data: userRow, error: userRowError } = await userClient
+        .from('users')
+        .select('id')
+        .eq('auth_id', req.user?.auth_id || req.user?.id)
+        .maybeSingle();
+
+      if (userRowError) {
+        throw userRowError;
+      }
+
+      const numericUserId = userRow?.id;
+      if (!numericUserId) {
+        return res.status(400).json({ success: false, error: 'User record not found for authenticated user' });
+      }
+
+      const ext = req.file.originalname.split('.').pop().toLowerCase();
+      const objectPath = `${numericUserId}/logo.${ext}`;
+      console.log('Uploading logo to path:', objectPath, 'for auth_id:', req.user?.auth_id);
+
+      const { data, error } = await userClient
+        .storage
+        .from(LOGO_BUCKET)
+        .upload(objectPath, req.file.buffer, {
+          contentType: req.file.mimetype,
+          upsert: true,
+        });
+
+      if (error) {
+        throw new Error(`Storage upload failed: ${error.message}`);
+      }
+
+      const publicUrl = `${SUPABASE_URL}/storage/v1/object/public/${LOGO_BUCKET}/${objectPath}`;
+      res.json({ success: true, url: publicUrl, data });
+    } catch (error) {
+      res.status(500).json({
+        success: false,
+        error: 'Failed to upload logo: ' + error.message,
       });
     }
   }

@@ -1,4 +1,4 @@
-// App.jsx
+// frontend/src/App.jsx
 import { Routes, Route, Navigate } from 'react-router-dom';
 import { Toaster } from 'react-hot-toast';
 import Register from './features/auth/pages/register/Register';

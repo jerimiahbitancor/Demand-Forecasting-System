@@ -59,9 +59,13 @@ class MappingService {
     return `mapping_${userId}_${key}`;
   }
 
+  isSessionStorageAvailable() {
+    return typeof sessionStorage !== 'undefined' && sessionStorage !== null;
+  }
+
   saveToSession(userId, key, data) {
     try {
-      if (!userId || typeof sessionStorage === 'undefined') return;
+      if (!userId || !this.isSessionStorageAvailable()) return;
       const sessionKey = this.getSessionKey(userId, key);
       sessionStorage.setItem(sessionKey, JSON.stringify(data));
     } catch (error) {
@@ -71,7 +75,7 @@ class MappingService {
 
   getFromSession(userId, key) {
     try {
-      if (!userId || typeof sessionStorage === 'undefined') return null;
+      if (!userId || !this.isSessionStorageAvailable()) return null;
       const sessionKey = this.getSessionKey(userId, key);
       const stored = sessionStorage.getItem(sessionKey);
       return stored ? JSON.parse(stored) : null;
@@ -82,7 +86,7 @@ class MappingService {
 
   clearSession(userId) {
     try {
-      if (!userId || typeof sessionStorage === 'undefined') return;
+      if (!userId || !this.isSessionStorageAvailable()) return;
       const keys = [
         'products',
         'categories',
@@ -338,31 +342,19 @@ class MappingService {
       }
 
       if (!this.isSupabaseReady()) {
+        // Fallback: return updated mock data
         return { ...existingProduct, ...productData };
       }
 
       console.log(`Updating product ${id} for user_id: ${numericId}`);
 
-      // Build update data - only include fields that exist in the table
-      const updateData = {};
-      
-      if (productData.name !== undefined) {
-        updateData.name = productData.name.trim();
-      }
-      if (productData.price !== undefined) {
-        updateData.price = parseFloat(productData.price);
-      }
-      if (productData.category !== undefined) {
-        updateData.category = productData.category || 'Uncategorized';
-      }
-      if (productData.serving_size_label !== undefined) {
-        updateData.serving_size_label = productData.serving_size_label || null;
-      }
-      if (productData.is_active !== undefined) {
-        updateData.is_active = productData.is_active;
-      }
-
-      console.log('Update data:', updateData);
+      const updateData = {
+        name: productData.name.trim(),
+        price: parseFloat(productData.price),
+        category: productData.category || 'Uncategorized',
+        serving_size_label: productData.serving_size_label || null,
+        is_active: productData.is_active !== undefined ? productData.is_active : true
+      };
 
       const { data: product, error: productError } = await supabase
         .from('products')
@@ -379,6 +371,25 @@ class MappingService {
 
       // Handle ingredients update
       if (productData.ingredients !== undefined) {
+        // Validate ingredient payload before mutating DB.
+        const normalizedIngredients = Array.isArray(productData.ingredients)
+          ? productData.ingredients.map((ingredient) => ({
+              name: ingredient.name?.trim(),
+              quantity: ingredient.quantity !== undefined && ingredient.quantity !== null
+                ? parseFloat(ingredient.quantity)
+                : NaN,
+              unit: ingredient.unit?.trim() || 'kg'
+            }))
+          : [];
+
+        if (normalizedIngredients.some((ingredient) => !ingredient.name)) {
+          throw new Error('All ingredients must include a name.');
+        }
+
+        if (normalizedIngredients.some((ingredient) => isNaN(ingredient.quantity) || ingredient.quantity <= 0)) {
+          throw new Error('All ingredient quantities must be numbers greater than 0.');
+        }
+
         // Delete existing ingredients
         const { error: deleteError } = await supabase
           .from('product_ingredients')
@@ -391,15 +402,15 @@ class MappingService {
         }
 
         // Add new ingredients
-        if (productData.ingredients && productData.ingredients.length > 0) {
-          console.log(`Updating ${productData.ingredients.length} ingredients for product ${id}`);
+        if (normalizedIngredients.length > 0) {
+          console.log(`📝 Updating ${normalizedIngredients.length} ingredients for product ${id}`);
           
-          for (const ingredient of productData.ingredients) {
+          for (const ingredient of normalizedIngredients) {
             try {
               const ingredientId = await this.getOrCreateIngredient(
                 ingredient.name,
-                ingredient.unit || 'kg',
-                numericId
+                ingredient.unit,
+                userId
               );
 
               const { error: piError } = await supabase
@@ -407,14 +418,16 @@ class MappingService {
                 .insert({
                   product_id: id,
                   ingredient_id: ingredientId,
-                  quantity_per_serving: parseFloat(ingredient.quantity) || 1
+                  quantity_per_serving: ingredient.quantity
                 });
 
               if (piError) {
-                console.error(`Error adding ingredient ${ingredient.name}:`, piError);
+                console.error(`❌ Error adding ingredient ${ingredient.name}:`, piError);
+                throw piError;
               }
             } catch (ingredientError) {
-              console.error(`Error processing ingredient ${ingredient.name}:`, ingredientError);
+              console.error(`❌ Error processing ingredient ${ingredient.name || '[missing name]'}:`, ingredientError);
+              throw ingredientError;
             }
           }
         }

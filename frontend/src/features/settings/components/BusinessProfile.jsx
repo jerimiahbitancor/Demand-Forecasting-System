@@ -1,4 +1,4 @@
-// BusinessProfile.jsx
+// frontend/src/features/settings/components/BusinessProfile.jsx
 import { useState, useEffect } from "react";
 import { FiUploadCloud, FiCheckCircle, FiSave, FiEdit } from "react-icons/fi";
 import axios from 'axios';
@@ -14,6 +14,7 @@ function BusinessProfile() {
     business_address: "",
     business_email: "",
     business_contact_number: "",
+    logo: null, // now a Supabase Storage public URL, not base64
   });
 
   const [logoFile, setLogoFile] = useState(null);
@@ -21,33 +22,38 @@ function BusinessProfile() {
   const [isDragging, setIsDragging] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
+  const [isUploadingLogo, setIsUploadingLogo] = useState(false);
 
-  // Axios instance — created first
   const apiClient = axios.create({
     baseURL: API_URL,
-    headers: {
-      'Content-Type': 'application/json',
-    }
+    headers: { 'Content-Type': 'application/json' },
   });
 
-  // One interceptor, attached after apiClient exists
   apiClient.interceptors.request.use(
-    (config) => {
-      Object.assign(config.headers, authService.getAuthHeaders());
+    async (config) => {
+      try {
+        const headers = await authService.getAuthHeaders();
+        if (headers && typeof headers === 'object') {
+          Object.assign(config.headers, headers);
+        }
+      } catch (e) {
+        // swallow - request will still go through without auth header
+      }
       return config;
     },
     (error) => Promise.reject(error)
   );
 
-  // Fetch business profile
   const fetchBusinessProfile = async () => {
     try {
       setIsLoading(true);
       const response = await apiClient.get('/settings/business-profile');
       if (response.data.success && response.data.data) {
         setFormData(response.data.data);
+        if (response.data.data.logo) {
+          setLogoPreview(response.data.data.logo);
+        }
       }
-      // else: no profile saved yet — formData keeps its empty default
     } catch (error) {
       console.error('Error fetching business profile:', error);
       toast.error('Failed to load business profile');
@@ -60,51 +66,72 @@ function BusinessProfile() {
     fetchBusinessProfile();
   }, []);
 
-  // Form input handler
   const handleInputChange = (e) => {
     const { name, value } = e.target;
-    setFormData((prev) => ({
-      ...prev,
-      [name]: value,
-    }));
+    setFormData((prev) => ({ ...prev, [name]: value }));
   };
 
-  // Upload handlers
   const handleFileDrop = (e) => {
     e.preventDefault();
     setIsDragging(false);
     const file = e.dataTransfer.files[0];
-    if (file) {
-      validateAndSetLogoFile(file);
-    }
+    if (file) validateAndSetLogoFile(file);
   };
 
   const handleFileSelect = (e) => {
     const file = e.target.files[0];
-    if (file) {
-      validateAndSetLogoFile(file);
-    }
+    if (file) validateAndSetLogoFile(file);
   };
 
-  const validateAndSetLogoFile = (file) => {
+  // Validates, shows an instant local preview, then uploads to Supabase
+  // Storage right away — by the time the user hits "Save Changes",
+  // formData.logo already holds the final public URL.
+  const validateAndSetLogoFile = async (file) => {
     const validTypes = ["image/png", "image/jpeg", "image/gif", "image/svg+xml"];
     if (!validTypes.includes(file.type) && !file.name.match(/\.(png|jpg|jpeg|gif|svg)$/i)) {
       toast.error("Please upload a PNG, JPG, JPEG, GIF, or SVG image");
       return;
     }
-
     if (file.size > 5 * 1024 * 1024) {
       toast.error("File size exceeds 5MB limit");
       return;
     }
 
     setLogoFile(file);
+
+    // Instant local preview while the upload is in flight
     const reader = new FileReader();
-    reader.onload = (e) => {
-      setLogoPreview(e.target.result);
-    };
+    reader.onload = (e) => setLogoPreview(e.target.result);
     reader.readAsDataURL(file);
-    toast.success('Logo uploaded successfully');
+
+    setIsUploadingLogo(true);
+    const uploadingToast = toast.loading('Uploading logo...');
+    try {
+      const form = new FormData();
+      form.append('logo', file);
+
+      const authHeaders = await authService.getAuthHeaders();
+      const response = await axios.post(
+        `${API_URL}/settings/business-profile/logo`,
+        form,
+        { headers: { ...authHeaders } }
+      );
+
+      toast.dismiss(uploadingToast);
+      if (response.data.success) {
+        setFormData((prev) => ({ ...prev, logo: response.data.url }));
+        setLogoPreview(response.data.url); // swap local preview for the real CDN URL
+        toast.success('Logo uploaded successfully');
+      }
+    } catch (error) {
+      toast.dismiss(uploadingToast);
+      console.error('Error uploading logo:', error);
+      toast.error(error.response?.data?.error || 'Failed to upload logo');
+      setLogoFile(null);
+      setLogoPreview(null);
+    } finally {
+      setIsUploadingLogo(false);
+    }
   };
 
   const handleDragOver = (e) => {
@@ -121,11 +148,10 @@ function BusinessProfile() {
     e.stopPropagation();
     setLogoFile(null);
     setLogoPreview(null);
+    setFormData((prev) => ({ ...prev, logo: null }));
   };
 
-  // Save changes handler
   const handleSaveChanges = async () => {
-    // Validate required fields
     if (!formData.business_name || !formData.business_address) {
       toast.error('Business name and address are required');
       return;
@@ -135,22 +161,10 @@ function BusinessProfile() {
     const savingToast = toast.loading('Saving business profile...');
 
     try {
-      const payload = { ...formData };
-      
-      // If logo file exists, convert to base64 or upload
-      if (logoFile) {
-        // In production, upload to server
-        // const reader = new FileReader();
-        // const base64 = await new Promise((resolve) => {
-        //   reader.onload = (e) => resolve(e.target.result);
-        //   reader.readAsDataURL(logoFile);
-        // });
-        // payload.logo = base64;
-        payload.logo = logoPreview;
-      }
+      // formData.logo is already a Storage URL (or null) — no base64
+      // conversion needed here anymore, the upload already happened.
+      const response = await apiClient.post('/settings/business-profile', formData);
 
-      const response = await apiClient.post('/settings/business-profile', payload);
-      
       toast.dismiss(savingToast);
       if (response.data.success) {
         toast.success('✅ Business profile saved successfully!');
@@ -169,7 +183,6 @@ function BusinessProfile() {
   return (
     <div className="business-profile-container">
       <div className="content-wrapper">
-        {/* Form Section */}
         <div className="form-section">
           <div className="form-group">
             <label htmlFor="businessName" className="form-label">
@@ -232,51 +245,44 @@ function BusinessProfile() {
           </div>
         </div>
 
-        {/* Upload Logo Section */}
         <div className="upload-section">
           <div className="upload-header">
             <h3 className="upload-title">Upload Business Logo</h3>
           </div>
 
-          {/* Current Logo Preview */}
           {logoPreview && (
             <div className="logo-preview">
               <img src={logoPreview} alt="Business Logo" className="logo-image" />
-              <button className="remove-logo-btn" onClick={handleRemoveFile}>
+              <button className="remove-logo-btn" onClick={handleRemoveFile} disabled={isUploadingLogo}>
                 <FiEdit size={16} /> Change
               </button>
             </div>
           )}
 
-          {/* Drag and Drop Zone */}
           <div
             className={`drop-zone ${isDragging ? "dragging" : ""} ${logoFile ? "uploaded" : ""}`}
             onDrop={handleFileDrop}
             onDragOver={handleDragOver}
             onDragLeave={handleDragLeave}
-            onClick={() => document.getElementById("logoFileInput").click()}
+            onClick={() => !isUploadingLogo && document.getElementById("logoFileInput").click()}
           >
             <div className="drop-zone-icon">
               <FiUploadCloud size={32} />
             </div>
-            {logoFile ? (
+            {isUploadingLogo ? (
+              <p className="drop-zone-text">Uploading...</p>
+            ) : logoFile ? (
               <div className="uploaded-file-info">
                 <p className="file-name">{logoFile.name}</p>
-                <p className="file-size">
-                  {(logoFile.size / 1024).toFixed(2)} KB
-                </p>
-                <button
-                  className="remove-file"
-                  onClick={handleRemoveFile}
-                >
+                <p className="file-size">{(logoFile.size / 1024).toFixed(2)} KB</p>
+                <button className="remove-file" onClick={handleRemoveFile}>
                   Remove
                 </button>
               </div>
             ) : (
               <>
                 <p className="drop-zone-text">
-                  Drag and Drop Files or{" "}
-                  <span className="browse-link">Browse</span>
+                  Drag and Drop Files or <span className="browse-link">Browse</span>
                 </p>
                 <p className="upload-subtitle">
                   Supported formats: PNG, JPG, GIF, SVG (Max 5MB)
@@ -289,19 +295,19 @@ function BusinessProfile() {
               className="file-input"
               accept=".png,.jpg,.jpeg,.gif,.svg"
               onChange={handleFileSelect}
+              disabled={isUploadingLogo}
             />
           </div>
         </div>
       </div>
 
-      {/* Save Changes Button */}
       <div className="button-section">
-        <button 
-          className="btn-save-changes" 
+        <button
+          className="btn-save-changes"
           onClick={handleSaveChanges}
-          disabled={isSaving || isLoading}
+          disabled={isSaving || isLoading || isUploadingLogo}
         >
-          <FiSave size={16} /> 
+          <FiSave size={16} />
           {isSaving ? 'Saving...' : 'Save Changes'}
         </button>
       </div>

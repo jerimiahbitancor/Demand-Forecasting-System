@@ -1,4 +1,4 @@
-// src/context/AuthContext.jsx
+// frontend/src/context/AuthContext.jsx
 import { createContext, useContext, useState, useEffect } from 'react';
 import { supabase } from '../config/supabase';
 
@@ -81,6 +81,17 @@ export const AuthProvider = ({ children }) => {
         
         if (session?.user) {
           setUser(session.user);
+          // Persist token for other code paths that read sessionStorage
+          try {
+            if (session.access_token) {
+              sessionStorage.setItem('access_token', session.access_token);
+            }
+            if (session.refresh_token) {
+              sessionStorage.setItem('refresh_token', session.refresh_token);
+            }
+          } catch (e) {
+            console.warn('Failed to persist session tokens to sessionStorage', e);
+          }
           await syncUser();
         } else {
           setUser(null);
@@ -101,9 +112,17 @@ export const AuthProvider = ({ children }) => {
         
         if (session?.user) {
           setUser(session.user);
+          try {
+            if (session.access_token) sessionStorage.setItem('access_token', session.access_token);
+            if (session.refresh_token) sessionStorage.setItem('refresh_token', session.refresh_token);
+          } catch (e) {
+            console.warn('Failed to persist session tokens on auth change', e);
+          }
           await syncUser();
         } else {
           setUser(null);
+          sessionStorage.removeItem('access_token');
+          sessionStorage.removeItem('refresh_token');
         }
         setLoading(false);
       }
@@ -252,6 +271,12 @@ export const AuthProvider = ({ children }) => {
         
         if (!setSessionError && sessionData?.session?.user) {
           setUser(sessionData.session.user);
+          try {
+            if (sessionData.session.access_token) sessionStorage.setItem('access_token', sessionData.session.access_token);
+            if (sessionData.session.refresh_token) sessionStorage.setItem('refresh_token', sessionData.session.refresh_token);
+          } catch (e) {
+            console.warn('Failed to persist session tokens after createPassword', e);
+          }
           
           // Verify session was set
           const { data: verifySession } = await supabase.auth.getSession();
@@ -383,6 +408,8 @@ export const AuthProvider = ({ children }) => {
       await supabase.auth.signOut();
       setUser(null);
       clearRegistrationData();
+      sessionStorage.removeItem('access_token');
+      sessionStorage.removeItem('refresh_token');
       return { success: true };
     } catch (error) {
       console.error('Logout error:', error);
