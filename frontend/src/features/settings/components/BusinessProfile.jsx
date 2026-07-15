@@ -1,6 +1,6 @@
 // frontend/src/features/settings/components/BusinessProfile.jsx
 import { useState, useEffect } from "react";
-import { FiUploadCloud, FiCheckCircle, FiSave, FiEdit } from "react-icons/fi";
+import { FiUploadCloud, FiSave, FiEdit, FiX } from "react-icons/fi";
 import axios from 'axios';
 import toast from 'react-hot-toast';
 import "./BusinessProfile.css";
@@ -14,7 +14,7 @@ function BusinessProfile() {
     business_address: "",
     business_email: "",
     business_contact_number: "",
-    logo: null, // now a Supabase Storage public URL, not base64
+    logo: null,
   });
 
   const [logoFile, setLogoFile] = useState(null);
@@ -83,9 +83,6 @@ function BusinessProfile() {
     if (file) validateAndSetLogoFile(file);
   };
 
-  // Validates, shows an instant local preview, then uploads to Supabase
-  // Storage right away — by the time the user hits "Save Changes",
-  // formData.logo already holds the final public URL.
   const validateAndSetLogoFile = async (file) => {
     const validTypes = ["image/png", "image/jpeg", "image/gif", "image/svg+xml"];
     if (!validTypes.includes(file.type) && !file.name.match(/\.(png|jpg|jpeg|gif|svg)$/i)) {
@@ -99,7 +96,6 @@ function BusinessProfile() {
 
     setLogoFile(file);
 
-    // Instant local preview while the upload is in flight
     const reader = new FileReader();
     reader.onload = (e) => setLogoPreview(e.target.result);
     reader.readAsDataURL(file);
@@ -120,7 +116,7 @@ function BusinessProfile() {
       toast.dismiss(uploadingToast);
       if (response.data.success) {
         setFormData((prev) => ({ ...prev, logo: response.data.url }));
-        setLogoPreview(response.data.url); // swap local preview for the real CDN URL
+        setLogoPreview(response.data.url);
         toast.success('Logo uploaded successfully');
       }
     } catch (error) {
@@ -161,8 +157,6 @@ function BusinessProfile() {
     const savingToast = toast.loading('Saving business profile...');
 
     try {
-      // formData.logo is already a Storage URL (or null) — no base64
-      // conversion needed here anymore, the upload already happened.
       const response = await apiClient.post('/settings/business-profile', formData);
 
       toast.dismiss(savingToast);
@@ -247,57 +241,69 @@ function BusinessProfile() {
 
         <div className="upload-section">
           <div className="upload-header">
-            <h3 className="upload-title">Upload Business Logo</h3>
+            <h3 className="upload-title">Business Logo</h3>
+            <p className="upload-subtitle">Upload your business logo (PNG, JPG, GIF, SVG - Max 5MB)</p>
           </div>
 
+          {/* Logo Preview */}
           {logoPreview && (
-            <div className="logo-preview">
-              <img src={logoPreview} alt="Business Logo" className="logo-image" />
-              <button className="remove-logo-btn" onClick={handleRemoveFile} disabled={isUploadingLogo}>
-                <FiEdit size={16} /> Change
+            <div className="logo-preview-container">
+              <div className="logo-preview-wrapper">
+                <img src={logoPreview} alt="Business Logo" className="logo-preview-image" />
+                <button 
+                  className="logo-remove-btn" 
+                  onClick={handleRemoveFile} 
+                  disabled={isUploadingLogo}
+                  title="Remove logo"
+                >
+                  <FiX size={16} />
+                </button>
+              </div>
+              <button 
+                className="logo-change-btn" 
+                onClick={() => document.getElementById("logoFileInput").click()}
+                disabled={isUploadingLogo}
+              >
+                <FiEdit size={14} /> Change Logo
               </button>
             </div>
           )}
 
-          <div
-            className={`drop-zone ${isDragging ? "dragging" : ""} ${logoFile ? "uploaded" : ""}`}
-            onDrop={handleFileDrop}
-            onDragOver={handleDragOver}
-            onDragLeave={handleDragLeave}
-            onClick={() => !isUploadingLogo && document.getElementById("logoFileInput").click()}
-          >
-            <div className="drop-zone-icon">
-              <FiUploadCloud size={32} />
-            </div>
-            {isUploadingLogo ? (
-              <p className="drop-zone-text">Uploading...</p>
-            ) : logoFile ? (
-              <div className="uploaded-file-info">
-                <p className="file-name">{logoFile.name}</p>
-                <p className="file-size">{(logoFile.size / 1024).toFixed(2)} KB</p>
-                <button className="remove-file" onClick={handleRemoveFile}>
-                  Remove
-                </button>
+          {/* Drop Zone */}
+          {!logoPreview && (
+            <div
+              className={`drop-zone ${isDragging ? "dragging" : ""}`}
+              onDrop={handleFileDrop}
+              onDragOver={handleDragOver}
+              onDragLeave={handleDragLeave}
+              onClick={() => !isUploadingLogo && document.getElementById("logoFileInput").click()}
+            >
+              <div className="drop-zone-icon">
+                <FiUploadCloud size={28} />
               </div>
-            ) : (
-              <>
-                <p className="drop-zone-text">
-                  Drag and Drop Files or <span className="browse-link">Browse</span>
-                </p>
-                <p className="upload-subtitle">
-                  Supported formats: PNG, JPG, GIF, SVG (Max 5MB)
-                </p>
-              </>
-            )}
-            <input
-              type="file"
-              id="logoFileInput"
-              className="file-input"
-              accept=".png,.jpg,.jpeg,.gif,.svg"
-              onChange={handleFileSelect}
-              disabled={isUploadingLogo}
-            />
-          </div>
+              {isUploadingLogo ? (
+                <div className="uploading-status">
+                  <div className="spinner"></div>
+                  <p className="drop-zone-text">Uploading logo...</p>
+                </div>
+              ) : (
+                <>
+                  <p className="drop-zone-text">
+                    Drag & drop your logo here or <span className="browse-link">browse</span>
+                  </p>
+                  <p className="drop-zone-hint">Supports PNG, JPG, GIF, SVG up to 5MB</p>
+                </>
+              )}
+              <input
+                type="file"
+                id="logoFileInput"
+                className="file-input"
+                accept=".png,.jpg,.jpeg,.gif,.svg"
+                onChange={handleFileSelect}
+                disabled={isUploadingLogo}
+              />
+            </div>
+          )}
         </div>
       </div>
 
