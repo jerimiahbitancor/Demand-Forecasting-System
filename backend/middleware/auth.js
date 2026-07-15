@@ -1,4 +1,4 @@
-// middleware/auth.js
+// backend/middleware/auth.js
 const { supabase } = require('../config/supabase');
 
 const authenticate = async (req, res, next) => {
@@ -58,6 +58,9 @@ const authenticate = async (req, res, next) => {
       user_id: customUserId
     };
     req.authUser = user;
+    // Attach the raw access token so downstream handlers can create
+    // a user-scoped Supabase client (so RLS policies run in user context)
+    req.accessToken = token;
 
     console.log('User authenticated:', req.user.email);
     console.log('User ID:', req.user.id);

@@ -272,6 +272,24 @@ const MappingData = () => {
     if (formData.ingredients.length === 0) {
       errors.ingredients = "At least one ingredient is required";
       isValid = false;
+    } else {
+      formData.ingredients.forEach((ingredient, index) => {
+        const name = ingredient.name?.trim();
+        const quantity = parseFloat(ingredient.quantity);
+
+        if (!name) {
+          errors.ingredients = "All ingredients must have a name.";
+          isValid = false;
+        }
+
+        if (ingredient.quantity === undefined || ingredient.quantity === null || ingredient.quantity === '') {
+          errors.ingredients = "All ingredients must have a quantity.";
+          isValid = false;
+        } else if (isNaN(quantity) || quantity <= 0) {
+          errors.ingredients = "Ingredient quantities must be numbers greater than 0.";
+          isValid = false;
+        }
+      });
     }
 
     setFormErrors(errors);

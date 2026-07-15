@@ -1,0 +1,170 @@
+-- WARNING: This schema is for context only and is not meant to be run.
+-- Table order and constraints may not be valid for execution.
+
+CREATE TABLE public.users (
+  id integer NOT NULL DEFAULT nextval('users_id_seq'::regclass),
+  email character varying NOT NULL UNIQUE,
+  created_at timestamp without time zone DEFAULT now(),
+  name character varying NOT NULL,
+  is_verified boolean DEFAULT false,
+  verified_at timestamp without time zone,
+  auth_id uuid UNIQUE,
+  CONSTRAINT users_pkey PRIMARY KEY (id)
+);
+CREATE TABLE public.business_profile (
+  id integer NOT NULL DEFAULT nextval('business_profile_id_seq'::regclass),
+  business_name character varying NOT NULL,
+  business_email character varying NOT NULL,
+  business_contact_number character varying NOT NULL,
+  business_address text,
+  logo_url character varying,
+  updated_at timestamp without time zone DEFAULT now(),
+  user_id integer UNIQUE,
+  CONSTRAINT business_profile_pkey PRIMARY KEY (id),
+  CONSTRAINT fk_business_profile_user FOREIGN KEY (user_id) REFERENCES public.users(id)
+);
+CREATE TABLE public.forecast_config (
+  id integer NOT NULL DEFAULT nextval('forecast_config_id_seq'::regclass),
+  safety_buffer_percentage numeric DEFAULT 15.00,
+  updated_at timestamp without time zone DEFAULT now(),
+  CONSTRAINT forecast_config_pkey PRIMARY KEY (id)
+);
+CREATE TABLE public.system_actions_log (
+  id integer NOT NULL DEFAULT nextval('system_actions_log_id_seq'::regclass),
+  action_type character varying NOT NULL,
+  performed_at timestamp without time zone DEFAULT now(),
+  details text,
+  CONSTRAINT system_actions_log_pkey PRIMARY KEY (id)
+);
+CREATE TABLE public.products (
+  id integer NOT NULL DEFAULT nextval('products_id_seq'::regclass),
+  name character varying NOT NULL UNIQUE,
+  price numeric NOT NULL,
+  category character varying NOT NULL,
+  serving_size_label character varying,
+  is_active boolean DEFAULT true,
+  first_sold_date date,
+  created_at timestamp without time zone DEFAULT now(),
+  user_id integer,
+  CONSTRAINT products_pkey PRIMARY KEY (id),
+  CONSTRAINT fk_products_user FOREIGN KEY (user_id) REFERENCES public.users(id)
+);
+CREATE TABLE public.ingredients (
+  id integer NOT NULL DEFAULT nextval('ingredients_id_seq'::regclass),
+  name character varying NOT NULL UNIQUE,
+  unit character varying NOT NULL,
+  user_id integer,
+  CONSTRAINT ingredients_pkey PRIMARY KEY (id),
+  CONSTRAINT fk_ingredients_user FOREIGN KEY (user_id) REFERENCES public.users(id)
+);
+CREATE TABLE public.product_ingredients (
+  id integer NOT NULL DEFAULT nextval('product_ingredients_id_seq'::regclass),
+  product_id integer,
+  ingredient_id integer,
+  quantity_per_serving numeric NOT NULL,
+  CONSTRAINT product_ingredients_pkey PRIMARY KEY (id),
+  CONSTRAINT product_ingredients_product_id_fkey FOREIGN KEY (product_id) REFERENCES public.products(id),
+  CONSTRAINT product_ingredients_ingredient_id_fkey FOREIGN KEY (ingredient_id) REFERENCES public.ingredients(id)
+);
+CREATE TABLE public.fixed_holidays (
+  id integer NOT NULL DEFAULT nextval('fixed_holidays_id_seq'::regclass),
+  month integer NOT NULL,
+  day integer NOT NULL,
+  label character varying NOT NULL,
+  CONSTRAINT fixed_holidays_pkey PRIMARY KEY (id)
+);
+CREATE TABLE public.special_holidays (
+  id integer NOT NULL DEFAULT nextval('special_holidays_id_seq'::regclass),
+  date date NOT NULL UNIQUE,
+  label character varying NOT NULL,
+  CONSTRAINT special_holidays_pkey PRIMARY KEY (id)
+);
+CREATE TABLE public.uploads (
+  id integer NOT NULL DEFAULT nextval('uploads_id_seq'::regclass),
+  filename character varying NOT NULL,
+  upload_date timestamp without time zone DEFAULT now(),
+  row_count integer,
+  status character varying DEFAULT 'pending'::character varying,
+  error_message text,
+  user_id integer,
+  CONSTRAINT uploads_pkey PRIMARY KEY (id),
+  CONSTRAINT fk_uploads_user FOREIGN KEY (user_id) REFERENCES public.users(id)
+);
+CREATE TABLE public.daily_sales (
+  id integer NOT NULL DEFAULT nextval('daily_sales_id_seq'::regclass),
+  product_id integer,
+  sale_date date NOT NULL,
+  quantity_sold integer NOT NULL,
+  upload_id integer,
+  CONSTRAINT daily_sales_pkey PRIMARY KEY (id),
+  CONSTRAINT daily_sales_product_id_fkey FOREIGN KEY (product_id) REFERENCES public.products(id),
+  CONSTRAINT daily_sales_upload_id_fkey FOREIGN KEY (upload_id) REFERENCES public.uploads(id)
+);
+CREATE TABLE public.forecasts (
+  id integer NOT NULL DEFAULT nextval('forecasts_id_seq'::regclass),
+  product_id integer,
+  forecast_date date NOT NULL,
+  predicted_quantity numeric NOT NULL,
+  predicted_revenue numeric,
+  model_version character varying,
+  created_at timestamp without time zone DEFAULT now(),
+  CONSTRAINT forecasts_pkey PRIMARY KEY (id),
+  CONSTRAINT forecasts_product_id_fkey FOREIGN KEY (product_id) REFERENCES public.products(id)
+);
+CREATE TABLE public.model_metrics (
+  id integer NOT NULL DEFAULT nextval('model_metrics_id_seq'::regclass),
+  model_version character varying NOT NULL,
+  evaluation_date date DEFAULT CURRENT_DATE,
+  mape numeric,
+  mae numeric,
+  rmse numeric,
+  notes text,
+  CONSTRAINT model_metrics_pkey PRIMARY KEY (id)
+);
+CREATE TABLE public.product_classifications (
+  id integer NOT NULL DEFAULT nextval('product_classifications_id_seq'::regclass),
+  product_id integer,
+  classification_date date DEFAULT CURRENT_DATE,
+  demand_tier character varying NOT NULL,
+  basis character varying,
+  CONSTRAINT product_classifications_pkey PRIMARY KEY (id),
+  CONSTRAINT product_classifications_product_id_fkey FOREIGN KEY (product_id) REFERENCES public.products(id)
+);
+CREATE TABLE public.notifications (
+  id bigint NOT NULL DEFAULT nextval('notifications_id_seq'::regclass),
+  user_id uuid NOT NULL,
+  type character varying NOT NULL DEFAULT 'info'::character varying,
+  title character varying NOT NULL,
+  message text NOT NULL,
+  link character varying,
+  read boolean DEFAULT false,
+  created_at timestamp with time zone DEFAULT now(),
+  updated_at timestamp with time zone DEFAULT now(),
+  metadata jsonb,
+  CONSTRAINT notifications_pkey PRIMARY KEY (id),
+  CONSTRAINT fk_notifications_user FOREIGN KEY (user_id) REFERENCES auth.users(id)
+);
+CREATE TABLE public.password_resets (
+  id integer NOT NULL DEFAULT nextval('password_resets_id_seq'::regclass),
+  user_id integer NOT NULL UNIQUE,
+  email character varying NOT NULL,
+  verification_code character varying NOT NULL,
+  expires_at timestamp with time zone NOT NULL,
+  is_used boolean DEFAULT false,
+  created_at timestamp with time zone DEFAULT now(),
+  used_at timestamp with time zone,
+  CONSTRAINT password_resets_pkey PRIMARY KEY (id),
+  CONSTRAINT password_resets_user_id_fkey FOREIGN KEY (user_id) REFERENCES public.users(id)
+);
+CREATE TABLE public.email_verifications (
+  id integer NOT NULL DEFAULT nextval('email_verifications_id_seq'::regclass),
+  user_id integer NOT NULL UNIQUE,
+  email character varying NOT NULL,
+  verification_code character varying NOT NULL,
+  expires_at timestamp with time zone NOT NULL,
+  is_used boolean DEFAULT false,
+  used_at timestamp with time zone,
+  created_at timestamp with time zone DEFAULT now(),
+  CONSTRAINT email_verifications_pkey PRIMARY KEY (id),
+  CONSTRAINT email_verifications_user_id_fkey FOREIGN KEY (user_id) REFERENCES public.users(id)
+);

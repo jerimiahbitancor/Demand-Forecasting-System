@@ -26,9 +26,13 @@ isValidUserId(userId) {
     return `mapping_${userId}_${key}`;
   }
 
+  isSessionStorageAvailable() {
+    return typeof sessionStorage !== 'undefined' && sessionStorage !== null;
+  }
+
   saveToSession(userId, key, data) {
     try {
-      if (!userId) return;
+      if (!userId || !this.isSessionStorageAvailable()) return;
       const sessionKey = this.getSessionKey(userId, key);
       sessionStorage.setItem(sessionKey, JSON.stringify(data));
     } catch (error) {
@@ -38,7 +42,7 @@ isValidUserId(userId) {
 
   getFromSession(userId, key) {
     try {
-      if (!userId) return null;
+      if (!userId || !this.isSessionStorageAvailable()) return null;
       const sessionKey = this.getSessionKey(userId, key);
       const stored = sessionStorage.getItem(sessionKey);
       return stored ? JSON.parse(stored) : null;
@@ -50,7 +54,7 @@ isValidUserId(userId) {
 
   clearSession(userId) {
     try {
-      if (!userId) return;
+      if (!userId || !this.isSessionStorageAvailable()) return;
       const keys = [
         'products',
         'categories',
@@ -226,8 +230,7 @@ isValidUserId(userId) {
         const mockProduct = {
           id: Date.now(),
           ...productData,
-          created_at: new Date().toISOString(),
-          updated_at: new Date().toISOString()
+          created_at: new Date().toISOString()
         };
         return mockProduct;
       }
@@ -312,7 +315,7 @@ isValidUserId(userId) {
 
       if (!this.isSupabaseReady()) {
         // Fallback: return updated mock data
-        return { ...existingProduct, ...productData, updated_at: new Date().toISOString() };
+        return { ...existingProduct, ...productData };
       }
 
       console.log(`✏️ Updating product ${id} for user_id: ${userId}`);
@@ -322,8 +325,7 @@ isValidUserId(userId) {
         price: parseFloat(productData.price),
         category: productData.category || 'Uncategorized',
         serving_size_label: productData.serving_size_label || null,
-        is_active: productData.is_active !== undefined ? productData.is_active : true,
-        updated_at: new Date().toISOString()
+        is_active: productData.is_active !== undefined ? productData.is_active : true
       };
 
       const { data: product, error: productError } = await supabase
@@ -341,6 +343,25 @@ isValidUserId(userId) {
 
       // Update ingredients if provided
       if (productData.ingredients !== undefined) {
+        // Validate ingredient payload before mutating DB.
+        const normalizedIngredients = Array.isArray(productData.ingredients)
+          ? productData.ingredients.map((ingredient) => ({
+              name: ingredient.name?.trim(),
+              quantity: ingredient.quantity !== undefined && ingredient.quantity !== null
+                ? parseFloat(ingredient.quantity)
+                : NaN,
+              unit: ingredient.unit?.trim() || 'kg'
+            }))
+          : [];
+
+        if (normalizedIngredients.some((ingredient) => !ingredient.name)) {
+          throw new Error('All ingredients must include a name.');
+        }
+
+        if (normalizedIngredients.some((ingredient) => isNaN(ingredient.quantity) || ingredient.quantity <= 0)) {
+          throw new Error('All ingredient quantities must be numbers greater than 0.');
+        }
+
         // Delete existing ingredients
         const { error: deleteError } = await supabase
           .from('product_ingredients')
@@ -353,14 +374,14 @@ isValidUserId(userId) {
         }
 
         // Add new ingredients
-        if (productData.ingredients && productData.ingredients.length > 0) {
-          console.log(`📝 Updating ${productData.ingredients.length} ingredients for product ${id}`);
+        if (normalizedIngredients.length > 0) {
+          console.log(`📝 Updating ${normalizedIngredients.length} ingredients for product ${id}`);
           
-          for (const ingredient of productData.ingredients) {
+          for (const ingredient of normalizedIngredients) {
             try {
               const ingredientId = await this.getOrCreateIngredient(
                 ingredient.name,
-                ingredient.unit || 'kg',
+                ingredient.unit,
                 userId
               );
 
@@ -369,14 +390,16 @@ isValidUserId(userId) {
                 .insert({
                   product_id: id,
                   ingredient_id: ingredientId,
-                  quantity_per_serving: parseFloat(ingredient.quantity) || 1
+                  quantity_per_serving: ingredient.quantity
                 });
 
               if (piError) {
                 console.error(`❌ Error adding ingredient ${ingredient.name}:`, piError);
+                throw piError;
               }
             } catch (ingredientError) {
-              console.error(`❌ Error processing ingredient ${ingredient.name}:`, ingredientError);
+              console.error(`❌ Error processing ingredient ${ingredient.name || '[missing name]'}:`, ingredientError);
+              throw ingredientError;
             }
           }
         }
