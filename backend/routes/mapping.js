@@ -6,11 +6,6 @@ const mappingService = require('../services/mappingService');
 
 // ============== PRODUCT ENDPOINTS ==============
 
-/**
- * GET /api/mapping/products
- * Get all products with their ingredients (filtered by user)
- * Query params: category, search, forceRefresh
- */
 router.get('/products', authenticate, async (req, res) => {
   try {
     if (!req.user) {
@@ -21,11 +16,11 @@ router.get('/products', authenticate, async (req, res) => {
     }
 
     const { category, search, forceRefresh } = req.query;
-    const userId = req.user.id;
+    const userId = req.user?.user_id || req.user?.id;
     
-    console.log(`📊 Fetching products for user: ${userId}${forceRefresh ? ' (force refresh)' : ''}`);
+    console.log('Fetching products for user:', userId);
+    console.log('User object:', JSON.stringify(req.user, null, 2));
     
-    // Force refresh parameter to bypass cache
     const force = forceRefresh === 'true';
     const products = await mappingService.getProducts(userId, category, search, force);
     
@@ -36,7 +31,7 @@ router.get('/products', authenticate, async (req, res) => {
       fromCache: !force && products.length > 0
     });
   } catch (error) {
-    console.error('❌ Error fetching products:', error);
+    console.error('Error fetching products:', error);
     res.status(500).json({
       success: false,
       error: 'Failed to fetch products',
@@ -45,10 +40,6 @@ router.get('/products', authenticate, async (req, res) => {
   }
 });
 
-/**
- * GET /api/mapping/products/:id
- * Get a single product with its ingredients
- */
 router.get('/products/:id', authenticate, async (req, res) => {
   try {
     if (!req.user) {
@@ -58,8 +49,10 @@ router.get('/products/:id', authenticate, async (req, res) => {
       });
     }
 
-    const userId = req.user.id;
+    const userId = req.user?.user_id || req.user?.id;
     const productId = parseInt(req.params.id);
+    
+    console.log('Get product - userId:', userId, 'productId:', productId);
     
     if (isNaN(productId)) {
       return res.status(400).json({
@@ -82,7 +75,7 @@ router.get('/products/:id', authenticate, async (req, res) => {
       data: product
     });
   } catch (error) {
-    console.error('❌ Error fetching product:', error);
+    console.error('Error fetching product:', error);
     res.status(500).json({
       success: false,
       error: 'Failed to fetch product',
@@ -91,10 +84,6 @@ router.get('/products/:id', authenticate, async (req, res) => {
   }
 });
 
-/**
- * POST /api/mapping/products
- * Create a new product with ingredients
- */
 router.post('/products', authenticate, async (req, res) => {
   try {
     if (!req.user) {
@@ -105,9 +94,18 @@ router.post('/products', authenticate, async (req, res) => {
     }
 
     const { name, price, category, serving_size_label, ingredients } = req.body;
-    const userId = req.user.id;
+    const userId = req.user?.user_id || req.user?.id;
     
-    // Enhanced validation
+    console.log('Creating product - userId:', userId);
+    
+    // Validate userId exists
+    if (!userId) {
+      return res.status(400).json({
+        success: false,
+        error: 'User not found in system. Please login again.'
+      });
+    }
+    
     if (!name || name.trim() === '') {
       return res.status(400).json({
         success: false,
@@ -137,7 +135,7 @@ router.post('/products', authenticate, async (req, res) => {
       });
     }
     
-    console.log(`📝 Creating product "${name}" for user: ${userId}`);
+    console.log(`Creating product "${name}" for user: ${userId}`);
     
     const product = await mappingService.createProduct({
       name: name.trim(),
@@ -158,10 +156,9 @@ router.post('/products', authenticate, async (req, res) => {
       message: 'Product created successfully'
     });
   } catch (error) {
-    console.error('❌ Error creating product:', error);
+    console.error('Error creating product:', error);
     
-    // Handle specific database errors
-    if (error.code === '23505') { // Unique violation
+    if (error.code === '23505') {
       return res.status(409).json({
         success: false,
         error: 'A product with this name already exists'
@@ -176,10 +173,6 @@ router.post('/products', authenticate, async (req, res) => {
   }
 });
 
-/**
- * PUT /api/mapping/products/:id
- * Update a product (verifies ownership)
- */
 router.put('/products/:id', authenticate, async (req, res) => {
   try {
     if (!req.user) {
@@ -198,9 +191,21 @@ router.put('/products/:id', authenticate, async (req, res) => {
     }
 
     const { name, price, category, serving_size_label, is_active, ingredients } = req.body;
-    const userId = req.user.id;
+    const userId = req.user?.user_id || req.user?.id;
     
-    // Validation
+    console.log('===== UPDATE PRODUCT REQUEST =====');
+    console.log('Product ID:', productId);
+    console.log('User ID:', userId);
+    console.log('User object:', JSON.stringify(req.user, null, 2));
+    console.log('Request body:', JSON.stringify(req.body, null, 2));
+    
+    if (!userId) {
+      return res.status(400).json({
+        success: false,
+        error: 'User not found in system. Please login again.'
+      });
+    }
+    
     if (name !== undefined && name.trim() === '') {
       return res.status(400).json({
         success: false,
@@ -218,7 +223,7 @@ router.put('/products/:id', authenticate, async (req, res) => {
       }
     }
     
-    console.log(`✏️ Updating product ${productId} for user: ${userId}`);
+    console.log(`Updating product ${productId} for user: ${userId}`);
     
     const product = await mappingService.updateProduct(productId, {
       name: name?.trim(),
@@ -240,15 +245,19 @@ router.put('/products/:id', authenticate, async (req, res) => {
       });
     }
     
+    console.log('Product updated successfully:', product);
+    console.log('===== END UPDATE =====');
+    
     res.json({
       success: true,
       data: product,
       message: 'Product updated successfully'
     });
   } catch (error) {
-    console.error('❌ Error updating product:', error);
+    console.error('Error updating product:', error);
+    console.error('Error stack:', error.stack);
     
-    if (error.code === '23505') { // Unique violation
+    if (error.code === '23505') {
       return res.status(409).json({
         success: false,
         error: 'A product with this name already exists'
@@ -258,15 +267,12 @@ router.put('/products/:id', authenticate, async (req, res) => {
     res.status(500).json({
       success: false,
       error: 'Failed to update product',
-      details: process.env.NODE_ENV === 'development' ? error.message : undefined
+      details: process.env.NODE_ENV === 'development' ? error.message : undefined,
+      stack: process.env.NODE_ENV === 'development' ? error.stack : undefined
     });
   }
 });
 
-/**
- * DELETE /api/mapping/products/:id
- * Delete a product (verifies ownership)
- */
 router.delete('/products/:id', authenticate, async (req, res) => {
   try {
     if (!req.user) {
@@ -284,9 +290,9 @@ router.delete('/products/:id', authenticate, async (req, res) => {
       });
     }
 
-    const userId = req.user.id;
+    const userId = req.user?.user_id || req.user?.id;
     
-    console.log(`🗑️ Deleting product ${productId} for user: ${userId}`);
+    console.log(`Deleting product ${productId} for user: ${userId}`);
     
     const success = await mappingService.deleteProduct(productId, userId);
     
@@ -302,7 +308,7 @@ router.delete('/products/:id', authenticate, async (req, res) => {
       message: 'Product deleted successfully'
     });
   } catch (error) {
-    console.error('❌ Error deleting product:', error);
+    console.error('Error deleting product:', error);
     res.status(500).json({
       success: false,
       error: 'Failed to delete product',
@@ -313,11 +319,6 @@ router.delete('/products/:id', authenticate, async (req, res) => {
 
 // ============== CATEGORY ENDPOINTS ==============
 
-/**
- * GET /api/mapping/categories
- * Get all categories (filtered by user)
- * Query params: forceRefresh
- */
 router.get('/categories', authenticate, async (req, res) => {
   try {
     if (!req.user) {
@@ -327,11 +328,11 @@ router.get('/categories', authenticate, async (req, res) => {
       });
     }
 
-    const userId = req.user.id;
+    const userId = req.user?.user_id || req.user?.id;
     const { forceRefresh } = req.query;
     const force = forceRefresh === 'true';
     
-    console.log(`📂 Fetching categories for user: ${userId}${force ? ' (force refresh)' : ''}`);
+    console.log(`Fetching categories for user: ${userId}${force ? ' (force refresh)' : ''}`);
     
     const categories = await mappingService.getCategories(userId, force);
     
@@ -341,7 +342,7 @@ router.get('/categories', authenticate, async (req, res) => {
       count: categories.length
     });
   } catch (error) {
-    console.error('❌ Error fetching categories:', error);
+    console.error('Error fetching categories:', error);
     res.status(500).json({
       success: false,
       error: 'Failed to fetch categories',
@@ -352,10 +353,6 @@ router.get('/categories', authenticate, async (req, res) => {
 
 // ============== UTILITY ENDPOINTS ==============
 
-/**
- * GET /api/mapping/stats
- * Get product statistics for the current user
- */
 router.get('/stats', authenticate, async (req, res) => {
   try {
     if (!req.user) {
@@ -365,12 +362,10 @@ router.get('/stats', authenticate, async (req, res) => {
       });
     }
 
-    const userId = req.user.id;
+    const userId = req.user?.user_id || req.user?.id;
     
-    // Get all products
     const products = await mappingService.getProducts(userId);
     
-    // Calculate statistics
     const stats = {
       totalProducts: products.length,
       categories: new Set(products.map(p => p.category)).size,
@@ -393,7 +388,7 @@ router.get('/stats', authenticate, async (req, res) => {
       data: stats
     });
   } catch (error) {
-    console.error('❌ Error fetching stats:', error);
+    console.error('Error fetching stats:', error);
     res.status(500).json({
       success: false,
       error: 'Failed to fetch statistics',
@@ -402,11 +397,6 @@ router.get('/stats', authenticate, async (req, res) => {
   }
 });
 
-/**
- * GET /api/mapping/search
- * Search products by name or ingredient
- * Query params: q (search query)
- */
 router.get('/search', authenticate, async (req, res) => {
   try {
     if (!req.user) {
@@ -417,7 +407,7 @@ router.get('/search', authenticate, async (req, res) => {
     }
 
     const { q } = req.query;
-    const userId = req.user.id;
+    const userId = req.user?.user_id || req.user?.id;
     
     if (!q || q.trim() === '') {
       return res.status(400).json({
@@ -426,9 +416,8 @@ router.get('/search', authenticate, async (req, res) => {
       });
     }
     
-    console.log(`🔍 Searching for "${q}" for user: ${userId}`);
+    console.log(`Searching for "${q}" for user: ${userId}`);
     
-    // Get all products and filter locally (or you could add a search endpoint to your service)
     const products = await mappingService.getProducts(userId);
     
     const results = products.filter(product => 
@@ -446,7 +435,7 @@ router.get('/search', authenticate, async (req, res) => {
       query: q
     });
   } catch (error) {
-    console.error('❌ Error searching products:', error);
+    console.error('Error searching products:', error);
     res.status(500).json({
       success: false,
       error: 'Failed to search products',
@@ -455,10 +444,6 @@ router.get('/search', authenticate, async (req, res) => {
   }
 });
 
-/**
- * POST /api/mapping/refresh
- * Force refresh the cache for the current user
- */
 router.post('/refresh', authenticate, async (req, res) => {
   try {
     if (!req.user) {
@@ -468,14 +453,12 @@ router.post('/refresh', authenticate, async (req, res) => {
       });
     }
 
-    const userId = req.user.id;
+    const userId = req.user?.user_id || req.user?.id;
     
-    console.log(`🔄 Refreshing cache for user: ${userId}`);
+    console.log(`Refreshing cache for user: ${userId}`);
     
-    // Clear session cache
     mappingService.clearSession(userId);
     
-    // Fetch fresh data
     const products = await mappingService.getProducts(userId, null, null, true);
     const categories = await mappingService.getCategories(userId, true);
     
@@ -488,7 +471,7 @@ router.post('/refresh', authenticate, async (req, res) => {
       }
     });
   } catch (error) {
-    console.error('❌ Error refreshing cache:', error);
+    console.error('Error refreshing cache:', error);
     res.status(500).json({
       success: false,
       error: 'Failed to refresh cache',

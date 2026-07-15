@@ -45,6 +45,28 @@ const authenticate = async (req, res, next) => {
         console.log('Custom user found:', customUserId);
       } else {
         console.log('No custom user found for auth_id:', user.id);
+        // Try to create user if not exists
+        try {
+          const { data: newUser, error: insertError } = await supabase
+            .from('users')
+            .insert({
+              auth_id: user.id,
+              email: user.email,
+              name: user.user_metadata?.full_name || user.user_metadata?.name || user.email.split('@')[0] || 'User',
+              is_verified: user.email_confirmed_at ? true : false,
+              verified_at: user.email_confirmed_at || null
+            })
+            .select()
+            .single();
+          
+          if (!insertError && newUser) {
+            customUserId = newUser.id;
+            customUser = newUser;
+            console.log('Created custom user:', customUserId);
+          }
+        } catch (createError) {
+          console.error('Error creating custom user:', createError);
+        }
       }
     } catch (err) {
       console.error('Error fetching custom user:', err);
@@ -63,8 +85,8 @@ const authenticate = async (req, res, next) => {
     req.accessToken = token;
 
     console.log('User authenticated:', req.user.email);
-    console.log('User ID:', req.user.id);
-    console.log('User user_id:', req.user.user_id);
+    console.log('User ID (auth):', req.user.id);
+    console.log('User user_id (custom):', req.user.user_id);
     next();
 
   } catch (error) {
