@@ -89,7 +89,9 @@ class MappingService {
       if (!userId || !this.isSessionStorageAvailable()) return;
       const keys = [
         'products',
-        'categories',
+        'products_inactive',
+        'categories_active',
+        'categories_inactive',
         'totalProducts',
         'searchTerm',
         'selectedCategory',
@@ -104,7 +106,7 @@ class MappingService {
     }
   }
 
-  async getProducts(userId, category = null, search = null, forceRefresh = false) {
+  async getProducts(userId, category = null, search = null, forceRefresh = false, status = 'active') {
     try {
       const numericId = await this.getNumericUserId(userId);
       if (!numericId) {
@@ -112,10 +114,15 @@ class MappingService {
         return [];
       }
 
-      if (!forceRefresh) {
-        const cached = this.getFromSession(numericId, 'products');
+      const cacheKeys = {
+        active: 'products',
+        inactive: 'products_inactive'
+      };
+      const cacheKey = cacheKeys[status] || null;
+      if (!forceRefresh && cacheKey) {
+        const cached = this.getFromSession(numericId, cacheKey);
         if (cached && Array.isArray(cached)) {
-          console.log(`Using cached products from sessionStorage (${cached.length} items)`);
+          console.log(`Using cached products from sessionStorage (${cached.length} items, status=${status})`);
           
           let filtered = [...cached];
           if (category && category !== 'All') {
@@ -136,7 +143,7 @@ class MappingService {
         return [];
       }
 
-      console.log(`Fetching products for user_id: ${numericId}${forceRefresh ? ' (forced refresh)' : ''}`);
+      console.log(`Fetching products for user_id: ${numericId}${forceRefresh ? ' (forced refresh)' : ''}${status ? ` status=${status}` : ''}`);
 
       let query = supabase
         .from('products')
@@ -154,6 +161,12 @@ class MappingService {
         .eq('user_id', numericId)
         .order('name');
 
+      if (status === 'active') {
+        query = query.eq('is_active', true);
+      } else if (status === 'inactive') {
+        query = query.eq('is_active', false);
+      }
+
       if (category && category !== 'All') {
         query = query.eq('category', category);
       }
@@ -169,8 +182,8 @@ class MappingService {
         throw error;
       }
 
-      if (data && Array.isArray(data)) {
-        this.saveToSession(numericId, 'products', data);
+      if (data && Array.isArray(data) && cacheKey) {
+        this.saveToSession(numericId, cacheKey, data);
         this.saveToSession(numericId, 'totalProducts', data.length);
         
         const categories = ['All', ...new Set(data.map(item => item.category).filter(Boolean))];
@@ -348,13 +361,18 @@ class MappingService {
 
       console.log(`Updating product ${id} for user_id: ${numericId}`);
 
-      const updateData = {
-        name: productData.name.trim(),
-        price: parseFloat(productData.price),
-        category: productData.category || 'Uncategorized',
-        serving_size_label: productData.serving_size_label || null,
-        is_active: productData.is_active !== undefined ? productData.is_active : true
-      };
+      const updateData = {};
+      if (productData.name !== undefined) updateData.name = productData.name.trim();
+      if (productData.price !== undefined) updateData.price = parseFloat(productData.price);
+      if (productData.category !== undefined) updateData.category = productData.category || 'Uncategorized';
+      if (productData.serving_size_label !== undefined) updateData.serving_size_label = productData.serving_size_label || null;
+      if (productData.is_active !== undefined) updateData.is_active = productData.is_active;
+      else updateData.is_active = existingProduct.is_active;
+
+      if (productData.is_active === true) {
+        updateData.inactive_reason = null;
+        updateData.inactive_since = null;
+      }
 
       const { data: product, error: productError } = await supabase
         .from('products')
@@ -539,7 +557,346 @@ class MappingService {
     }
   }
 
-  async getCategories(userId, forceRefresh = false) {
+  getAllowedArchiveReasons() {
+    return [
+      'Discontinued',
+      'Seasonal',
+      'Out of stock temporarily'
+    ];
+  }
+
+  getSystemStaleReasons() {
+    return [
+      'No sales for 28 days',
+      'No sales yet'
+    ];
+  }
+
+  formatDate(value) {
+    if (!value) return null;
+    const date = new Date(value);
+    if (isNaN(date.getTime())) return null;
+    return date.toISOString().split('T')[0];
+  }
+
+  async evaluateNewMenuProduct(productId, userId) {
+    try {
+      const numericId = await this.getNumericUserId(userId);
+      if (!numericId) {
+        throw new Error('Valid User ID is required for product evaluation');
+      }
+
+      const product = await this.getProductById(productId, numericId);
+      if (!product) {
+        return null;
+      }
+
+      if (product.first_sold_date) {
+        return product;
+      }
+
+      const { data, error } = await supabase
+        .from('daily_sales')
+        .select('sale_date')
+        .eq('product_id', productId)
+        .order('sale_date', { ascending: true })
+        .limit(1)
+        .maybeSingle();
+
+      if (error && error.code !== 'PGRST116') {
+        throw error;
+      }
+
+      if (data && data.sale_date) {
+        const firstSoldDate = this.formatDate(data.sale_date);
+        const { data: updated, error: updateError } = await supabase
+          .from('products')
+          .update({ first_sold_date: firstSoldDate })
+          .eq('id', productId)
+          .eq('user_id', numericId)
+          .select()
+          .single();
+
+        if (updateError) {
+          console.error('Error updating first_sold_date:', updateError);
+          throw updateError;
+        }
+
+        this.clearSession(numericId);
+        return updated;
+      }
+
+      return product;
+    } catch (error) {
+      console.error('Error evaluating new menu product:', error);
+      throw error;
+    }
+  }
+
+  async archiveProduct(id, reason, userId) {
+    try {
+      const numericId = await this.getNumericUserId(userId);
+      if (!numericId) {
+        throw new Error('Valid User ID is required to archive a product');
+      }
+
+      if (!reason || typeof reason !== 'string' || reason.trim() === '') {
+        throw new Error('Archive reason is required');
+      }
+
+      const normalizedReason = reason.trim();
+      const allowedReasons = this.getAllowedArchiveReasons();
+      if (!allowedReasons.includes(normalizedReason)) {
+        throw new Error(`Invalid archive reason. Allowed reasons: ${allowedReasons.join(', ')}`);
+      }
+
+      const existingProduct = await this.getProductById(id, numericId);
+      if (!existingProduct) {
+        throw new Error('Product not found or does not belong to user');
+      }
+
+      if (!this.isSupabaseReady()) {
+        return {
+          ...existingProduct,
+          is_active: false,
+          inactive_reason: normalizedReason,
+          inactive_since: this.formatDate(new Date())
+        };
+      }
+
+      const updateData = {
+        is_active: false,
+        inactive_reason: normalizedReason,
+        inactive_since: this.formatDate(new Date())
+      };
+
+      const { data: product, error } = await supabase
+        .from('products')
+        .update(updateData)
+        .eq('id', id)
+        .eq('user_id', numericId)
+        .select()
+        .single();
+
+      if (error) {
+        console.error('Error archiving product:', error);
+        throw error;
+      }
+
+      this.clearSession(numericId);
+      return product;
+    } catch (error) {
+      console.error('Error archiving product:', error);
+      throw error;
+    }
+  }
+
+  async reactivateProduct(id, userId, options = {}) {
+    try {
+      const numericId = await this.getNumericUserId(userId);
+      if (!numericId) {
+        throw new Error('Valid User ID is required to reactivate a product');
+      }
+
+      const existingProduct = await this.getProductById(id, numericId);
+      if (!existingProduct) {
+        throw new Error('Product not found or does not belong to user');
+      }
+
+      if (existingProduct.is_active) {
+        return existingProduct;
+      }
+
+      const manualReasons = this.getAllowedArchiveReasons();
+      const reason = existingProduct.inactive_reason;
+
+      if (reason === 'Discontinued' && !options.forceReactivate) {
+        throw new Error('Discontinued products require explicit confirmation to reactivate. Set forceReactivate=true to proceed.');
+      }
+
+      if (!this.isSupabaseReady()) {
+        return {
+          ...existingProduct,
+          is_active: true,
+          inactive_reason: null,
+          inactive_since: null
+        };
+      }
+
+      const updateData = {
+        is_active: true,
+        inactive_reason: null,
+        inactive_since: null
+      };
+
+      const { data: product, error } = await supabase
+        .from('products')
+        .update(updateData)
+        .eq('id', id)
+        .eq('user_id', numericId)
+        .select()
+        .single();
+
+      if (error) {
+        console.error('Error reactivating product:', error);
+        throw error;
+      }
+
+      await this.evaluateNewMenuProduct(id, numericId);
+      this.clearSession(numericId);
+      return product;
+    } catch (error) {
+      console.error('Error reactivating product:', error);
+      throw error;
+    }
+  }
+
+  async reconcileProductActivation(userId) {
+    try {
+      const numericId = await this.getNumericUserId(userId);
+      if (!numericId) {
+        console.warn('Cannot reconcile product activation without a valid user ID');
+        return { reconciled: false, message: 'Missing user ID' };
+      }
+
+      if (!this.isSupabaseReady()) {
+        console.warn('Supabase not ready; skipping product activation reconciliation');
+        return { reconciled: false, message: 'Supabase unavailable' };
+      }
+
+      const cutoffDate = new Date();
+      cutoffDate.setDate(cutoffDate.getDate() - 28);
+      const cutoffIso = this.formatDate(cutoffDate);
+
+      const { data: products, error: productsError } = await supabase
+        .from('products')
+        .select('id, name, created_at, is_active, inactive_reason, inactive_since, first_sold_date')
+        .eq('user_id', numericId);
+
+      if (productsError) {
+        console.error('Error fetching products for reconciliation:', productsError);
+        throw productsError;
+      }
+
+      if (!products || products.length === 0) {
+        return { reconciled: true, updated: 0, reactivated: 0, archived: 0 };
+      }
+
+      const productIds = products.map((product) => product.id);
+      const { data: sales, error: salesError } = await supabase
+        .from('daily_sales')
+        .select('product_id, sale_date')
+        .in('product_id', productIds);
+
+      if (salesError) {
+        console.error('Error fetching sales for product reconciliation:', salesError);
+        throw salesError;
+      }
+
+      const salesByProduct = {};
+      (sales || []).forEach((sale) => {
+        const saleDate = new Date(sale.sale_date);
+        const productId = sale.product_id;
+
+        if (!salesByProduct[productId]) {
+          salesByProduct[productId] = {
+            lastSale: saleDate,
+            firstSale: saleDate
+          };
+          return;
+        }
+
+        if (saleDate > salesByProduct[productId].lastSale) {
+          salesByProduct[productId].lastSale = saleDate;
+        }
+        if (saleDate < salesByProduct[productId].firstSale) {
+          salesByProduct[productId].firstSale = saleDate;
+        }
+      });
+
+      let updatedCount = 0;
+      let reactivatedCount = 0;
+      let archivedCount = 0;
+      let otherUpdatedCount = 0;
+
+      for (const product of products) {
+        const salesEntry = salesByProduct[product.id];
+        const lastSale = salesEntry?.lastSale || null;
+        const firstSale = salesEntry?.firstSale || null;
+        const createdAt = product.created_at ? new Date(product.created_at) : null;
+        const isActive = product.is_active;
+        const reason = product.inactive_reason;
+        const isSystemStale = this.getSystemStaleReasons().includes(reason);
+        const updateData = {};
+
+        if (!product.first_sold_date && firstSale) {
+          updateData.first_sold_date = this.formatDate(firstSale);
+        }
+
+        if (isActive) {
+          if (lastSale && lastSale < cutoffDate) {
+            updateData.is_active = false;
+            updateData.inactive_reason = 'No sales for 28 days';
+            updateData.inactive_since = this.formatDate(lastSale);
+          } else if (!lastSale && createdAt && createdAt < cutoffDate) {
+            updateData.is_active = false;
+            updateData.inactive_reason = 'No sales yet';
+            updateData.inactive_since = this.formatDate(createdAt);
+          }
+        } else if (isSystemStale) {
+          if (lastSale && lastSale >= cutoffDate) {
+            updateData.is_active = true;
+            updateData.inactive_reason = null;
+            updateData.inactive_since = null;
+          }
+        }
+
+        if (Object.keys(updateData).length > 0) {
+          const { data: updatedProduct, error: updateError } = await supabase
+            .from('products')
+            .update(updateData)
+            .eq('id', product.id)
+            .eq('user_id', numericId)
+            .select()
+            .single();
+
+          if (updateError) {
+            console.error(`Error updating product ${product.id} during reconciliation:`, updateError);
+            continue;
+          }
+
+          if (updatedProduct) {
+            if (updateData.is_active === true && !isActive) {
+              reactivatedCount += 1;
+              console.log(`Reactivated product ${product.id} (${product.name}) after recent sales`);
+            } else if (updateData.is_active === false && isActive) {
+              archivedCount += 1;
+              console.log(`Archived product ${product.id} (${product.name}) due to stale sales`);
+            } else {
+              otherUpdatedCount += 1;
+              console.log(`Updated product ${product.id} (${product.name}) during reconciliation`);
+            }
+          }
+        }
+      }
+
+      if (archivedCount > 0 || reactivatedCount > 0 || otherUpdatedCount > 0) {
+        this.clearSession(numericId);
+      }
+
+      return {
+        reconciled: true,
+        updated: archivedCount + otherUpdatedCount,
+        reactivated: reactivatedCount,
+        archived: archivedCount
+      };
+    } catch (error) {
+      console.error('Error reconciling product activation:', error);
+      throw error;
+    }
+  }
+
+  async getCategories(userId, forceRefresh = false, status = 'active') {
     try {
       const numericId = await this.getNumericUserId(userId);
       if (!numericId) {
@@ -547,15 +904,16 @@ class MappingService {
         return ['All'];
       }
 
+      const cacheKey = `categories_${status || 'all'}`;
       if (!forceRefresh) {
-        const cached = this.getFromSession(numericId, 'categories');
+        const cached = this.getFromSession(numericId, cacheKey);
         if (cached && Array.isArray(cached) && cached.length > 0) {
-          console.log(`Using cached categories from sessionStorage (${cached.length} items)`);
+          console.log(`Using cached categories from sessionStorage (${cached.length} items, status=${status})`);
           return cached;
         }
       }
 
-      const products = await this.getProducts(numericId, null, null, forceRefresh);
+      const products = await this.getProducts(numericId, null, null, forceRefresh, status);
       
       if (!products || products.length === 0) {
         return ['All'];
@@ -563,9 +921,9 @@ class MappingService {
 
       const categories = ['All', ...new Set(products.map(item => item.category).filter(Boolean))];
       
-      this.saveToSession(numericId, 'categories', categories);
+      this.saveToSession(numericId, cacheKey, categories);
 
-      console.log(`Found ${categories.length} categories`);
+      console.log(`Found ${categories.length} categories for status=${status}`);
       return categories;
 
     } catch (error) {
