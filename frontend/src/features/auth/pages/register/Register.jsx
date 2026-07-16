@@ -143,7 +143,7 @@ const Register = () => {
               className="logo"
               src="/public/logo.png"
             />
-            <h1 className="brand-title">ChefDuo Sales Forecasting</h1>
+            <h1 className="brand-title">ChefDuo Demand Forecasting</h1>
             <p className="brand-subtitle">Join our vibrant culinary community today.</p>
           </div>
 
