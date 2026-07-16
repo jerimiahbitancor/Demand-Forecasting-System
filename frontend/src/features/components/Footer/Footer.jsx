@@ -13,7 +13,7 @@ const Footer = () => {
         <div className="footer-column footer-brand">
           <h3 className="footer-brand-name">Chef Duo</h3>
           <p className="footer-brand-desc">
-            ChefDuo's Sales Forecasting System.
+            ChefDuo's Demand Forecasting System.
           </p>
           <div className="footer-socials">
             <a href="https://www.facebook.com/chefduo.bagumbayan" className="social-link" aria-label="Facebook">

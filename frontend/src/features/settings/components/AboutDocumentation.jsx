@@ -22,8 +22,8 @@ function AboutDocumentation() {
   const [loading, setLoading] = useState(true);
   const [systemInfo, setSystemInfo] = useState({
     version: "v1.0.0",
-    name: "ChefDuo Sales Forecasting",
-    description: "A comprehensive sales forecasting system for restaurants and food businesses."
+    name: "ChefDuo Demand Forecasting",
+    description: "A comprehensive demand  forecasting system for restaurants and food businesses."
   });
   const [developers, setDevelopers] = useState([
     { name: "Bitancor,", title: "Jerimiah A.", avatar: null, role: "Team Lead Developer" },
@@ -39,10 +39,10 @@ function AboutDocumentation() {
       content: `
         <h2>User Manual</h2>
         <h3>Getting Started</h3>
-        <p>Welcome to ChefDuo Sales Forecasting System. This guide will help you navigate through the system.</p>
+        <p>Welcome to ChefDuo Demand Forecasting System. This guide will help you navigate through the system.</p>
         
         <h4>1. Dashboard Overview</h4>
-        <p>The dashboard provides you with a comprehensive overview of your sales data, including:</p>
+        <p>The dashboard provides you with a comprehensive overview of your demand data, including:</p>
         <ul>
           <li>Total sales revenue</li>
           <li>Top selling products</li>
@@ -117,7 +117,7 @@ function AboutDocumentation() {
       content: `
         <h2>System Documentation</h2>
         <h3>Architecture Overview</h3>
-        <p>The ChefDuo Sales Forecasting System follows a modern microservices architecture with the following components:</p>
+        <p>The ChefDuo Demand Forecasting System follows a modern microservices architecture with the following components:</p>
         
         <h4>Frontend (React)</h4>
         <ul>
@@ -253,8 +253,8 @@ function AboutDocumentation() {
       setLoading(true);
       setSystemInfo({
         version: "v1.0.0",
-        name: "ChefDuo Sales Forecasting",
-        description: "A comprehensive sales forecasting system for restaurants and food businesses."
+        name: "ChefDuo Demand Forecasting",
+        description: "A comprehensive demand forecasting system for restaurants and food businesses."
       });
     } catch (error) {
       console.error('Error fetching system info:', error);

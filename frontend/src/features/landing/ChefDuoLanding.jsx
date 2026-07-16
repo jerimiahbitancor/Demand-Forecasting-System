@@ -165,7 +165,7 @@ const ChefDuoLanding = () => {
               <h1 className="hero-title">
                 Get Started with <br />
                 <span className="hero-title-highlight">
-                  Chef Duo Sales <br />
+                  Chef Duo Demand<br />
                   Forecast
                 </span>
               </h1>
@@ -205,7 +205,7 @@ const ChefDuoLanding = () => {
                 <div ref={dashboardRef} className="dashboard-card">
                   <img
                     src="../src/assets/landing/Rectangle.png"
-                    alt="Chef Duo Sales Forecasting Dashboard"
+                    alt="Chef Duo Demand Forecasting Dashboard"
                     className="dashboard-image"
                   />
                 </div>

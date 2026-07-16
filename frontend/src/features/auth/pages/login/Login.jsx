@@ -148,7 +148,7 @@ const Login = () => {
               className="logo"
               src="/public/logo.png"
             />
-            <h1 className="brand-title">ChefDuo Sales Forecasting</h1>
+            <h1 className="brand-title">ChefDuo Demand Forecasting</h1>
             <p className="brand-subtitle">Welcome back! Log in to your account.</p>
           </div>
 
