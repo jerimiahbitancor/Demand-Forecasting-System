@@ -2,6 +2,7 @@
 import { useState, useEffect } from 'react';
 import { NavLink, useNavigate, } from 'react-router-dom';
 import Swal from 'sweetalert2';
+import '../../../utils/swalTheme.css';
 import { useAuth } from '../../../context/AuthContext';
 import { 
   FaChartBar,

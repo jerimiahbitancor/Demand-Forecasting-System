@@ -18,6 +18,7 @@ import {
   ComposedChart
 } from 'recharts';
 import Swal from 'sweetalert2';
+import '../../../utils/swalTheme.css';
 import axios from 'axios';
 import Navbar from "../../components/Navbar/Navbar";
 import "./Dashboard.css";
@@ -585,7 +586,7 @@ const Dashboard = () => {
         <br />
         <br />
         <strong style={{ color: "#34d399" }}>
-          💡 A little extra buffer
+          A little extra buffer
         </strong>{" "}
         has been added to cover unexpected orders or staff meals (you can adjust
         this buffer in Settings).

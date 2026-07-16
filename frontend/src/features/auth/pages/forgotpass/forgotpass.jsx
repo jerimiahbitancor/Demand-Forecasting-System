@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import Swal from 'sweetalert2';
+import '../../../../utils/swalTheme.css';
 import {
   FaEnvelope,
   FaKey,
@@ -125,7 +126,7 @@ const ForgotPassword = () => {
     }
   };
 
-  // ✅ New: Resend Code function
+  // New: Resend Code function
   const handleResendCode = async () => {
     setResendLoading(true);
     setErrors({});
@@ -347,7 +348,7 @@ const ForgotPassword = () => {
                 )}
               </button>
 
-              {/* ✅ NEW: Resend Code Section */}
+              {/* New: Resend Code Section */}
               <div className="resend-section">
                 {canResend ? (
                   <button
