@@ -150,7 +150,7 @@ const CreatePassword = () => {
         } else {
           await Swal.fire({
             icon: 'success',
-            title: 'Account Created! 🎉',
+            title: 'Account Created!',
             text: 'Welcome to ChefDuo!',
             timer: 1500,
             showConfirmButton: false,
