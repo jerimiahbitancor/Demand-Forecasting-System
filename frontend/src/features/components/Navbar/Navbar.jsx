@@ -115,7 +115,7 @@ const Navbar = () => {
             src="/logo.png"
           />
         </div>
-        <span className="brand-text">Sales Forecasting</span>
+        <span className="brand-text">Demand Forecasting</span>
       </div>
 
       {/* Navigation */}

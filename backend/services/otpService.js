@@ -96,17 +96,17 @@ const sendOTPEmail = async (email, otp, type) => {
         <body>
           <div class="container">
             <div class="header">
-              <h1>ChefDuo Sales Forecasting</h1>
+              <h1>ChefDuo Demand Forecasting</h1>
             </div>
             <div class="content">
               <h2>${template.title}</h2>
               <p>${template.message}</p>
               <div class="otp-box">${otp}</div>
-              <p><strong>This code will expire in 10 minutes.</strong></p>
+              <p><strong>This code will expire in 1 minute.</strong></p>
               <p>${template.footer}</p>
             </div>
             <div class="footer">
-              <p>© ${new Date().getFullYear()} ChefDuo Sales Forecasting. All rights reserved.</p>
+              <p>© ${new Date().getFullYear()} ChefDuo Demand Forecasting. All rights reserved.</p>
               <p>This is an automated message, please do not reply.</p>
             </div>
           </div>

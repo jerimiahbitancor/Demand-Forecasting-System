@@ -1,6 +1,0 @@
-venv/
-.env
-__pycache__/
-*.pyc
-ml/saved_models/*.joblib
-.DS_Store
