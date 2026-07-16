@@ -67,7 +67,7 @@ function ForecastConfig() {
 
       toast.dismiss(savingToast);
       if (response.data.success) {
-        toast.success('✅ Configuration saved successfully!');
+        toast.success('Configuration saved successfully!');
       } else {
         toast.error('Failed to save configuration');
       }

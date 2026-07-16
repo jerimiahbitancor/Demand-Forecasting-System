@@ -15,6 +15,7 @@ import axios from 'axios';
 import toast from 'react-hot-toast';
 import "./MappingData.css";
 import ConfirmDeleteModal from "./ConfirmDeleteModal";
+import ArchiveReasonModal from "./ArchiveReasonModal";
 import { useAuth } from "../../../context/AuthContext";
 
 const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:5000/api';
@@ -27,6 +28,7 @@ const STORAGE_KEYS = {
   SELECTED_CATEGORY: 'mapping_selected_category',
   SORT_BY: 'mapping_sort_by',
   CURRENT_PAGE: 'mapping_current_page',
+  STATUS_FILTER: 'mapping_status_filter',
   LAST_FETCH: 'mapping_last_fetch'
 };
 
@@ -68,6 +70,15 @@ const MappingData = () => {
   const [totalProducts, setTotalProducts] = useState(() => {
     return parseInt(sessionStorage.getItem(STORAGE_KEYS.TOTAL_PRODUCTS)) || 0;
   });
+
+  const [statusFilter, setStatusFilter] = useState(() => {
+    return sessionStorage.getItem(STORAGE_KEYS.STATUS_FILTER) || 'active';
+  });
+
+  const [archiveReasons, setArchiveReasons] = useState([]);
+  const [pendingArchive, setPendingArchive] = useState(null);
+  const [selectedArchiveReason, setSelectedArchiveReason] = useState('');
+  const [archiveError, setArchiveError] = useState('');
 
   const [pendingDelete, setPendingDelete] = useState(null);
 
@@ -115,16 +126,23 @@ const MappingData = () => {
   }, [getToken]);
 
   useEffect(() => {
-    sessionStorage.setItem(STORAGE_KEYS.MAPPING_DATA, JSON.stringify(mappingData));
-  }, [mappingData]);
+    const cacheSuffix = statusFilter === 'inactive' ? '_inactive' : '';
+    sessionStorage.setItem(STORAGE_KEYS.MAPPING_DATA + cacheSuffix, JSON.stringify(mappingData));
+  }, [mappingData, statusFilter]);
 
   useEffect(() => {
-    sessionStorage.setItem(STORAGE_KEYS.CATEGORIES, JSON.stringify(categories));
-  }, [categories]);
+    const cacheSuffix = statusFilter === 'inactive' ? '_inactive' : '';
+    sessionStorage.setItem(STORAGE_KEYS.CATEGORIES + cacheSuffix, JSON.stringify(categories));
+  }, [categories, statusFilter]);
 
   useEffect(() => {
-    sessionStorage.setItem(STORAGE_KEYS.TOTAL_PRODUCTS, totalProducts.toString());
-  }, [totalProducts]);
+    const cacheSuffix = statusFilter === 'inactive' ? '_inactive' : '';
+    sessionStorage.setItem(STORAGE_KEYS.TOTAL_PRODUCTS + cacheSuffix, totalProducts.toString());
+  }, [totalProducts, statusFilter]);
+
+  useEffect(() => {
+    sessionStorage.setItem(STORAGE_KEYS.STATUS_FILTER, statusFilter);
+  }, [statusFilter]);
 
   useEffect(() => {
     sessionStorage.setItem(STORAGE_KEYS.SEARCH_TERM, searchTerm);
@@ -146,10 +164,11 @@ const MappingData = () => {
     try {
       setLoading(true);
       
-      const storedData = sessionStorage.getItem(STORAGE_KEYS.MAPPING_DATA);
-      const storedCategories = sessionStorage.getItem(STORAGE_KEYS.CATEGORIES);
-      const storedTotal = sessionStorage.getItem(STORAGE_KEYS.TOTAL_PRODUCTS);
-      const lastFetch = sessionStorage.getItem(STORAGE_KEYS.LAST_FETCH);
+      const cacheSuffix = statusFilter === 'inactive' ? '_inactive' : '';
+      const storedData = sessionStorage.getItem(STORAGE_KEYS.MAPPING_DATA + cacheSuffix);
+      const storedCategories = sessionStorage.getItem(STORAGE_KEYS.CATEGORIES + cacheSuffix);
+      const storedTotal = sessionStorage.getItem(STORAGE_KEYS.TOTAL_PRODUCTS + cacheSuffix);
+      const lastFetch = sessionStorage.getItem(STORAGE_KEYS.LAST_FETCH + cacheSuffix);
       
       const cacheValid = lastFetch && (Date.now() - parseInt(lastFetch)) < 5 * 60 * 1000;
       
@@ -167,6 +186,7 @@ const MappingData = () => {
 
       const productsResponse = await apiClient.get('/mapping/products', {
         params: {
+          status: statusFilter,
           category: selectedCategory === 'All' ? null : selectedCategory,
           search: searchTerm || null,
           forceRefresh: forceRefresh ? 'true' : 'false'
@@ -177,13 +197,15 @@ const MappingData = () => {
         const data = productsResponse.data.data || [];
         setMappingData(data);
         setTotalProducts(data.length);
-        sessionStorage.setItem(STORAGE_KEYS.MAPPING_DATA, JSON.stringify(data));
-        sessionStorage.setItem(STORAGE_KEYS.TOTAL_PRODUCTS, data.length.toString());
-        sessionStorage.setItem(STORAGE_KEYS.LAST_FETCH, Date.now().toString());
+        const cacheSuffix = statusFilter === 'inactive' ? '_inactive' : '';
+        sessionStorage.setItem(STORAGE_KEYS.MAPPING_DATA + cacheSuffix, JSON.stringify(data));
+        sessionStorage.setItem(STORAGE_KEYS.TOTAL_PRODUCTS + cacheSuffix, data.length.toString());
+        sessionStorage.setItem(STORAGE_KEYS.LAST_FETCH + cacheSuffix, Date.now().toString());
       }
 
       const categoriesResponse = await apiClient.get('/mapping/categories', {
         params: {
+          status: statusFilter,
           forceRefresh: forceRefresh ? 'true' : 'false'
         }
       });
@@ -191,7 +213,8 @@ const MappingData = () => {
       if (categoriesResponse.data.success) {
         const cats = categoriesResponse.data.data || ['All'];
         setCategories(cats);
-        sessionStorage.setItem(STORAGE_KEYS.CATEGORIES, JSON.stringify(cats));
+        const cacheSuffix = statusFilter === 'inactive' ? '_inactive' : '';
+        sessionStorage.setItem(STORAGE_KEYS.CATEGORIES + cacheSuffix, JSON.stringify(cats));
       }
 
     } catch (error) {
@@ -204,17 +227,18 @@ const MappingData = () => {
     } finally {
       setLoading(false);
     }
-  }, [apiClient, selectedCategory, searchTerm]);
+  }, [apiClient, selectedCategory, searchTerm, statusFilter]);
 
   useEffect(() => {
-    const hasStoredData = sessionStorage.getItem(STORAGE_KEYS.MAPPING_DATA) !== null;
-    const lastFetch = sessionStorage.getItem(STORAGE_KEYS.LAST_FETCH);
+    const cacheSuffix = statusFilter === 'inactive' ? '_inactive' : '';
+    const hasStoredData = sessionStorage.getItem(STORAGE_KEYS.MAPPING_DATA + cacheSuffix) !== null;
+    const lastFetch = sessionStorage.getItem(STORAGE_KEYS.LAST_FETCH + cacheSuffix);
     const cacheValid = lastFetch && (Date.now() - parseInt(lastFetch)) < 5 * 60 * 1000;
     
     if (hasStoredData && cacheValid) {
-      const storedData = sessionStorage.getItem(STORAGE_KEYS.MAPPING_DATA);
-      const storedCategories = sessionStorage.getItem(STORAGE_KEYS.CATEGORIES);
-      const storedTotal = sessionStorage.getItem(STORAGE_KEYS.TOTAL_PRODUCTS);
+      const storedData = sessionStorage.getItem(STORAGE_KEYS.MAPPING_DATA + cacheSuffix);
+      const storedCategories = sessionStorage.getItem(STORAGE_KEYS.CATEGORIES + cacheSuffix);
+      const storedTotal = sessionStorage.getItem(STORAGE_KEYS.TOTAL_PRODUCTS + cacheSuffix);
       
       if (storedData) setMappingData(JSON.parse(storedData));
       if (storedCategories) setCategories(JSON.parse(storedCategories));
@@ -223,12 +247,28 @@ const MappingData = () => {
     } else {
       fetchData(false);
     }
-  }, [fetchData]);
+  }, [fetchData, statusFilter]);
+
+  useEffect(() => {
+    const loadArchiveReasons = async () => {
+      try {
+        const response = await apiClient.get('/mapping/archive-reasons');
+        if (response.data?.success) {
+          setArchiveReasons(response.data.data || []);
+        }
+      } catch (error) {
+        console.error('Error fetching archive reasons:', error);
+      }
+    };
+
+    loadArchiveReasons();
+  }, [apiClient]);
 
   useEffect(() => {
     const handleVisibilityChange = () => {
       if (!document.hidden) {
-        const lastFetch = sessionStorage.getItem(STORAGE_KEYS.LAST_FETCH);
+        const cacheSuffix = statusFilter === 'inactive' ? '_inactive' : '';
+        const lastFetch = sessionStorage.getItem(STORAGE_KEYS.LAST_FETCH + cacheSuffix);
         const cacheValid = lastFetch && (Date.now() - parseInt(lastFetch)) < 5 * 60 * 1000;
         if (!cacheValid) {
           fetchData(true);
@@ -363,6 +403,59 @@ const MappingData = () => {
     });
     setFormErrors({ productName: "", price: "", category: "", ingredients: "" });
     setIsModalOpen(true);
+  };
+
+  const requestArchive = (product) => {
+    setPendingArchive(product);
+    setSelectedArchiveReason(archiveReasons[0] || '');
+    setArchiveError('');
+  };
+
+  const confirmArchive = async () => {
+    if (!pendingArchive) return;
+    if (!selectedArchiveReason) {
+      setArchiveError('Please select a reason');
+      return;
+    }
+
+    const archiveToast = toast.loading(`Archiving ${pendingArchive.name}...`);
+
+    try {
+      const response = await apiClient.post(`/mapping/products/${pendingArchive.id}/archive`, {
+        reason: selectedArchiveReason
+      });
+
+      toast.dismiss(archiveToast);
+      if (response.data.success) {
+        toast.success(`Archived ${pendingArchive.name}`);
+        setPendingArchive(null);
+        await fetchData(true);
+      }
+    } catch (error) {
+      toast.dismiss(archiveToast);
+      console.error('Error archiving product:', error);
+      setArchiveError(error.response?.data?.error || 'Failed to archive product');
+    }
+  };
+
+  const handleReactivate = async (product) => {
+    const reactivateToast = toast.loading(`Reactivating ${product.name}...`);
+
+    try {
+      const response = await apiClient.post(`/mapping/products/${product.id}/reactivate`, {
+        forceReactivate: true
+      });
+
+      toast.dismiss(reactivateToast);
+      if (response.data.success) {
+        toast.success(`Reactivated ${product.name}`);
+        await fetchData(true);
+      }
+    } catch (error) {
+      toast.dismiss(reactivateToast);
+      console.error('Error reactivating product:', error);
+      toast.error(error.response?.data?.error || 'Failed to reactivate product');
+    }
   };
 
   const requestDelete = (id, name) => {
@@ -540,7 +633,7 @@ const MappingData = () => {
     <div className="mapping-container">
       <div className="mapping-header">
         <h2 className="mapping-title">
-          Current Ingredient Mapping ({totalProducts} Active Products)
+          Current Ingredient Mapping ({totalProducts} {statusFilter === 'active' ? 'Active' : 'Archived'} Products)
           {loading && <span className="loading-spinner">...</span>}
         </h2>
         <button 
@@ -570,6 +663,18 @@ const MappingData = () => {
           />
         </div>
         <div className="filter-wrapper">
+          <select 
+            className="filter-select"
+            value={statusFilter}
+            onChange={(e) => {
+              setStatusFilter(e.target.value);
+              setSelectedCategory('All');
+              setCurrentPage(1);
+            }}
+          >
+            <option value="active">Active</option>
+            <option value="inactive">Archived</option>
+          </select>
           <select 
             className="filter-select"
             value={selectedCategory}
@@ -615,6 +720,7 @@ const MappingData = () => {
                   <th>Category</th>
                   <th>Ingredients</th>
                   <th>Price</th>
+                  <th>Status</th>
                   <th>Action</th>
                 </tr>
               </thead>
@@ -642,21 +748,43 @@ const MappingData = () => {
                       )}
                     </td>
                     <td className="price-cell">₱{item.price.toFixed(2)}</td>
+                    <td className="status-cell">
+                      {item.is_active ? (
+                        <span className="status-badge active">Active</span>
+                      ) : (
+                        <span className="status-badge inactive">Archived</span>
+                      )}
+                      {!item.is_active && item.inactive_reason && (
+                        <div className="status-reason">{item.inactive_reason}</div>
+                      )}
+                    </td>
                     <td>
-                      <button 
-                        className="action-btn edit"
-                        onClick={() => handleEdit(item)}
-                        title="Edit product"
-                      >
-                        <FiEdit2 size={16} />
-                      </button>
-                      <button 
-                        className="action-btn delete"
-                        onClick={() => requestDelete(item.id, item.name)}
-                        title="Delete product"
-                      >
-                        <FiTrash2 size={16} />
-                      </button>
+                      {item.is_active ? (
+                        <>
+                          <button 
+                            className="action-btn edit"
+                            onClick={() => handleEdit(item)}
+                            title="Edit product"
+                          >
+                            <FiEdit2 size={16} />
+                          </button>
+                          <button 
+                            className="action-btn archive"
+                            onClick={() => requestArchive(item)}
+                            title="Archive product"
+                          >
+                            <FiTrash2 size={16} />
+                          </button>
+                        </>
+                      ) : (
+                        <button 
+                          className="action-btn reactivate"
+                          onClick={() => handleReactivate(item)}
+                          title="Reactivate product"
+                        >
+                          ↻
+                        </button>
+                      )}
                     </td>
                   </tr>
                 ))}
@@ -901,6 +1029,20 @@ const MappingData = () => {
           productName={pendingDelete.name}
           onCancel={() => setPendingDelete(null)}
           onConfirm={confirmDelete}
+        />
+      )}
+      {pendingArchive && (
+        <ArchiveReasonModal
+          productName={pendingArchive.name}
+          reasons={archiveReasons}
+          selectedReason={selectedArchiveReason}
+          error={archiveError}
+          onCancel={() => setPendingArchive(null)}
+          onConfirm={confirmArchive}
+          onSelectReason={(value) => {
+            setSelectedArchiveReason(value);
+            if (archiveError) setArchiveError('');
+          }}
         />
       )}
     </div>

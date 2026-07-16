@@ -2,6 +2,7 @@
 import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import Swal from 'sweetalert2';
+import '../../../../utils/swalTheme.css';
 import { 
   FaLock, 
   FaKey,
@@ -18,7 +19,7 @@ const CreatePassword = () => {
   const navigate = useNavigate();
   const { createPassword, clearRegistrationData, registrationData, loading, user } = useAuth();
   
-  // ✅ Get data from AuthContext
+  // Get data from AuthContext
   const email = registrationData?.email;
   const userId = registrationData?.userId;
   const otpVerified = registrationData?.otpVerified;
@@ -49,7 +50,7 @@ const CreatePassword = () => {
       return;
     }
     
-    // ✅ Check if OTP was verified
+    // Check if OTP was verified
     if (!otpVerified && !isSubmitting) {
       if (user) {
         navigate('/landing', { replace: true });
@@ -156,10 +157,10 @@ const CreatePassword = () => {
             showConfirmButton: false,
           });
 
-          // ✅ Wait for session to be fully established
+          // Wait for session to be fully established
           await new Promise(resolve => setTimeout(resolve, 1000));
 
-          // ✅ Verify session exists before navigating
+          // Verify session exists before navigating
           const { data: { session } } = await supabase.auth.getSession();
           console.log('🔍 Session after creation:', !!session);
           
@@ -167,7 +168,7 @@ const CreatePassword = () => {
             navigate('/landing', { replace: true });
           } else {
             // Fallback: go to login
-            console.log('⚠️ No session found, redirecting to login');
+            console.log('No session found, redirecting to login');
             navigate('/login', { replace: true });
           }
           clearRegistrationData();

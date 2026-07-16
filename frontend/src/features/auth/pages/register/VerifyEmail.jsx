@@ -2,6 +2,7 @@
 import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import Swal from 'sweetalert2';
+import '../../../../utils/swalTheme.css';
 import { FaEnvelope, FaKey, FaSpinner, FaArrowLeft } from 'react-icons/fa';
 import { useAuth } from '../../../../context/AuthContext';
 import './VerifyEmail.css';
@@ -10,7 +11,7 @@ const VerifyEmail = () => {
   const navigate = useNavigate();
   const { verifyOTP, resendOTP, registrationData, user } = useAuth();
   
-  // ✅ Get data from AuthContext
+  // Get data from AuthContext
   const email = registrationData?.email;
   const userId = registrationData?.userId;
   
@@ -88,7 +89,7 @@ const VerifyEmail = () => {
           showConfirmButton: false,
         });
 
-        // ✅ No state needed! AuthContext has the data
+        // No state needed! AuthContext has the data
         navigate('/create-password');
       } else {
         throw new Error(result.error);

@@ -8,6 +8,7 @@ const authenticate = require('../middleware/auth');
 const fileProcessor = require('../services/fileProcessor');
 const uploadService = require('../services/uploadService');
 const menuService = require('../services/menuService');
+const mappingService = require('../services/mappingService');
 
 router.post(
   '/',
@@ -89,6 +90,12 @@ router.post(
           });
 
           uploadService.markUploadComplete(file.originalname, numericId);
+
+          try {
+            await mappingService.reconcileProductActivation(numericId);
+          } catch (reconcileError) {
+            console.error('Error reconciling product activation after menu upload:', reconcileError);
+          }
 
           return res.status(201).json({
             success: true,

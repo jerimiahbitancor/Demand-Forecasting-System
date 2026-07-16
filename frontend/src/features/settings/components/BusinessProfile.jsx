@@ -161,7 +161,7 @@ function BusinessProfile() {
 
       toast.dismiss(savingToast);
       if (response.data.success) {
-        toast.success('✅ Business profile saved successfully!');
+        toast.success('Business profile saved successfully!');
       } else {
         toast.error('Failed to save business profile');
       }
