@@ -91,7 +91,7 @@ const Forecasting = () => {
     exportReport: (
       <div style={{ padding: '4px 0', fontSize: '13px', lineHeight: '1.6' }}>
         <strong style={{ color: '#60a5fa', display: 'block', marginBottom: '6px' }}>
-          📄 Export Forecast Report
+          Export Forecast Report
         </strong>
         Download your forecast data in PDF or Excel format.
         <br/><br/>
@@ -107,7 +107,7 @@ const Forecasting = () => {
     forecastedItems: (
       <div style={{ padding: '4px 0', fontSize: '13px', lineHeight: '1.6' }}>
         <strong style={{ color: '#60a5fa', display: 'block', marginBottom: '6px' }}>
-          📦 Products Forecasted
+          Products Forecasted
         </strong>
         Total number of products currently being forecasted by the system.
         <br/><br/>

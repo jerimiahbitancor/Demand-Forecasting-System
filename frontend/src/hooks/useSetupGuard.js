@@ -2,6 +2,7 @@
 import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { supabase } from '../config/supabase';
+import { TEMPORARY_ACCESS_BYPASS } from '../config/accessControl';
 import { useAuth } from '../context/AuthContext';
 
 export function useSetupGuard(mode) {
@@ -10,6 +11,11 @@ export function useSetupGuard(mode) {
   const [checking, setChecking] = useState(true);
 
   useEffect(() => {
+    if (TEMPORARY_ACCESS_BYPASS) {
+      setChecking(false);
+      return;
+    }
+
     let active = true;
 
     const check = async () => {

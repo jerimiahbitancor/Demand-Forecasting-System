@@ -48,7 +48,7 @@ function DataManagementSettings() {
       toast.dismiss(loadingToast);
       if (response.data.success) {
         setBackupStatus("success");
-        toast.success('✅ Database backup created successfully!');
+        toast.success('Database backup created successfully!');
         // Download the backup file
         if (response.data.data?.url) {
           window.open(response.data.data.url, '_blank');
@@ -63,7 +63,7 @@ function DataManagementSettings() {
       toast.dismiss(loadingToast);
       console.error('Error creating backup:', error);
       setBackupStatus("error");
-      toast.error('❌ Failed to create backup');
+      toast.error('Failed to create backup');
       setTimeout(() => {
         setBackupStatus(null);
       }, 3000);
@@ -73,7 +73,7 @@ function DataManagementSettings() {
   // Reset Historical Data handler
   const handleResetHistoricalData = async () => {
     const confirmed = window.confirm(
-      "⚠️ WARNING: This action cannot be undone. Are you sure you want to reset all historical data?"
+      "WARNING: This action cannot be undone. Are you sure you want to reset all historical data?"
     );
     if (!confirmed) return;
 
@@ -86,7 +86,7 @@ function DataManagementSettings() {
       toast.dismiss(loadingToast);
       if (response.data.success) {
         setResetStatus("success");
-        toast.success('✅ Historical data reset successfully!');
+        toast.success('Historical data reset successfully!');
         setTimeout(() => {
           setResetStatus(null);
         }, 3000);
@@ -97,7 +97,7 @@ function DataManagementSettings() {
       toast.dismiss(loadingToast);
       console.error('Error resetting data:', error);
       setResetStatus("error");
-      toast.error('❌ Failed to reset historical data');
+      toast.error('Failed to reset historical data');
       setTimeout(() => {
         setResetStatus(null);
       }, 3000);
@@ -127,7 +127,7 @@ function DataManagementSettings() {
       link.remove();
       
       setExportStatus("success");
-      toast.success(`✅ Data exported successfully as ${exportFormat.toUpperCase()}!`);
+      toast.success(`Data exported successfully as ${exportFormat.toUpperCase()}!`);
       setTimeout(() => {
         setExportStatus(null);
       }, 3000);
@@ -135,7 +135,7 @@ function DataManagementSettings() {
       toast.dismiss(loadingToast);
       console.error('Error exporting data:', error);
       setExportStatus("error");
-      toast.error('❌ Failed to export data');
+      toast.error('Failed to export data');
       setTimeout(() => {
         setExportStatus(null);
       }, 3000);
