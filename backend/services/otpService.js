@@ -7,6 +7,7 @@ const timezone = require('dayjs/plugin/timezone');
 dayjs.extend(utc);
 dayjs.extend(timezone);
 const PH_TZ = 'Asia/Manila';
+const OTP_EXPIRATION_MINUTES = 3;
 
 const nowPH = () => dayjs().tz(PH_TZ);
 const toPH = (dbTimestamp) => {
@@ -15,6 +16,22 @@ const toPH = (dbTimestamp) => {
   const safe = hasOffset ? dbTimestamp : `${dbTimestamp}Z`;
   return dayjs(safe).tz(PH_TZ);
 };
+
+const toSafeISOString = (value) => {
+  if (!value) return nowPH().toISOString();
+
+  try {
+    const parsed = value instanceof Date ? value : new Date(value);
+    if (Number.isNaN(parsed.getTime())) {
+      return nowPH().toISOString();
+    }
+    return parsed.toISOString();
+  } catch (error) {
+    return nowPH().toISOString();
+  }
+};
+
+const getOtpExpiryTime = () => nowPH().add(OTP_EXPIRATION_MINUTES, 'minute');
 
 // Generate 6-digit OTP
 const generateOTP = () => {
@@ -52,7 +69,7 @@ const sendOTPEmail = async (email, otp, type) => {
     const templates = {
       verification: {
         subject: 'Verify Your ChefDuo Account',
-        title: 'Welcome to ChefDuo! 🎉',
+        title: 'Welcome to ChefDuo!',
         message: 'Thank you for registering. Please verify your email address by entering the OTP code below:',
         footer: 'If you didn\'t create an account with ChefDuo, please ignore this email.'
       },
@@ -67,7 +84,7 @@ const sendOTPEmail = async (email, otp, type) => {
     const template = templates[type] || templates.verification;
 
     const mailOptions = {
-      from: process.env.EMAIL_FROM || 'noreply@chefduo.com',
+      from: process.env.EMAIL_FROM,
       to: email,
       subject: template.subject,
       html: `
@@ -102,7 +119,7 @@ const sendOTPEmail = async (email, otp, type) => {
               <h2>${template.title}</h2>
               <p>${template.message}</p>
               <div class="otp-box">${otp}</div>
-              <p><strong>This code will expire in 1 minute.</strong></p>
+              <p><strong>This code will expire in ${OTP_EXPIRATION_MINUTES} minutes.</strong></p>
               <p>${template.footer}</p>
             </div>
             <div class="footer">
@@ -125,7 +142,7 @@ const sendOTPEmail = async (email, otp, type) => {
 
 // ✅ Store OTP (NO PASSWORD!)
 const storeOTP = async (userId, email, otp, type) => {
-  const expiresAt = nowPH().add(10, 'minute').toISOString();
+  const expiresAt = toSafeISOString(getOtpExpiryTime());
   const table = type === 'verification' ? 'email_verifications' : 'password_resets';
   
   // ✅ First, mark ALL old OTPs as used (use admin client for writes)
@@ -275,5 +292,7 @@ module.exports = {
   verifyOTP,
   resendOTP,
   nowPH,
-  toPH
+  toPH,
+  toSafeISOString,
+  getOtpExpiryTime
 };

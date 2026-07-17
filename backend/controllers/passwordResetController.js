@@ -1,5 +1,5 @@
 const { supabase, supabaseAdmin } = require('../config/supabase');
-const { generateOTP, sendOTPEmail, toPH, nowPH } = require('../services/otpService');
+const { generateOTP, sendOTPEmail, toPH, nowPH, toSafeISOString, getOtpExpiryTime, OTP_EXPIRATION_MINUTES } = require('../services/otpService');
 
 // ============ SEND VERIFICATION CODE ============
 const sendCode = async (req, res) => {
@@ -23,7 +23,7 @@ const sendCode = async (req, res) => {
     }
 
     const verificationCode = generateOTP();
-    const expiresAt = nowPH().add(15, 'minute').toISOString();
+    const expiresAt = toSafeISOString(getOtpExpiryTime());
 
     const { error: upsertError } = await supabase
       .from('password_resets')

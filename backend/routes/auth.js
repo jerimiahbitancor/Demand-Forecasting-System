@@ -2,7 +2,7 @@
 const express = require('express');
 const router = express.Router();
 const { supabase, supabaseAdmin } = require('../config/supabase');
-const { generateOTP, sendOTPEmail, storeOTP, toPH, nowPH } = require('../services/otpService');
+const { generateOTP, sendOTPEmail, storeOTP, toPH, nowPH, toSafeISOString, getOtpExpiryTime, OTP_EXPIRATION_MINUTES } = require('../services/otpService');
 const passwordResetController = require('../controllers/passwordResetController');
 const authenticate = require('../middleware/auth');
 
@@ -51,7 +51,7 @@ router.post('/register', async (req, res) => {
     if (insertError) throw new Error(insertError.message);
 
     const otp = generateOTP();
-    const expiresAt = nowPH().add(10, 'minute');
+    const expiresAt = nowPH().add(OTP_EXPIRATION_MINUTES, 'minute');
 
     await storeOTP(user.id, normalizedEmail, otp, 'verification');
 
@@ -206,7 +206,7 @@ router.post('/create-password', async (req, res) => {
     const now = nowPH();
     const timeDiff = now.diff(usedAt, 'minute');
 
-    if (timeDiff > 10) {
+    if (timeDiff > OTP_EXPIRATION_MINUTES) {
       return res.status(400).json({
         error: 'OTP verification expired. Please request a new OTP.'
       });
@@ -327,8 +327,8 @@ router.post('/resend-otp', async (req, res) => {
 
     const otp = generateOTP();
     
-    // ✅ Use nowPH() for PH time
-    const expiresAt = nowPH().add(10, 'minute');
+    // ✅ Use a proper future expiration timestamp
+    const expiresAt = getOtpExpiryTime();
 
     console.log('📧 New OTP:', otp);
     console.log('⏰ Expires at (PH):', expiresAt.format());
@@ -339,10 +339,10 @@ router.post('/resend-otp', async (req, res) => {
         user_id: userId,
         email: normalizedEmail,
         verification_code: otp,
-        expires_at: expiresAt.toISOString(),
+        expires_at: toSafeISOString(expiresAt),
         is_used: false,
         used_at: null,
-        created_at: nowPH().toISOString()
+        created_at: toSafeISOString(nowPH())
       }, {
         onConflict: 'user_id'
       });
