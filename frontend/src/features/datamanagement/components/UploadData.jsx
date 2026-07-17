@@ -5,6 +5,11 @@ import {
   FiAlertCircle,
   FiCheckCircle,
   FiXCircle,
+  FiFile,
+  FiTrash2,
+  FiUpload,
+  FiList,
+  FiPlus
 } from "react-icons/fi";
 import HistoricalData from "./HistoricalData";
 import MappingData from "./MappingData";
@@ -23,15 +28,19 @@ const UploadData = ({
 }) => {
   const { getToken, checkUploadStatus } = useAuth();
 
-  const [salesFile, setSalesFile] = useState(null);
+  // Sales upload state - MULTIPLE FILES
+  const [salesFiles, setSalesFiles] = useState([]);
   const [isSalesDragging, setIsSalesDragging] = useState(false);
   const [salesUploadStatus, setSalesUploadStatus] = useState(null);
   const [salesProgress, setSalesProgress] = useState(0);
   const [salesValidated, setSalesValidated] = useState(false);
   const [salesValidationErrors, setSalesValidationErrors] = useState([]);
   const [salesIsValid, setIsSalesValid] = useState(false);
+  const [salesProcessingIndex, setSalesProcessingIndex] = useState(-1);
+  const [salesUploadedCount, setSalesUploadedCount] = useState(0);
 
-  const [menuFile, setMenuFile] = useState(null);
+  // Menu upload state - MULTIPLE FILES
+  const [menuFiles, setMenuFiles] = useState([]);
   const [isMenuDragging, setIsMenuDragging] = useState(false);
   const [menuUploadStatus, setMenuUploadStatus] = useState(null);
   const [menuProgress, setMenuProgress] = useState(0);
@@ -39,7 +48,10 @@ const UploadData = ({
   const [menuValidationErrors, setMenuValidationErrors] = useState([]);
   const [menuDbDuplicates, setMenuDbDuplicates] = useState([]);
   const [menuIsValid, setMenuIsValid] = useState(false);
+  const [menuProcessingIndex, setMenuProcessingIndex] = useState(-1);
+  const [menuUploadedCount, setMenuUploadedCount] = useState(0);
 
+  // Dynamic preview data from API
   const [salesPreviewData, setSalesPreviewData] = useState({
     totalRecords: 0,
     validRecords: 0,
@@ -55,6 +67,7 @@ const UploadData = ({
     issues: []
   });
 
+  // Toast container refs
   const [salesToastId, setSalesToastId] = useState(null);
   const [menuToastId, setMenuToastId] = useState(null);
 
@@ -331,75 +344,117 @@ const UploadData = ({
     };
   };
 
+  // Sales handlers - MULTIPLE FILES
   const handleSalesFileDrop = (e) => {
     e.preventDefault();
     setIsSalesDragging(false);
-    const file = e.dataTransfer.files[0];
-    if (file) {
-      validateAndSetSalesFile(file);
+    const files = e.dataTransfer.files;
+    if (files && files.length > 0) {
+      const fileArray = Array.from(files);
+      validateAndSetSalesFiles(fileArray);
     }
   };
 
   const handleSalesFileSelect = (e) => {
-    const file = e.target.files[0];
-    if (file) {
-      validateAndSetSalesFile(file);
+    const files = e.target.files;
+    if (files && files.length > 0) {
+      const fileArray = Array.from(files);
+      validateAndSetSalesFiles(fileArray);
     }
+    // Reset input so same files can be selected again
+    e.target.value = '';
   };
 
-  const validateAndSetSalesFile = async (file) => {
-    const validTypes = ['text/csv', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', 'application/vnd.ms-excel'];
-    if (!validTypes.includes(file.type) && !file.name.match(/\.(csv|xlsx)$/i)) {
-      if (salesToastId) toast.dismiss(salesToastId);
-      const id = toast.error('Please upload a CSV or XLSX file');
-      setSalesToastId(id);
-      return;
+  const validateAndSetSalesFiles = async (files) => {
+    const validFiles = [];
+    const invalidFiles = [];
+    
+    for (const file of files) {
+      const validTypes = ['text/csv', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', 'application/vnd.ms-excel'];
+      if (!validTypes.includes(file.type) && !file.name.match(/\.(csv|xlsx)$/i)) {
+        invalidFiles.push(file.name);
+        continue;
+      }
+
+      if (file.size > 20 * 1024 * 1024) {
+        invalidFiles.push(`${file.name} (exceeds 20MB)`);
+        continue;
+      }
+
+      validFiles.push(file);
     }
 
-    if (file.size > 20 * 1024 * 1024) {
+    if (invalidFiles.length > 0) {
       if (salesToastId) toast.dismiss(salesToastId);
-      const id = toast.error('File size exceeds 20MB limit');
+      const id = toast.error(`Invalid files: ${invalidFiles.join(', ')}. Please upload CSV or XLSX files under 20MB.`);
       setSalesToastId(id);
-      return;
     }
 
-    setSalesFile(file);
+    if (validFiles.length === 0) return;
+
+    setSalesFiles(prev => [...prev, ...validFiles]);
     setSalesUploadStatus(null);
     setSalesProgress(0);
     setSalesValidated(false);
     setSalesValidationErrors([]);
     setIsSalesValid(false);
+    setSalesUploadedCount(0);
+    console.log(`Sales files added: ${validFiles.length} files`);
 
-    try {
-      const data = await readFileData(file);
-      const validation = validateSalesData(data);
-      
-      setSalesPreviewData({
-        totalRecords: validation.totalRows,
-        validRecords: validation.validRows,
-        invalidRecords: validation.invalidRows,
-        systemMatch: validation.totalRows > 0 ? 
-          `${Math.round((validation.validRows / validation.totalRows) * 100)}%` : '0%',
-        issues: validation.errors
-      });
-      
-      setSalesValidated(true);
-      setSalesValidationErrors(validation.errors);
-      setIsSalesValid(validation.isValid);
-      
-      if (validation.isValid) {
-        if (salesToastId) toast.dismiss(salesToastId);
-        const id = toast.success(`File validated: ${validation.validRows} valid records found`);
-        setSalesToastId(id);
-      } else {
-        if (salesToastId) toast.dismiss(salesToastId);
-        const id = toast.error(`File has ${validation.invalidRows} issues. Please review the preview below.`);
-        setSalesToastId(id);
+    // Validate each file
+    let totalValidRows = 0;
+    let totalInvalidRows = 0;
+    let allErrors = [];
+    let allValid = true;
+
+    for (const file of validFiles) {
+      try {
+        const data = await readFileData(file);
+        const validation = validateSalesData(data);
+        
+        totalValidRows += validation.validRows;
+        totalInvalidRows += validation.invalidRows;
+        allErrors = [...allErrors, ...validation.errors.map(e => ({
+          ...e,
+          file: file.name
+        }))];
+        
+        if (!validation.isValid) {
+          allValid = false;
+        }
+      } catch (error) {
+        console.error('Error reading file:', error);
+        allErrors.push({
+          row: 0,
+          message: `Error reading ${file.name}: ${error.message}`,
+          file: file.name
+        });
+        allValid = false;
       }
-    } catch (error) {
-      console.error('Error reading file:', error);
+    }
+
+    const totalRows = totalValidRows + totalInvalidRows;
+    
+    setSalesPreviewData({
+      totalRecords: totalRows,
+      validRecords: totalValidRows,
+      invalidRecords: totalInvalidRows,
+      systemMatch: totalRows > 0 ? 
+        `${Math.round((totalValidRows / totalRows) * 100)}%` : '0%',
+      issues: allErrors.slice(0, 10)
+    });
+    
+    setSalesValidated(true);
+    setSalesValidationErrors(allErrors);
+    setIsSalesValid(allValid);
+    
+    if (allValid) {
       if (salesToastId) toast.dismiss(salesToastId);
-      const id = toast.error('Error reading file. Please make sure it is a valid CSV or Excel file.');
+      const id = toast.success(`All ${validFiles.length} files validated: ${totalValidRows} valid records found`);
+      setSalesToastId(id);
+    } else {
+      if (salesToastId) toast.dismiss(salesToastId);
+      const id = toast.error(`Files have ${totalInvalidRows} issues. Please review the preview below.`);
       setSalesToastId(id);
     }
   };
@@ -414,10 +469,26 @@ const UploadData = ({
     setIsSalesDragging(false);
   };
 
+  const removeSalesFile = (index) => {
+    setSalesFiles(prev => prev.filter((_, i) => i !== index));
+    if (salesFiles.length <= 1) {
+      setSalesValidated(false);
+      setSalesValidationErrors([]);
+      setIsSalesValid(false);
+      setSalesPreviewData({
+        totalRecords: 0,
+        validRecords: 0,
+        invalidRecords: 0,
+        systemMatch: "0%",
+        issues: []
+      });
+    }
+  };
+
   const handleSalesConfirm = async () => {
-    if (!salesFile) {
+    if (salesFiles.length === 0) {
       if (salesToastId) toast.dismiss(salesToastId);
-      const id = toast.error('Please select a file first');
+      const id = toast.error('Please select files first');
       setSalesToastId(id);
       return;
     }
@@ -439,72 +510,90 @@ const UploadData = ({
     try {
       setSalesUploadStatus('loading');
       setSalesProgress(0);
+      setSalesProcessingIndex(0);
+      setSalesUploadedCount(0);
       
-      const progressInterval = setInterval(() => {
-        setSalesProgress(prev => {
-          if (prev >= 90) {
-            clearInterval(progressInterval);
-            return 90;
+      const totalFiles = salesFiles.length;
+      let uploaded = 0;
+      
+      for (let i = 0; i < totalFiles; i++) {
+        setSalesProcessingIndex(i);
+        
+        const formData = new FormData();
+        formData.append('file', salesFiles[i]);
+        formData.append('fileType', 'sales');
+
+        console.log(`Uploading sales file ${i + 1}/${totalFiles}: ${salesFiles[i].name}`);
+
+        const response = await apiClient.post('/upload', formData, {
+          headers: {
+            'Content-Type': 'multipart/form-data'
+          },
+          onUploadProgress: (progressEvent) => {
+            const percentCompleted = Math.round((progressEvent.loaded * 100) / progressEvent.total);
+            const overallProgress = Math.round(((i + (percentCompleted / 100)) / totalFiles) * 100);
+            setSalesProgress(overallProgress);
           }
-          return prev + Math.random() * 10;
         });
-      }, 300);
-      
-      const formData = new FormData();
-      formData.append('file', salesFile);
-      formData.append('fileType', 'sales');
 
-      console.log('Sending sales upload request...');
-
-      const response = await apiClient.post('/upload', formData, {
-        headers: {
-          'Content-Type': 'multipart/form-data'
-        },
-        onUploadProgress: (progressEvent) => {
-          const percentCompleted = Math.round((progressEvent.loaded * 100) / progressEvent.total);
-          setSalesProgress(percentCompleted);
+        if (response?.data?.success) {
+          uploaded++;
+          setSalesUploadedCount(uploaded);
+          
+          if (salesToastId) toast.dismiss(salesToastId);
+          const id = toast.success(`Uploaded ${uploaded}/${totalFiles}: ${salesFiles[i].name}`);
+          setSalesToastId(id);
+        } else {
+          throw new Error(response?.data?.error || `Failed to upload ${salesFiles[i].name}`);
         }
-      });
-
-      clearInterval(progressInterval);
-      setSalesProgress(100);
-
-      console.log('Upload response:', response.data);
-
-      if (response?.data?.success) {
-        setSalesUploadStatus('success');
-        
-        const summary = response?.data?.summary || {};
-        setSalesPreviewData({
-          totalRecords: summary.totalRows || 0,
-          validRecords: summary.validRows || 0,
-          invalidRecords: summary.invalidRows || 0,
-          systemMatch: summary.validRows && summary.totalRows ? 
-            `${Math.round((summary.validRows / summary.totalRows) * 100)}%` : '0%',
-          issues: summary.errors || []
-        });
-        
-        if (salesToastId) toast.dismiss(salesToastId);
-        const id = toast.success(`Sales data uploaded successfully! ${summary.validRows || 0} records processed.`);
-        setSalesToastId(id);
-        
-        await checkUploadStatus();
-        
-        if (onUploadSuccess) {
-          onUploadSuccess(response.data);
-        }
-        
-        setTimeout(() => {
-          setSalesUploadStatus(null);
-          setSalesFile(null);
-          setSalesProgress(0);
-          setSalesValidated(false);
-          setSalesValidationErrors([]);
-          setIsSalesValid(false);
-        }, 3000);
-      } else {
-        throw new Error(response?.data?.error || 'Upload failed');
       }
+
+      setSalesProgress(100);
+      setSalesUploadStatus('success');
+      
+      const summary = {
+        totalRows: salesPreviewData.totalRecords,
+        validRows: salesPreviewData.validRecords,
+        invalidRows: salesPreviewData.invalidRows,
+        errors: salesPreviewData.issues,
+        filesUploaded: uploaded,
+        totalFiles: totalFiles
+      };
+      
+      setSalesPreviewData({
+        ...salesPreviewData,
+        systemMatch: salesPreviewData.totalRecords > 0 ? 
+          `${Math.round((salesPreviewData.validRecords / salesPreviewData.totalRecords) * 100)}%` : '0%'
+      });
+      
+      if (salesToastId) toast.dismiss(salesToastId);
+      const id = toast.success(`Successfully uploaded ${uploaded}/${totalFiles} files! ${salesPreviewData.validRecords || 0} records processed.`);
+      setSalesToastId(id);
+      
+      await checkUploadStatus();
+      
+      if (onUploadSuccess) {
+        onUploadSuccess({ filesUploaded: uploaded, totalFiles });
+      }
+      
+      setTimeout(() => {
+        setSalesUploadStatus(null);
+        setSalesFiles([]);
+        setSalesProgress(0);
+        setSalesValidated(false);
+        setSalesValidationErrors([]);
+        setIsSalesValid(false);
+        setSalesProcessingIndex(-1);
+        setSalesUploadedCount(0);
+        setSalesPreviewData({
+          totalRecords: 0,
+          validRecords: 0,
+          invalidRecords: 0,
+          systemMatch: "0%",
+          issues: []
+        });
+      }, 5000);
+      
     } catch (error) {
       console.error('Upload error:', error);
       console.error('Error response:', error.response?.data);
@@ -533,17 +622,20 @@ const UploadData = ({
       
       setTimeout(() => {
         setSalesUploadStatus(null);
+        setSalesProcessingIndex(-1);
       }, 3000);
     }
   };
 
   const handleSalesDiscard = () => {
-    setSalesFile(null);
+    setSalesFiles([]);
     setSalesUploadStatus(null);
     setSalesProgress(0);
     setSalesValidated(false);
     setSalesValidationErrors([]);
     setIsSalesValid(false);
+    setSalesProcessingIndex(-1);
+    setSalesUploadedCount(0);
     setSalesPreviewData({
       totalRecords: 0,
       validRecords: 0,
@@ -552,7 +644,7 @@ const UploadData = ({
       issues: []
     });
     if (salesToastId) toast.dismiss(salesToastId);
-    const id = toast('File discarded');
+    const id = toast('All files discarded');
     setSalesToastId(id);
   };
 
@@ -562,74 +654,112 @@ const UploadData = ({
     setSalesToastId(id);
   };
 
+  // Menu handlers - MULTIPLE FILES
   const handleMenuFileDrop = (e) => {
     e.preventDefault();
     setIsMenuDragging(false);
-    const file = e.dataTransfer.files[0];
-    if (file) {
-      validateAndSetMenuFile(file);
+    const files = e.dataTransfer.files;
+    if (files && files.length > 0) {
+      const fileArray = Array.from(files);
+      validateAndSetMenuFiles(fileArray);
     }
   };
 
   const handleMenuFileSelect = (e) => {
-    const file = e.target.files[0];
-    if (file) {
-      validateAndSetMenuFile(file);
+    const files = e.target.files;
+    if (files && files.length > 0) {
+      const fileArray = Array.from(files);
+      validateAndSetMenuFiles(fileArray);
     }
+    e.target.value = '';
   };
 
-  const validateAndSetMenuFile = async (file) => {
-    const validTypes = ['text/csv', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', 'application/vnd.ms-excel'];
-    if (!validTypes.includes(file.type) && !file.name.match(/\.(csv|xlsx)$/i)) {
-      if (menuToastId) toast.dismiss(menuToastId);
-      const id = toast.error('Please upload a CSV or XLSX file');
-      setMenuToastId(id);
-      return;
+  const validateAndSetMenuFiles = async (files) => {
+    const validFiles = [];
+    const invalidFiles = [];
+    
+    for (const file of files) {
+      const validTypes = ['text/csv', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', 'application/vnd.ms-excel'];
+      if (!validTypes.includes(file.type) && !file.name.match(/\.(csv|xlsx)$/i)) {
+        invalidFiles.push(file.name);
+        continue;
+      }
+
+      if (file.size > 20 * 1024 * 1024) {
+        invalidFiles.push(`${file.name} (exceeds 20MB)`);
+        continue;
+      }
+
+      validFiles.push(file);
     }
 
-    if (file.size > 20 * 1024 * 1024) {
+    if (invalidFiles.length > 0) {
       if (menuToastId) toast.dismiss(menuToastId);
-      const id = toast.error('File size exceeds 20MB limit');
+      const id = toast.error(`Invalid files: ${invalidFiles.join(', ')}. Please upload CSV or XLSX files under 20MB.`);
       setMenuToastId(id);
-      return;
     }
 
-    setMenuFile(file);
+    if (validFiles.length === 0) return;
+
+    setMenuFiles(prev => [...prev, ...validFiles]);
     setMenuUploadStatus(null);
     setMenuProgress(0);
     setMenuValidated(false);
     setMenuValidationErrors([]);
     setMenuDbDuplicates([]);
     setMenuIsValid(false);
+    setMenuUploadedCount(0);
+    console.log(`Menu files added: ${validFiles.length} files`);
 
-    try {
-      const data = await readFileData(file);
-      const validation = validateMenuData(data);
-      
-      setMenuPreviewData({
-        totalItems: validation.totalRows,
-        mappedItems: validation.validRows,
-        unmappedItems: validation.invalidRows,
-        issues: validation.errors
-      });
-      
-      setMenuValidated(true);
-      setMenuValidationErrors(validation.errors);
-      setMenuIsValid(validation.isValid);
-      
-      if (validation.isValid) {
-        if (menuToastId) toast.dismiss(menuToastId);
-        const id = toast.success(`Menu file validated: ${validation.validRows} items ready`);
-        setMenuToastId(id);
-      } else {
-        if (menuToastId) toast.dismiss(menuToastId);
-        const id = toast.error(`Menu file has ${validation.invalidRows} issues. Please review the preview below.`);
-        setMenuToastId(id);
+    let totalValidRows = 0;
+    let totalInvalidRows = 0;
+    let allErrors = [];
+    let allValid = true;
+
+    for (const file of validFiles) {
+      try {
+        const data = await readFileData(file);
+        const validation = validateMenuData(data);
+        
+        totalValidRows += validation.validRows;
+        totalInvalidRows += validation.invalidRows;
+        allErrors = [...allErrors, ...validation.errors.map(e => ({
+          ...e,
+          file: file.name
+        }))];
+        
+        if (!validation.isValid) {
+          allValid = false;
+        }
+      } catch (error) {
+        console.error('Error reading file:', error);
+        allErrors.push({
+          row: 0,
+          message: `Error reading ${file.name}: ${error.message}`,
+          file: file.name
+        });
+        allValid = false;
       }
-    } catch (error) {
-      console.error('Error reading file:', error);
+    }
+
+    setMenuPreviewData({
+      totalItems: totalValidRows + totalInvalidRows,
+      mappedItems: totalValidRows,
+      unmappedItems: totalInvalidRows,
+      issues: allErrors.slice(0, 10)
+    });
+    
+    setMenuValidated(true);
+    setMenuValidationErrors(allErrors);
+    setMenuIsValid(allValid);
+    
+    if (allValid) {
       if (menuToastId) toast.dismiss(menuToastId);
-      const id = toast.error('Error reading file. Please make sure it is a valid CSV or Excel file.');
+      const id = toast.success(`All ${validFiles.length} menu files validated: ${totalValidRows} items ready`);
+      setMenuToastId(id);
+    } else {
+      if (menuToastId) toast.dismiss(menuToastId);
+      const id = toast.error(`Menu files have ${totalInvalidRows} issues. Please review the preview below.`);
       setMenuToastId(id);
     }
   };
@@ -644,10 +774,25 @@ const UploadData = ({
     setIsMenuDragging(false);
   };
 
+  const removeMenuFile = (index) => {
+    setMenuFiles(prev => prev.filter((_, i) => i !== index));
+    if (menuFiles.length <= 1) {
+      setMenuValidated(false);
+      setMenuValidationErrors([]);
+      setMenuIsValid(false);
+      setMenuPreviewData({
+        totalItems: 0,
+        mappedItems: 0,
+        unmappedItems: 0,
+        issues: []
+      });
+    }
+  };
+
   const handleMenuConfirm = async () => {
-    if (!menuFile) {
+    if (menuFiles.length === 0) {
       if (menuToastId) toast.dismiss(menuToastId);
-      const id = toast.error('Please select a file first');
+      const id = toast.error('Please select files first');
       setMenuToastId(id);
       return;
     }
@@ -669,93 +814,85 @@ const UploadData = ({
     try {
       setMenuUploadStatus('loading');
       setMenuProgress(0);
+      setMenuProcessingIndex(0);
+      setMenuUploadedCount(0);
       
-      const progressInterval = setInterval(() => {
-        setMenuProgress(prev => {
-          if (prev >= 90) {
-            clearInterval(progressInterval);
-            return 90;
-          }
-          return prev + Math.random() * 10;
-        });
-      }, 300);
+      const totalFiles = menuFiles.length;
+      let uploaded = 0;
       
-      const formData = new FormData();
-      formData.append('file', menuFile);
-      formData.append('fileType', 'menu');
-
-      console.log('Sending menu upload request...');
-
-      const response = await apiClient.post('/upload', formData, {
-        headers: {
-          'Content-Type': 'multipart/form-data'
-        },
-        onUploadProgress: (progressEvent) => {
-          const percentCompleted = Math.round((progressEvent.loaded * 100) / progressEvent.total);
-          setMenuProgress(percentCompleted);
-        }
-      });
-
-      clearInterval(progressInterval);
-      setMenuProgress(100);
-
-      if (response?.data?.success) {
-        const summary = response?.data?.summary || {};
+      for (let i = 0; i < totalFiles; i++) {
+        setMenuProcessingIndex(i);
         
-        if (summary.dbDuplicates && summary.dbDuplicates.length > 0) {
-          setMenuValidated(false);
-          setMenuValidationErrors(summary.dbDuplicates.map(d => ({
-            row: 0,
-            message: d.message
-          })));
-          setMenuDbDuplicates(summary.dbDuplicates);
-          setMenuPreviewData({
-            totalItems: summary.totalRows || 0,
-            mappedItems: 0,
-            unmappedItems: summary.totalRows || 0,
-            issues: summary.dbDuplicates.map(d => ({
-              row: 0,
-              message: d.message
-            }))
-          });
+        const formData = new FormData();
+        formData.append('file', menuFiles[i]);
+        formData.append('fileType', 'menu');
+
+        console.log(`Uploading menu file ${i + 1}/${totalFiles}: ${menuFiles[i].name}`);
+
+        const response = await apiClient.post('/upload', formData, {
+          headers: {
+            'Content-Type': 'multipart/form-data'
+          },
+          onUploadProgress: (progressEvent) => {
+            const percentCompleted = Math.round((progressEvent.loaded * 100) / progressEvent.total);
+            const overallProgress = Math.round(((i + (percentCompleted / 100)) / totalFiles) * 100);
+            setMenuProgress(overallProgress);
+          }
+        });
+
+        if (response?.data?.success) {
+          uploaded++;
+          setMenuUploadedCount(uploaded);
+          
+          const summary = response?.data?.summary || {};
+          
+          if (summary.dbDuplicates && summary.dbDuplicates.length > 0) {
+            if (menuToastId) toast.dismiss(menuToastId);
+            const id = toast.error(`Found ${summary.dbDuplicates.length} duplicate product(s) in ${menuFiles[i].name}. Please remove them.`);
+            setMenuToastId(id);
+            // Continue with other files
+            continue;
+          }
           
           if (menuToastId) toast.dismiss(menuToastId);
-          const id = toast.error(`Found ${summary.dbDuplicates.length} duplicate product(s) in the database. Please remove them from your file.`);
+          const id = toast.success(`Uploaded ${uploaded}/${totalFiles}: ${menuFiles[i].name}`);
           setMenuToastId(id);
-          return;
+        } else {
+          throw new Error(response?.data?.error || `Failed to upload ${menuFiles[i].name}`);
         }
-        
-        setMenuUploadStatus('success');
-        setMenuPreviewData({
-          totalItems: summary.totalRows || 0,
-          mappedItems: summary.validRows || 0,
-          unmappedItems: summary.invalidRows || 0,
-          issues: summary.errors || []
-        });
-        
-        const productMsg = summary.productsInserted ? ` ${summary.productsInserted} products added.` : '';
-        const ingredientMsg = summary.ingredientsInserted ? ` ${summary.ingredientsInserted} ingredients added.` : '';
-        
-        if (menuToastId) toast.dismiss(menuToastId);
-        const id = toast.success(`Menu data uploaded successfully!${productMsg}${ingredientMsg}`);
-        setMenuToastId(id);
-        
-        if (onUploadSuccess) {
-          onUploadSuccess(response.data);
-        }
-        
-        setTimeout(() => {
-          setMenuUploadStatus(null);
-          setMenuFile(null);
-          setMenuProgress(0);
-          setMenuValidated(false);
-          setMenuValidationErrors([]);
-          setMenuDbDuplicates([]);
-          setMenuIsValid(false);
-        }, 3000);
-      } else {
-        throw new Error(response?.data?.error || 'Upload failed');
       }
+
+      setMenuProgress(100);
+      setMenuUploadStatus('success');
+      
+      const productMsg = ` ${menuPreviewData.mappedItems || 0} items mapped.`;
+      
+      if (menuToastId) toast.dismiss(menuToastId);
+      const id = toast.success(`Successfully uploaded ${uploaded}/${totalFiles} menu files!${productMsg}`);
+      setMenuToastId(id);
+      
+      if (onUploadSuccess) {
+        onUploadSuccess({ filesUploaded: uploaded, totalFiles });
+      }
+      
+      setTimeout(() => {
+        setMenuUploadStatus(null);
+        setMenuFiles([]);
+        setMenuProgress(0);
+        setMenuValidated(false);
+        setMenuValidationErrors([]);
+        setMenuDbDuplicates([]);
+        setMenuIsValid(false);
+        setMenuProcessingIndex(-1);
+        setMenuUploadedCount(0);
+        setMenuPreviewData({
+          totalItems: 0,
+          mappedItems: 0,
+          unmappedItems: 0,
+          issues: []
+        });
+      }, 5000);
+      
     } catch (error) {
       console.error('Menu upload error:', error);
       console.error('Error response:', error.response?.data);
@@ -770,18 +907,21 @@ const UploadData = ({
       
       setTimeout(() => {
         setMenuUploadStatus(null);
+        setMenuProcessingIndex(-1);
       }, 3000);
     }
   };
 
   const handleMenuDiscard = () => {
-    setMenuFile(null);
+    setMenuFiles([]);
     setMenuUploadStatus(null);
     setMenuProgress(0);
     setMenuValidated(false);
     setMenuValidationErrors([]);
     setMenuDbDuplicates([]);
     setMenuIsValid(false);
+    setMenuProcessingIndex(-1);
+    setMenuUploadedCount(0);
     setMenuPreviewData({
       totalItems: 0,
       mappedItems: 0,
@@ -789,10 +929,11 @@ const UploadData = ({
       issues: []
     });
     if (menuToastId) toast.dismiss(menuToastId);
-    const id = toast('File discarded');
+    const id = toast('All menu files discarded');
     setMenuToastId(id);
   };
 
+  // Progress bar component
   const ProgressBar = ({ progress, status }) => {
     const getColor = () => {
       if (status === 'error') return '#ef4444';
@@ -852,6 +993,56 @@ const UploadData = ({
     );
   };
 
+  // Helper to format file size
+  const formatFileSize = (bytes) => {
+    if (bytes < 1024) return bytes + ' B';
+    if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB';
+    return (bytes / (1024 * 1024)).toFixed(1) + ' MB';
+  };
+
+  // Render file list
+  const renderFileList = (files, onRemove, uploadStatus, processingIndex, uploadedCount) => {
+    if (files.length === 0) return null;
+    
+    return (
+      <div className="file-list-container">
+        <div className="file-list-header">
+          <span className="file-count">{files.length} file(s) selected</span>
+          {uploadStatus === 'loading' && (
+            <span className="upload-progress-info">
+              Uploading {processingIndex + 1}/{files.length}...
+              {uploadedCount > 0 && ` (${uploadedCount} completed)`}
+            </span>
+          )}
+        </div>
+        <div className="file-list">
+          {files.map((file, index) => (
+            <div key={index} className={`file-item ${uploadStatus === 'loading' && processingIndex === index ? 'processing' : ''}`}>
+              <FiFile className="file-icon" />
+              <span className="file-name">{file.name}</span>
+              <span className="file-size">{formatFileSize(file.size)}</span>
+              {uploadStatus === 'loading' && processingIndex === index && (
+                <span className="file-status uploading">Uploading...</span>
+              )}
+              {uploadStatus === 'loading' && processingIndex > index && (
+                <span className="file-status done">✓ Done</span>
+              )}
+              {uploadStatus !== 'loading' && (
+                <button 
+                  className="remove-file-btn"
+                  onClick={() => onRemove(index)}
+                  title="Remove file"
+                >
+                  <FiTrash2 size={14} />
+                </button>
+              )}
+            </div>
+          ))}
+        </div>
+      </div>
+    );
+  };
+
   return (
     <div className="tabbed-container">
       <div className="tabs-header1">
@@ -869,18 +1060,24 @@ const UploadData = ({
       {activeTab === "upload" && (
         <div className="tab-content">
           <div className="upload-row">
+            {/* First Upload Section - Sales Data */}
             <div className="upload">
               <div className="upload-header">
                 <div>
                   <h2 className="upload-title">Upload New Sales Data</h2>
                   <p className="upload-subtitle">
-                    Drag and drop your sales export below. For Sales Data your file must have these columns: <strong>Item name, Category, Items sold, Gross sales, Items refunded, Refunds, Net sales</strong>
+                    Drag and drop multiple sales files below. For Sales Data your files must have these columns: <strong>Item name, Category, Items sold, Gross sales, Items refunded, Refunds, Net sales</strong>
                   </p>
+                  <p className="upload-hint">You can select multiple CSV or XLSX files at once.</p>
                 </div>
+                {salesFiles.length > 0 && (
+                  <span className="file-badge">{salesFiles.length} files</span>
+                )}
               </div>
 
+              {/* Drag and Drop Zone */}
               <div
-                className={`drop-zone ${isSalesDragging ? "dragging" : ""} ${salesFile ? "uploaded" : ""}`}
+                className={`drop-zone ${isSalesDragging ? "dragging" : ""} ${salesFiles.length > 0 ? "uploaded" : ""}`}
                 onDrop={handleSalesFileDrop}
                 onDragOver={handleSalesDragOver}
                 onDragLeave={handleSalesDragLeave}
@@ -889,20 +1086,20 @@ const UploadData = ({
                 <div className="drop-zone-icon">
                   <FiUploadCloud size={32} />
                 </div>
-                {salesFile ? (
+                {salesFiles.length > 0 ? (
                   <div className="uploaded-file-info">
-                    <p className="file-name">{salesFile.name}</p>
-                    <p className="file-size">
-                      {(salesFile.size / 1024).toFixed(2)} KB
+                    <p className="file-count-text">{salesFiles.length} file(s) selected</p>
+                    <p className="file-total-size">
+                      Total: {formatFileSize(salesFiles.reduce((sum, f) => sum + f.size, 0))}
                     </p>
                     <button
-                      className="remove-file"
+                      className="remove-all-files"
                       onClick={(e) => {
                         e.stopPropagation();
                         handleSalesDiscard();
                       }}
                     >
-                      Remove
+                      Remove All
                     </button>
                   </div>
                 ) : (
@@ -912,7 +1109,10 @@ const UploadData = ({
                       <span className="browse-link">Browse</span>
                     </p>
                     <p className="drop-zone-formats">
-                      Supported formats: CSV, .XLSX (Max 20MB)
+                      Supported formats: CSV, .XLSX (Max 20MB each)
+                    </p>
+                    <p className="drop-zone-hint">
+                      <FiPlus size={14} /> Select multiple files
                     </p>
                   </>
                 )}
@@ -921,10 +1121,21 @@ const UploadData = ({
                   id="salesFileInput"
                   className="file-input"
                   accept=".csv,.xlsx"
+                  multiple
                   onChange={handleSalesFileSelect}
                 />
               </div>
 
+              {/* File List */}
+              {renderFileList(
+                salesFiles, 
+                removeSalesFile, 
+                salesUploadStatus, 
+                salesProcessingIndex, 
+                salesUploadedCount
+              )}
+
+              {/* Upload Status with Progress Bar */}
               {salesUploadStatus === 'loading' && (
                 <div className="upload-status loading">
                   <span className="spinner"></span>
@@ -947,13 +1158,14 @@ const UploadData = ({
                 </div>
               )}
 
+              {/* Data Preview for Sales - Always shown */}
               <div className="data-preview">
                 <div className="preview-header">
                   <h3 className="preview-title">Preview & Validation</h3>
                   <div className="preview-status">
-                    <span className={`status-badge ${salesIsValid ? "success" : salesFile ? "warning" : "warning"}`}>
+                    <span className={`status-badge ${salesIsValid ? "success" : salesFiles.length > 0 ? "warning" : "warning"}`}>
                       <span className="status-dot"></span>
-                      {salesIsValid ? "Validated" : salesFile ? "Needs Review" : "No file uploaded"}
+                      {salesIsValid ? "Validated" : salesFiles.length > 0 ? "Needs Review" : "No files uploaded"}
                     </span>
                     <span className="status-separator">|</span>
                     <span className="status-records">
@@ -975,8 +1187,13 @@ const UploadData = ({
                     <p className="stat-label">System Match</p>
                     <p className="stat-value">{salesPreviewData.systemMatch || '0%'}</p>
                   </div>
+                  <div className="stat-box">
+                    <p className="stat-label">Files</p>
+                    <p className="stat-value">{salesFiles.length}</p>
+                  </div>
                 </div>
 
+                {/* Validation Issues */}
                 {salesPreviewData.issues && salesPreviewData.issues.length > 0 && (
                   <div className="validation-issues">
                     <div className="issues-header">
@@ -989,6 +1206,7 @@ const UploadData = ({
                       {salesPreviewData.issues.map((issue, index) => (
                         <div className="issue-item" key={index}>
                           <span className="issue-text">
+                            {issue.file && <span className="issue-file">[{issue.file}] </span>}
                             {issue.row ? `Row ${issue.row}: ` : ''}{issue.message}
                           </span>
                           {issue.row && issue.row > 1 && (
@@ -1005,39 +1223,46 @@ const UploadData = ({
                   </div>
                 )}
 
+                {/* Action Buttons */}
                 <div className="action-buttons">
                   <div className="buttonsact">
                     <button 
                       className="btn-secondary" 
                       onClick={handleSalesDiscard}
-                      disabled={!salesFile || salesUploadStatus === 'loading'}
+                      disabled={salesFiles.length === 0 || salesUploadStatus === 'loading'}
                     >
-                      Discard
+                      Discard All
                     </button>
                     <button
                       className={`btn-primary ${salesUploadStatus === 'loading' ? 'loading' : ''}`}
                       onClick={handleSalesConfirm}
-                      disabled={!salesFile || salesUploadStatus === 'loading' || !salesValidated || !salesIsValid}
+                      disabled={salesFiles.length === 0 || salesUploadStatus === 'loading' || !salesValidated || !salesIsValid}
                     >
-                      {salesUploadStatus === 'loading' ? 'Uploading...' : 'Confirm & Process Upload'}
+                      {salesUploadStatus === 'loading' ? 'Uploading...' : `Upload ${salesFiles.length} File(s)`}
                     </button>
                   </div>
                 </div>
               </div>
             </div>
 
+            {/* Second Upload Section - Menu Data */}
             <div className="upload">
               <div className="upload-header">
                 <div>
                   <h2 className="upload-title">Upload Menu Data</h2>
                   <p className="upload-subtitle">
-                    Drag and drop your menu mapping file below. For Menu Data your file must have these columns: <strong>Product Name, Ingredients, Quantity, Unit, Price, Category</strong>
+                    Drag and drop multiple menu mapping files below. For Menu Data your files must have these columns: <strong>Product Name, Ingredients, Quantity, Unit, Price, Category</strong>
                   </p>
+                  <p className="upload-hint">You can select multiple CSV or XLSX files at once.</p>
                 </div>
+                {menuFiles.length > 0 && (
+                  <span className="file-badge">{menuFiles.length} files</span>
+                )}
               </div>
 
+              {/* Drag and Drop Zone */}
               <div
-                className={`drop-zone ${isMenuDragging ? "dragging" : ""} ${menuFile ? "uploaded" : ""}`}
+                className={`drop-zone ${isMenuDragging ? "dragging" : ""} ${menuFiles.length > 0 ? "uploaded" : ""}`}
                 onDrop={handleMenuFileDrop}
                 onDragOver={handleMenuDragOver}
                 onDragLeave={handleMenuDragLeave}
@@ -1046,20 +1271,20 @@ const UploadData = ({
                 <div className="drop-zone-icon">
                   <FiUploadCloud size={32} />
                 </div>
-                {menuFile ? (
+                {menuFiles.length > 0 ? (
                   <div className="uploaded-file-info">
-                    <p className="file-name">{menuFile.name}</p>
-                    <p className="file-size">
-                      {(menuFile.size / 1024).toFixed(2)} KB
+                    <p className="file-count-text">{menuFiles.length} file(s) selected</p>
+                    <p className="file-total-size">
+                      Total: {formatFileSize(menuFiles.reduce((sum, f) => sum + f.size, 0))}
                     </p>
                     <button
-                      className="remove-file"
+                      className="remove-all-files"
                       onClick={(e) => {
                         e.stopPropagation();
                         handleMenuDiscard();
                       }}
                     >
-                      Remove
+                      Remove All
                     </button>
                   </div>
                 ) : (
@@ -1069,7 +1294,10 @@ const UploadData = ({
                       <span className="browse-link">Browse</span>
                     </p>
                     <p className="drop-zone-formats">
-                      Supported formats: CSV, .XLSX (Max 20MB)
+                      Supported formats: CSV, .XLSX (Max 20MB each)
+                    </p>
+                    <p className="drop-zone-hint">
+                      <FiPlus size={14} /> Select multiple files
                     </p>
                   </>
                 )}
@@ -1078,10 +1306,21 @@ const UploadData = ({
                   id="menuFileInput"
                   className="file-input"
                   accept=".csv,.xlsx"
+                  multiple
                   onChange={handleMenuFileSelect}
                 />
               </div>
 
+              {/* File List */}
+              {renderFileList(
+                menuFiles, 
+                removeMenuFile, 
+                menuUploadStatus, 
+                menuProcessingIndex, 
+                menuUploadedCount
+              )}
+
+              {/* Upload Status with Progress Bar */}
               {menuUploadStatus === 'loading' && (
                 <div className="upload-status loading">
                   <span className="spinner"></span>
@@ -1104,13 +1343,14 @@ const UploadData = ({
                 </div>
               )}
 
+              {/* Data Preview for Menu - Always shown */}
               <div className="data-preview">
                 <div className="preview-header">
                   <h3 className="preview-title">Menu Preview & Validation</h3>
                   <div className="preview-status">
-                    <span className={`status-badge ${menuIsValid ? "success" : menuFile ? "warning" : "warning"}`}>
+                    <span className={`status-badge ${menuIsValid ? "success" : menuFiles.length > 0 ? "warning" : "warning"}`}>
                       <span className="status-dot"></span>
-                      {menuIsValid ? "Validated" : menuFile ? "Needs Review" : "No file uploaded"}
+                      {menuIsValid ? "Validated" : menuFiles.length > 0 ? "Needs Review" : "No files uploaded"}
                     </span>
                     <span className="status-separator">|</span>
                     <span className="status-records">
@@ -1132,8 +1372,13 @@ const UploadData = ({
                     <p className="stat-label">Unmapped</p>
                     <p className="stat-value error">{menuPreviewData.unmappedItems || 0}</p>
                   </div>
+                  <div className="stat-box">
+                    <p className="stat-label">Files</p>
+                    <p className="stat-value">{menuFiles.length}</p>
+                  </div>
                 </div>
 
+                {/* Menu Validation Issues */}
                 {menuPreviewData.issues && menuPreviewData.issues.length > 0 && (
                   <div className="validation-issues">
                     <div className="issues-header">
@@ -1146,6 +1391,7 @@ const UploadData = ({
                       {menuPreviewData.issues.map((issue, index) => (
                         <div className="issue-item" key={index}>
                           <span className="issue-text">
+                            {issue.file && <span className="issue-file">[{issue.file}] </span>}
                             {issue.row ? `Row ${issue.row}: ` : ''}{issue.message}
                           </span>
                           {issue.row && issue.row > 1 && (
@@ -1159,21 +1405,22 @@ const UploadData = ({
                   </div>
                 )}
 
+                {/* Action Buttons */}
                 <div className="action-buttons">
                   <div className="buttonsact">
                     <button 
                       className="btn-secondary" 
                       onClick={handleMenuDiscard}
-                      disabled={!menuFile || menuUploadStatus === 'loading'}
+                      disabled={menuFiles.length === 0 || menuUploadStatus === 'loading'}
                     >
-                      Discard
+                      Discard All
                     </button>
                     <button
                       className={`btn-primary ${menuUploadStatus === 'loading' ? 'loading' : ''}`}
                       onClick={handleMenuConfirm}
-                      disabled={!menuFile || menuUploadStatus === 'loading' || !menuValidated || !menuIsValid}
+                      disabled={menuFiles.length === 0 || menuUploadStatus === 'loading' || !menuValidated || !menuIsValid}
                     >
-                      {menuUploadStatus === 'loading' ? 'Uploading...' : 'Process Menu Data'}
+                      {menuUploadStatus === 'loading' ? 'Uploading...' : `Upload ${menuFiles.length} File(s)`}
                     </button>
                   </div>
                 </div>
