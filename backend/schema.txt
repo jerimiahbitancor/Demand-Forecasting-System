@@ -21,7 +21,7 @@ CREATE TABLE public.business_profile (
   updated_at timestamp without time zone DEFAULT now(),
   user_id integer UNIQUE,
   CONSTRAINT business_profile_pkey PRIMARY KEY (id),
-  CONSTRAINT fk_business_profile_user FOREIGN KEY (user_id) REFERENCES public.users(id)
+  CONSTRAINT business_profile_user_id_fkey FOREIGN KEY (user_id) REFERENCES public.users(id)
 );
 CREATE TABLE public.forecast_config (
   id integer NOT NULL DEFAULT nextval('forecast_config_id_seq'::regclass),

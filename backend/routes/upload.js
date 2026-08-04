@@ -141,17 +141,33 @@ router.post(
             numericId
           );
 
+          const salesProcessingResult = await uploadService.processSalesData(
+            processedData.data,
+            numericId,
+            uploadId,
+            file.originalname
+          );
+
           const summary = {
             totalRows: processedData.rowCount,
             validRows: validation.validRows || 0,
             invalidRows: validation.invalidRows || 0,
             errors: validation.errors || [],
-            uploadDate: validation.uploadDate || new Date().toISOString().split('T')[0]
+            uploadDate: validation.uploadDate || new Date().toISOString().split('T')[0],
+            productsDetected: salesProcessingResult.productsDetected || 0,
+            productsUpdated: salesProcessingResult.productsUpdated || 0,
+            warnings: salesProcessingResult.warnings || []
           };
 
           console.log('Sales data processed:', summary);
 
           uploadService.markUploadComplete(file.originalname, numericId);
+
+          try {
+            await mappingService.reconcileProductActivation(numericId);
+          } catch (reconcileError) {
+            console.error('Error reconciling product activation after sales upload:', reconcileError);
+          }
 
           return res.status(201).json({
             success: true,
