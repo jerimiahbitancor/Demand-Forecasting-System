@@ -156,6 +156,13 @@ isValidUserId(userId) {
     };
   }
 
+  formatDate(value) {
+    if (!value) return null;
+    const date = new Date(value);
+    if (Number.isNaN(date.getTime())) return null;
+    return date.toISOString().split('T')[0];
+  }
+
   // Check for duplicates in database
   async checkDatabaseDuplicates(products, userId) {
     const duplicates = [];
@@ -172,6 +179,48 @@ isValidUserId(userId) {
       }
     }
     return duplicates;
+  }
+
+  async getProductSalesCoverage(productName, userId = null) {
+    try {
+      if (!this.isSupabaseReady()) {
+        return { exists: false, hasSales: false };
+      }
+
+      if (!productName || !this.isValidUserId(userId)) {
+        return { exists: false, hasSales: false };
+      }
+
+      const { data: product, error } = await supabase
+        .from('products')
+        .select('id')
+        .ilike('name', productName)
+        .eq('user_id', userId)
+        .maybeSingle();
+
+      if (error && error.code !== 'PGRST116') {
+        throw error;
+      }
+
+      if (!product?.id) {
+        return { exists: false, hasSales: false };
+      }
+
+      const { data: sales, error: salesError } = await supabase
+        .from('daily_sales')
+        .select('id')
+        .eq('product_id', product.id)
+        .limit(1);
+
+      if (salesError) {
+        throw salesError;
+      }
+
+      return { exists: true, hasSales: (sales || []).length > 0, productId: product.id };
+    } catch (error) {
+      console.error('Error checking product sales coverage:', error);
+      return { exists: false, hasSales: false };
+    }
   }
 
   async processMenuData(data, userId = null) {
@@ -238,6 +287,7 @@ isValidUserId(userId) {
     }
 
     const errors = [];
+    const warnings = [];
     let validCount = 0;
     let invalidCount = 0;
     let productsInserted = 0;
@@ -264,6 +314,14 @@ isValidUserId(userId) {
         const price = parseFloat(row[priceCol]);
         const category = categoryCol ? row[categoryCol]?.trim() : 'Uncategorized';
 
+        const salesCoverage = await this.getProductSalesCoverage(productName, userId);
+        if (!salesCoverage.hasSales) {
+          const warningMessage = `Product "${productName}" was not found in sales data. It will be treated as a future product and excluded from forecasting until sales appear.`;
+          if (!warnings.some((warning) => warning.message === warningMessage)) {
+            warnings.push({ product: productName, message: warningMessage });
+          }
+        }
+
         let productId = await this.getProductIdByNameAndUser(productName, userId);
 
         if (!productId) {
@@ -272,7 +330,7 @@ isValidUserId(userId) {
             price: price,
             category: category || 'Uncategorized',
             serving_size_label: unit,
-            is_active: true,
+            is_active: false,
             first_sold_date: null,
             user_id: userId
           });
@@ -318,7 +376,8 @@ isValidUserId(userId) {
         validRows: validCount,
         invalidRows: invalidCount,
         errors: errors.slice(0, 10),
-        isValid: errors.length === 0
+        isValid: errors.length === 0,
+        warnings: warnings.slice(0, 10)
       },
       productsInserted: productsInserted,
       ingredientsInserted: ingredientsInserted,
@@ -370,7 +429,9 @@ isValidUserId(userId) {
         price: productData.price,
         category: productData.category || 'Uncategorized',
         serving_size_label: productData.serving_size_label || null,
-        is_active: productData.is_active !== undefined ? productData.is_active : true,
+        is_active: productData.is_active !== undefined ? productData.is_active : false,
+        inactive_reason: productData.is_active === true ? null : 'New product detected. Forecast available after 4 weeks.',
+        inactive_since: productData.is_active === true ? null : this.formatDate(new Date()),
         first_sold_date: productData.first_sold_date || null
       };
 

@@ -1,5 +1,6 @@
 // services/mappingService.js
 const { supabase, isConfigured } = require('../config/supabase');
+const { deriveProductStatus } = require('./productStatusService');
 
 class MappingService {
   constructor() {
@@ -161,12 +162,6 @@ class MappingService {
         .eq('user_id', numericId)
         .order('name');
 
-      if (status === 'active') {
-        query = query.eq('is_active', true);
-      } else if (status === 'inactive') {
-        query = query.eq('is_active', false);
-      }
-
       if (category && category !== 'All') {
         query = query.eq('category', category);
       }
@@ -190,12 +185,90 @@ class MappingService {
         this.saveToSession(numericId, 'categories', categories);
       }
 
-      console.log(`Fetched ${data?.length || 0} products from database`);
-      return data || [];
+      const enrichedProducts = await this.enrichProductsWithStatus(data || [], numericId);
+      const filteredByStatus = status === 'active'
+        ? enrichedProducts.filter((item) => item.is_active)
+        : status === 'inactive'
+          ? enrichedProducts.filter((item) => !item.is_active)
+          : enrichedProducts;
+
+      console.log(`Fetched ${filteredByStatus.length || 0} products from database`);
+      return filteredByStatus;
 
     } catch (error) {
       console.error('Error fetching products:', error);
       throw error;
+    }
+  }
+
+  async enrichProductsWithStatus(products, numericId) {
+    try {
+      if (!Array.isArray(products) || products.length === 0) {
+        return [];
+      }
+
+      if (!this.isSupabaseReady()) {
+        return products.map((product) => ({
+          ...product,
+          is_active: Boolean(product.is_active),
+          status: product.is_active ? 'active' : 'new',
+          status_label: product.is_active ? 'ACTIVE' : 'INACTIVE (NEW)',
+          status_reason: product.inactive_reason || 'New product detected. Forecast available after 4 weeks.'
+        }));
+      }
+
+      const productIds = [...new Set(products.map((product) => product.id).filter(Boolean))];
+      if (productIds.length === 0) {
+        return products;
+      }
+
+      const { data: sales, error: salesError } = await supabase
+        .from('daily_sales')
+        .select('product_id, sale_date')
+        .in('product_id', productIds);
+
+      if (salesError) {
+        console.error('Error fetching sales for product status enrichment:', salesError);
+        return products;
+      }
+
+      const salesByProduct = {};
+      (sales || []).forEach((sale) => {
+        const saleDate = new Date(sale.sale_date);
+        if (!salesByProduct[sale.product_id]) {
+          salesByProduct[sale.product_id] = { firstSoldDate: saleDate, lastSoldDate: saleDate };
+          return;
+        }
+
+        if (saleDate < salesByProduct[sale.product_id].firstSoldDate) {
+          salesByProduct[sale.product_id].firstSoldDate = saleDate;
+        }
+        if (saleDate > salesByProduct[sale.product_id].lastSoldDate) {
+          salesByProduct[sale.product_id].lastSoldDate = saleDate;
+        }
+      });
+
+      return products.map((product) => {
+        const status = deriveProductStatus({
+          firstSoldDate: salesByProduct[product.id]?.firstSoldDate || product.first_sold_date || null,
+          lastSoldDate: salesByProduct[product.id]?.lastSoldDate || null,
+          createdAt: product.created_at || null,
+          isActive: Boolean(product.is_active)
+        });
+
+        return {
+          ...product,
+          is_active: status.isActive,
+          status: status.status,
+          status_label: status.label,
+          status_reason: status.note || product.inactive_reason || '',
+          inactive_reason: status.note || product.inactive_reason || null,
+          inactive_since: product.inactive_since || null
+        };
+      });
+    } catch (error) {
+      console.error('Error enriching products with status:', error);
+      return products;
     }
   }
 
@@ -248,7 +321,8 @@ class MappingService {
         throw error;
       }
 
-      return data;
+      const [enrichedProduct] = await this.enrichProductsWithStatus([data], numericId);
+      return enrichedProduct || data;
 
     } catch (error) {
       console.error('Error fetching product:', error);
@@ -281,7 +355,9 @@ class MappingService {
         price: parseFloat(productData.price),
         category: productData.category || 'Uncategorized',
         serving_size_label: productData.serving_size_label || null,
-        is_active: true,
+        is_active: false,
+        inactive_reason: 'New product detected. Forecast available after 4 weeks.',
+        inactive_since: this.formatDate(new Date()),
         user_id: numericId
       };
 
@@ -366,12 +442,12 @@ class MappingService {
       if (productData.price !== undefined) updateData.price = parseFloat(productData.price);
       if (productData.category !== undefined) updateData.category = productData.category || 'Uncategorized';
       if (productData.serving_size_label !== undefined) updateData.serving_size_label = productData.serving_size_label || null;
-      if (productData.is_active !== undefined) updateData.is_active = productData.is_active;
-      else updateData.is_active = existingProduct.is_active;
-
-      if (productData.is_active === true) {
-        updateData.inactive_reason = null;
-        updateData.inactive_since = null;
+      if (productData.is_active !== undefined && productData.is_active === false) {
+        updateData.is_active = false;
+        updateData.inactive_reason = existingProduct.inactive_reason || 'New product detected. Forecast available after 4 weeks.';
+        updateData.inactive_since = existingProduct.inactive_since || this.formatDate(new Date());
+      } else {
+        updateData.is_active = existingProduct.is_active;
       }
 
       const { data: product, error: productError } = await supabase
@@ -892,6 +968,34 @@ class MappingService {
       };
     } catch (error) {
       console.error('Error reconciling product activation:', error);
+      throw error;
+    }
+  }
+
+  async validateForecastEligibility(userId, productIds = null) {
+    try {
+      const numericId = await this.getNumericUserId(userId);
+      if (!numericId) {
+        return { activeProducts: [], missingMappings: [], errors: ['User not found'] };
+      }
+
+      const products = await this.getProducts(userId, null, null, true, 'active');
+      const selectedProducts = productIds && productIds.length > 0
+        ? products.filter((product) => productIds.includes(product.id))
+        : products;
+
+      const missingMappings = selectedProducts.filter((product) => !product.product_ingredients || product.product_ingredients.length === 0);
+      const errors = missingMappings.length > 0
+        ? ['Ingredient mapping missing']
+        : [];
+
+      return {
+        activeProducts: selectedProducts,
+        missingMappings,
+        errors
+      };
+    } catch (error) {
+      console.error('Error validating forecast eligibility:', error);
       throw error;
     }
   }

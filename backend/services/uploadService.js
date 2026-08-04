@@ -1,5 +1,6 @@
 // services/uploadService.js
 const { supabase, isConfigured } = require('../config/supabase');
+const { deriveProductStatus } = require('./productStatusService');
 
 class UploadService {
   constructor() {
@@ -188,6 +189,184 @@ class UploadService {
     
     const lowerKey = normalized.toLowerCase();
     return mappings[lowerKey] || normalized;
+  }
+
+  getColumnValueByNames(row, names = []) {
+    if (!row || typeof row !== 'object') return null;
+
+    const headers = Object.keys(row);
+    for (const name of names) {
+      const found = headers.find((header) => header?.toLowerCase().trim() === name.toLowerCase().trim());
+      if (found && row[found] !== undefined && row[found] !== null && row[found] !== '') {
+        return row[found];
+      }
+    }
+    return null;
+  }
+
+  getSaleDateValue(row, fallbackDate) {
+    const dateColumns = ['Date', 'Sale Date', 'Sale date', 'Date sold', 'Transaction date', 'Order date', 'Invoice date'];
+    const rawValue = this.getColumnValueByNames(row, dateColumns);
+    if (!rawValue) return fallbackDate;
+
+    const parsedDate = new Date(rawValue);
+    if (Number.isNaN(parsedDate.getTime())) {
+      return fallbackDate;
+    }
+
+    return parsedDate.toISOString().slice(0, 10);
+  }
+
+  async processSalesData(rows = [], userId = null, uploadId = null, filename = null) {
+    try {
+      if (!Array.isArray(rows) || rows.length === 0) {
+        return { productsDetected: 0, productsUpdated: 0, warnings: [] };
+      }
+
+      const numericId = userId ? await this.getNumericUserId(userId) : null;
+      if (!numericId || !this.isSupabaseReady()) {
+        return { productsDetected: 0, productsUpdated: 0, warnings: [] };
+      }
+
+      const fallbackDate = this.extractDateFromFilename(filename) || new Date().toISOString().slice(0, 10);
+      const productIds = new Set();
+      const warnings = [];
+      let productsDetected = 0;
+
+      for (const row of rows) {
+        const productName = this.getColumnValueByNames(row, ['Item name', 'Item Name', 'Product', 'Product name'])?.toString()?.trim();
+        if (!productName) {
+          continue;
+        }
+
+        const quantity = parseFloat(this.getColumnValueByNames(row, ['Items sold', 'Items Sold', 'Quantity', 'Units sold']) || 0);
+        const category = this.getColumnValueByNames(row, ['Category', 'Category Name'])?.toString()?.trim() || 'Uncategorized';
+        const price = parseFloat(this.getColumnValueByNames(row, ['Net sales', 'Gross sales', 'Price']) || 0);
+        const saleDate = this.getSaleDateValue(row, fallbackDate);
+
+        let { data: existingProduct, error: productLookupError } = await supabase
+          .from('products')
+          .select('id, created_at, first_sold_date, is_active, inactive_reason')
+          .eq('user_id', numericId)
+          .ilike('name', productName)
+          .maybeSingle();
+
+        if (productLookupError && productLookupError.code !== 'PGRST116') {
+          throw productLookupError;
+        }
+
+        let productId = existingProduct?.id;
+        if (!productId) {
+          const { data: insertedProduct, error: insertError } = await supabase
+            .from('products')
+            .insert({
+              name: productName,
+              price: price > 0 ? price : 0,
+              category,
+              user_id: numericId,
+              is_active: false,
+              inactive_reason: 'New product detected. Forecast available after 4 weeks.',
+              inactive_since: new Date().toISOString().slice(0, 10),
+              first_sold_date: saleDate
+            })
+            .select()
+            .single();
+
+          if (insertError) {
+            if (insertError.code === '23505') {
+              const { data: retryProduct } = await supabase
+                .from('products')
+                .select('id, created_at, first_sold_date, is_active, inactive_reason')
+                .eq('user_id', numericId)
+                .ilike('name', productName)
+                .maybeSingle();
+              productId = retryProduct?.id;
+            } else {
+              throw insertError;
+            }
+          } else {
+            productId = insertedProduct?.id;
+            productsDetected += 1;
+          }
+        }
+
+        if (!productId) {
+          continue;
+        }
+
+        const { error: saleInsertError } = await supabase
+          .from('daily_sales')
+          .insert({
+            product_id: productId,
+            sale_date: saleDate,
+            quantity_sold: Number.isFinite(quantity) && quantity > 0 ? Math.round(quantity) : 1,
+            upload_id: uploadId || null
+          });
+
+        if (saleInsertError && saleInsertError.code !== '23505') {
+          throw saleInsertError;
+        }
+
+        productIds.add(productId);
+      }
+
+      let productsUpdated = 0;
+      for (const productId of productIds) {
+        const { data: product, error: productFetchError } = await supabase
+          .from('products')
+          .select('id, created_at, first_sold_date, is_active, inactive_reason')
+          .eq('id', productId)
+          .eq('user_id', numericId)
+          .maybeSingle();
+
+        if (productFetchError) {
+          continue;
+        }
+
+        const { data: salesRows, error: salesFetchError } = await supabase
+          .from('daily_sales')
+          .select('sale_date')
+          .eq('product_id', productId)
+          .order('sale_date', { ascending: true });
+
+        if (salesFetchError) {
+          continue;
+        }
+
+        const firstSoldDate = salesRows?.[0]?.sale_date || product?.first_sold_date || null;
+        const lastSoldDate = salesRows?.[salesRows.length - 1]?.sale_date || salesRows?.[0]?.sale_date || null;
+        const status = deriveProductStatus({
+          firstSoldDate: firstSoldDate || null,
+          lastSoldDate: lastSoldDate || null,
+          createdAt: product?.created_at || null,
+          isActive: Boolean(product?.is_active)
+        });
+
+        const { error: updateError } = await supabase
+          .from('products')
+          .update({
+            first_sold_date: firstSoldDate ? firstSoldDate.slice(0, 10) : null,
+            is_active: status.isActive,
+            inactive_reason: status.note || null,
+            inactive_since: status.isActive ? null : (product?.inactive_since || new Date().toISOString().slice(0, 10))
+          })
+          .eq('id', productId)
+          .eq('user_id', numericId);
+
+        if (!updateError) {
+          productsUpdated += 1;
+        }
+      }
+
+      return {
+        productsDetected,
+        productsUpdated,
+        warnings
+      };
+    } catch (error) {
+      console.error('Error processing sales data:', error);
+      throw error;
+    }
   }
 
   validateFileColumns(headers, requiredColumns, fileType) {

@@ -1,8 +1,8 @@
-# Sales Forecasting System for Supply Chain Decision Support in Micro Enterprise Food Service Using eXtreme Gradient Boost (XGBoost)
+# Demand Forecasting System for Supply Chain Decision Support in Micro Enterprise Food Service Using eXtreme Gradient Boost (XGBoost)
 
 ## Abstract
 
-This project presents a **Sales Forecasting System for Supply Chain Decision Support in Micro Enterprise Food Service Using eXtreme Gradient Boost (XGBoost)**. The system is designed to assist micro food service enterprises in forecasting product demand, optimizing ingredient procurement, and supporting inventory-related decision-making through data-driven insights.
+This project presents a **Demand Forecasting System for Supply Chain Decision Support in Micro Enterprise Food Service Using eXtreme Gradient Boost (XGBoost)**. The system is designed to assist micro food service enterprises in forecasting product demand, optimizing ingredient procurement, and supporting inventory-related decision-making through data-driven insights.
 
 By leveraging historical sales data and machine learning techniques, particularly the XGBoost algorithm, the system generates accurate sales forecasts that help business owners anticipate future demand, reduce stock shortages, minimize food waste, and improve operational efficiency.
 
@@ -14,7 +14,7 @@ The platform provides forecasting analytics, product performance analysis, ingre
 
 ### General Objective
 
-To develop a sales forecasting and supply chain decision support system for micro food service enterprises using the eXtreme Gradient Boost (XGBoost) machine learning algorithm.
+To develop a demand forecasting and supply chain decision support system for micro food service enterprises using the eXtreme Gradient Boost (XGBoost) machine learning algorithm.
 
 ### Specific Objectives
 
