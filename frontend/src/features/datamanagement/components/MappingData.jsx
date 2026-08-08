@@ -9,13 +9,12 @@ import {
   FiX,
   FiSave,
   FiSearch,
-  FiRefreshCw
+  FiRefreshCw,
+  FiInfo
 } from "react-icons/fi";
 import axios from 'axios';
 import toast from 'react-hot-toast';
 import "./MappingData.css";
-import ConfirmDeleteModal from "./ConfirmDeleteModal";
-import ArchiveReasonModal from "./ArchiveReasonModal";
 import { useAuth } from "../../../context/AuthContext";
 
 const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:5000/api';
@@ -74,13 +73,6 @@ const MappingData = () => {
   const [statusFilter, setStatusFilter] = useState(() => {
     return sessionStorage.getItem(STORAGE_KEYS.STATUS_FILTER) || 'active';
   });
-
-  const [archiveReasons, setArchiveReasons] = useState([]);
-  const [pendingArchive, setPendingArchive] = useState(null);
-  const [selectedArchiveReason, setSelectedArchiveReason] = useState('');
-  const [archiveError, setArchiveError] = useState('');
-
-  const [pendingDelete, setPendingDelete] = useState(null);
 
   const [formData, setFormData] = useState({
     productName: "",
@@ -250,21 +242,6 @@ const MappingData = () => {
   }, [fetchData, statusFilter]);
 
   useEffect(() => {
-    const loadArchiveReasons = async () => {
-      try {
-        const response = await apiClient.get('/mapping/archive-reasons');
-        if (response.data?.success) {
-          setArchiveReasons(response.data.data || []);
-        }
-      } catch (error) {
-        console.error('Error fetching archive reasons:', error);
-      }
-    };
-
-    loadArchiveReasons();
-  }, [apiClient]);
-
-  useEffect(() => {
     const handleVisibilityChange = () => {
       if (!document.hidden) {
         const cacheSuffix = statusFilter === 'inactive' ? '_inactive' : '';
@@ -405,84 +382,6 @@ const MappingData = () => {
     setIsModalOpen(true);
   };
 
-  const requestArchive = (product) => {
-    setPendingArchive(product);
-    setSelectedArchiveReason(archiveReasons[0] || '');
-    setArchiveError('');
-  };
-
-  const confirmArchive = async () => {
-    if (!pendingArchive) return;
-    if (!selectedArchiveReason) {
-      setArchiveError('Please select a reason');
-      return;
-    }
-
-    const archiveToast = toast.loading(`Archiving ${pendingArchive.name}...`);
-
-    try {
-      const response = await apiClient.post(`/mapping/products/${pendingArchive.id}/archive`, {
-        reason: selectedArchiveReason
-      });
-
-      toast.dismiss(archiveToast);
-      if (response.data.success) {
-        toast.success(`Archived ${pendingArchive.name}`);
-        setPendingArchive(null);
-        await fetchData(true);
-      }
-    } catch (error) {
-      toast.dismiss(archiveToast);
-      console.error('Error archiving product:', error);
-      setArchiveError(error.response?.data?.error || 'Failed to archive product');
-    }
-  };
-
-  const handleReactivate = async (product) => {
-    const reactivateToast = toast.loading(`Reactivating ${product.name}...`);
-
-    try {
-      const response = await apiClient.post(`/mapping/products/${product.id}/reactivate`, {
-        forceReactivate: true
-      });
-
-      toast.dismiss(reactivateToast);
-      if (response.data.success) {
-        toast.success(`Reactivated ${product.name}`);
-        await fetchData(true);
-      }
-    } catch (error) {
-      toast.dismiss(reactivateToast);
-      console.error('Error reactivating product:', error);
-      toast.error(error.response?.data?.error || 'Failed to reactivate product');
-    }
-  };
-
-  const requestDelete = (id, name) => {
-    setPendingDelete({ id, name });
-  };
-
-  const confirmDelete = async () => {
-    const { id, name } = pendingDelete;
-    const deletingToast = toast.loading('Deleting product...');
-
-    try {
-      const response = await apiClient.delete(`/mapping/products/${id}`);
-      toast.dismiss(deletingToast);
-
-      if (response.data.success) {
-        toast.success(`"${name}" has been removed.`);
-        await fetchData(true);
-      }
-    } catch (error) {
-      toast.dismiss(deletingToast);
-      console.error('Error deleting product:', error);
-      toast.error('Failed to delete product');
-    } finally {
-      setPendingDelete(null);
-    }
-  };
-
   const resetForm = () => {
     setFormData({
       productName: "",
@@ -550,6 +449,15 @@ const MappingData = () => {
     if (formErrors.ingredients && updatedIngredients.length > 0) {
       setFormErrors({ ...formErrors, ingredients: "" });
     }
+  };
+
+  const getStatusDetails = (product) => {
+    const isActive = product?.is_active === true || product?.status === 'active';
+    const label = product?.status_label || (isActive ? 'ACTIVE' : 'INACTIVE (NEW)');
+    const tone = isActive ? 'active' : (product?.status === 'inactive' ? 'discontinued' : 'new');
+    const reason = product?.status_reason || product?.inactive_reason || 'Status is determined from recent sales activity.';
+
+    return { label, tone, reason, isActive };
   };
 
   const sortOptions = [
@@ -633,19 +541,9 @@ const MappingData = () => {
     <div className="mapping-container">
       <div className="mapping-header">
         <h2 className="mapping-title">
-          Current Ingredient Mapping ({totalProducts} {statusFilter === 'active' ? 'Active' : 'Archived'} Products)
+          Current Ingredient Mapping ({totalProducts} products)
           {loading && <span className="loading-spinner">...</span>}
         </h2>
-        <button 
-          className="btn-upload"
-          onClick={() => {
-            resetForm();
-            setIsModalOpen(true);
-          }}
-          disabled={loading}
-        >
-          <FiPlus size={16} /> Add New Product
-        </button>
       </div>
 
       <div className="mapping-controls">
@@ -672,8 +570,8 @@ const MappingData = () => {
               setCurrentPage(1);
             }}
           >
-            <option value="active">Active</option>
-            <option value="inactive">Archived</option>
+            <option value="active">Active products</option>
+            <option value="inactive">Inactive products</option>
           </select>
           <select 
             className="filter-select"
@@ -710,7 +608,7 @@ const MappingData = () => {
           {loading ? (
             <div className="loading-state">Loading products...</div>
           ) : currentData.length === 0 ? (
-            <div className="empty-state">No products found. Add your first product!</div>
+            <div className="empty-state">No products found for this view.</div>
           ) : (
             <table className="mapping-table">
               <thead>
@@ -725,7 +623,10 @@ const MappingData = () => {
                 </tr>
               </thead>
               <tbody>
-                {currentData.map((item, index) => (
+                {currentData.map((item, index) => {
+                  const { label, tone, reason, isActive } = getStatusDetails(item);
+
+                  return (
                   <tr key={item.id}>
                     <td>{startIndex + index + 1}</td>
                     <td className="product-name">{item.name}</td>
@@ -749,45 +650,28 @@ const MappingData = () => {
                     </td>
                     <td className="price-cell">₱{item.price.toFixed(2)}</td>
                     <td className="status-cell">
-                      {item.is_active ? (
-                        <span className="status-badge active">Active</span>
-                      ) : (
-                        <span className="status-badge inactive">Archived</span>
-                      )}
-                      {!item.is_active && item.inactive_reason && (
-                        <div className="status-reason">{item.inactive_reason}</div>
-                      )}
+                      <div className="status-pill-group">
+                        <span className={`status-badge ${tone}`}>{label}</span>
+                        {!isActive && (
+                          <span className="status-info-wrapper" title={reason}>
+                            <FiInfo size={12} className="status-info-icon" />
+                            <span className="status-tooltip">{reason}</span>
+                          </span>
+                        )}
+                      </div>
                     </td>
                     <td>
-                      {item.is_active ? (
-                        <>
-                          <button 
-                            className="action-btn edit"
-                            onClick={() => handleEdit(item)}
-                            title="Edit product"
-                          >
-                            <FiEdit2 size={16} />
-                          </button>
-                          <button 
-                            className="action-btn archive"
-                            onClick={() => requestArchive(item)}
-                            title="Archive product"
-                          >
-                            <FiTrash2 size={16} />
-                          </button>
-                        </>
-                      ) : (
-                        <button 
-                          className="action-btn reactivate"
-                          onClick={() => handleReactivate(item)}
-                          title="Reactivate product"
-                        >
-                          ↻
-                        </button>
-                      )}
+                      <button 
+                        className="action-btn edit"
+                        onClick={() => handleEdit(item)}
+                        title="Edit product"
+                      >
+                        <FiEdit2 size={16} />
+                      </button>
                     </td>
                   </tr>
-                ))}
+                  );
+                })}
               </tbody>
             </table>
           )}
@@ -847,12 +731,7 @@ const MappingData = () => {
                     type="text"
                     placeholder="Enter product name"
                     value={formData.productName}
-                    onChange={(e) => {
-                      setFormData({...formData, productName: e.target.value});
-                      if (formErrors.productName) {
-                        setFormErrors({...formErrors, productName: ""});
-                      }
-                    }}
+                    readOnly
                     className={formErrors.productName ? 'error' : ''}
                   />
                   {formErrors.productName && (
@@ -882,35 +761,18 @@ const MappingData = () => {
                 </div>
               </div>
 
-              <div className="form-row">
-                <div className="form-group">
-                  <label>Category <span className="required">*</span></label>
-                  <input
-                    type="text"
-                    placeholder="Enter category"
-                    value={formData.category}
-                    onChange={(e) => {
-                      setFormData({...formData, category: e.target.value});
-                      if (formErrors.category) {
-                        setFormErrors({...formErrors, category: ""});
-                      }
-                    }}
-                    className={formErrors.category ? 'error' : ''}
-                  />
-                  {formErrors.category && (
-                    <span className="error-text">{formErrors.category}</span>
-                  )}
-                </div>
-
-                <div className="form-group">
-                  <label>Serving Size</label>
-                  <input
-                    type="text"
-                    placeholder="e.g., 1 cup, 250g"
-                    value={formData.servingSize}
-                    onChange={(e) => setFormData({...formData, servingSize: e.target.value})}
-                  />
-                </div>
+              <div className="form-group">
+                <label>Category <span className="required">*</span></label>
+                <input
+                  type="text"
+                  placeholder="Enter category"
+                  value={formData.category}
+                  readOnly
+                  className={formErrors.category ? 'error' : ''}
+                />
+                {formErrors.category && (
+                  <span className="error-text">{formErrors.category}</span>
+                )}
               </div>
 
               <div className="form-group">
@@ -1024,27 +886,6 @@ const MappingData = () => {
         </div>
       )}
 
-      {pendingDelete && (
-        <ConfirmDeleteModal
-          productName={pendingDelete.name}
-          onCancel={() => setPendingDelete(null)}
-          onConfirm={confirmDelete}
-        />
-      )}
-      {pendingArchive && (
-        <ArchiveReasonModal
-          productName={pendingArchive.name}
-          reasons={archiveReasons}
-          selectedReason={selectedArchiveReason}
-          error={archiveError}
-          onCancel={() => setPendingArchive(null)}
-          onConfirm={confirmArchive}
-          onSelectReason={(value) => {
-            setSelectedArchiveReason(value);
-            if (archiveError) setArchiveError('');
-          }}
-        />
-      )}
     </div>
   );
 };
