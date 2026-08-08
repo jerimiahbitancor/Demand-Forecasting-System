@@ -9,7 +9,7 @@ const authenticate = require('../middleware/auth');
 router.get('/', authenticate, async (req, res) => {
   try {
     const { data: users, error } = await supabase
-      .from('users')
+      .from('user')
       .select('id, email, name, created_at, is_verified')
       .order('created_at', { ascending: false });
 
@@ -29,7 +29,7 @@ router.get('/:id', authenticate, async (req, res) => {
 
   try {
     const { data: user, error } = await supabase
-      .from('users')
+      .from('user')
       .select('id, email, name, created_at, is_verified')
       .eq('id', parseInt(id))
       .single();
@@ -70,7 +70,7 @@ router.put('/:id', authenticate, async (req, res) => {
     }
 
     const { data, error } = await supabase
-      .from('users')
+      .from('user')
       .update(updates)
       .eq('id', parseInt(id))
       .select()
@@ -102,7 +102,7 @@ router.delete('/:id', authenticate, async (req, res) => {
 
     // Get user to get auth_id
     const { data: user, error: userError } = await supabase
-      .from('users')
+      .from('user')
       .select('auth_id')
       .eq('id', parseInt(id))
       .single();
@@ -121,7 +121,7 @@ router.delete('/:id', authenticate, async (req, res) => {
 
     // Delete from custom users table (cascade will handle related tables)
     const { error } = await supabase
-      .from('users')
+      .from('user')
       .delete()
       .eq('id', parseInt(id));
 

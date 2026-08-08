@@ -225,7 +225,7 @@ const verifyOTP = async (email, otp, type, markAsUsed = false) => {
   }
 
   const { data: user, error: userError } = await supabase
-    .from('users')
+    .from('user')
     .select('id, is_verified')
     .eq('id', otpRecord.user_id)
     .single();
@@ -264,7 +264,7 @@ const resendOTP = async (email, userId, type) => {
   const normalizedEmail = email.trim().toLowerCase();
 
   const { data: user, error: userError } = await supabase
-    .from('users')
+    .from('user')
     .select('id, is_verified')
     .eq('id', userId)
     .eq('email', normalizedEmail)

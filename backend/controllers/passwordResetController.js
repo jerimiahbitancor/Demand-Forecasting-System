@@ -13,7 +13,7 @@ const sendCode = async (req, res) => {
 
   try {
     const { data: user, error: userError } = await supabase
-      .from('users')
+      .from('user')
       .select('id, email')
       .ilike('email', normalizedEmail)
       .single();
@@ -69,7 +69,7 @@ const verifyCode = async (req, res) => {
 
   try {
     const { data: user, error: userError } = await supabase
-      .from('users')
+      .from('user')
       .select('id')
       .ilike('email', normalizedEmail)
       .single();
@@ -143,7 +143,7 @@ const resetPassword = async (req, res) => {
 
   try {
     const { data: user, error: userError } = await supabase
-      .from('users')
+      .from('user')
       .select('id, auth_id')
       .ilike('email', normalizedEmail)
       .single();
@@ -190,7 +190,7 @@ const resetPassword = async (req, res) => {
       if (existingAuth && existingAuth.user) {
         user.auth_id = existingAuth.user.id;
         const { error: syncError } = await supabase
-          .from('users')
+          .from('user')
           .update({ auth_id: user.auth_id })
           .eq('id', user.id);
 
@@ -210,7 +210,7 @@ const resetPassword = async (req, res) => {
 
         user.auth_id = authUser.user.id;
         const { error: syncError } = await supabase
-          .from('users')
+          .from('user')
           .update({ auth_id: user.auth_id })
           .eq('id', user.id);
 

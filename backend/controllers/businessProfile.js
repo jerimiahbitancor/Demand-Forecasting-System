@@ -142,7 +142,7 @@ class BusinessProfileController {
       const userClient = userScopedClient(req);
 
       const { data: userRow, error: userRowError } = await userClient
-        .from('users')
+        .from('user')
         .select('id')
         .eq('auth_id', req.user?.auth_id || req.user?.id)
         .maybeSingle();

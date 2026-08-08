@@ -11,7 +11,7 @@ async function createAdminUser() {
   try {
     // Check if admin already exists
     const { data: existingUser, error: checkError } = await supabase
-      .from('users')
+      .from('user')
       .select('id, email')
       .eq('email', email)
       .single();
@@ -37,7 +37,7 @@ async function createAdminUser() {
     }
 
     const { data: newUser, error: insertError } = await supabase
-      .from('users')
+      .from('user')
       .insert({
         email,
         auth_id: authUser.user.id,
