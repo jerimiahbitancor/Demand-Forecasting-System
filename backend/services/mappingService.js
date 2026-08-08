@@ -37,7 +37,7 @@ class MappingService {
       if (userId.length === 36) {
         try {
           const { data, error } = await supabase
-            .from('users')
+            .from('user')
             .select('id')
             .eq('auth_id', userId)
             .maybeSingle();

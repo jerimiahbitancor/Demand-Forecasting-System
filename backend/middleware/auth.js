@@ -34,7 +34,7 @@ const authenticate = async (req, res, next) => {
     
     try {
       const { data: userData, error: userError } = await supabase
-        .from('users')
+        .from('user')
         .select('*')
         .eq('auth_id', user.id)
         .maybeSingle();
@@ -48,7 +48,7 @@ const authenticate = async (req, res, next) => {
         // Try to create user if not exists
         try {
           const { data: newUser, error: insertError } = await supabase
-            .from('users')
+            .from('user')
             .insert({
               auth_id: user.id,
               email: user.email,

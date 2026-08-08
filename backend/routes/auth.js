@@ -24,7 +24,7 @@ router.post('/register', async (req, res) => {
 
   try {
     const { data: existingUser } = await supabase
-      .from('users')
+      .from('user')
       .select('id, email, is_verified')
       .eq('email', normalizedEmail)
       .maybeSingle();
@@ -35,11 +35,11 @@ router.post('/register', async (req, res) => {
       }
 
       await supabase.from('email_verifications').delete().eq('user_id', existingUser.id);
-      await supabase.from('users').delete().eq('id', existingUser.id);
+      await supabase.from('user').delete().eq('id', existingUser.id);
     }
 
     const { data: user, error: insertError } = await supabase
-      .from('users')
+      .from('user')
       .insert({
         email: normalizedEmail,
         name: fullName.trim(),
@@ -86,7 +86,7 @@ router.post('/verify-otp', async (req, res) => {
 
   try {
     const { data: user, error: userError } = await supabase
-      .from('users')
+      .from('user')
       .select('id, email, is_verified')
       .eq('id', userId)
       .eq('email', normalizedEmail)
@@ -169,7 +169,7 @@ router.post('/create-password', async (req, res) => {
 
   try {
     const { data: user, error: userError } = await supabase
-      .from('users')
+      .from('user')
       .select('*')
       .eq('id', userId)
       .eq('email', normalizedEmail)
@@ -235,7 +235,7 @@ router.post('/create-password', async (req, res) => {
           );
           
           await supabase
-            .from('users')
+            .from('user')
             .update({
               auth_id: existingAuth.user.id,
               is_verified: true,
@@ -262,7 +262,7 @@ router.post('/create-password', async (req, res) => {
 
     // ✅ Update user with auth_id and is_verified = true
     await supabase
-      .from('users')
+      .from('user')
       .update({
         auth_id: authUser.user.id,
         is_verified: true,
@@ -314,7 +314,7 @@ router.post('/resend-otp', async (req, res) => {
 
   try {
     const { data: user, error: userError } = await supabase
-      .from('users')
+      .from('user')
       .select('id')
       .eq('id', userId)
       .eq('email', normalizedEmail)
@@ -396,7 +396,7 @@ router.post('/sync-user', authenticate, async (req, res) => {
     // ✅ User exists in Auth but NOT in custom users table
     // Create custom user record
     const { data: newUser, error: insertError } = await supabaseAdmin
-      .from('users')
+      .from('user')
       .insert({
         auth_id: authUser.id,
         email: authUser.email,
@@ -441,7 +441,7 @@ router.post('/sync-user', authenticate, async (req, res) => {
 router.get('/setup', async (req, res) => {
   try {
     const { data, error } = await supabaseAdmin
-      .from('users')
+      .from('user')
       .select('id')
       .eq('is_verified', true)
       .limit(1);
