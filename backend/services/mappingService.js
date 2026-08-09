@@ -144,7 +144,7 @@ class MappingService {
         return [];
       }
 
-      console.log(`Fetching products for user_id: ${numericId}${forceRefresh ? ' (forced refresh)' : ''}${status ? ` status=${status}` : ''}`);
+      console.log(`Fetching products${forceRefresh ? ' (forced refresh)' : ''}${status ? ` status=${status}` : ''}`);
 
       let query = supabase
         .from('products')
@@ -293,7 +293,7 @@ class MappingService {
         return null;
       }
 
-      console.log(`Fetching product ${id} for user_id: ${numericId}`);
+      console.log(`Fetching product ${id}`);
 
       const { data, error } = await supabase
         .from('products')
@@ -346,7 +346,7 @@ class MappingService {
         return mockProduct;
       }
 
-      console.log(`Creating product for user_id: ${numericId}`);
+      console.log('Creating product');
 
       const insertData = {
         name: productData.name.trim(),
@@ -413,7 +413,7 @@ class MappingService {
       console.log('Update product called with:', { id, userId });
       
       const numericId = await this.getNumericUserId(userId);
-      console.log('Numeric ID resolved to:', numericId);
+      console.log('Numeric ID resolved');
       
       if (!numericId) {
         throw new Error('Valid User ID is required to update a product');
@@ -423,7 +423,7 @@ class MappingService {
       console.log('Existing product found:', existingProduct ? 'Yes' : 'No');
       
       if (!existingProduct) {
-        console.log(`Product ${id} not found or does not belong to user ${numericId}`);
+        console.log(`Product ${id} not found`);
         return null;
       }
 
@@ -432,7 +432,7 @@ class MappingService {
         return { ...existingProduct, ...productData };
       }
 
-      console.log(`Updating product ${id} for user_id: ${numericId}`);
+      console.log(`Updating product ${id}`);
 
       const updateData = {};
       if (productData.name !== undefined) updateData.name = productData.name.trim();
@@ -543,7 +543,7 @@ class MappingService {
 
       const existingProduct = await this.getProductById(id, numericId);
       if (!existingProduct) {
-        console.log(`Product ${id} not found or does not belong to user ${numericId}`);
+        console.log(`Product ${id} not found`);
         return false;
       }
 
@@ -552,7 +552,7 @@ class MappingService {
         return true;
       }
 
-      console.log(`Deleting product ${id} for user_id: ${numericId}`);
+      console.log(`Deleting product ${id}`);
 
       const { error } = await supabase
         .from('products')
@@ -590,7 +590,6 @@ class MappingService {
         .from('ingredients')
         .select('id')
         .ilike('name', name)
-        .eq('user_id', numericId)
         .maybeSingle();
 
       if (error && error.code !== 'PGRST116') {
@@ -605,8 +604,7 @@ class MappingService {
 
       const insertData = {
         name: name.trim(),
-        unit: unit || 'kg',
-        user_id: numericId
+        unit: unit || 'kg'
       };
 
       const { data: newData, error: insertError } = await supabase

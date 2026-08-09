@@ -444,7 +444,7 @@ isValidUserId(userId) {
         throw error;
       }
       
-      console.log(`✅ Product inserted: ${productData.name} (Category: ${productData.category}, ID: ${data.id}, User: ${productData.user_id || 'N/A'})`);
+      console.log(`✅ Product inserted: ${productData.name} (Category: ${productData.category}, ID: ${data.id})`);
       return data.id;
     } catch (error) {
       console.error('Error inserting product:', error);
@@ -498,10 +498,6 @@ isValidUserId(userId) {
         .select('id, name, unit')
         .ilike('name', name);
 
-      if (this.isValidUserId(userId)) {
-        query = query.eq('user_id', userId);
-      }
-
       const { data, error } = await query.maybeSingle();
 
       if (error && error.code !== 'PGRST116') {
@@ -529,10 +525,6 @@ isValidUserId(userId) {
         unit: unit 
       };
 
-      if (this.isValidUserId(userId)) {
-        insertData.user_id = userId;
-      }
-
       const { data: newData, error: insertError } = await supabase
         .from('ingredients')
         .insert(insertData)
@@ -552,7 +544,7 @@ isValidUserId(userId) {
         throw insertError;
       }
 
-      console.log(`✅ Ingredient inserted: ${name} (Unit: ${unit}, ID: ${newData.id}, User: ${userId || 'N/A'})`);
+      console.log(`✅ Ingredient inserted: ${name} (Unit: ${unit}, ID: ${newData.id})`);
       return newData.id;
 
     } catch (error) {

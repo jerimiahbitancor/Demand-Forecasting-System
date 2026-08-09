@@ -52,16 +52,11 @@ class BusinessProfileController {
         return res.status(401).json({ success: false, error: 'Missing access token' });
       }
 
-      const numericUserId = req.user?.user_id;
-      if (!numericUserId) {
-        return res.json({ success: true, data: null });
-      }
-
       const userClient = userScopedClient(req);
       const { data, error } = await userClient
         .from('business_profile')
         .select('*')
-        .eq('user_id', numericUserId)
+        .limit(1)
         .maybeSingle();
 
       if (error) throw error;
@@ -92,23 +87,40 @@ class BusinessProfileController {
         return res.status(401).json({ success: false, error: 'Missing access token' });
       }
 
-      const numericUserId = req.user?.user_id;
-      if (!numericUserId) {
-        return res.status(400).json({ success: false, error: 'User not found in users table' });
-      }
-
       const userClient = userScopedClient(req);
+
+      const { data: existingRow, error: existingError } = await userClient
+        .from('business_profile')
+        .select('*')
+        .limit(1)
+        .maybeSingle();
+
+      if (existingError) throw existingError;
+
       const row = {
         ...toDbRow(req.body),
-        user_id: numericUserId,
         updated_at: new Date(),
       };
 
-      const { data, error } = await userClient
-        .from('business_profile')
-        .upsert(row, { onConflict: 'user_id' })
-        .select()
-        .single();
+      let result;
+      if (existingRow?.id) {
+        const { data, error } = await userClient
+          .from('business_profile')
+          .update(row)
+          .eq('id', existingRow.id)
+          .select()
+          .single();
+        result = { data, error };
+      } else {
+        const { data, error } = await userClient
+          .from('business_profile')
+          .insert(row)
+          .select()
+          .single();
+        result = { data, error };
+      }
+
+      const { data, error } = result;
 
       if (error) throw error;
 
