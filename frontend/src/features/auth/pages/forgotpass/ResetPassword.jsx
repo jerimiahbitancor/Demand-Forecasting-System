@@ -9,7 +9,7 @@ import {
   FaArrowLeft,
   FaSpinner,
 } from 'react-icons/fa';
-import './forgotpass2.css';
+import './ResetPassword.css';
 
 const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:5000/api';
 
@@ -21,7 +21,7 @@ const getPasswordRules = (password) => [
   { test: /[^A-Za-z0-9]/.test(password), message: 'One special character' },
 ];
 
-const ForgotPassword2 = () => {
+const ResetPassword = () => {
   const navigate = useNavigate();
   const location = useLocation();
   const email = location.state?.email || 'your email';

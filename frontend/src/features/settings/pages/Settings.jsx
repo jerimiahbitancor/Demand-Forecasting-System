@@ -8,12 +8,12 @@ import {
   FiDatabase,
   FiBookOpen,
 } from 'react-icons/fi';
-import Navbar from '../components/Navbar/Navbar.jsx';
-import BusinessProfile from './components/BusinessProfile.jsx';
-import AccountSettings from './components/AccountSettings.jsx';
-import ForecastConfig from './components/ForecastConfig.jsx';
-import DataManagementSettings from './components/DataManagementSettings.jsx';
-import Documentation from './components/AboutDocumentation.jsx';
+import Navbar from '../../components/Navbar/Navbar.jsx';
+import BusinessProfile from '../components/BusinessProfile.jsx';
+import AccountSettings from '../components/AccountSettings.jsx';
+import ForecastConfig from '../components/ForecastConfig.jsx';
+import DataManagementSettings from '../components/DataManagementSettings.jsx';
+import Documentation from '../components/AboutDocumentation.jsx';
 import './Settings.css';
 
 const Settings = () => {

@@ -9,16 +9,16 @@ import { useSetupGuard } from './hooks/useSetupGuard';
 import ProtectedRoute from './features/components/ProtectedRoute';
 import RequireUpload from './features/components/RequireUpload';
 import { TEMPORARY_ACCESS_BYPASS } from './config/accessControl';
-import ForgotPassword from './features/auth/pages/forgotpass/forgotpass';
-import ForgotPassword2 from './features/auth/pages/forgotpass/forgotpass2';
+import ForgotPassword from './features/auth/pages/forgotpass/ForgotPassword';
+import ResetPassword from './features/auth/pages/forgotpass/ResetPassword';
 import ChefDuoLanding from './features/landing/ChefDuoLanding';
 import Dashboard from './features/dashboard/pages/Dashboard';
 import DataManagement from './features/datamanagement/pages/DataManagement';
-import Forecasting from './features/Analytics/Forecasting';
-import ProductPerformance from './features/Analytics/ProductPerformance';
-import IngredientDemand from './features/Analytics/components/IngredientDemand';
-import Settings from './features/settings/Settings';
-import Analytics from './features/Analytics/pages/Analytics';
+import Forecasting from './features/analytics/components/Forecasting';
+import ProductPerformance from './features/analytics/components/ProductPerformance';
+import IngredientDemand from './features/analytics/components/IngredientDemand';
+import Settings from './features/settings/pages/Settings';
+import Analytics from './features/analytics/pages/Analytics';
 import './App.css';
 import './RouteGuard.css'
 
@@ -143,7 +143,7 @@ function App() {
           </RouteGuard>
         } />
         <Route path="/forgot-password" element={<ForgotPassword />} />
-        <Route path="/forgot-password/reset" element={<ForgotPassword2 />} />
+        <Route path="/forgot-password/reset" element={<ResetPassword />} />
 
         {/* Landing Page - Protected */}
         <Route path="/landing" element={<ProtectedRoute><ChefDuoLanding /></ProtectedRoute>} />

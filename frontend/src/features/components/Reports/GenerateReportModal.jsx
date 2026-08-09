@@ -8,7 +8,7 @@
 
 import { useState } from "react";
 import { FiX, FiFileText, FiGrid } from "react-icons/fi";
-import DatePicker from "../../Analytics/components/shared/DatePicker.jsx";
+import DatePicker from "../../analytics/components/shared/DatePicker.jsx";
 import "./GenerateReportModal.css";
 
 const GenerateReportModal = ({ reportTitle, availableTables, onCancel, onGenerate }) => {
