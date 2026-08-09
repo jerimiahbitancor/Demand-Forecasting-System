@@ -297,4 +297,4 @@ const ResetPassword = () => {
   );
 };
 
-export default ForgotPassword2;
+export default ResetPassword;
