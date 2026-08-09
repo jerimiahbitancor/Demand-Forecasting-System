@@ -159,7 +159,6 @@ class MappingService {
             )
           )
         `)
-        .eq('user_id', numericId)
         .order('name');
 
       if (category && category !== 'All') {
@@ -310,7 +309,6 @@ class MappingService {
           )
         `)
         .eq('id', id)
-        .eq('user_id', numericId)
         .single();
 
       if (error) {
@@ -357,8 +355,7 @@ class MappingService {
         serving_size_label: productData.serving_size_label || null,
         is_active: false,
         inactive_reason: 'New product detected. Forecast available after 4 weeks.',
-        inactive_since: this.formatDate(new Date()),
-        user_id: numericId
+        inactive_since: this.formatDate(new Date())
       };
 
       const { data: product, error: productError } = await supabase
@@ -454,7 +451,6 @@ class MappingService {
         .from('products')
         .update(updateData)
         .eq('id', id)
-        .eq('user_id', numericId)
         .select()
         .single();
 
@@ -561,8 +557,7 @@ class MappingService {
       const { error } = await supabase
         .from('products')
         .delete()
-        .eq('id', id)
-        .eq('user_id', numericId);
+        .eq('id', id);
 
       if (error) {
         console.error('Error deleting product:', error);
@@ -689,7 +684,6 @@ class MappingService {
           .from('products')
           .update({ first_sold_date: firstSoldDate })
           .eq('id', productId)
-          .eq('user_id', numericId)
           .select()
           .single();
 
@@ -750,7 +744,6 @@ class MappingService {
         .from('products')
         .update(updateData)
         .eq('id', id)
-        .eq('user_id', numericId)
         .select()
         .single();
 
@@ -809,7 +802,6 @@ class MappingService {
         .from('products')
         .update(updateData)
         .eq('id', id)
-        .eq('user_id', numericId)
         .select()
         .single();
 
@@ -846,8 +838,7 @@ class MappingService {
 
       const { data: products, error: productsError } = await supabase
         .from('products')
-        .select('id, name, created_at, is_active, inactive_reason, inactive_since, first_sold_date')
-        .eq('user_id', numericId);
+        .select('id, name, created_at, is_active, inactive_reason, inactive_since, first_sold_date');
 
       if (productsError) {
         console.error('Error fetching products for reconciliation:', productsError);
@@ -932,7 +923,6 @@ class MappingService {
             .from('products')
             .update(updateData)
             .eq('id', product.id)
-            .eq('user_id', numericId)
             .select()
             .single();
 

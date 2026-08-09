@@ -247,7 +247,6 @@ class UploadService {
         let { data: existingProduct, error: productLookupError } = await supabase
           .from('products')
           .select('id, created_at, first_sold_date, is_active, inactive_reason')
-          .eq('user_id', numericId)
           .ilike('name', productName)
           .maybeSingle();
 
@@ -263,7 +262,6 @@ class UploadService {
               name: productName,
               price: price > 0 ? price : 0,
               category,
-              user_id: numericId,
               is_active: false,
               inactive_reason: 'New product detected. Forecast available after 4 weeks.',
               inactive_since: new Date().toISOString().slice(0, 10),
@@ -277,7 +275,6 @@ class UploadService {
               const { data: retryProduct } = await supabase
                 .from('products')
                 .select('id, created_at, first_sold_date, is_active, inactive_reason')
-                .eq('user_id', numericId)
                 .ilike('name', productName)
                 .maybeSingle();
               productId = retryProduct?.id;
@@ -316,7 +313,6 @@ class UploadService {
           .from('products')
           .select('id, created_at, first_sold_date, is_active, inactive_reason')
           .eq('id', productId)
-          .eq('user_id', numericId)
           .maybeSingle();
 
         if (productFetchError) {
@@ -350,8 +346,7 @@ class UploadService {
             inactive_reason: status.note || null,
             inactive_since: status.isActive ? null : (product?.inactive_since || new Date().toISOString().slice(0, 10))
           })
-          .eq('id', productId)
-          .eq('user_id', numericId);
+          .eq('id', productId);
 
         if (!updateError) {
           productsUpdated += 1;
@@ -850,10 +845,6 @@ class UploadService {
       let menuQuery = supabase
         .from('products')
         .select('*', { count: 'exact', head: true });
-
-      if (numericId) {
-        menuQuery = menuQuery.eq('user_id', numericId);
-      }
 
       let menuItemsCount = 0;
       try {

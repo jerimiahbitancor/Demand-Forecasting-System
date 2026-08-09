@@ -195,7 +195,6 @@ isValidUserId(userId) {
         .from('products')
         .select('id')
         .ilike('name', productName)
-        .eq('user_id', userId)
         .maybeSingle();
 
       if (error && error.code !== 'PGRST116') {
@@ -331,8 +330,7 @@ isValidUserId(userId) {
             category: category || 'Uncategorized',
             serving_size_label: unit,
             is_active: false,
-            first_sold_date: null,
-            user_id: userId
+            first_sold_date: null
           });
           productsInserted++;
         } else {
@@ -398,10 +396,6 @@ isValidUserId(userId) {
         .select('id')
         .ilike('name', name);
 
-      if (this.isValidUserId(userId)) {
-        query = query.eq('user_id', userId);
-      }
-
       const { data, error } = await query.maybeSingle();
 
       if (error) {
@@ -434,10 +428,6 @@ isValidUserId(userId) {
         inactive_since: productData.is_active === true ? null : this.formatDate(new Date()),
         first_sold_date: productData.first_sold_date || null
       };
-
-      if (this.isValidUserId(productData.user_id)) {
-        insertData.user_id = productData.user_id;
-      }
 
       const { data, error } = await supabase
         .from('products')
@@ -622,11 +612,6 @@ isValidUserId(userId) {
         `)
         .order('name');
 
-      if (this.isValidUserId(userId)) {
-        query = query.eq('user_id', userId);
-        console.log(`🔍 Fetching products for user_id: ${userId}`);
-      }
-
       const { data, error } = await query;
       if (error) throw error;
       return data;
@@ -658,10 +643,6 @@ isValidUserId(userId) {
         .ilike('category', category)
         .order('name');
 
-      if (this.isValidUserId(userId)) {
-        query = query.eq('user_id', userId);
-      }
-
       const { data, error } = await query;
       if (error) throw error;
       return data;
@@ -680,10 +661,6 @@ isValidUserId(userId) {
       let query = supabase
         .from('products')
         .select('category');
-
-      if (this.isValidUserId(userId)) {
-        query = query.eq('user_id', userId);
-      }
 
       const { data, error } = await query.order('category');
 
