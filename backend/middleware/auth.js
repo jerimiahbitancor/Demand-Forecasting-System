@@ -1,5 +1,5 @@
 // backend/middleware/auth.js
-const { supabase } = require('../config/supabase');
+const { supabase, supabaseAdmin } = require('../config/supabase');
 
 const authenticate = async (req, res, next) => {
   try {
@@ -33,7 +33,7 @@ const authenticate = async (req, res, next) => {
     let customUserId = null;
     
     try {
-      const { data: userData, error: userError } = await supabase
+      const { data: userData, error: userError } = await supabaseAdmin
         .from('user')
         .select('*')
         .eq('auth_id', user.id)
@@ -47,7 +47,7 @@ const authenticate = async (req, res, next) => {
         console.log('No custom user found for auth_id:', user.id);
         // Try to create user if not exists
         try {
-          const { data: newUser, error: insertError } = await supabase
+          const { data: newUser, error: insertError } = await supabaseAdmin
             .from('user')
             .insert({
               auth_id: user.id,
