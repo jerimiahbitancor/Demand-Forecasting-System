@@ -1,5 +1,5 @@
 // services/menuService.js
-const { supabase, isConfigured } = require('../config/supabase');
+const { supabase, isConfigured, supabaseAdmin } = require('../config/supabase');
 
 class MenuService {
   constructor() {
@@ -191,8 +191,7 @@ isValidUserId(userId) {
         return { exists: false, hasSales: false };
       }
 
-      const { data: product, error } = await supabase
-        .from('products')
+      const { data: product, error } = await supabaseAdmin.from('products')
         .select('id')
         .ilike('name', productName)
         .maybeSingle();
@@ -205,8 +204,7 @@ isValidUserId(userId) {
         return { exists: false, hasSales: false };
       }
 
-      const { data: sales, error: salesError } = await supabase
-        .from('daily_sales')
+      const { data: sales, error: salesError } = await supabaseAdmin.from('daily_sales')
         .select('id')
         .eq('product_id', product.id)
         .limit(1);
@@ -391,8 +389,7 @@ isValidUserId(userId) {
         return null;
       }
 
-      let query = supabase
-        .from('products')
+      let query = supabaseAdmin.from('products')
         .select('id')
         .ilike('name', name);
 
@@ -429,8 +426,7 @@ isValidUserId(userId) {
         first_sold_date: productData.first_sold_date || null
       };
 
-      const { data, error } = await supabase
-        .from('products')
+      const { data, error } = await supabaseAdmin.from('products')
         .insert(insertData)
         .select()
         .single();
@@ -458,8 +454,7 @@ isValidUserId(userId) {
         return;
       }
 
-      const { data, error } = await supabase
-        .from('products')
+      const { data, error } = await supabaseAdmin.from('products')
         .select('category')
         .eq('id', productId)
         .single();
@@ -470,8 +465,7 @@ isValidUserId(userId) {
       }
 
       if (data.category !== category) {
-        const { error: updateError } = await supabase
-          .from('products')
+        const { error: updateError } = await supabaseAdmin.from('products')
           .update({ category: category })
           .eq('id', productId);
 
@@ -493,8 +487,7 @@ isValidUserId(userId) {
         return Math.floor(Math.random() * 1000) + 1;
       }
 
-      let query = supabase
-        .from('ingredients')
+      let query = supabaseAdmin.from('ingredients')
         .select('id, name, unit')
         .ilike('name', name);
 
@@ -506,8 +499,7 @@ isValidUserId(userId) {
 
       if (data) {
         if (data.unit !== unit) {
-          const { error: updateError } = await supabase
-            .from('ingredients')
+          const { error: updateError } = await supabaseAdmin.from('ingredients')
             .update({ unit: unit })
             .eq('id', data.id);
           
@@ -525,8 +517,7 @@ isValidUserId(userId) {
         unit: unit 
       };
 
-      const { data: newData, error: insertError } = await supabase
-        .from('ingredients')
+      const { data: newData, error: insertError } = await supabaseAdmin.from('ingredients')
         .insert(insertData)
         .select()
         .single();
@@ -534,8 +525,7 @@ isValidUserId(userId) {
       if (insertError) {
         if (insertError.code === '23505') {
           console.log(`⚠️ Ingredient already exists: ${name}`);
-          const existing = await supabase
-            .from('ingredients')
+          const existing = await supabaseAdmin.from('ingredients')
             .select('id')
             .ilike('name', name)
             .maybeSingle();
@@ -560,8 +550,7 @@ isValidUserId(userId) {
         return;
       }
 
-      const { error } = await supabase
-        .from('product_ingredients')
+      const { error } = await supabaseAdmin.from('product_ingredients')
         .insert({
           product_id: data.product_id,
           ingredient_id: data.ingredient_id,
@@ -589,8 +578,7 @@ isValidUserId(userId) {
         return [];
       }
 
-      let query = supabase
-        .from('products')
+      let query = supabaseAdmin.from('products')
         .select(`
           *,
           product_ingredients (
@@ -619,8 +607,7 @@ isValidUserId(userId) {
         return [];
       }
 
-      let query = supabase
-        .from('products')
+      let query = supabaseAdmin.from('products')
         .select(`
           *,
           product_ingredients (
@@ -650,8 +637,7 @@ isValidUserId(userId) {
         return [];
       }
 
-      let query = supabase
-        .from('products')
+      let query = supabaseAdmin.from('products')
         .select('category');
 
       const { data, error } = await query.order('category');

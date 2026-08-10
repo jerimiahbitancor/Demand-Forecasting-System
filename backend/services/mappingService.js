@@ -1,5 +1,5 @@
 // services/mappingService.js
-const { supabase, isConfigured } = require('../config/supabase');
+const { supabase, isConfigured, supabaseAdmin } = require('../config/supabase');
 const { deriveProductStatus } = require('./productStatusService');
 
 class MappingService {
@@ -36,8 +36,7 @@ class MappingService {
       }
       if (userId.length === 36) {
         try {
-          const { data, error } = await supabase
-            .from('user')
+          const { data, error } = await supabaseAdmin.from('user')
             .select('id')
             .eq('auth_id', userId)
             .maybeSingle();
@@ -146,8 +145,7 @@ class MappingService {
 
       console.log(`Fetching products${forceRefresh ? ' (forced refresh)' : ''}${status ? ` status=${status}` : ''}`);
 
-      let query = supabase
-        .from('products')
+      let query = supabaseAdmin.from('products')
         .select(`
           *,
           product_ingredients (
@@ -221,8 +219,7 @@ class MappingService {
         return products;
       }
 
-      const { data: sales, error: salesError } = await supabase
-        .from('daily_sales')
+      const { data: sales, error: salesError } = await supabaseAdmin.from('daily_sales')
         .select('product_id, sale_date')
         .in('product_id', productIds);
 
@@ -295,8 +292,7 @@ class MappingService {
 
       console.log(`Fetching product ${id}`);
 
-      const { data, error } = await supabase
-        .from('products')
+      const { data, error } = await supabaseAdmin.from('products')
         .select(`
           *,
           product_ingredients (
@@ -358,8 +354,7 @@ class MappingService {
         inactive_since: this.formatDate(new Date())
       };
 
-      const { data: product, error: productError } = await supabase
-        .from('products')
+      const { data: product, error: productError } = await supabaseAdmin.from('products')
         .insert(insertData)
         .select()
         .single();
@@ -380,8 +375,7 @@ class MappingService {
               numericId
             );
 
-            const { error: piError } = await supabase
-              .from('product_ingredients')
+            const { error: piError } = await supabaseAdmin.from('product_ingredients')
               .insert({
                 product_id: product.id,
                 ingredient_id: ingredientId,
@@ -447,8 +441,7 @@ class MappingService {
         updateData.is_active = existingProduct.is_active;
       }
 
-      const { data: product, error: productError } = await supabase
-        .from('products')
+      const { data: product, error: productError } = await supabaseAdmin.from('products')
         .update(updateData)
         .eq('id', id)
         .select()
@@ -481,8 +474,7 @@ class MappingService {
         }
 
         // Delete existing ingredients
-        const { error: deleteError } = await supabase
-          .from('product_ingredients')
+        const { error: deleteError } = await supabaseAdmin.from('product_ingredients')
           .delete()
           .eq('product_id', id);
 
@@ -503,8 +495,7 @@ class MappingService {
                 userId
               );
 
-              const { error: piError } = await supabase
-                .from('product_ingredients')
+              const { error: piError } = await supabaseAdmin.from('product_ingredients')
                 .insert({
                   product_id: id,
                   ingredient_id: ingredientId,
@@ -554,8 +545,7 @@ class MappingService {
 
       console.log(`Deleting product ${id}`);
 
-      const { error } = await supabase
-        .from('products')
+      const { error } = await supabaseAdmin.from('products')
         .delete()
         .eq('id', id);
 
@@ -586,8 +576,7 @@ class MappingService {
         return Date.now();
       }
 
-      const { data, error } = await supabase
-        .from('ingredients')
+      const { data, error } = await supabaseAdmin.from('ingredients')
         .select('id')
         .ilike('name', name)
         .maybeSingle();
@@ -607,8 +596,7 @@ class MappingService {
         unit: unit || 'kg'
       };
 
-      const { data: newData, error: insertError } = await supabase
-        .from('ingredients')
+      const { data: newData, error: insertError } = await supabaseAdmin.from('ingredients')
         .insert(insertData)
         .select()
         .single();
@@ -664,8 +652,7 @@ class MappingService {
         return product;
       }
 
-      const { data, error } = await supabase
-        .from('daily_sales')
+      const { data, error } = await supabaseAdmin.from('daily_sales')
         .select('sale_date')
         .eq('product_id', productId)
         .order('sale_date', { ascending: true })
@@ -678,8 +665,7 @@ class MappingService {
 
       if (data && data.sale_date) {
         const firstSoldDate = this.formatDate(data.sale_date);
-        const { data: updated, error: updateError } = await supabase
-          .from('products')
+        const { data: updated, error: updateError } = await supabaseAdmin.from('products')
           .update({ first_sold_date: firstSoldDate })
           .eq('id', productId)
           .select()
@@ -738,8 +724,7 @@ class MappingService {
         inactive_since: this.formatDate(new Date())
       };
 
-      const { data: product, error } = await supabase
-        .from('products')
+      const { data: product, error } = await supabaseAdmin.from('products')
         .update(updateData)
         .eq('id', id)
         .select()
@@ -796,8 +781,7 @@ class MappingService {
         inactive_since: null
       };
 
-      const { data: product, error } = await supabase
-        .from('products')
+      const { data: product, error } = await supabaseAdmin.from('products')
         .update(updateData)
         .eq('id', id)
         .select()
@@ -834,8 +818,7 @@ class MappingService {
       cutoffDate.setDate(cutoffDate.getDate() - 28);
       const cutoffIso = this.formatDate(cutoffDate);
 
-      const { data: products, error: productsError } = await supabase
-        .from('products')
+      const { data: products, error: productsError } = await supabaseAdmin.from('products')
         .select('id, name, created_at, is_active, inactive_reason, inactive_since, first_sold_date');
 
       if (productsError) {
@@ -848,8 +831,7 @@ class MappingService {
       }
 
       const productIds = products.map((product) => product.id);
-      const { data: sales, error: salesError } = await supabase
-        .from('daily_sales')
+      const { data: sales, error: salesError } = await supabaseAdmin.from('daily_sales')
         .select('product_id, sale_date')
         .in('product_id', productIds);
 
@@ -917,8 +899,7 @@ class MappingService {
         }
 
         if (Object.keys(updateData).length > 0) {
-          const { data: updatedProduct, error: updateError } = await supabase
-            .from('products')
+          const { data: updatedProduct, error: updateError } = await supabaseAdmin.from('products')
             .update(updateData)
             .eq('id', product.id)
             .select()

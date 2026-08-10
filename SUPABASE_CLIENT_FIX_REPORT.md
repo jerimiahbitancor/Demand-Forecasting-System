@@ -216,6 +216,86 @@ Files changed and exact before/after client-swap lines:
       .eq('email', normalizedEmail)
       .single();`
 
+- backend/controllers/productController.js
+  - Before: `const { data: products, error: productError } = await supabase
+      .from('products')...`
+    After:  `const { data: products, error: productError } = await supabaseAdmin
+      .from('products')...`
+
+  - Before: `const { data: mappings, error: mappingError } = await supabase
+      .from('product_ingredients')...`
+    After:  `const { data: mappings, error: mappingError } = await supabaseAdmin
+      .from('product_ingredients')...`
+
+  - Before: `const { data: existing, error: findError } = await supabase
+      .from('ingredients')...`
+    After:  `const { data: existing, error: findError } = await supabaseAdmin
+      .from('ingredients')...`
+
+- backend/create-admin.js
+  - Before: `const { data: existingUser, error: checkError } = await supabase
+      .from('user')...`
+    After:  `const { data: existingUser, error: checkError } = await supabaseAdmin
+      .from('user')...`
+
+- backend/routes/users.js
+  - Before: `const { data: users, error } = await supabase
+      .from('user')...`
+    After:  `const { data: users, error } = await supabaseAdmin
+      .from('user')...`
+
+  - Before: `const { data: user, error } = await supabase
+      .from('user')
+      .update({...})...`
+    After:  `const { data: user, error } = await supabaseAdmin
+      .from('user')
+      .update({...})...`
+
+- backend/services/mappingService.js
+  - Before: `const { data, error } = await supabase
+      .from('user')...`
+    After:  `const { data, error } = await supabaseAdmin
+      .from('user')...`
+
+  - Before: `const { data: sales, error: salesError } = await supabase
+      .from('daily_sales')...`
+    After:  `const { data: sales, error: salesError } = await supabaseAdmin
+      .from('daily_sales')...`
+
+  - Before: `const { data: newData, error: insertError } = await supabase
+      .from('ingredients')...`
+    After:  `const { data: newData, error: insertError } = await supabaseAdmin
+      .from('ingredients')...`
+
+- backend/services/menuService.js
+  - Before: `const { data: product, error } = await supabase
+      .from('products')...`
+    After:  `const { data: product, error } = await supabaseAdmin
+      .from('products')...`
+
+  - Before: `const { data: sales, error: salesError } = await supabase
+      .from('daily_sales')...`
+    After:  `const { data: sales, error: salesError } = await supabaseAdmin
+      .from('daily_sales')...`
+
+- backend/services/uploadService.js
+  - Before: `const { data, error } = await supabase
+      .from('uploads')...`
+    After:  `const { data, error } = await supabaseAdmin
+      .from('uploads')...`
+
+  - Before: `const { data, error } = await supabase
+      .from('products')...`
+    After:  `const { data, error } = await supabaseAdmin
+      .from('products')...`
+
+  - Before: `const { data, error } = await supabase
+      .from('daily_sales')...`
+    After:  `const { data, error } = await supabaseAdmin
+      .from('daily_sales')...`
+
+  - Fixed `.from('users')` to `.from('user')` in `backend/services/uploadService.js` inside `getNumericUserId()`.
+
 Verification notes:
 - All `supabase.auth.*` usages were left untouched. Instances found (for review):
   - backend/middleware/auth.js: `supabase.auth.getUser(token)`
@@ -223,14 +303,10 @@ Verification notes:
   - backend/routes/users.js: `supabase.auth.updateUser` and `supabase.auth.admin.deleteUser`
 
 Runtime verification:
-- Attempted to start backend server; port 5000 was already in use so a fresh start failed with `EADDRINUSE`.
-- Queried the running server at `GET http://localhost:5000/api/auth/setup` and received:
-
-```
-{"success":true,"hasUser":false}
-```
-
-This indicates the running server responded successfully to the setup check (no user rows found).
+- Started backend server on port `5001` successfully after port `5000` was already in use.
+- `/health` returned `{"status":"OK","timestamp":"..."}`.
+- A final backend-wide grep confirmed zero remaining `supabase.from(` occurrences in backend JS files.
+- No `from('users')` table references remain in backend JS.
 
 If you want, next steps I can take:
 - Stop the currently running server (if you want a fresh instance) and start a new one to capture startup logs.

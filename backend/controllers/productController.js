@@ -1,11 +1,11 @@
 // /backend/controllers/ProductController.js
-const { supabase } = require('../config/supabase');
+const { supabase, supabaseAdmin } = require('../config/supabase');
 
 class ProductController {
   static _ensureSupabase(res) {
-    if (!supabase) {
+    if (!supabaseAdmin) {
       res.status(500).json({
-        error: 'Supabase is not configured. Set SUPABASE_URL and SUPABASE_ANON_KEY first.',
+        error: 'Supabase admin client is not configured. Set SUPABASE_SERVICE_KEY first.',
       });
       return false;
     }
@@ -18,15 +18,13 @@ class ProductController {
     if (!ProductController._ensureSupabase(res)) return;
 
     try {
-      const { data: products, error: productError } = await supabase
-        .from('products')
+      const { data: products, error: productError } = await supabaseAdmin.from('products')
         .select('*')
         .order('created_at', { ascending: false });
 
       if (productError) throw productError;
 
-      const { data: mappings, error: mappingError } = await supabase
-        .from('product_ingredients')
+      const { data: mappings, error: mappingError } = await supabaseAdmin.from('product_ingredients')
         .select('id, product_id, quantity_per_serving, ingredients ( id, name, unit )');
 
       if (mappingError) throw mappingError;
@@ -55,8 +53,7 @@ class ProductController {
 
     const { id } = req.params;
     try {
-      const { data: product, error: productError } = await supabase
-        .from('products')
+      const { data: product, error: productError } = await supabaseAdmin.from('products')
         .select('*')
         .eq('id', parseInt(id))
         .single();
@@ -65,8 +62,7 @@ class ProductController {
         return res.status(404).json({ error: 'Product not found' });
       }
 
-      const { data: mappings, error: mappingError } = await supabase
-        .from('product_ingredients')
+      const { data: mappings, error: mappingError } = await supabaseAdmin.from('product_ingredients')
         .select('id, quantity_per_serving, ingredients ( id, name, unit )')
         .eq('product_id', product.id);
 
@@ -105,8 +101,7 @@ class ProductController {
 
     try {
       // 1. Insert the product
-      const { data: newProduct, error: productError } = await supabase
-        .from('products')
+      const { data: newProduct, error: productError } = await supabaseAdmin.from('products')
         .insert({ name, category, price })
         .select()
         .single();
@@ -121,8 +116,7 @@ class ProductController {
           ingredients
         );
 
-        const { error: mappingError } = await supabase
-          .from('product_ingredients')
+        const { error: mappingError } = await supabaseAdmin.from('product_ingredients')
           .insert(mappingRows);
 
         if (mappingError) throw mappingError;
@@ -137,8 +131,8 @@ class ProductController {
       // Manual rollback — Supabase JS has no cross-table transaction support.
       // See write-up: this is a documented limitation, not an oversight.
       if (insertedProductId) {
-        await supabase.from('product_ingredients').delete().eq('product_id', insertedProductId);
-        await supabase.from('products').delete().eq('id', insertedProductId);
+        await supabaseAdmin.from('product_ingredients').delete().eq('product_id', insertedProductId);
+        await supabaseAdmin.from('products').delete().eq('id', insertedProductId);
       }
       res.status(500).json({ error: 'Failed to create product: ' + error.message });
     }
@@ -162,8 +156,7 @@ class ProductController {
       if (category !== undefined) updates.category = category;
       if (price !== undefined) updates.price = price;
 
-      const { data: updatedProduct, error: productError } = await supabase
-        .from('products')
+      const { data: updatedProduct, error: productError } = await supabaseAdmin.from('products')
         .update(updates)
         .eq('id', parseInt(id))
         .select()
@@ -176,8 +169,7 @@ class ProductController {
       // Replace ingredient mappings wholesale — simpler and safer than diffing
       // individual rows, at the cost of a delete+reinsert per edit.
       if (Array.isArray(ingredients)) {
-        const { error: deleteError } = await supabase
-          .from('product_ingredients')
+        const { error: deleteError } = await supabaseAdmin.from('product_ingredients')
           .delete()
           .eq('product_id', updatedProduct.id);
 
@@ -189,8 +181,7 @@ class ProductController {
             ingredients
           );
 
-          const { error: insertError } = await supabase
-            .from('product_ingredients')
+          const { error: insertError } = await supabaseAdmin.from('product_ingredients')
             .insert(mappingRows);
 
           if (insertError) throw insertError;
@@ -215,8 +206,7 @@ class ProductController {
     const { id } = req.params;
 
     try {
-      const { data: product, error: findError } = await supabase
-        .from('products')
+      const { data: product, error: findError } = await supabaseAdmin.from('products')
         .select('id, name')
         .eq('id', parseInt(id))
         .single();
@@ -227,15 +217,13 @@ class ProductController {
 
       // Manual cascade — your schema has no ON DELETE CASCADE on
       // product_ingredients.product_id, so this must happen first.
-      const { error: mappingDeleteError } = await supabase
-        .from('product_ingredients')
+      const { error: mappingDeleteError } = await supabaseAdmin.from('product_ingredients')
         .delete()
         .eq('product_id', product.id);
 
       if (mappingDeleteError) throw mappingDeleteError;
 
-      const { error: productDeleteError } = await supabase
-        .from('products')
+      const { error: productDeleteError } = await supabaseAdmin.from('products')
         .delete()
         .eq('id', product.id);
 
@@ -263,8 +251,7 @@ class ProductController {
         throw new Error(`Each ingredient needs a name and a positive quantity`);
       }
 
-      const { data: existing, error: findError } = await supabase
-        .from('ingredients')
+      const { data: existing, error: findError } = await supabaseAdmin.from('ingredients')
         .select('id, unit')
         .ilike('name', ing.name.trim())
         .maybeSingle();
@@ -276,8 +263,7 @@ class ProductController {
       if (existing) {
         ingredientId = existing.id;
       } else {
-        const { data: newIngredient, error: createError } = await supabase
-          .from('ingredients')
+        const { data: newIngredient, error: createError } = await supabaseAdmin.from('ingredients')
           .insert({ name: ing.name.trim(), unit: ing.unit })
           .select('id')
           .single();
