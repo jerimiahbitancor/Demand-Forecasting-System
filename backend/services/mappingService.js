@@ -1,6 +1,7 @@
 // services/mappingService.js
 const { supabase, isConfigured, supabaseAdmin } = require('../config/supabase');
 const { deriveProductStatus } = require('./productStatusService');
+const { PRODUCT_STATUS_NOTES, ARCHIVE_REASONS } = require('./productStatusConstants');
 
 class MappingService {
   constructor() {
@@ -210,7 +211,7 @@ class MappingService {
           is_active: Boolean(product.is_active),
           status: product.is_active ? 'active' : 'new',
           status_label: product.is_active ? 'ACTIVE' : 'INACTIVE (NEW)',
-          status_reason: product.inactive_reason || 'New product detected. Forecast available after 4 weeks.'
+          status_reason: product.inactive_reason || PRODUCT_STATUS_NOTES.NEW_PRODUCT
         }));
       }
 
@@ -350,7 +351,7 @@ class MappingService {
         category: productData.category || 'Uncategorized',
         serving_size_label: productData.serving_size_label || null,
         is_active: false,
-        inactive_reason: 'New product detected. Forecast available after 4 weeks.',
+        inactive_reason: PRODUCT_STATUS_NOTES.NEW_PRODUCT,
         inactive_since: this.formatDate(new Date())
       };
 
@@ -435,7 +436,7 @@ class MappingService {
       if (productData.serving_size_label !== undefined) updateData.serving_size_label = productData.serving_size_label || null;
       if (productData.is_active !== undefined && productData.is_active === false) {
         updateData.is_active = false;
-        updateData.inactive_reason = existingProduct.inactive_reason || 'New product detected. Forecast available after 4 weeks.';
+        updateData.inactive_reason = existingProduct.inactive_reason || PRODUCT_STATUS_NOTES.NEW_PRODUCT;
         updateData.inactive_since = existingProduct.inactive_since || this.formatDate(new Date());
       } else {
         updateData.is_active = existingProduct.is_active;
@@ -616,16 +617,16 @@ class MappingService {
 
   getAllowedArchiveReasons() {
     return [
-      'Discontinued',
-      'Seasonal',
-      'Out of stock temporarily'
+      ARCHIVE_REASONS.DISCONTINUED,
+      ARCHIVE_REASONS.SEASONAL,
+      ARCHIVE_REASONS.OUT_OF_STOCK_TEMP
     ];
   }
 
   getSystemStaleReasons() {
     return [
-      'No sales for 28 days',
-      'No sales yet'
+      PRODUCT_STATUS_NOTES.STALE,
+      PRODUCT_STATUS_NOTES.NEVER_SOLD
     ];
   }
 
@@ -883,18 +884,24 @@ class MappingService {
         if (isActive) {
           if (lastSale && lastSale < cutoffDate) {
             updateData.is_active = false;
-            updateData.inactive_reason = 'No sales for 28 days';
+            updateData.inactive_reason = PRODUCT_STATUS_NOTES.STALE;
             updateData.inactive_since = this.formatDate(lastSale);
           } else if (!lastSale && createdAt && createdAt < cutoffDate) {
             updateData.is_active = false;
-            updateData.inactive_reason = 'No sales yet';
+            updateData.inactive_reason = PRODUCT_STATUS_NOTES.NEVER_SOLD;
             updateData.inactive_since = this.formatDate(createdAt);
           }
         } else if (isSystemStale) {
           if (lastSale && lastSale >= cutoffDate) {
-            updateData.is_active = true;
-            updateData.inactive_reason = null;
-            updateData.inactive_since = null;
+            const hasEnoughHistory = firstSale && firstSale <= cutoffDate;
+            if (hasEnoughHistory) {
+              updateData.is_active = true;
+              updateData.inactive_reason = null;
+              updateData.inactive_since = null;
+            } else {
+              updateData.is_active = false;
+              updateData.inactive_reason = PRODUCT_STATUS_NOTES.NEW_PRODUCT;
+            }
           }
         }
 

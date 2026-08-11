@@ -1,6 +1,7 @@
 // services/uploadService.js
 const { supabase, isConfigured, supabaseAdmin } = require('../config/supabase');
 const { deriveProductStatus } = require('./productStatusService');
+const { PRODUCT_STATUS_NOTES } = require('./productStatusConstants');
 
 class UploadService {
   constructor() {
@@ -260,7 +261,7 @@ class UploadService {
               price: price > 0 ? price : 0,
               category,
               is_active: false,
-              inactive_reason: 'New product detected. Forecast available after 4 weeks.',
+              inactive_reason: PRODUCT_STATUS_NOTES.NEW_PRODUCT,
               inactive_since: new Date().toISOString().slice(0, 10),
               first_sold_date: saleDate
             })

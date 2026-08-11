@@ -1,5 +1,6 @@
 // services/menuService.js
 const { supabase, isConfigured, supabaseAdmin } = require('../config/supabase');
+const { PRODUCT_STATUS_NOTES } = require('./productStatusConstants');
 
 class MenuService {
   constructor() {
@@ -421,7 +422,7 @@ isValidUserId(userId) {
         category: productData.category || 'Uncategorized',
         serving_size_label: productData.serving_size_label || null,
         is_active: productData.is_active !== undefined ? productData.is_active : false,
-        inactive_reason: productData.is_active === true ? null : 'New product detected. Forecast available after 4 weeks.',
+        inactive_reason: productData.is_active === true ? null : PRODUCT_STATUS_NOTES.NEW_PRODUCT,
         inactive_since: productData.is_active === true ? null : this.formatDate(new Date()),
         first_sold_date: productData.first_sold_date || null
       };
