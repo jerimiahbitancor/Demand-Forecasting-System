@@ -1,3 +1,4 @@
+const { PRODUCT_STATUS_NOTES } = require('./productStatusConstants');
 const DAY_MS = 24 * 60 * 60 * 1000;
 
 function toDate(value) {
@@ -19,7 +20,7 @@ function deriveProductStatus({ firstSoldDate, lastSoldDate, createdAt, isActive 
       return {
         status: 'active',
         label: 'ACTIVE',
-        note: '',
+        note: PRODUCT_STATUS_NOTES.ACTIVE,
         isActive: true,
       };
     }
@@ -27,7 +28,7 @@ function deriveProductStatus({ firstSoldDate, lastSoldDate, createdAt, isActive 
     return {
       status: 'new',
       label: 'INACTIVE (NEW)',
-      note: 'New product detected. Forecast available after 4 weeks.',
+      note: PRODUCT_STATUS_NOTES.NEW_PRODUCT,
       isActive: false,
     };
   }
@@ -36,7 +37,7 @@ function deriveProductStatus({ firstSoldDate, lastSoldDate, createdAt, isActive 
     return {
       status: 'inactive',
       label: 'INACTIVE (DISCONTINUED)',
-      note: 'Discontinued product. Excluded from forecast.',
+      note: PRODUCT_STATUS_NOTES.STALE,
       isActive: false,
     };
   }
@@ -45,7 +46,7 @@ function deriveProductStatus({ firstSoldDate, lastSoldDate, createdAt, isActive 
     return {
       status: 'inactive',
       label: 'INACTIVE (DISCONTINUED)',
-      note: 'Discontinued product. Excluded from forecast.',
+      note: PRODUCT_STATUS_NOTES.STALE,
       isActive: false,
     };
   }
@@ -53,7 +54,7 @@ function deriveProductStatus({ firstSoldDate, lastSoldDate, createdAt, isActive 
   return {
     status: 'new',
     label: 'INACTIVE (NEW)',
-    note: 'New product detected. Forecast available after 4 weeks.',
+    note: PRODUCT_STATUS_NOTES.NEW_PRODUCT,
     isActive: false,
   };
 }

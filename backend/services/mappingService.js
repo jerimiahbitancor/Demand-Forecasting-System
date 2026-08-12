@@ -1,6 +1,7 @@
 // services/mappingService.js
-const { supabase, isConfigured } = require('../config/supabase');
+const { supabase, isConfigured, supabaseAdmin } = require('../config/supabase');
 const { deriveProductStatus } = require('./productStatusService');
+const { PRODUCT_STATUS_NOTES, ARCHIVE_REASONS } = require('./productStatusConstants');
 
 class MappingService {
   constructor() {
@@ -36,8 +37,7 @@ class MappingService {
       }
       if (userId.length === 36) {
         try {
-          const { data, error } = await supabase
-            .from('user')
+          const { data, error } = await supabaseAdmin.from('user')
             .select('id')
             .eq('auth_id', userId)
             .maybeSingle();
@@ -144,10 +144,9 @@ class MappingService {
         return [];
       }
 
-      console.log(`Fetching products for user_id: ${numericId}${forceRefresh ? ' (forced refresh)' : ''}${status ? ` status=${status}` : ''}`);
+      console.log(`Fetching products${forceRefresh ? ' (forced refresh)' : ''}${status ? ` status=${status}` : ''}`);
 
-      let query = supabase
-        .from('products')
+      let query = supabaseAdmin.from('products')
         .select(`
           *,
           product_ingredients (
@@ -159,7 +158,6 @@ class MappingService {
             )
           )
         `)
-        .eq('user_id', numericId)
         .order('name');
 
       if (category && category !== 'All') {
@@ -213,7 +211,7 @@ class MappingService {
           is_active: Boolean(product.is_active),
           status: product.is_active ? 'active' : 'new',
           status_label: product.is_active ? 'ACTIVE' : 'INACTIVE (NEW)',
-          status_reason: product.inactive_reason || 'New product detected. Forecast available after 4 weeks.'
+          status_reason: product.inactive_reason || PRODUCT_STATUS_NOTES.NEW_PRODUCT
         }));
       }
 
@@ -222,8 +220,7 @@ class MappingService {
         return products;
       }
 
-      const { data: sales, error: salesError } = await supabase
-        .from('daily_sales')
+      const { data: sales, error: salesError } = await supabaseAdmin.from('daily_sales')
         .select('product_id, sale_date')
         .in('product_id', productIds);
 
@@ -294,10 +291,9 @@ class MappingService {
         return null;
       }
 
-      console.log(`Fetching product ${id} for user_id: ${numericId}`);
+      console.log(`Fetching product ${id}`);
 
-      const { data, error } = await supabase
-        .from('products')
+      const { data, error } = await supabaseAdmin.from('products')
         .select(`
           *,
           product_ingredients (
@@ -310,7 +306,6 @@ class MappingService {
           )
         `)
         .eq('id', id)
-        .eq('user_id', numericId)
         .single();
 
       if (error) {
@@ -348,7 +343,7 @@ class MappingService {
         return mockProduct;
       }
 
-      console.log(`Creating product for user_id: ${numericId}`);
+      console.log('Creating product');
 
       const insertData = {
         name: productData.name.trim(),
@@ -356,13 +351,11 @@ class MappingService {
         category: productData.category || 'Uncategorized',
         serving_size_label: productData.serving_size_label || null,
         is_active: false,
-        inactive_reason: 'New product detected. Forecast available after 4 weeks.',
-        inactive_since: this.formatDate(new Date()),
-        user_id: numericId
+        inactive_reason: PRODUCT_STATUS_NOTES.NEW_PRODUCT,
+        inactive_since: this.formatDate(new Date())
       };
 
-      const { data: product, error: productError } = await supabase
-        .from('products')
+      const { data: product, error: productError } = await supabaseAdmin.from('products')
         .insert(insertData)
         .select()
         .single();
@@ -383,8 +376,7 @@ class MappingService {
               numericId
             );
 
-            const { error: piError } = await supabase
-              .from('product_ingredients')
+            const { error: piError } = await supabaseAdmin.from('product_ingredients')
               .insert({
                 product_id: product.id,
                 ingredient_id: ingredientId,
@@ -416,7 +408,7 @@ class MappingService {
       console.log('Update product called with:', { id, userId });
       
       const numericId = await this.getNumericUserId(userId);
-      console.log('Numeric ID resolved to:', numericId);
+      console.log('Numeric ID resolved');
       
       if (!numericId) {
         throw new Error('Valid User ID is required to update a product');
@@ -426,7 +418,7 @@ class MappingService {
       console.log('Existing product found:', existingProduct ? 'Yes' : 'No');
       
       if (!existingProduct) {
-        console.log(`Product ${id} not found or does not belong to user ${numericId}`);
+        console.log(`Product ${id} not found`);
         return null;
       }
 
@@ -435,7 +427,7 @@ class MappingService {
         return { ...existingProduct, ...productData };
       }
 
-      console.log(`Updating product ${id} for user_id: ${numericId}`);
+      console.log(`Updating product ${id}`);
 
       const updateData = {};
       if (productData.name !== undefined) updateData.name = productData.name.trim();
@@ -444,17 +436,15 @@ class MappingService {
       if (productData.serving_size_label !== undefined) updateData.serving_size_label = productData.serving_size_label || null;
       if (productData.is_active !== undefined && productData.is_active === false) {
         updateData.is_active = false;
-        updateData.inactive_reason = existingProduct.inactive_reason || 'New product detected. Forecast available after 4 weeks.';
+        updateData.inactive_reason = existingProduct.inactive_reason || PRODUCT_STATUS_NOTES.NEW_PRODUCT;
         updateData.inactive_since = existingProduct.inactive_since || this.formatDate(new Date());
       } else {
         updateData.is_active = existingProduct.is_active;
       }
 
-      const { data: product, error: productError } = await supabase
-        .from('products')
+      const { data: product, error: productError } = await supabaseAdmin.from('products')
         .update(updateData)
         .eq('id', id)
-        .eq('user_id', numericId)
         .select()
         .single();
 
@@ -485,8 +475,7 @@ class MappingService {
         }
 
         // Delete existing ingredients
-        const { error: deleteError } = await supabase
-          .from('product_ingredients')
+        const { error: deleteError } = await supabaseAdmin.from('product_ingredients')
           .delete()
           .eq('product_id', id);
 
@@ -507,8 +496,7 @@ class MappingService {
                 userId
               );
 
-              const { error: piError } = await supabase
-                .from('product_ingredients')
+              const { error: piError } = await supabaseAdmin.from('product_ingredients')
                 .insert({
                   product_id: id,
                   ingredient_id: ingredientId,
@@ -547,7 +535,7 @@ class MappingService {
 
       const existingProduct = await this.getProductById(id, numericId);
       if (!existingProduct) {
-        console.log(`Product ${id} not found or does not belong to user ${numericId}`);
+        console.log(`Product ${id} not found`);
         return false;
       }
 
@@ -556,13 +544,11 @@ class MappingService {
         return true;
       }
 
-      console.log(`Deleting product ${id} for user_id: ${numericId}`);
+      console.log(`Deleting product ${id}`);
 
-      const { error } = await supabase
-        .from('products')
+      const { error } = await supabaseAdmin.from('products')
         .delete()
-        .eq('id', id)
-        .eq('user_id', numericId);
+        .eq('id', id);
 
       if (error) {
         console.error('Error deleting product:', error);
@@ -591,11 +577,9 @@ class MappingService {
         return Date.now();
       }
 
-      const { data, error } = await supabase
-        .from('ingredients')
+      const { data, error } = await supabaseAdmin.from('ingredients')
         .select('id')
         .ilike('name', name)
-        .eq('user_id', numericId)
         .maybeSingle();
 
       if (error && error.code !== 'PGRST116') {
@@ -610,12 +594,10 @@ class MappingService {
 
       const insertData = {
         name: name.trim(),
-        unit: unit || 'kg',
-        user_id: numericId
+        unit: unit || 'kg'
       };
 
-      const { data: newData, error: insertError } = await supabase
-        .from('ingredients')
+      const { data: newData, error: insertError } = await supabaseAdmin.from('ingredients')
         .insert(insertData)
         .select()
         .single();
@@ -635,16 +617,16 @@ class MappingService {
 
   getAllowedArchiveReasons() {
     return [
-      'Discontinued',
-      'Seasonal',
-      'Out of stock temporarily'
+      ARCHIVE_REASONS.DISCONTINUED,
+      ARCHIVE_REASONS.SEASONAL,
+      ARCHIVE_REASONS.OUT_OF_STOCK_TEMP
     ];
   }
 
   getSystemStaleReasons() {
     return [
-      'No sales for 28 days',
-      'No sales yet'
+      PRODUCT_STATUS_NOTES.STALE,
+      PRODUCT_STATUS_NOTES.NEVER_SOLD
     ];
   }
 
@@ -671,8 +653,7 @@ class MappingService {
         return product;
       }
 
-      const { data, error } = await supabase
-        .from('daily_sales')
+      const { data, error } = await supabaseAdmin.from('daily_sales')
         .select('sale_date')
         .eq('product_id', productId)
         .order('sale_date', { ascending: true })
@@ -685,11 +666,9 @@ class MappingService {
 
       if (data && data.sale_date) {
         const firstSoldDate = this.formatDate(data.sale_date);
-        const { data: updated, error: updateError } = await supabase
-          .from('products')
+        const { data: updated, error: updateError } = await supabaseAdmin.from('products')
           .update({ first_sold_date: firstSoldDate })
           .eq('id', productId)
-          .eq('user_id', numericId)
           .select()
           .single();
 
@@ -746,11 +725,9 @@ class MappingService {
         inactive_since: this.formatDate(new Date())
       };
 
-      const { data: product, error } = await supabase
-        .from('products')
+      const { data: product, error } = await supabaseAdmin.from('products')
         .update(updateData)
         .eq('id', id)
-        .eq('user_id', numericId)
         .select()
         .single();
 
@@ -805,11 +782,9 @@ class MappingService {
         inactive_since: null
       };
 
-      const { data: product, error } = await supabase
-        .from('products')
+      const { data: product, error } = await supabaseAdmin.from('products')
         .update(updateData)
         .eq('id', id)
-        .eq('user_id', numericId)
         .select()
         .single();
 
@@ -844,10 +819,8 @@ class MappingService {
       cutoffDate.setDate(cutoffDate.getDate() - 28);
       const cutoffIso = this.formatDate(cutoffDate);
 
-      const { data: products, error: productsError } = await supabase
-        .from('products')
-        .select('id, name, created_at, is_active, inactive_reason, inactive_since, first_sold_date')
-        .eq('user_id', numericId);
+      const { data: products, error: productsError } = await supabaseAdmin.from('products')
+        .select('id, name, created_at, is_active, inactive_reason, inactive_since, first_sold_date');
 
       if (productsError) {
         console.error('Error fetching products for reconciliation:', productsError);
@@ -859,8 +832,7 @@ class MappingService {
       }
 
       const productIds = products.map((product) => product.id);
-      const { data: sales, error: salesError } = await supabase
-        .from('daily_sales')
+      const { data: sales, error: salesError } = await supabaseAdmin.from('daily_sales')
         .select('product_id, sale_date')
         .in('product_id', productIds);
 
@@ -912,27 +884,31 @@ class MappingService {
         if (isActive) {
           if (lastSale && lastSale < cutoffDate) {
             updateData.is_active = false;
-            updateData.inactive_reason = 'No sales for 28 days';
+            updateData.inactive_reason = PRODUCT_STATUS_NOTES.STALE;
             updateData.inactive_since = this.formatDate(lastSale);
           } else if (!lastSale && createdAt && createdAt < cutoffDate) {
             updateData.is_active = false;
-            updateData.inactive_reason = 'No sales yet';
+            updateData.inactive_reason = PRODUCT_STATUS_NOTES.NEVER_SOLD;
             updateData.inactive_since = this.formatDate(createdAt);
           }
         } else if (isSystemStale) {
           if (lastSale && lastSale >= cutoffDate) {
-            updateData.is_active = true;
-            updateData.inactive_reason = null;
-            updateData.inactive_since = null;
+            const hasEnoughHistory = firstSale && firstSale <= cutoffDate;
+            if (hasEnoughHistory) {
+              updateData.is_active = true;
+              updateData.inactive_reason = null;
+              updateData.inactive_since = null;
+            } else {
+              updateData.is_active = false;
+              updateData.inactive_reason = PRODUCT_STATUS_NOTES.NEW_PRODUCT;
+            }
           }
         }
 
         if (Object.keys(updateData).length > 0) {
-          const { data: updatedProduct, error: updateError } = await supabase
-            .from('products')
+          const { data: updatedProduct, error: updateError } = await supabaseAdmin.from('products')
             .update(updateData)
             .eq('id', product.id)
-            .eq('user_id', numericId)
             .select()
             .single();
 

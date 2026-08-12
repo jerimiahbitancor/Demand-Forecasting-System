@@ -106,7 +106,7 @@ const Dashboard = () => {
         }
       });
 
-      const statsResponse = await apiClient.get('/uploads/stats/summary');
+      const statsResponse = await apiClient.get('/upload/stats/summary');
       
       Swal.close();
 

@@ -23,7 +23,7 @@ router.post('/register', async (req, res) => {
   const normalizedEmail = email.trim().toLowerCase();
 
   try {
-    const { data: existingUser } = await supabase
+    const { data: existingUser } = await supabaseAdmin
       .from('user')
       .select('id, email, is_verified')
       .eq('email', normalizedEmail)
@@ -34,11 +34,11 @@ router.post('/register', async (req, res) => {
         return res.status(400).json({ error: 'User with this email already exists and is verified' });
       }
 
-      await supabase.from('email_verifications').delete().eq('user_id', existingUser.id);
-      await supabase.from('user').delete().eq('id', existingUser.id);
+      await supabaseAdmin.from('email_verifications').delete().eq('user_id', existingUser.id);
+      await supabaseAdmin.from('user').delete().eq('id', existingUser.id);
     }
 
-    const { data: user, error: insertError } = await supabase
+    const { data: user, error: insertError } = await supabaseAdmin
       .from('user')
       .insert({
         email: normalizedEmail,
@@ -85,7 +85,7 @@ router.post('/verify-otp', async (req, res) => {
   const trimmedOtp = String(otp).trim();
 
   try {
-    const { data: user, error: userError } = await supabase
+    const { data: user, error: userError } = await supabaseAdmin
       .from('user')
       .select('id, email, is_verified')
       .eq('id', userId)
@@ -100,7 +100,7 @@ router.post('/verify-otp', async (req, res) => {
       return res.status(400).json({ error: 'Account is already verified' });
     }
 
-    const { data: verification, error: otpError } = await supabase
+    const { data: verification, error: otpError } = await supabaseAdmin
       .from('email_verifications')
       .select('*')
       .eq('user_id', userId)
@@ -123,7 +123,7 @@ router.post('/verify-otp', async (req, res) => {
     }
 
     // ✅ ONLY mark OTP as used (NOT verified_at - that doesn't exist!)
-    const { error: updateError } = await supabase
+    const { error: updateError } = await supabaseAdmin
       .from('email_verifications')
       .update({ 
         is_used: true,
@@ -168,7 +168,7 @@ router.post('/create-password', async (req, res) => {
   const normalizedEmail = email.trim().toLowerCase();
 
   try {
-    const { data: user, error: userError } = await supabase
+    const { data: user, error: userError } = await supabaseAdmin
       .from('user')
       .select('*')
       .eq('id', userId)
@@ -184,7 +184,7 @@ router.post('/create-password', async (req, res) => {
     }
 
     // ✅ Check OTP was used (is_used = true)
-    const { data: verification, error: verifyError } = await supabase
+    const { data: verification, error: verifyError } = await supabaseAdmin
       .from('email_verifications')
       .select('*')
       .eq('user_id', userId)
@@ -234,7 +234,7 @@ router.post('/create-password', async (req, res) => {
             { password: password }
           );
           
-          await supabase
+          await supabaseAdmin
             .from('user')
             .update({
               auth_id: existingAuth.user.id,
@@ -261,7 +261,7 @@ router.post('/create-password', async (req, res) => {
     }
 
     // ✅ Update user with auth_id and is_verified = true
-    await supabase
+    await supabaseAdmin
       .from('user')
       .update({
         auth_id: authUser.user.id,
@@ -313,7 +313,7 @@ router.post('/resend-otp', async (req, res) => {
   const normalizedEmail = email.trim().toLowerCase();
 
   try {
-    const { data: user, error: userError } = await supabase
+    const { data: user, error: userError } = await supabaseAdmin
       .from('user')
       .select('id')
       .eq('id', userId)
@@ -333,7 +333,7 @@ router.post('/resend-otp', async (req, res) => {
     console.log('📧 New OTP:', otp);
     console.log('⏰ Expires at (PH):', expiresAt.format());
 
-    const { error: upsertError } = await supabase
+    const { error: upsertError } = await supabaseAdmin
       .from('email_verifications')
       .upsert({
         user_id: userId,

@@ -1,6 +1,7 @@
 // services/uploadService.js
-const { supabase, isConfigured } = require('../config/supabase');
+const { supabase, isConfigured, supabaseAdmin } = require('../config/supabase');
 const { deriveProductStatus } = require('./productStatusService');
+const { PRODUCT_STATUS_NOTES } = require('./productStatusConstants');
 
 class UploadService {
   constructor() {
@@ -36,8 +37,8 @@ class UploadService {
     
     if (typeof userId === 'string' && userId.length === 36) {
       try {
-        const { data, error } = await supabase
-          .from('users')
+        const { data, error } = await supabaseAdmin
+          .from('user')
           .select('id')
           .eq('auth_id', userId)
           .maybeSingle();
@@ -153,8 +154,7 @@ class UploadService {
       const oneHourAgo = new Date();
       oneHourAgo.setHours(oneHourAgo.getHours() - 1);
 
-      const { data, error } = await supabase
-        .from('uploads')
+      const { data, error } = await supabaseAdmin.from('uploads')
         .select('id, filename, upload_date')
         .eq('filename', filename)
         .eq('user_id', numericId)
@@ -244,10 +244,8 @@ class UploadService {
         const price = parseFloat(this.getColumnValueByNames(row, ['Net sales', 'Gross sales', 'Price']) || 0);
         const saleDate = this.getSaleDateValue(row, fallbackDate);
 
-        let { data: existingProduct, error: productLookupError } = await supabase
-          .from('products')
+        let { data: existingProduct, error: productLookupError } = await supabaseAdmin.from('products')
           .select('id, created_at, first_sold_date, is_active, inactive_reason')
-          .eq('user_id', numericId)
           .ilike('name', productName)
           .maybeSingle();
 
@@ -257,15 +255,13 @@ class UploadService {
 
         let productId = existingProduct?.id;
         if (!productId) {
-          const { data: insertedProduct, error: insertError } = await supabase
-            .from('products')
+          const { data: insertedProduct, error: insertError } = await supabaseAdmin.from('products')
             .insert({
               name: productName,
               price: price > 0 ? price : 0,
               category,
-              user_id: numericId,
               is_active: false,
-              inactive_reason: 'New product detected. Forecast available after 4 weeks.',
+              inactive_reason: PRODUCT_STATUS_NOTES.NEW_PRODUCT,
               inactive_since: new Date().toISOString().slice(0, 10),
               first_sold_date: saleDate
             })
@@ -274,10 +270,8 @@ class UploadService {
 
           if (insertError) {
             if (insertError.code === '23505') {
-              const { data: retryProduct } = await supabase
-                .from('products')
+              const { data: retryProduct } = await supabaseAdmin.from('products')
                 .select('id, created_at, first_sold_date, is_active, inactive_reason')
-                .eq('user_id', numericId)
                 .ilike('name', productName)
                 .maybeSingle();
               productId = retryProduct?.id;
@@ -294,8 +288,7 @@ class UploadService {
           continue;
         }
 
-        const { error: saleInsertError } = await supabase
-          .from('daily_sales')
+        const { error: saleInsertError } = await supabaseAdmin.from('daily_sales')
           .insert({
             product_id: productId,
             sale_date: saleDate,
@@ -312,19 +305,16 @@ class UploadService {
 
       let productsUpdated = 0;
       for (const productId of productIds) {
-        const { data: product, error: productFetchError } = await supabase
-          .from('products')
+        const { data: product, error: productFetchError } = await supabaseAdmin.from('products')
           .select('id, created_at, first_sold_date, is_active, inactive_reason')
           .eq('id', productId)
-          .eq('user_id', numericId)
           .maybeSingle();
 
         if (productFetchError) {
           continue;
         }
 
-        const { data: salesRows, error: salesFetchError } = await supabase
-          .from('daily_sales')
+        const { data: salesRows, error: salesFetchError } = await supabaseAdmin.from('daily_sales')
           .select('sale_date')
           .eq('product_id', productId)
           .order('sale_date', { ascending: true });
@@ -342,16 +332,14 @@ class UploadService {
           isActive: Boolean(product?.is_active)
         });
 
-        const { error: updateError } = await supabase
-          .from('products')
+        const { error: updateError } = await supabaseAdmin.from('products')
           .update({
             first_sold_date: firstSoldDate ? firstSoldDate.slice(0, 10) : null,
             is_active: status.isActive,
             inactive_reason: status.note || null,
             inactive_since: status.isActive ? null : (product?.inactive_since || new Date().toISOString().slice(0, 10))
           })
-          .eq('id', productId)
-          .eq('user_id', numericId);
+          .eq('id', productId);
 
         if (!updateError) {
           productsUpdated += 1;
@@ -608,8 +596,7 @@ class UploadService {
         result = upload.id;
       } else {
         console.log('Inserting into Supabase:', insertData);
-        const { data, error } = await supabase
-          .from('uploads')
+        const { data, error } = await supabaseAdmin.from('uploads')
           .insert(insertData)
           .select()
           .single();
@@ -659,8 +646,7 @@ class UploadService {
         return uploads.slice(offset, offset + limit);
       }
 
-      let query = supabase
-        .from('uploads')
+      let query = supabaseAdmin.from('uploads')
         .select('*')
         .order('upload_date', { ascending: false });
 
@@ -708,8 +694,7 @@ class UploadService {
         return this.memoryStore.uploads.find((upload) => upload.id === Number(id)) || null;
       }
 
-      let query = supabase
-        .from('uploads')
+      let query = supabaseAdmin.from('uploads')
         .select('*')
         .eq('id', id);
 
@@ -764,8 +749,7 @@ class UploadService {
         return upload;
       }
 
-      let query = supabase
-        .from('uploads')
+      let query = supabaseAdmin.from('uploads')
         .update(updateData)
         .eq('id', id);
 
@@ -796,8 +780,7 @@ class UploadService {
         return true;
       }
 
-      let query = supabase
-        .from('uploads')
+      let query = supabaseAdmin.from('uploads')
         .delete()
         .eq('id', id);
 
@@ -834,8 +817,7 @@ class UploadService {
         return stats;
       }
 
-      let query = supabase
-        .from('uploads')
+      let query = supabaseAdmin.from('uploads')
         .select('status, row_count, upload_date');
 
       if (numericId) {
@@ -847,13 +829,8 @@ class UploadService {
 
       if (uploadError) throw uploadError;
 
-      let menuQuery = supabase
-        .from('products')
+      let menuQuery = supabaseAdmin.from('products')
         .select('*', { count: 'exact', head: true });
-
-      if (numericId) {
-        menuQuery = menuQuery.eq('user_id', numericId);
-      }
 
       let menuItemsCount = 0;
       try {

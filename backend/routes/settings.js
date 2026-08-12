@@ -2,10 +2,10 @@
 const express = require('express');
 const router = express.Router();
 const authenticate = require('../middleware/auth');
-const BusinessProfileController = require('../controllers/businessProfile');
+const BusinessProfileController = require('../controllers/businessProfileController');
 const AccountController = require('../controllers/accountController');
 const uploadLogo = require('../middleware/uploadLogo');
-const virusScan = require('../middleware/virus-scan'); // generic buffer scanner, reused as-is
+const virusScan = require('../middleware/virusScan'); // generic buffer scanner, reused as-is
 
 router.get('/business-profile', authenticate, BusinessProfileController.get);
 router.post('/business-profile', authenticate, BusinessProfileController.save);

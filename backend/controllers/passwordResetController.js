@@ -12,7 +12,7 @@ const sendCode = async (req, res) => {
   const normalizedEmail = email.trim().toLowerCase();
 
   try {
-    const { data: user, error: userError } = await supabase
+    const { data: user, error: userError } = await supabaseAdmin
       .from('user')
       .select('id, email')
       .ilike('email', normalizedEmail)
@@ -25,7 +25,7 @@ const sendCode = async (req, res) => {
     const verificationCode = generateOTP();
     const expiresAt = toSafeISOString(getOtpExpiryTime());
 
-    const { error: upsertError } = await supabase
+    const { error: upsertError } = await supabaseAdmin
       .from('password_resets')
       .upsert(
         {
@@ -68,7 +68,7 @@ const verifyCode = async (req, res) => {
   const normalizedEmail = email.trim().toLowerCase();
 
   try {
-    const { data: user, error: userError } = await supabase
+    const { data: user, error: userError } = await supabaseAdmin
       .from('user')
       .select('id')
       .ilike('email', normalizedEmail)
@@ -78,7 +78,7 @@ const verifyCode = async (req, res) => {
       return res.status(401).json({ error: 'Invalid email or code' });
     }
 
-    const { data: resetRecord, error: resetError } = await supabase
+    const { data: resetRecord, error: resetError } = await supabaseAdmin
       .from('password_resets')
       .select('id, verification_code, expires_at, is_used')
       .eq('user_id', user.id)
@@ -142,7 +142,7 @@ const resetPassword = async (req, res) => {
   const normalizedEmail = email.trim().toLowerCase();
 
   try {
-    const { data: user, error: userError } = await supabase
+    const { data: user, error: userError } = await supabaseAdmin
       .from('user')
       .select('id, auth_id')
       .ilike('email', normalizedEmail)
@@ -152,7 +152,7 @@ const resetPassword = async (req, res) => {
       return res.status(401).json({ error: 'Invalid request' });
     }
 
-    const { data: resetRecord, error: resetError } = await supabase
+    const { data: resetRecord, error: resetError } = await supabaseAdmin
       .from('password_resets')
       .select('id, verification_code, expires_at, is_used')
       .eq('user_id', user.id)
@@ -189,7 +189,7 @@ const resetPassword = async (req, res) => {
 
       if (existingAuth && existingAuth.user) {
         user.auth_id = existingAuth.user.id;
-        const { error: syncError } = await supabase
+        const { error: syncError } = await supabaseAdmin
           .from('user')
           .update({ auth_id: user.auth_id })
           .eq('id', user.id);
@@ -209,7 +209,7 @@ const resetPassword = async (req, res) => {
         }
 
         user.auth_id = authUser.user.id;
-        const { error: syncError } = await supabase
+        const { error: syncError } = await supabaseAdmin
           .from('user')
           .update({ auth_id: user.auth_id })
           .eq('id', user.id);
@@ -228,7 +228,7 @@ const resetPassword = async (req, res) => {
       throw updateError;
     }
 
-    const { error: markError } = await supabase
+    const { error: markError } = await supabaseAdmin
       .from('password_resets')
       .update({ is_used: true })
       .eq('id', resetRecord.id);

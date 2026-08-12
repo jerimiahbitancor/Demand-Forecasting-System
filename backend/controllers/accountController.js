@@ -13,7 +13,7 @@ const sendChangePasswordCode = async (req, res) => {
 
     const normalizedEmail = String(email).trim().toLowerCase();
 
-    const { data: user, error: userError } = await supabase
+    const { data: user, error: userError } = await supabaseAdmin
       .from('user')
       .select('id')
       .ilike('email', normalizedEmail)
@@ -77,7 +77,7 @@ const changePassword = async (req, res) => {
       return res.status(401).json({ error: verifyResult.error || 'Invalid code' });
     }
 
-    const { data: user, error: userError } = await supabase
+    const { data: user, error: userError } = await supabaseAdmin
       .from('user')
       .select('id, auth_id')
       .ilike('email', normalizedEmail)
@@ -97,7 +97,7 @@ const changePassword = async (req, res) => {
 
       if (existingAuth && existingAuth.user) {
         authId = existingAuth.user.id;
-        const { error: syncError } = await supabase
+        const { error: syncError } = await supabaseAdmin
           .from('user')
           .update({ auth_id: authId })
           .eq('id', user.id);
@@ -110,7 +110,7 @@ const changePassword = async (req, res) => {
         });
         if (createError) throw createError;
         authId = created.user.id;
-        const { error: syncError } = await supabase
+        const { error: syncError } = await supabaseAdmin
           .from('user')
           .update({ auth_id: authId })
           .eq('id', user.id);
@@ -122,14 +122,14 @@ const changePassword = async (req, res) => {
     if (updateError) throw updateError;
 
     const now = new Date().toISOString();
-    const { error: timestampError } = await supabase
+    const { error: timestampError } = await supabaseAdmin
       .from('user')
       .update({ last_password_change: now })
       .eq('id', user.id);
 
     if (timestampError) {
       console.warn('Could not update last_password_change field, falling back to updated_at:', timestampError.message);
-        const { error: fallbackError } = await supabase
+        const { error: fallbackError } = await supabaseAdmin
           .from('user')
         .update({ updated_at: now })
         .eq('id', user.id);

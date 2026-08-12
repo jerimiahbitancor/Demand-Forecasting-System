@@ -10,9 +10,9 @@ const rateLimit = require('express-rate-limit');
 const authRoutes = require('./routes/auth');
 const userRoutes = require('./routes/users');
 const uploadRoutes = require('./routes/upload');
-const uploadsRoutes = require('./routes/uploads');
 const mappingRoutes = require('./routes/mapping');
 const settingsRoutes = require('./routes/settings');
+const notificationRoutes = require('./routes/notifications');
 
 // Load environment variables
 dotenv.config({ path: path.join(__dirname, '.env') });
@@ -70,9 +70,9 @@ if (process.env.NODE_ENV !== 'production') {
 app.use('/api/auth', authRoutes);
 app.use('/api/users', userRoutes);
 app.use('/api/upload', uploadRoutes);
-app.use('/api/uploads', uploadsRoutes);
 app.use('/api/mapping', mappingRoutes);
 app.use('/api/settings', settingsRoutes);
+app.use('/api/notifications', notificationRoutes);
 
 // ============= HEALTH CHECK =============
 app.get('/health', (req, res) => {

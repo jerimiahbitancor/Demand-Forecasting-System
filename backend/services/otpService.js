@@ -193,7 +193,7 @@ const verifyOTP = async (email, otp, type, markAsUsed = false) => {
 
   const table = type === 'verification' ? 'email_verifications' : 'password_resets';
 
-  const { data: otpRecord, error: otpError } = await supabase
+  const { data: otpRecord, error: otpError } = await supabaseAdmin
     .from(table)
     .select('*')
     .eq('email', normalizedEmail)
@@ -224,7 +224,7 @@ const verifyOTP = async (email, otp, type, markAsUsed = false) => {
     return { valid: false, error: 'Invalid verification code' };
   }
 
-  const { data: user, error: userError } = await supabase
+  const { data: user, error: userError } = await supabaseAdmin
     .from('user')
     .select('id, is_verified')
     .eq('id', otpRecord.user_id)
@@ -263,7 +263,7 @@ const verifyOTP = async (email, otp, type, markAsUsed = false) => {
 const resendOTP = async (email, userId, type) => {
   const normalizedEmail = email.trim().toLowerCase();
 
-  const { data: user, error: userError } = await supabase
+  const { data: user, error: userError } = await supabaseAdmin
     .from('user')
     .select('id, is_verified')
     .eq('id', userId)

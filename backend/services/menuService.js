@@ -1,5 +1,6 @@
 // services/menuService.js
-const { supabase, isConfigured } = require('../config/supabase');
+const { supabase, isConfigured, supabaseAdmin } = require('../config/supabase');
+const { PRODUCT_STATUS_NOTES } = require('./productStatusConstants');
 
 class MenuService {
   constructor() {
@@ -191,11 +192,9 @@ isValidUserId(userId) {
         return { exists: false, hasSales: false };
       }
 
-      const { data: product, error } = await supabase
-        .from('products')
+      const { data: product, error } = await supabaseAdmin.from('products')
         .select('id')
         .ilike('name', productName)
-        .eq('user_id', userId)
         .maybeSingle();
 
       if (error && error.code !== 'PGRST116') {
@@ -206,8 +205,7 @@ isValidUserId(userId) {
         return { exists: false, hasSales: false };
       }
 
-      const { data: sales, error: salesError } = await supabase
-        .from('daily_sales')
+      const { data: sales, error: salesError } = await supabaseAdmin.from('daily_sales')
         .select('id')
         .eq('product_id', product.id)
         .limit(1);
@@ -331,8 +329,7 @@ isValidUserId(userId) {
             category: category || 'Uncategorized',
             serving_size_label: unit,
             is_active: false,
-            first_sold_date: null,
-            user_id: userId
+            first_sold_date: null
           });
           productsInserted++;
         } else {
@@ -393,14 +390,9 @@ isValidUserId(userId) {
         return null;
       }
 
-      let query = supabase
-        .from('products')
+      let query = supabaseAdmin.from('products')
         .select('id')
         .ilike('name', name);
-
-      if (this.isValidUserId(userId)) {
-        query = query.eq('user_id', userId);
-      }
 
       const { data, error } = await query.maybeSingle();
 
@@ -430,17 +422,12 @@ isValidUserId(userId) {
         category: productData.category || 'Uncategorized',
         serving_size_label: productData.serving_size_label || null,
         is_active: productData.is_active !== undefined ? productData.is_active : false,
-        inactive_reason: productData.is_active === true ? null : 'New product detected. Forecast available after 4 weeks.',
+        inactive_reason: productData.is_active === true ? null : PRODUCT_STATUS_NOTES.NEW_PRODUCT,
         inactive_since: productData.is_active === true ? null : this.formatDate(new Date()),
         first_sold_date: productData.first_sold_date || null
       };
 
-      if (this.isValidUserId(productData.user_id)) {
-        insertData.user_id = productData.user_id;
-      }
-
-      const { data, error } = await supabase
-        .from('products')
+      const { data, error } = await supabaseAdmin.from('products')
         .insert(insertData)
         .select()
         .single();
@@ -454,7 +441,7 @@ isValidUserId(userId) {
         throw error;
       }
       
-      console.log(`✅ Product inserted: ${productData.name} (Category: ${productData.category}, ID: ${data.id}, User: ${productData.user_id || 'N/A'})`);
+      console.log(`✅ Product inserted: ${productData.name} (Category: ${productData.category}, ID: ${data.id})`);
       return data.id;
     } catch (error) {
       console.error('Error inserting product:', error);
@@ -468,8 +455,7 @@ isValidUserId(userId) {
         return;
       }
 
-      const { data, error } = await supabase
-        .from('products')
+      const { data, error } = await supabaseAdmin.from('products')
         .select('category')
         .eq('id', productId)
         .single();
@@ -480,8 +466,7 @@ isValidUserId(userId) {
       }
 
       if (data.category !== category) {
-        const { error: updateError } = await supabase
-          .from('products')
+        const { error: updateError } = await supabaseAdmin.from('products')
           .update({ category: category })
           .eq('id', productId);
 
@@ -503,14 +488,9 @@ isValidUserId(userId) {
         return Math.floor(Math.random() * 1000) + 1;
       }
 
-      let query = supabase
-        .from('ingredients')
+      let query = supabaseAdmin.from('ingredients')
         .select('id, name, unit')
         .ilike('name', name);
-
-      if (this.isValidUserId(userId)) {
-        query = query.eq('user_id', userId);
-      }
 
       const { data, error } = await query.maybeSingle();
 
@@ -520,8 +500,7 @@ isValidUserId(userId) {
 
       if (data) {
         if (data.unit !== unit) {
-          const { error: updateError } = await supabase
-            .from('ingredients')
+          const { error: updateError } = await supabaseAdmin.from('ingredients')
             .update({ unit: unit })
             .eq('id', data.id);
           
@@ -539,12 +518,7 @@ isValidUserId(userId) {
         unit: unit 
       };
 
-      if (this.isValidUserId(userId)) {
-        insertData.user_id = userId;
-      }
-
-      const { data: newData, error: insertError } = await supabase
-        .from('ingredients')
+      const { data: newData, error: insertError } = await supabaseAdmin.from('ingredients')
         .insert(insertData)
         .select()
         .single();
@@ -552,8 +526,7 @@ isValidUserId(userId) {
       if (insertError) {
         if (insertError.code === '23505') {
           console.log(`⚠️ Ingredient already exists: ${name}`);
-          const existing = await supabase
-            .from('ingredients')
+          const existing = await supabaseAdmin.from('ingredients')
             .select('id')
             .ilike('name', name)
             .maybeSingle();
@@ -562,7 +535,7 @@ isValidUserId(userId) {
         throw insertError;
       }
 
-      console.log(`✅ Ingredient inserted: ${name} (Unit: ${unit}, ID: ${newData.id}, User: ${userId || 'N/A'})`);
+      console.log(`✅ Ingredient inserted: ${name} (Unit: ${unit}, ID: ${newData.id})`);
       return newData.id;
 
     } catch (error) {
@@ -578,8 +551,7 @@ isValidUserId(userId) {
         return;
       }
 
-      const { error } = await supabase
-        .from('product_ingredients')
+      const { error } = await supabaseAdmin.from('product_ingredients')
         .insert({
           product_id: data.product_id,
           ingredient_id: data.ingredient_id,
@@ -607,8 +579,7 @@ isValidUserId(userId) {
         return [];
       }
 
-      let query = supabase
-        .from('products')
+      let query = supabaseAdmin.from('products')
         .select(`
           *,
           product_ingredients (
@@ -621,11 +592,6 @@ isValidUserId(userId) {
           )
         `)
         .order('name');
-
-      if (this.isValidUserId(userId)) {
-        query = query.eq('user_id', userId);
-        console.log(`🔍 Fetching products for user_id: ${userId}`);
-      }
 
       const { data, error } = await query;
       if (error) throw error;
@@ -642,8 +608,7 @@ isValidUserId(userId) {
         return [];
       }
 
-      let query = supabase
-        .from('products')
+      let query = supabaseAdmin.from('products')
         .select(`
           *,
           product_ingredients (
@@ -657,10 +622,6 @@ isValidUserId(userId) {
         `)
         .ilike('category', category)
         .order('name');
-
-      if (this.isValidUserId(userId)) {
-        query = query.eq('user_id', userId);
-      }
 
       const { data, error } = await query;
       if (error) throw error;
@@ -677,13 +638,8 @@ isValidUserId(userId) {
         return [];
       }
 
-      let query = supabase
-        .from('products')
+      let query = supabaseAdmin.from('products')
         .select('category');
-
-      if (this.isValidUserId(userId)) {
-        query = query.eq('user_id', userId);
-      }
 
       const { data, error } = await query.order('category');
 
