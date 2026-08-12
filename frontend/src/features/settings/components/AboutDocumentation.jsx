@@ -149,7 +149,7 @@ function AboutDocumentation() {
         POST   /api/auth/login
         POST   /api/auth/register
         POST   /api/upload
-        GET    /api/uploads
+        GET    /api/upload
         GET    /api/mapping/products
         POST   /api/mapping/products
         </pre>

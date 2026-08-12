@@ -28,9 +28,9 @@
   - GET `/api/mapping/products`, GET `/api/mapping/products/:id`, POST/PUT/DELETE `/api/mapping/products` — product CRUD, ingredient mappings.
   - POST `/api/mapping/products/:id/archive` and `/reactivate` — archive/reactivate flows.
   - GET `/api/mapping/categories`, `/stats`, `/search`, `/refresh`, `/archive-reasons`.
-- Upload / Uploads routes ([backend/routes/upload.js](backend/routes/upload.js), [backend/routes/uploads.js](backend/routes/uploads.js)):
+- Upload routes ([backend/routes/upload.js](backend/routes/upload.js)):
   - POST `/api/upload` — file upload pipeline (multer -> validate -> virus scan -> process), used for menu/sales ingestion.
-  - GET/PUT/DELETE and status endpoints under `/api/uploads` (list, detail, summary stats, check duplicate).
+  - GET/PUT/DELETE and status endpoints under `/api/upload` (list, detail, summary stats, check duplicate).
 - Users & admin ([backend/routes/users.js](backend/routes/users.js)):
   - GET `/api/users`, GET/PUT/DELETE `/api/users/:id` (protected).
 

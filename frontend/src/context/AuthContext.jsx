@@ -428,14 +428,12 @@ export const AuthProvider = ({ children }) => {
       const token = await getToken();
       if (!token) return false;
 
-      let res = await fetch(`${API_URL}/upload/status/check`, {
+      const res = await fetch(`${API_URL}/upload/status/check`, {
         headers: { Authorization: `Bearer ${token}` }
       });
       
-      if (res.status === 404) {
-        res = await fetch(`${API_URL}/uploads/status/check`, {
-          headers: { Authorization: `Bearer ${token}` }
-        });
+      if (res.status === 404 || res.status === 401) {
+        return false;
       }
       
       if (res.status === 404 || res.status === 401) {

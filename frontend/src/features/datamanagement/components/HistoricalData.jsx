@@ -97,7 +97,7 @@ const HistoricalData = () => {
         return;
       }
 
-      const response = await apiClient.get('/uploads', {
+      const response = await apiClient.get('/upload', {
         params: {
           limit: 100,
           offset: 0
