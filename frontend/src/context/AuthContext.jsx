@@ -108,6 +108,7 @@ export const AuthProvider = ({ children }) => {
 
     const { data: { subscription } } = supabase.auth.onAuthStateChange(
       async (event, session) => {
+        if (event === 'INITIAL_SESSION' || event === 'SIGNED_IN') return;
         console.log('Auth state changed:', event);
         
         if (session?.user) {
@@ -431,10 +432,6 @@ export const AuthProvider = ({ children }) => {
       const res = await fetch(`${API_URL}/upload/status/check`, {
         headers: { Authorization: `Bearer ${token}` }
       });
-      
-      if (res.status === 404 || res.status === 401) {
-        return false;
-      }
       
       if (res.status === 404 || res.status === 401) {
         return false;
