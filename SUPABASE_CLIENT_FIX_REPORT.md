@@ -308,6 +308,22 @@ Runtime verification:
 - A final backend-wide grep confirmed zero remaining `supabase.from(` occurrences in backend JS files.
 - No `from('users')` table references remain in backend JS.
 
+Additional business-profile fix:
+- Updated `backend/controllers/businessProfileController.js` to import only `supabaseAdmin` from `../config/supabase`.
+- Removed the inline `userScopedClient(req)` helper and all user-scoped `createClient(...)` usage.
+- Replaced all `userClient.from(...)` calls in `get()`, `save()`, and `uploadLogo()` with `supabaseAdmin.from(...)`.
+- Replaced `userClient.storage.from(LOGO_BUCKET)` with `supabaseAdmin.storage.from(LOGO_BUCKET)` in `uploadLogo()`.
+- Kept the existing `req.accessToken` / `401 Missing access token` checks unchanged.
+
+Search results:
+- Backend source search found only `createClient(...)` in `backend/config/supabase.js`.
+- No additional inline `createClient(...)` / `Bearer ${req.accessToken}` patterns were found in backend source files outside vendor packages.
+- Additional matches under `backend/node_modules` are third-party package comments and not application code.
+
+Verification steps for this fix:
+- `node --check backend/controllers/businessProfileController.js` passed with no syntax errors.
+- Started backend on port `5002` and `GET http://localhost:5002/health` returned `{"status":"OK","timestamp":"..."}`.
+
 If you want, next steps I can take:
 - Stop the currently running server (if you want a fresh instance) and start a new one to capture startup logs.
 - Run integration tests or exercise additional auth endpoints.

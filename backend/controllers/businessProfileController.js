@@ -1,9 +1,7 @@
 // backend/controllers/businessProfile.js
-const { supabase } = require('../config/supabase');
-const { createClient } = require('@supabase/supabase-js');
+const { supabaseAdmin } = require('../config/supabase');
 
 const SUPABASE_URL = process.env.SUPABASE_URL;
-const SUPABASE_ANON_KEY = process.env.SUPABASE_ANON_KEY;
 const LOGO_BUCKET = 'business-logo';
 
 // The DB schema now matches the frontend's field names exactly
@@ -35,14 +33,6 @@ function toApiShape(row) {
   };
 }
 
-// Used for business_profile reads/writes — PostgREST reliably forwards
-// this client's global Authorization header, so this pattern is fine here.
-function userScopedClient(req) {
-  return createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
-    global: { headers: { Authorization: `Bearer ${req.accessToken}` } },
-  });
-}
-
 class BusinessProfileController {
   // GET /api/settings/business-profile
   static async get(req, res) {
@@ -52,8 +42,7 @@ class BusinessProfileController {
         return res.status(401).json({ success: false, error: 'Missing access token' });
       }
 
-      const userClient = userScopedClient(req);
-      const { data, error } = await userClient
+      const { data, error } = await supabaseAdmin
         .from('business_profile')
         .select('*')
         .limit(1)
@@ -87,9 +76,7 @@ class BusinessProfileController {
         return res.status(401).json({ success: false, error: 'Missing access token' });
       }
 
-      const userClient = userScopedClient(req);
-
-      const { data: existingRow, error: existingError } = await userClient
+      const { data: existingRow, error: existingError } = await supabaseAdmin
         .from('business_profile')
         .select('*')
         .limit(1)
@@ -104,7 +91,7 @@ class BusinessProfileController {
 
       let result;
       if (existingRow?.id) {
-        const { data, error } = await userClient
+        const { data, error } = await supabaseAdmin
           .from('business_profile')
           .update(row)
           .eq('id', existingRow.id)
@@ -112,7 +99,7 @@ class BusinessProfileController {
           .single();
         result = { data, error };
       } else {
-        const { data, error } = await userClient
+        const { data, error } = await supabaseAdmin
           .from('business_profile')
           .insert(row)
           .select()
@@ -151,9 +138,7 @@ class BusinessProfileController {
         return res.status(400).json({ success: false, error: 'No file uploaded' });
       }
 
-      const userClient = userScopedClient(req);
-
-      const { data: userRow, error: userRowError } = await userClient
+      const { data: userRow, error: userRowError } = await supabaseAdmin
         .from('user')
         .select('id')
         .eq('auth_id', req.user?.auth_id || req.user?.id)
@@ -172,7 +157,7 @@ class BusinessProfileController {
       const objectPath = `${numericUserId}/logo.${ext}`;
       console.log('Uploading logo to path:', objectPath, 'for auth_id:', req.user?.auth_id);
 
-      const { data, error } = await userClient
+      const { data, error } = await supabaseAdmin
         .storage
         .from(LOGO_BUCKET)
         .upload(objectPath, req.file.buffer, {
