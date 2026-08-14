@@ -1,6 +1,6 @@
 // frontend/src/features/components/Navbar/Navbar.jsx
 import { useState, useEffect } from 'react';
-import { NavLink, useNavigate, } from 'react-router-dom';
+import { NavLink, useNavigate } from 'react-router-dom';
 import Swal from 'sweetalert2';
 import '../../../utils/swalTheme.css';
 import { useAuth } from '../../../context/AuthContext';
@@ -11,7 +11,9 @@ import {
   FaChevronDown,
   FaCog,
   FaRegQuestionCircle,
-  FaUser
+  FaUser,
+  FaBoxes,  // Added for Inventory
+  FaClipboardList // Alternative inventory icon
 } from 'react-icons/fa';
 import NotificationDropdown from '../Notification/NotificationDropdown';
 import './Navbar.css';
@@ -137,6 +139,16 @@ const Navbar = () => {
           <FaDatabase className="nav-icon" />
           Data Management
         </NavLink>
+
+        {/* New Inventory Link */}
+        <NavLink 
+          to="/inventory-management" 
+          className={({ isActive }) => `nav-link ${isActive ? 'active' : ''}`}
+          onClick={() => setIsMobileMenuOpen(false)}
+        >
+          <FaBoxes className="nav-icon" />
+          Inventory
+        </NavLink>
         
         <NavLink
           to="/analytics"
@@ -217,6 +229,16 @@ const Navbar = () => {
           Data Management
         </NavLink>
 
+        {/* Mobile Inventory Link */}
+        <NavLink
+          to="/inventory-management"
+          className={({ isActive }) => `nav-link ${isActive ? 'active' : ''}`}
+          onClick={() => handleNavigation('/inventory-management')}
+        >
+          <FaBoxes className="nav-icon" />
+          Inventory
+        </NavLink>
+
         <NavLink
           to="/analytics"
           className={({ isActive }) => `nav-link ${isActive ? 'active' : ''}`}
@@ -261,6 +283,3 @@ const Navbar = () => {
 };
 
 export default Navbar;
-
-
-
