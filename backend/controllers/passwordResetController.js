@@ -89,6 +89,7 @@ const verifyCode = async (req, res) => {
       return res.status(401).json({ error: 'Invalid email or code' });
     }
 
+    // Check if code is already used
     if (resetRecord.is_used) {
       console.log('Code already used:', resetRecord.id);
       return res.status(401).json({ error: 'This code has already been used' });
@@ -105,6 +106,7 @@ const verifyCode = async (req, res) => {
       isExpired: timeDiff <= 0,
     });
 
+    // ✅ Check expiration ONLY HERE in verification step
     if (timeDiff <= 0) {
       return res.status(401).json({ error: 'Verification code has expired' });
     }
@@ -117,9 +119,12 @@ const verifyCode = async (req, res) => {
       return res.status(401).json({ error: 'Invalid code' });
     }
 
+    // ✅ Don't mark as used here
+    // Just verify and let the user proceed to reset page
+
     res.status(200).json({
-        success: true,
-        message: 'Code verified successfully',
+      success: true,
+      message: 'Code verified successfully',
     });
   } catch (error) {
     console.error('Verify code error:', error);
@@ -154,7 +159,7 @@ const resetPassword = async (req, res) => {
 
     const { data: resetRecord, error: resetError } = await supabaseAdmin
       .from('password_resets')
-      .select('id, verification_code, expires_at, is_used')
+      .select('id, verification_code, is_used')
       .eq('user_id', user.id)
       .single();
 
@@ -164,14 +169,6 @@ const resetPassword = async (req, res) => {
 
     if (resetRecord.is_used) {
       return res.status(401).json({ error: 'This code has already been used' });
-    }
-
-    const currentTime = nowPH();
-    const expiresTime = toPH(resetRecord.expires_at);
-    const timeDiff = expiresTime.diff(currentTime);
-
-    if (timeDiff <= 0) {
-      return res.status(401).json({ error: 'Verification code has expired' });
     }
 
     const dbCode = String(resetRecord.verification_code).trim();
@@ -230,7 +227,10 @@ const resetPassword = async (req, res) => {
 
     const { error: markError } = await supabaseAdmin
       .from('password_resets')
-      .update({ is_used: true })
+      .update({ 
+        is_used: true,
+        used_at: nowPH().toISOString()
+      })
       .eq('id', resetRecord.id);
 
     if (markError) {

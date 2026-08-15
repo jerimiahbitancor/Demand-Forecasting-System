@@ -374,21 +374,7 @@ const ForgotPassword = () => {
                 )}
               </div>
 
-              {/* Info text */}
-              <div className="info-text">
-                <FaEnvelope className="info-icon" />
-                <p>
-                  Didn't receive the code? Check your spam folder or 
-                  <button 
-                    type="button" 
-                    className="resend-link"
-                    onClick={handleResendCode}
-                    disabled={resendLoading || !canResend}
-                  >
-                    request a new one
-                  </button>
-                </p>
-              </div>
+    
             </form>
           )}
 
