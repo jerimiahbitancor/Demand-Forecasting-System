@@ -1,0 +1,898 @@
+================================================================================
+DEMAND FORECASTING SYSTEM - COMPREHENSIVE MODULES & TEST CASES
+================================================================================
+Project: Sales-Forecasting-System
+Version: 2.0
+Date Generated: 2026-08-14
+Updated: Includes Restructure & Supabase Client Fixes
+
+================================================================================
+PART 1: COMPLETE SYSTEM ARCHITECTURE & MODULES
+================================================================================
+
+1. BACKEND MODULES & SERVICES
+===================================
+
+1.1 AUTHENTICATION MODULE
+   Files: routes/auth.js, controllers/accountController.js
+   Services: OTP verification, Password reset, JWT authentication
+   Features:
+   - User registration with email verification
+   - OTP-based email verification (15-min expiry)
+   - Password creation & reset workflow
+   - JWT token generation & validation
+   - Supabase Auth integration
+   - Custom users table sync
+
+1.2 PRODUCT MANAGEMENT MODULE
+   Files: routes/mapping.js, controllers/productController.js
+   Database: products, ingredients, product_ingredients
+   Features:
+   - Create/Read/Update/Delete products
+   - Product classification (Active, New, Discontinued)
+   - Ingredient mapping (product_ingredients junction table)
+   - Batch operations (archive/reactivate)
+   - Product search & filtering
+   - Category management
+
+1.3 INVENTORY MANAGEMENT MODULE (NEW)
+   Database: ingredient_stock, stock_movements, market_price
+   Features:
+   - Track ingredient stock levels
+   - Reorder threshold management
+   - Stock movement recording (additions/consumption)
+   - Market price tracking
+   - Ingredient demand calculation
+   - Stock alert generation
+
+1.4 DATA UPLOAD & FILE PROCESSING MODULE
+   Files: routes/upload.js, middleware/upload.js, services/fileProcessor.js
+   Features:
+   - CSV/Excel file upload via multer
+   - File validation (size, format, encoding)
+   - Virus scanning (ClamAV integration via clamdjs)
+   - Data parsing (csv-parser, xlsx)
+   - Duplicate detection
+   - Batch processing with progress tracking
+   - Error reporting & rollback
+
+1.5 FORECASTING & ANALYTICS MODULE
+   Files: services/productStatusService.js, productStatusConstants.js
+   XGBoost Integration: Python backend (external)
+   Features:
+   - XGBoost model training
+   - Daily/Weekly/Monthly forecasting
+   - Accuracy metrics (MAPE, MAE, RMSE)
+   - Feature importance analysis
+   - Seasonal pattern detection
+   - Holiday-aware forecasting
+   - Model versioning & tracking
+
+1.6 DEMAND & INGREDIENT PLANNING MODULE
+   Features:
+   - Forecast-based ingredient demand calculation
+   - Recipe quantity × forecasted servings
+   - Safety buffer application (configurable %)
+   - Weekly ingredient planner (7-day grid)
+   - Daily shopping list generation
+   - Batch/order recommendations
+
+1.7 NOTIFICATION & ALERT MODULE
+   Files: routes/notifications.js, controllers/notificationController.js
+   Database: notifications, system_actions_log
+   Features:
+   - Stock shortage alerts
+   - Forecast completion alerts
+   - Daily summary notifications
+   - Email notifications (nodemailer)
+   - In-app notification dropdown
+   - Alert preferences management
+
+1.8 BUSINESS PROFILE MODULE
+   Files: controllers/businessProfileController.js, routes/settings.js
+   Database: business_profile
+   Features:
+   - Business name, address, contact management
+   - Logo upload (AWS S3 or file-based)
+   - Configuration settings
+   - Forecast config (safety buffer, etc.)
+
+1.9 SECURITY & MIDDLEWARE MODULE
+   Files: middleware/auth.js, middleware/virusScan.js, middleware/validation.js
+   Features:
+   - JWT Bearer token authentication
+   - Supabase auth user validation
+   - Custom user record creation/sync
+   - Rate limiting (express-rate-limit)
+   - CORS protection
+   - Helmet security headers
+   - Input validation
+   - Virus scanning
+
+1.10 REPORTING & EXPORT MODULE
+   Files: services/reportService.js (frontend)
+   Libraries: jsPDF, jspdf-autotable, xlsx
+   Features:
+   - Sales forecast PDF generation
+   - Accuracy report PDF
+   - Ingredient demand report
+   - Excel exports
+   - Graph/chart inclusion
+   - Multi-format support
+
+================================================================================
+
+2. FRONTEND MODULES & COMPONENTS
+===================================
+
+2.1 AUTHENTICATION PAGES
+   Files: auth/pages/login, register, forgotpass, reset
+   Features:
+   - Registration form with validation
+   - OTP verification UI
+   - Password creation form
+   - Login form with session persistence
+   - Forgot password / Reset password flows
+   - Email input validation
+   - Password strength indicators
+
+2.2 AUTHENTICATION CONTEXT
+   File: context/AuthContext.jsx
+   State Management:
+   - User authentication state
+   - Registration data (email, temp storage)
+   - Token management
+   - Session persistence
+   - Supabase auth subscription
+   - Setup guard bypass flag
+
+2.3 DASHBOARD MODULE
+   Files: dashboard/pages/Dashboard.jsx
+   Components:
+   - KPI Cards (Predicted Sales Today, Actual Sales Yesterday, Accuracy Score, Stock Alerts)
+   - Sales Overview Graph (Actual vs Forecasted)
+   - Sales Calendar with event indicators
+   - Product Performance panel
+   - Ingredient Requirement panel
+   - First-time onboarding modal
+
+2.4 DATA MANAGEMENT MODULE
+   Files: datamanagement/components/UploadData.jsx, HistoricalData.jsx, MappingData.jsx
+   Features:
+   - File upload interface (drag-drop, click-select)
+   - Sales data tab (CSV/Excel)
+   - Menu/Product data tab
+   - File preview & validation
+   - Duplicate detection
+   - Multiple file batch upload
+   - Progress tracking per file
+   - Error handling & reporting
+
+2.5 ANALYTICS MODULE
+   Files: analytics/components/Forecasting.jsx, IngredientDemand.jsx, ProductPerformance.jsx
+   Sub-components:
+   - DatePicker (shared component)
+   - InfoBanner (tooltips & help)
+   
+   2.5a FORECASTING COMPONENT
+   Features:
+   - Forecast accuracy score chart
+   - Sales prediction graph (Actual vs Forecast)
+   - Demand prediction grid
+   - Feature importance analysis
+   - Model training info display
+   - Accuracy history trending
+   - Weekly/Monthly breakdown tables
+
+   2.5b INGREDIENT DEMAND COMPONENT
+   Features:
+   - Weekly ingredient planner (heatmap grid)
+   - Daily shopping list
+   - Buy list with quantities & units
+   - Ingredient demand table
+   - Safety buffer visualization
+   - High-demand highlighting
+   - Export to PDF/Excel
+
+   2.5c PRODUCT PERFORMANCE COMPONENT
+   Features:
+   - Best selling products ranking
+   - Demand tier visualization
+   - Product status classification
+   - Sales trend analysis
+
+2.6 INVENTORY MANAGEMENT MODULE
+   Files: inventory/pages/Inventory.jsx, InventoryManagement.jsx, Product.jsx
+   
+   2.6a INVENTORY COMPONENT
+   Features:
+   - Inventory item list (Stock, Price, Batch, Min Stock)
+   - Search & filter by name, category, batch
+   - Sort by any column
+   - Pagination
+   - Add/Edit/Delete items
+   - Stock status indicators
+   - Low stock warnings
+   - Batch tracking
+
+   2.6b PRODUCT COMPONENT (From Inventory Tab)
+   Features:
+   - Product list with ingredients
+   - Product stats (Total, Active, Inactive, Value)
+   - Category filtering
+   - Search functionality
+   - Sorting options
+   - Pagination
+   - Add/Edit/Delete products
+   - Ingredient mapping UI
+   - Status indicators
+   - API integration (axios with auth)
+
+   2.6c INVENTORY MANAGEMENT WRAPPER
+   Main page with:
+   - Navbar integration
+   - Tab switcher (Inventory Management, Product Management)
+   - Header with page title & description
+
+2.7 SETTINGS MODULE
+   Files: settings/pages/Settings.jsx
+   Features:
+   - Business profile edit
+   - User account settings
+   - Notification preferences
+   - Forecast configuration
+   - Safety buffer settings
+
+2.8 NAVIGATION & LAYOUT COMPONENTS
+   - Navbar.jsx: Top navigation, user menu, notification dropdown
+   - Footer.jsx: Footer content
+   - ProtectedRoute.jsx: Route guard for authenticated pages
+   - RequireUpload.jsx: Guard for data upload requirement
+
+2.9 NOTIFICATION COMPONENTS
+   Files: components/Notification/NotificationDropdown.jsx
+   Features:
+   - Dropdown menu in navbar
+   - List of recent notifications
+   - Mark as read
+   - Click to action
+   - Unread badge counter
+
+2.10 REPORTS COMPONENT
+   Files: components/Reports/GenerateReportModal.jsx
+   Features:
+   - Report type selection
+   - Date range picker
+   - Format selection (PDF/Excel)
+   - Generation progress
+   - Download trigger
+
+2.11 API SERVICES
+   Files: services/authService.js, productService.js, reportService.js
+   Features:
+   - Axios HTTP client with token injection
+   - Error handling
+   - Response transformation
+   - Report generation (PDF/Excel)
+
+2.12 UTILITIES & HOOKS
+   Files: hooks/useSetupGuard.js, config/supabase.js, config/accessControl.js
+   Features:
+   - Setup flow guard (check first-time user)
+   - Supabase client initialization
+   - Temp access bypass (dev mode)
+   - Auth state persistence
+
+================================================================================
+
+3. DATABASE SCHEMA & TABLES
+===================================
+
+Core Tables:
+- users: User accounts (auth_id, email, is_verified, etc.)
+- email_verifications: OTP storage for registration
+- password_resets: Password reset tokens
+- business_profile: Business info (name, address, logo)
+
+Product & Ingredient Tables:
+- products: Menu items (name, price, category, status, dates)
+- ingredients: Raw ingredients (name, unit, price)
+- product_ingredients: Recipe mapping (quantity per serving)
+
+Sales & Forecasting Tables:
+- uploads: File upload history & status
+- daily_sales: Historical sales data
+- forecasts: Predicted quantities & revenue
+- model_metrics: XGBoost accuracy (MAPE, MAE, RMSE)
+- product_classifications: Demand tiers (High, Medium, Low, New, Discontinued)
+
+Inventory & Stock Tables:
+- ingredient_stock: Current stock levels & reorder thresholds
+- stock_movements: Stock additions/consumption tracking
+- market_price: Ingredient market prices from external sources
+
+Operational Tables:
+- notifications: In-app alerts & messages
+- forecast_config: System configuration (safety buffer %)
+- forecast_cogs: Cost of goods sold calculations
+- system_actions_log: Audit trail
+- fixed_holidays: Holiday dates to exclude from forecasts
+- special_holidays: One-time special dates
+
+================================================================================
+
+4. API ENDPOINTS (HIGH-LEVEL OVERVIEW)
+===================================
+
+AUTH Routes (/api/auth/):
+- POST /register - User registration
+- POST /verify-otp - Verify OTP
+- POST /create-password - Create auth user & password
+- POST /resend-otp - Resend OTP
+- POST /sync-user - Sync Supabase user to custom users table
+- GET /setup - Check if user setup is complete
+- POST /forgot-password/send-code - Send reset code
+- POST /forgot-password/verify-code - Verify reset code
+- POST /forgot-password/reset-password - Reset password
+
+PRODUCT Routes (/api/mapping/):
+- GET /products - List all products
+- GET /products/:id - Get product with ingredients
+- POST /products - Create product
+- PUT /products/:id - Update product
+- DELETE /products/:id - Delete product
+- POST /products/:id/archive - Archive product
+- POST /products/:id/reactivate - Reactivate product
+- GET /categories - Get product categories
+- GET /stats - Get product statistics
+- GET /search - Search products
+
+UPLOAD Routes (/api/upload/):
+- POST / - Upload file (CSV/Excel)
+- GET / - List uploads
+- GET /:id - Get upload details
+- PUT /:id - Update upload
+- DELETE /:id - Delete upload
+- GET /:id/status - Check upload status
+- GET /stats/summary - Upload statistics
+
+SETTINGS Routes (/api/settings/):
+- GET /business-profile - Get business profile
+- PUT /business-profile - Update business profile
+- GET /forecast-config - Get forecast configuration
+- PUT /forecast-config - Update configuration
+
+NOTIFICATIONS Routes (/api/notifications/):
+- GET / - Get user notifications
+- POST /:id/read - Mark as read
+- DELETE /:id - Delete notification
+
+USERS Routes (/api/users/):
+- GET / - List all users (admin)
+- GET /:id - Get user details
+- PUT /:id - Update user
+- DELETE /:id - Delete user (admin)
+
+================================================================================
+PART 2: COMPREHENSIVE TEST CASES (150 TOTAL)
+================================================================================
+
+Test Case Format:
+Test Case ID | Test Case Description | Pre-conditions | Test Steps | Test Data | Expected Result | Actual Result | Status | Priority | Tested By | Date Tested | Comments
+
+---
+
+SECTION A: AUTHENTICATION & REGISTRATION TESTS (TC-001 to TC-030)
+===================================================================
+
+TC-001 | User Registration - Valid Email & Password | None | 1. Navigate to /register 2. Enter email 3. Enter password (8+ chars, mixed case, number, special) 4. Confirm password 5. Click Register | Email: newuser@example.com, Password: Test@123456 | System creates custom user record, sends OTP to email | | | HIGH | | |
+TC-002 | User Registration - Invalid Email Format | None | 1. Navigate to /register 2. Enter invalid email 3. Click Register | Email: invalidemail, Password: Test@123456 | Frontend validation error: "Invalid email format" | | | HIGH | | |
+TC-003 | User Registration - Duplicate Email (Conflict) | User with test@example.com exists | 1. Attempt to register with existing email 2. Click Register | Email: test@example.com (exists), Password: Test@123456 | Error: "Email already registered" (from auth route) | | | HIGH | | |
+TC-004 | User Registration - Weak Password | None | 1. Enter email 2. Enter weak password (only lowercase) 3. Click Register | Email: user@example.com, Password: password | Error: "Password must contain uppercase, lowercase, number, special char" | | | HIGH | | |
+TC-005 | User Registration - Password Mismatch | None | 1. Enter email 2. Enter password 3. Enter different confirm 4. Click Register | Email: user@example.com, Pass: Test@123, Confirm: Test@456 | Error: "Passwords do not match" | | | HIGH | | |
+TC-006 | OTP Verification - Valid OTP | User registered, OTP sent | 1. Check email for OTP 2. Enter OTP in verification field 3. Click Verify | OTP: 123456 (from email) | Success: "OTP verified", proceed to password creation | | | HIGH | | |
+TC-007 | OTP Verification - Invalid OTP | User registered | 1. Enter incorrect OTP 2. Click Verify | OTP: 999999 (wrong) | Error: "Invalid or expired OTP" | | | HIGH | | |
+TC-008 | OTP Verification - Expired OTP (>15 min) | User registered, OTP sent 15+ min ago | 1. Wait 15+ minutes 2. Try to verify with old OTP | OTP sent at T=0, verify at T=16min | Error: "OTP has expired. Request a new OTP" | | | MEDIUM | | |
+TC-009 | OTP Resend | OTP expired or user requests new | 1. Click Resend OTP link 2. Confirm email | Email: user@example.com | New OTP sent, email received with new code | | | MEDIUM | | |
+TC-010 | Create Password - Valid Strong Password | OTP verified | 1. Enter strong password 2. Confirm password 3. Click Create Password | Password: SecurePass@2024 | Password created, Auth user created, auto-login attempted | | | HIGH | | |
+TC-011 | Create Password - Weak Password | OTP verified | 1. Enter weak password 2. Click Create Password | Password: 123456 | Error: "Password requirements not met" | | | HIGH | | |
+TC-012 | Create Password - Password Mismatch | OTP verified | 1. Enter password in field 1 2. Enter different in field 2 3. Click Create | Pass1: Test@123, Pass2: Test@456 | Error: "Passwords do not match" | | | HIGH | | |
+TC-013 | Auto-Login After Password Creation | Password created successfully | 1. Complete create-password flow 2. System attempts auto-login | Complete password creation | User redirected to dashboard if auto-login succeeds | | | HIGH | | |
+TC-014 | User Login - Valid Credentials | Account created & verified | 1. Navigate to /login 2. Enter email & password 3. Click Login | Email: user@example.com, Password: SecurePass@2024 | User logged in, JWT token set, redirected to dashboard | | | HIGH | | |
+TC-015 | User Login - Incorrect Password | Account exists | 1. Enter correct email 2. Enter wrong password 3. Click Login | Email: user@example.com, Password: WrongPassword | Error: "Invalid email or password" | | | HIGH | | |
+TC-016 | User Login - Non-existent Account | None | 1. Enter non-existent email 2. Enter password 3. Click Login | Email: nonexistent@example.com, Password: Test@123 | Error: "Invalid email or password" (generic for security) | | | HIGH | | |
+TC-017 | User Login - Session Persistence | User logged in | 1. Login successfully 2. Close browser tab 3. Reopen site | Logged in, then close/reopen | Session persisted from localStorage/sessionStorage | | | HIGH | | |
+TC-018 | Forgot Password - Valid Email | Account exists | 1. Click Forgot Password 2. Enter email 3. Click Send Code | Email: user@example.com | Reset code sent to email, confirmation message shown | | | HIGH | | |
+TC-019 | Forgot Password - Non-existent Email | None | 1. Click Forgot Password 2. Enter non-existent email 3. Click Send | Email: notexist@example.com | Generic message: "If email exists, reset link sent" (security) | | | MEDIUM | | |
+TC-020 | Reset Password - Verify Code Step | Reset code sent | 1. Enter reset code from email 2. Click Verify | Code: abc123xyz (from email) | Code verified, proceed to password entry | | | HIGH | | |
+TC-021 | Reset Password - Invalid Code | Reset flow in progress | 1. Enter incorrect code 2. Click Verify | Code: wrongcode123 | Error: "Invalid or expired reset code" | | | HIGH | | |
+TC-022 | Reset Password - Create New Password | Code verified | 1. Enter new password 2. Confirm password 3. Click Reset | NewPass: NewPass@2024 | Password reset success, redirected to login | | | HIGH | | |
+TC-023 | Reset Password - Code Expiry (>24 hours) | Reset code sent 24+ hours ago | 1. Try to verify old reset code | Code from 25 hours ago | Error: "Reset code expired" | | | MEDIUM | | |
+TC-024 | JWT Token Validation - Valid Token | User logged in | 1. Call protected API with valid JWT | Authorization: Bearer <valid_token> | Request succeeds, 200 OK response | | | HIGH | | |
+TC-025 | JWT Token Validation - Expired Token | User token expired | 1. Use expired JWT in request | Authorization: Bearer <expired_token> | Response: 401 Unauthorized | | | HIGH | | |
+TC-026 | JWT Token Validation - Malformed Token | User has token | 1. Modify JWT (change payload) 2. Send request | Authorization: Bearer malformed_token | Response: 401 Unauthorized | | | HIGH | | |
+TC-027 | JWT Token Validation - Missing Token | Authenticated endpoint | 1. Call protected endpoint without token | No Authorization header | Response: 401 Unauthorized | | | HIGH | | |
+TC-028 | User Session - Logout | User logged in | 1. Click Logout 2. Verify redirection | User logged in | Token cleared, redirected to login | | | HIGH | | |
+TC-029 | Rate Limiting - Multiple Login Attempts | User account exists | 1. Attempt login 10 times in 1 minute | 10 failed attempts within 60 sec | After limit: 429 Too Many Requests | | | MEDIUM | | |
+TC-030 | Account Verification Status Check | Registered user | 1. GET /api/auth/setup 2. Check response | Auth token included | Response shows is_verified status | | | MEDIUM | | |
+
+---
+
+SECTION B: BUSINESS PROFILE & SETTINGS TESTS (TC-031 to TC-045)
+===============================================================
+
+TC-031 | Business Profile Creation - First Time Setup | User logged in, no profile exists | 1. Navigate to /settings 2. Click Setup Business Profile 3. Enter name, address, contact 4. Save | Name: ChefDuo Restaurant, Address: 123 Main St, Contact: 555-1234 | Profile created, data saved to business_profile table | | | HIGH | | |
+TC-032 | Business Profile Update | Business profile exists | 1. Navigate to Settings 2. Edit business info 3. Save changes | Name: ChefDuo V2, Address: 456 Oak Ave | Profile updated in database | | | HIGH | | |
+TC-033 | Business Logo Upload - Valid Image | Business profile exists | 1. Click Upload Logo 2. Select PNG/JPG 3. Upload | File: logo.png (500KB, valid) | Logo uploaded, URL saved to logo_url field | | | HIGH | | |
+TC-034 | Business Logo Upload - Invalid File Type | Business profile exists | 1. Click Upload Logo 2. Select document.pdf 3. Upload | File: document.pdf | Error: "Invalid file type. Please upload PNG or JPG" | | | HIGH | | |
+TC-035 | Business Logo Upload - File Too Large | Business profile exists | 1. Upload image >5MB 2. Click Upload | File: large_image.png (10MB) | Error: "File size exceeds 5MB limit" | | | MEDIUM | | |
+TC-036 | Forecast Configuration - Update Safety Buffer | Forecast config exists | 1. Navigate to Settings/Forecast Config 2. Change safety buffer from 15% to 20% 3. Save | Buffer: 20% | Config updated in forecast_config table | | | MEDIUM | | |
+TC-037 | Notification Preferences - Email Alerts | User settings exist | 1. Navigate to Notification Preferences 2. Toggle Email Alerts to ON 3. Save | Email Alerts: ON | Setting persisted, future alerts sent via email | | | MEDIUM | | |
+TC-038 | Notification Preferences - In-App Alerts | User settings exist | 1. Navigate to Notification Preferences 2. Toggle In-App Alerts to ON 3. Save | In-App Alerts: ON | Setting persisted, alerts appear in dropdown | | | MEDIUM | | |
+TC-039 | User Account Settings - Change Email Address | User logged in | 1. Navigate to Settings/Account 2. Change email 3. Verify new email 4. Confirm change | New Email: newemail@example.com | Email changed, verification sent to new email | | | HIGH | | |
+TC-040 | User Account Settings - Change Full Name | User logged in | 1. Navigate to Settings/Account 2. Edit name field 3. Save | New Name: John Doe | Name updated in users table | | | MEDIUM | | |
+TC-041 | User Account Settings - View Account Info | User logged in | 1. Navigate to Settings/Account 2. View account details | | All account info displayed correctly | | | MEDIUM | | |
+TC-042 | Multi-User Support - Data Isolation | 2 users registered | 1. User A logs in, views products 2. User B logs in, views products 3. Verify each sees only their data | User A's products ≠ User B's products | Each user sees only their own data | | | HIGH | | |
+TC-043 | User Permissions - Non-Admin Access | Non-admin user logged in | 1. Attempt to access /admin endpoints 2. Check authorization | API: /api/admin/users | Response: 403 Forbidden | | | MEDIUM | | |
+TC-044 | User Deletion - Account Removal | User account active | 1. User requests account deletion 2. Confirm action 3. Verify deletion | User: test_delete@example.com | Account deleted, auth user removed | | | LOW | | |
+TC-045 | User Session Timeout | User logged in, idle for >1 hour | 1. Leave session idle for 1+ hour 2. Attempt action | Idle time: 61 minutes | Session expired, redirected to login | | | MEDIUM | | |
+
+---
+
+SECTION C: PRODUCT MANAGEMENT TESTS (TC-046 to TC-080)
+========================================================
+
+TC-046 | Product Addition - Valid Product Data | Business profile created | 1. Navigate to Data Management/Product Management 2. Click Add Product 3. Enter product name, category, price 4. Save | Name: Biryani, Category: Rice Dishes, Price: 250, Unit: Plate | Product created with ID, status=active | | | HIGH | | |
+TC-047 | Product Addition - Duplicate Product Name | Product exists | 1. Attempt to create product with same name | Name: Biryani (exists) | Error: "Product name already exists" | | | HIGH | | |
+TC-048 | Product Addition - Missing Required Fields | Business profile exists | 1. Leave product name empty 2. Click Save | Name: (empty), Price: 250 | Error: "Product name is required" | | | HIGH | | |
+TC-049 | Product Addition - Invalid Price Format | Business profile exists | 1. Enter non-numeric price 2. Click Save | Price: "abc" | Error: "Price must be a number" | | | HIGH | | |
+TC-050 | Product Ingredient Mapping - Add Single Ingredient | Product created | 1. Click Add Ingredient 2. Select ingredient 3. Enter quantity 4. Save | Ingredient: Rice, Qty: 2kg | Mapping created in product_ingredients table | | | HIGH | | |
+TC-051 | Product Ingredient Mapping - Add Multiple Ingredients | Product created | 1. Click Add Ingredients 2. Select 3 ingredients 3. Enter quantities for each 4. Save | Product: Biryani, Ingredients: Rice (2kg), Chicken (1.5kg), Spices (50g) | All 3 mappings created, linked to product | | | HIGH | | |
+TC-052 | Product Ingredient Mapping - Update Quantity | Mapping exists | 1. Click Edit Ingredient 2. Change quantity from 2kg to 3kg 3. Save | Ingredient: Rice, Old: 2kg, New: 3kg | product_ingredients quantity_per_serving updated | | | MEDIUM | | |
+TC-053 | Product Ingredient Mapping - Remove Ingredient | Mapping exists | 1. Click Remove Ingredient 2. Confirm action | Ingredient: Rice from Biryani | Mapping deleted from product_ingredients | | | MEDIUM | | |
+TC-054 | Product Update - Change Price | Product exists | 1. Click Edit Product 2. Change price 3. Save | Old Price: 250, New Price: 300 | Price updated in products table | | | HIGH | | |
+TC-055 | Product Update - Change Category | Product exists | 1. Click Edit Product 2. Change category 3. Save | Old: Rice Dishes, New: Specialty Dishes | Category updated in products table | | | MEDIUM | | |
+TC-056 | Product Update - Mark Inactive (Archive) | Product exists, no active forecasts | 1. Click Archive Product 2. Select reason 3. Confirm | Product: Discontinued Biryani, Reason: Discontinued | is_active=false, inactive_reason stored, inactive_since set | | | HIGH | | |
+TC-057 | Product Update - Reactivate Archived Product | Product archived | 1. Navigate to Archived Products 2. Select product 3. Click Reactivate | Product: Discontinued Biryani | is_active=true, inactive fields cleared | | | MEDIUM | | |
+TC-058 | Product Deletion - Delete Product | Product exists, no sales data | 1. Click Delete Product 2. Confirm action | Product: Test Product (no sales) | Product deleted from products table | | | MEDIUM | | |
+TC-059 | Product Deletion - Prevent Delete if Dependencies Exist | Product has sales data | 1. Attempt to delete product with sales 2. Click Delete | Product: Biryani (has sales) | Error: "Cannot delete product with sales history. Archive instead." | | | HIGH | | |
+TC-060 | Product Status Classification - Active Product | Product has 30+ days sales history | 1. System analyzes product 2. Check status in UI | Product: Biryani, Last sale: today | Status: ACTIVE | | | HIGH | | |
+TC-061 | Product Status Classification - New Product | Product added 5 days ago with limited data | 1. Check product status 2. View classification | Product: New Dish (5 days old, 8 sales) | Status: INACTIVE (NEW) with note | | | MEDIUM | | |
+TC-062 | Product Status Classification - Discontinued Product | Product not sold for 28+ days | 1. Check product status 2. View in listing | Product: Old Item (last sale: 30 days ago) | Status: INACTIVE (DISCONTINUED) | | | MEDIUM | | |
+TC-063 | Product Search - Search by Name | Multiple products exist | 1. Navigate to Product Management 2. Enter search term 3. Results shown | Search: "Biryani" | Only products containing "Biryani" shown | | | MEDIUM | | |
+TC-064 | Product Search - Search by Category | Products in multiple categories | 1. Enter search term 2. Filter by category | Search: "Rice", Category: "Sauces" | Results filtered by category | | | MEDIUM | | |
+TC-065 | Product Filtering - Filter by Status | Mixed active/inactive products | 1. Navigate to Product Management 2. Filter by Status 3. Show only Active | Filter: Active=true | Only active products displayed | | | MEDIUM | | |
+TC-066 | Product Sorting - Sort by Price | Products with different prices | 1. Click Price column header 2. Sort ascending | | Products sorted by price (ascending) | | | MEDIUM | | |
+TC-067 | Product Sorting - Sort by Name | Multiple products | 1. Click Name column header 2. Sort | | Products sorted alphabetically | | | MEDIUM | | |
+TC-068 | Product Pagination | 15+ products exist | 1. Navigate to Product Management 2. Check pagination | Items per page: 10 | Show 10 per page, pagination controls visible | | | MEDIUM | | |
+TC-069 | Product Statistics - Total Products Count | Products exist | 1. View product stats panel 2. Check total_products | | Stat shows correct count (e.g., 14) | | | MEDIUM | | |
+TC-070 | Product Statistics - Active vs Inactive | Mixed products | 1. View product stats 2. Check active_products & inactive_products | Total: 14, Active: 12, Inactive: 2 | Stats accurate and sum correctly | | | MEDIUM | | |
+TC-071 | Product Statistics - Total Value | Products with prices | 1. Calculate sum of all product prices 2. Compare with total_value stat | Products: Biryani (250), Curry (200), Rice (100) | Total value = 550 | | | MEDIUM | | |
+TC-072 | Category Management - Create New Category | Categories list exists | 1. Click Add Category 2. Enter name 3. Save | Category: Beverages | Category added to system | | | MEDIUM | | |
+TC-073 | Category Management - Assign Product to Category | Product exists | 1. Edit product 2. Select category 3. Save | Product: Biryani, Category: Rice Dishes | Product assigned to category | | | MEDIUM | | |
+TC-074 | Category Management - View Products by Category | Multiple categories exist | 1. Navigate to Product Management 2. Filter by category | Category: Rice Dishes | All products in category shown | | | MEDIUM | | |
+TC-075 | Bulk Product Upload - Upload Products via CSV | CSV file ready | 1. Click Bulk Upload 2. Select CSV 3. Upload | File: products.csv (Name, Category, Price) | All products from CSV created | | | MEDIUM | | |
+TC-076 | Bulk Product Upload - Handle Duplicates | CSV contains duplicate names | 1. Upload CSV with duplicate entries 2. Handle conflicts | CSV: Biryani (appears twice) | Error shown, duplicates not created | | | MEDIUM | | |
+TC-077 | Bulk Product Upload - Validation Errors | CSV has invalid data | 1. Upload CSV with missing price 2. Check errors | CSV: Row 3 missing Price | Row 3 marked as invalid, others processed | | | MEDIUM | | |
+TC-078 | Product Menu Sync - Sync from POS System | POS data available (mock) | 1. Navigate to Settings 2. Click Sync POS Menu 3. Confirm | | Menu items from POS synced to products | | | LOW | | |
+TC-079 | Product Price Update - Bulk Update | Products exist | 1. Select multiple products 2. Update price 3. Apply to all | Products: 5 selected, New price: +5% | All selected products' prices updated | | | MEDIUM | | |
+TC-080 | Product Historical Data - View First Sold Date | Product has sales | 1. View product details 2. Check first_sold_date | | first_sold_date displayed correctly | | | MEDIUM | | |
+
+---
+
+SECTION D: INVENTORY MANAGEMENT TESTS (TC-081 to TC-120)
+========================================================
+
+TC-081 | Inventory View - List All Stock Items | Inventory items exist | 1. Navigate to Inventory Management 2. View Inventory tab | | All items displayed with columns: Name, Qty, Unit, Price, Batch, Min Stock | | | HIGH | | |
+TC-082 | Inventory Search - Search by Item Name | Multiple inventory items | 1. Enter search term 2. Search | Search: "Tomato Sauce" | Results show only matching items | | | MEDIUM | | |
+TC-083 | Inventory Search - Search by Batch Number | Items with batch codes | 1. Enter batch number 2. Search | Batch: "B001" | Results show items from batch B001 | | | MEDIUM | | |
+TC-084 | Inventory Sort - Sort by Quantity | Items with different quantities | 1. Click Quantity header 2. Sort ascending | | Items sorted by qty (low to high) | | | MEDIUM | | |
+TC-085 | Inventory Sort - Sort by Date | Items with different dates | 1. Click Date header 2. Sort descending | | Items sorted by date (newest first) | | | MEDIUM | | |
+TC-086 | Inventory Pagination - Navigate Pages | 20+ inventory items | 1. View first page (5 items) 2. Click Next 3. Navigate | Items per page: 5 | Page navigation works correctly | | | MEDIUM | | |
+TC-087 | Inventory Add Item - New Stock Item | Inventory management open | 1. Click Add Item 2. Enter name, qty, unit, price 3. Save | Name: Tomato Sauce, Qty: 50kg, Price: 120/unit | Item added to inventory list | | | HIGH | | |
+TC-088 | Inventory Add Item - Set Minimum Stock Level | Adding new item | 1. Enter item details 2. Set min_stock threshold 3. Save | Item: Chicken Breast, Min Stock: 20kg | min_stock stored, used for alerts | | | HIGH | | |
+TC-089 | Inventory Edit Item - Update Quantity | Inventory item exists | 1. Click Edit 2. Change quantity 3. Save | Old Qty: 50kg, New Qty: 45kg | Quantity updated in ingredient_stock | | | HIGH | | |
+TC-090 | Inventory Edit Item - Update Price | Inventory item exists | 1. Click Edit 2. Change unit price 3. Save | Old Price: 120, New Price: 130 | Price updated | | | MEDIUM | | |
+TC-091 | Inventory Edit Item - Update Reorder Threshold | Inventory item exists | 1. Click Edit 2. Change reorder_threshold 3. Save | Old Threshold: 10, New Threshold: 15 | Threshold updated in ingredient_stock | | | MEDIUM | | |
+TC-092 | Inventory Delete Item - Remove Stock Item | Item exists, no dependencies | 1. Click Delete 2. Confirm | Item: Test Item | Item removed from inventory_stock | | | MEDIUM | | |
+TC-093 | Stock Status Indicator - Low Stock Warning | Item qty < min_stock | 1. View inventory list 2. Check status icon | Item: Chicken, Qty: 5kg, Min: 20kg | Red warning icon shows | | | HIGH | | |
+TC-094 | Stock Status Indicator - Out of Stock | Item qty = 0 | 1. View inventory list 2. Check item status | Item: Mushroom, Qty: 0 | Critical alert: "Out of Stock" | | | HIGH | | |
+TC-095 | Stock Status Indicator - Normal Stock | Item qty > min_stock | 1. View inventory list 2. Check status | Item: Rice, Qty: 100kg, Min: 20kg | Green status: "In Stock" | | | MEDIUM | | |
+TC-096 | Stock Reorder Alert - Automatic Alert Generation | Stock falls below threshold | 1. Update item qty below min_stock 2. System generates alert | Qty: 8kg, Min: 10kg | Alert created in notifications table | | | HIGH | | |
+TC-097 | Stock Reorder Alert - Email Notification | Alert generated | 1. Stock alert triggered 2. Check email | Reorder alert sent | Email received with item name & qty needed | | | MEDIUM | | |
+TC-098 | Stock Reorder Alert - In-App Notification | Alert generated | 1. Stock alert triggered 2. View notification dropdown | Alert: Low stock for Rice | Notification appears in navbar dropdown | | | MEDIUM | | |
+TC-099 | Stock Movement Recording - Addition | Stock added (receiving goods) | 1. Record stock addition 2. Enter quantity 3. Save | Ingredient: Rice, Add: +50kg | stock_movements entry created (type: 'addition') | | | HIGH | | |
+TC-100 | Stock Movement Recording - Consumption | Stock consumed (used in sales) | 1. Record consumption after sales upload 2. Auto-deduct qty | Product: Biryani sold 10 units, Uses 2kg Rice | Rice qty auto-decreased by 20kg | | | HIGH | | |
+TC-101 | Stock Movement History - View All Movements | Stock movements exist | 1. View Movement History tab 2. See log | | All movements displayed with date, type, qty, reference | | | MEDIUM | | |
+TC-102 | Batch Tracking - Batch Number on Receipt | Inventory item | 1. Record stock addition with batch number 2. Save | Batch: B001, Qty: 50kg Rice | Batch number stored, linked to inventory | | | MEDIUM | | |
+TC-103 | Batch Tracking - FIFO Usage | Multiple batches exist (B001, B002, B003) | 1. Record consumption 2. Verify FIFO order | Batches: B001 (oldest), B002, B003 (newest) | B001 consumed first (if implemented) | | | MEDIUM | | |
+TC-104 | Ingredient Stock Level - Current Quantity Accuracy | Stock movements recorded | 1. Verify ingredient_stock.current_quantity | Movements: +100kg, -20kg, -15kg | current_quantity = 65kg | | | HIGH | | |
+TC-105 | Market Price Tracking - Manual Price Entry | Ingredient stock exists | 1. Enter manual market price 2. Save | Ingredient: Rice, Price: 50/kg | Entry created in market_price (is_manual_entry=true) | | | MEDIUM | | |
+TC-106 | Market Price Tracking - External Source Update | Web scraping configured | 1. System scrapes market prices 2. Updates records | Source: Online Market API | Prices updated in market_price table | | | LOW | | |
+TC-107 | Stock Valuation - Calculate Total Inventory Value | Multiple items with qty & price | 1. Calculate SUM(qty × price) 2. View total | Items: Rice 100kg@50 + Chicken 20kg@250 | Total Value = 5000 + 5000 = 10,000 | | | MEDIUM | | |
+TC-108 | Expiry Date Tracking - Set Expiry Date | Perishable item | 1. Add inventory item 2. Set expiry_date field 3. Save | Item: Milk, Expiry: 2026-08-20 | Expiry date stored | | | MEDIUM | | |
+TC-109 | Expiry Alert - Item Expiring Soon | Item expiry < 3 days | 1. Check system alerts 2. View expiry warnings | Item: Milk expires 2026-08-17 | Alert: "Milk expires in 2 days" | | | MEDIUM | | |
+TC-110 | Storage Location Tracking - Assign Location | Inventory item added | 1. Assign storage location (Cold Storage, Dry Goods, etc.) 2. Save | Item: Chicken, Location: Freezer | Location stored & displayed | | | MEDIUM | | |
+TC-111 | Multi-Unit Support - Different Units | Ingredients with different units | 1. Add items with different units 2. View | Rice: kg, Oil: L, Spices: g | Units displayed correctly per item | | | MEDIUM | | |
+TC-112 | Inventory Export - Export to Excel | Inventory data exists | 1. Click Export 2. Download Excel | | Excel file generated with all inventory data | | | MEDIUM | | |
+TC-113 | Inventory Report - Daily Stock Report | Inventory exists | 1. Generate report 2. Select date range 3. Export PDF | Date: 2026-08-14 | PDF with stock summary, movements, value | | | MEDIUM | | |
+TC-114 | Inventory Dashboard - Quick Stats | Inventory items exist | 1. View inventory summary section 2. Check KPIs | | Cards show: Total Items, Low Stock Items, Out of Stock | | | MEDIUM | | |
+TC-115 | Inventory Audit - Physical Count vs System | Physical count done, system has records | 1. Compare counts 2. Record discrepancies | System: Rice 100kg, Count: 98kg | Discrepancy: -2kg recorded | | | MEDIUM | | |
+TC-116 | Inventory Adjustment - Correct Discrepancy | Audit discrepancy found | 1. Record adjustment 2. Update system qty | Old Qty: 100kg, New: 98kg | Adjustment recorded in stock_movements | | | MEDIUM | | |
+TC-117 | Reorder List Generation - Recommended Orders | Items below threshold | 1. Generate reorder list 2. View recommendations | Items < min_stock: Rice (15kg), Chicken (5kg) | List shows all items needing reorder | | | HIGH | | |
+TC-118 | Reorder List - Suggested Quantities | Items needing reorder | 1. View suggested qty to purchase 2. Check calculations | Rice current: 5kg, Min: 20kg → Suggest: 50kg | Calculation: Min × 2 or custom formula | | | MEDIUM | | |
+TC-119 | Reorder Export - Generate PO | Reorder list ready | 1. Click Generate Purchase Order 2. Export PDF | | PO generated with supplier details, items, qty | | | MEDIUM | | |
+TC-120 | Inventory Sync - Sync with Forecasting | Forecast + Inventory data available | 1. System calculates required stock for forecast 2. Compare with actual | Forecast: 100 Biryani, Requires 200kg Rice, Have: 150kg | Alert: Need 50kg more Rice | | | HIGH | | |
+
+---
+
+SECTION E: DATA UPLOAD & FILE PROCESSING TESTS (TC-121 to TC-145)
+==================================================================
+
+TC-121 | File Upload - Valid CSV (Sales Data) | User authenticated, business profile complete | 1. Navigate to Upload 2. Select CSV 3. Click Upload | File: sales_data.csv (Date, Product, Qty, Price) | File validated, virus-scanned, parsed, data preview shown | | | HIGH | | |
+TC-122 | File Upload - Valid Excel File | User authenticated | 1. Navigate to Upload 2. Select .xlsx 3. Click Upload | File: sales_data.xlsx | File validated, processed, row count displayed | | | HIGH | | |
+TC-123 | File Upload - Virus Detected | User uploads file | 1. Upload file with malware signature 2. ClamAV scans | File: Contains EICAR test virus | Error: "File flagged as dangerous. Upload rejected." | | | HIGH | | |
+TC-124 | File Upload - Invalid File Format | User uploads non-CSV/Excel | 1. Upload .pdf or .txt file 2. Click Upload | File: document.pdf | Error: "Unsupported file format. Upload CSV or Excel only." | | | HIGH | | |
+TC-125 | File Upload - File Size Exceeds Limit | User uploads large file | 1. Upload file >50MB 2. Click Upload | File: huge_data.csv (100MB) | Error: "File size exceeds 50MB limit" | | | MEDIUM | | |
+TC-126 | File Upload - Duplicate Detection | Same file uploaded before | 1. Upload same file twice 2. Confirm duplicate | File: sales_data.csv (same content) | Warning: "File appears duplicate. Proceed?" | | | MEDIUM | | |
+TC-127 | File Validation - Check Column Headers | CSV uploaded | 1. System validates required columns 2. Check headers | Required: Date, Product, Qty; File has all | Validation passes | | | HIGH | | |
+TC-128 | File Validation - Missing Required Columns | CSV missing columns | 1. Upload CSV without Product column | File: Missing "Product" column | Error: "Missing required column: Product" | | | HIGH | | |
+TC-129 | File Validation - Data Type Checking | CSV with invalid data types | 1. Upload CSV with non-numeric Qty 2. Check validation | Qty: "abc" (should be number) | Error: "Qty in row 5 is not numeric" | | | HIGH | | |
+TC-130 | File Preview - Display First 5 Rows | File uploaded, validated | 1. View file preview after upload | | Preview shows first 5 data rows | | | MEDIUM | | |
+TC-131 | File Preview - Show Parsing Issues | CSV with some invalid rows | 1. Preview file with issues | Issues: Row 3 invalid qty, Row 7 missing product | Preview highlights issues, shows count | | | MEDIUM | | |
+TC-132 | CSV Parsing - Correct Delimiter Detection | CSV with semicolon delimiter | 1. Upload CSV with ; delimiter 2. System detects | Delimiter: ; | System auto-detects & parses correctly | | | MEDIUM | | |
+TC-133 | Excel Parsing - Multiple Sheets | .xlsx with 3 sheets | 1. Upload .xlsx with multiple sheets 2. Select sheet | Sheets: Sales (select), Products, Inventory | User selects sheet to process | | | MEDIUM | | |
+TC-134 | Excel Parsing - Handle Merged Cells | .xlsx with merged cells | 1. Upload .xlsx with merged header cells | Merged: Columns A-C header | System handles gracefully or errors clearly | | | MEDIUM | | |
+TC-135 | Batch Processing - Process Multiple Files | 3 CSV files uploaded | 1. Upload 3 files simultaneously 2. Process all | Files: sales_jan.csv, sales_feb.csv, sales_mar.csv | All files processed in queue | | | MEDIUM | | |
+TC-136 | Progress Tracking - Upload Progress Bar | Large file uploading | 1. Upload large file 2. Watch progress | File size: 20MB | Progress bar shows 0-100% | | | MEDIUM | | |
+TC-137 | Progress Tracking - Per-File Processing Status | Multiple files in queue | 1. Upload 3 files 2. View status | File 1: Processing, File 2: Pending, File 3: Queued | Status updated for each file | | | MEDIUM | | |
+TC-138 | Data Insertion - Insert Parsed Data into daily_sales | CSV parsed successfully | 1. System inserts rows to daily_sales 2. Verify DB | 100 rows in CSV → 100 rows in DB | All rows inserted with upload_id reference | | | HIGH | | |
+TC-139 | Transaction Rollback - Partial Failure Handling | CSV with 100 rows, row 50 has error | 1. Process file with error in middle | Error in row 50, but rows 1-49 valid | Rollback? Or partial insert? (Clarify design) | | | MEDIUM | | |
+TC-140 | Upload History - View All Uploads | Uploads completed | 1. Navigate to Upload History 2. List all uploads | | History shows: Filename, Date, Row Count, Status | | | MEDIUM | | |
+TC-141 | Upload Status - Check Processing Status | Upload in progress | 1. View upload detail 2. Check status | Status: Processing (50% complete) | Real-time status update | | | MEDIUM | | |
+TC-142 | Upload Status - Completed with Summary | Upload finished | 1. View upload detail 2. Check summary | Status: Completed, Inserted: 95 rows, Errors: 5 | Summary shows stats | | | MEDIUM | | |
+TC-143 | Upload Deletion - Delete Upload Record | Upload exists | 1. Select upload 2. Click Delete 3. Confirm | | Upload record deleted, daily_sales rows cascade deleted | | | MEDIUM | | |
+TC-144 | Menu Upload - Upload Products List | CSV with products | 1. Navigate to Upload (Menu tab) 2. Upload product CSV | Columns: Name, Category, Price, Ingredients | Products from CSV created/updated | | | MEDIUM | | |
+TC-145 | Data Consistency - Verify data integrity after upload | Files uploaded successfully | 1. Query daily_sales post-upload 2. Verify counts | Uploaded: 200 rows, DB shows: 200 rows | Data consistent & complete | | | MEDIUM | | |
+
+---
+
+SECTION F: FORECASTING & XGBOOST TESTS (TC-146 to TC-170)
+===========================================================
+
+TC-146 | Forecasting - Minimum Data Check | Daily_sales table populated | 1. Check if 30+ days of sales exist 2. Attempt forecast | Sales data: 35 days | System proceeds with forecast | | | HIGH | | |
+TC-147 | Forecasting - Insufficient Data | Only 15 days of sales | 1. Attempt to generate forecast | Sales data: 15 days (< 30) | Error: "Need 30+ days of sales history" | | | HIGH | | |
+TC-148 | Forecasting - Generate 7-Day Forecast | 30+ days sales data exists | 1. Navigate to Analytics/Forecasting 2. Select 7-day range 3. Generate | Date range: Next 7 days | 7-day forecast generated with predictions | | | HIGH | | |
+TC-149 | Forecasting - Generate 30-Day Forecast | 60+ days sales data | 1. Select 30-day range 2. Generate forecast | Date range: Next 30 days | 30-day forecast generated with accuracy score | | | HIGH | | |
+TC-150 | Forecasting - Holiday Exclusion | Fixed holiday configured | 1. Add 2026-12-25 to fixed_holidays 2. Generate forecast | Holiday: 2026-12-25 (Christmas) | Forecast day uses lower baseline or excluded | | | MEDIUM | | |
+TC-151 | Forecasting - Accuracy Score Calculation | Forecast completed, actual data available | 1. Compare predicted vs actual 2. Calculate accuracy | Predicted: 100, Actual: 95 | Accuracy score displayed (MAPE, MAE, RMSE) | | | HIGH | | |
+TC-152 | Forecasting - MAPE Calculation | Forecast vs actuals | 1. Calculate MAPE = mean(|actual-pred|/actual) | 5 days data | MAPE calculated correctly | | | MEDIUM | | |
+TC-153 | Forecasting - MAE Calculation | Forecast vs actuals | 1. Calculate MAE = mean(|actual-pred|) | 5 days data | MAE calculated correctly | | | MEDIUM | | |
+TC-154 | Forecasting - RMSE Calculation | Forecast vs actuals | 1. Calculate RMSE = sqrt(mean(actual-pred)²) | 5 days data | RMSE calculated correctly | | | MEDIUM | | |
+TC-155 | Forecasting Model - Training Status | Model trained | 1. View training info panel 2. Check status | Status: Trained, Last Trained: 2026-06-24 6:00 AM | Training info displayed | | | MEDIUM | | |
+TC-156 | Forecasting Model - Training Records Count | Model trained on data | 1. View training records info | Training Data: 1,248 rows (≈5 months) | Record count displayed | | | MEDIUM | | |
+TC-157 | Forecasting Model - Active Products Count | Products in system | 1. Check active products count | Active: 14 products | Count shown in training info | | | MEDIUM | | |
+TC-158 | Feature Importance - Is Payday | Feature analysis done | 1. View feature importance chart 2. Check "Is payday" | Importance: 92% | Highest-ranked feature shown | | | MEDIUM | | |
+TC-159 | Feature Importance - Holiday | Feature analysis | 1. View feature importance 2. Check "Holiday" | Importance: 84% | Ranked 2nd in importance | | | MEDIUM | | |
+TC-160 | Feature Importance - Day of Week | Feature analysis | 1. View feature importance 2. Check "Day of Week" | Importance: 76% | Ranked 3rd | | | MEDIUM | | |
+TC-161 | Forecast Accuracy History - Trending | Multiple forecasts completed | 1. View accuracy history chart 2. See trend | 14 weeks of accuracy data | Chart shows accuracy trend over time | | | MEDIUM | | |
+TC-162 | Forecast Accuracy - Excellent (>90%) | Forecast accuracy calculated | 1. View accuracy score | Accuracy: 92.6% | Display: Green, Label: "Excellent" | | | MEDIUM | | |
+TC-163 | Forecast Accuracy - Good (80-90%) | Forecast accuracy calculated | 1. View accuracy score | Accuracy: 85% | Display: Blue, Label: "Good" | | | MEDIUM | | |
+TC-164 | Forecast Accuracy - Fair (70-80%) | Forecast accuracy calculated | 1. View accuracy score | Accuracy: 75% | Display: Amber, Label: "Fair" | | | MEDIUM | | |
+TC-165 | Sales Prediction - Actual vs Forecast Graph | Forecast data available | 1. Navigate to Forecasting 2. View Sales Prediction graph | Week: June 20-26 | Graph shows actual (blue) vs forecast (orange) lines | | | MEDIUM | | |
+TC-166 | Sales Prediction - Table View | Forecast data available | 1. View forecast table 2. Check product rows | Product: Biryani, Actual: 48, Forecast: 45 | Table shows date, product, actual, forecast, revenue | | | MEDIUM | | |
+TC-167 | Demand Prediction - Weekly Grid | Forecasted demand available | 1. View demand prediction grid | | Grid shows daily demand for week | | | MEDIUM | | |
+TC-168 | Demand Prediction - Per-Product Breakdown | Forecast for multiple products | 1. View per-product forecast table | Product: Poppers & Rice, Qty: 48 | Table shows all product forecasts | | | MEDIUM | | |
+TC-169 | Forecast Export - Export to PDF Report | Forecast completed | 1. Click Export PDF 2. Download | | PDF generated with forecast details, graphs | | | MEDIUM | | |
+TC-170 | Forecast Export - Export to Excel | Forecast completed | 1. Click Export Excel 2. Download | | Excel file with forecast data in sheets | | | MEDIUM | | |
+
+---
+
+SECTION G: INGREDIENT DEMAND & PLANNING TESTS (TC-171 to TC-190)
+=================================================================
+
+TC-171 | Ingredient Demand - Calculate Weekly Demand | Forecast generated, recipes mapped | 1. System calculates ingredient demand for week 2. View grid | | Weekly ingredient planner grid shows quantities | | | HIGH | | |
+TC-172 | Ingredient Demand - Quantity Calculation | Ingredient mapped to products | 1. Calculate: Forecasted servings × recipe quantity | Biryani forecast: 100, Rice qty: 2kg per serving → Need 200kg | Calculation correct | | | HIGH | | |
+TC-173 | Ingredient Demand - Safety Buffer Application | Demand calculated, buffer = 15% | 1. Apply safety buffer to calculated demand | Calculated: 200kg, Buffer: 15% → Final: 230kg | Final demand = calculated × (1 + buffer%) | | | HIGH | | |
+TC-174 | Weekly Planner - Color Coding (Light Blue) | Weekly demand grid | 1. View ingredient row 2. Check normal days | Normal demand: Light blue cells | Color correct for normal levels | | | MEDIUM | | |
+TC-175 | Weekly Planner - Color Coding (Amber) | Weekly demand grid | 1. View ingredient row 2. Check above-normal days | Above-normal: Amber cells (e.g., Friday) | Color correct for elevated demand | | | MEDIUM | | |
+TC-176 | Weekly Planner - Color Coding (Red) | Weekly demand grid | 1. View ingredient row 2. Check high-demand days | High demand: Red cells (e.g., payday) | Color correct for spike days | | | MEDIUM | | |
+TC-177 | Daily Shopping List - Generate for Tomorrow | Forecast available | 1. Navigate to IngredientDemand 2. View Daily Shopping List | | List shows all ingredients needed for tomorrow | | | HIGH | | |
+TC-178 | Daily Shopping List - Quantity Display | Shopping list generated | 1. View each ingredient's quantity 2. Check unit | Ingredient: Rice, Qty: 50.5kg | Quantity and unit displayed correctly | | | MEDIUM | | |
+TC-179 | Daily Shopping List - More Than Usual Badge | Item quantity above typical | 1. View shopping list 2. Check badge | Item: Pork, Flag: "More than usual" | Badge appears for items above range | | | MEDIUM | | |
+TC-180 | Buy List - Recommended Order Quantities | Demand calculated, multiple dishes use ingredient | 1. View Buy List tab 2. Check recommendations | Ingredient: Pork, Recommended: 4kg | Quantity based on linked dishes' forecasts | | | MEDIUM | | |
+TC-181 | Buy List - Linked Dishes Display | Ingredient used in multiple dishes | 1. View Buy List 2. Check "Linked Dishes" column | Pork used in: "Breaded Tonkatsu, Coated Tonkatsu, ..." | Dishes listed | | | MEDIUM | | |
+TC-182 | Buy List - Base Qty vs Total with Buffer | Buy list shows quantities | 1. View Buy List row 2. Check base & total | Base: 3.68kg, Buffer: 0.55kg, Total: 4.23kg | Display shows breakdown | | | MEDIUM | | |
+TC-183 | Ingredient Demand - High Demand Indicator | Ingredient showing high demand | 1. View ingredient list 2. Check isHigh flag | Ingredient: Rice (isHigh: true) | High-demand items highlighted | | | MEDIUM | | |
+TC-184 | Ingredient Demand - Sorting by Demand | Multiple ingredients with different demand | 1. Sort by quantity needed | | Items sorted by demand (highest first) | | | MEDIUM | | |
+TC-185 | Ingredient List - Usage Indication | Ingredients used in recipes | 1. View ingredient list 2. Check "usedIn" field | Rice: "All dishes" or specific products | Usage context shown | | | MEDIUM | | |
+TC-186 | Ingredient Demand Export - PDF Report | Demand data available | 1. Click Export PDF 2. Download | | PDF with weekly planner, shopping list, buy list | | | MEDIUM | | |
+TC-187 | Ingredient Demand Export - Excel Export | Demand data available | 1. Click Export Excel 2. Download | | Excel with ingredients, quantities, units | | | MEDIUM | | |
+TC-188 | Ingredient Optimization - Reorder Amount Calculator | Items needing reorder | 1. Calculate optimal order qty (e.g., 2× min stock) | Current: 5kg, Min: 20kg → Order: 40kg? | Formula used & result displayed | | | MEDIUM | | |
+TC-189 | Safety Buffer Customization | Forecast config accessible | 1. Navigate to Settings/Forecast Config 2. Change buffer from 15% to 20% 3. Save | New Buffer: 20% | Buffer updated, future demands use new % | | | MEDIUM | | |
+TC-190 | Ingredient Demand - Multi-Unit Handling | Ingredients with different units (kg, L, g) | 1. View demand for items with mixed units 2. Display | Rice: kg, Oil: L, Spices: g | All units displayed correctly | | | MEDIUM | | |
+
+---
+
+SECTION H: NOTIFICATIONS & ALERTS TESTS (TC-191 to TC-210)
+============================================================
+
+TC-191 | Stock Alert - Generate Alert When Stock < Min | Stock level drops below threshold | 1. Update ingredient_stock.current_qty < reorder_threshold 2. System generates alert | Chicken: Qty 5kg, Min: 20kg | Alert created in notifications table | | | HIGH | | |
+TC-192 | Stock Alert - Email Notification | Alert generated | 1. Alert triggered 2. System sends email | Alert: Low stock for Chicken | Email sent to user with details | | | HIGH | | |
+TC-193 | Stock Alert - In-App Notification | Alert generated | 1. Alert triggered 2. User navigates app | Alert: Low stock for Chicken | Notification appears in dropdown (unread) | | | HIGH | | |
+TC-194 | Notification Dropdown - Display Recent Alerts | Multiple notifications exist | 1. Click notification icon in navbar 2. View list | | Last 5-10 notifications shown | | | MEDIUM | | |
+TC-195 | Notification Dropdown - Unread Counter | Unread notifications exist | 1. View navbar notification icon 2. Check badge | 3 unread notifications | Badge shows "3" | | | MEDIUM | | |
+TC-196 | Notification - Mark as Read | Unread notification in dropdown | 1. Click notification or Mark as Read 2. Confirm | Notification: Stock Alert | Notification marked as read, badge decreases | | | MEDIUM | | |
+TC-197 | Notification - Delete Notification | Notification in list | 1. Click Delete icon 2. Confirm | Notification: Forecast Complete | Notification deleted from list | | | MEDIUM | | |
+TC-198 | Forecast Completion Alert | Forecast finishes generating | 1. System generates alert 2. Check notifications | Alert: "Forecast for June 25-26 generated" | Alert appears in dropdown & optionally email | | | MEDIUM | | |
+TC-199 | Daily Summary Alert | End of business day | 1. System compiles daily summary 2. Send alert | Daily stats: Sales, Forecast accuracy, Alerts | Summary notification sent if enabled | | | MEDIUM | | |
+TC-200 | Alert Preferences - Email Alerts Toggle | Notification settings accessible | 1. Navigate to Settings/Notifications 2. Toggle Email Alerts | Email Alerts: OFF | Setting saved, no emails until re-enabled | | | MEDIUM | | |
+TC-201 | Alert Preferences - In-App Alerts Toggle | Notification settings | 1. Navigate to Settings/Notifications 2. Toggle In-App Alerts | In-App Alerts: OFF | In-app notifications suppressed | | | MEDIUM | | |
+TC-202 | Alert Preferences - Alert Types Selection | Notification settings | 1. Navigate to Notification Types 2. Deselect "Stock Alerts" | Enabled: Forecast, Disabled: Stock | Only enabled alert types sent | | | MEDIUM | | |
+TC-203 | Notification Email - Content Accuracy | Stock alert email sent | 1. Review email content 2. Check details | Email includes: Item, Current qty, Min qty, Recommended action | Email content accurate | | | MEDIUM | | |
+TC-204 | Notification Email - Delivery Confirmation | Email sent | 1. Check email delivery logs 2. Verify receipt | Email: user@example.com | Email delivered to inbox (not spam) | | | MEDIUM | | |
+TC-205 | Notification Email - Unsubscribe Link | Email notification sent | 1. Click unsubscribe link in email | Link: Unsubscribe from alerts | User unsubscribed, setting updated | | | MEDIUM | | |
+TC-206 | Alert History - View Past Alerts | Multiple alerts generated | 1. Navigate to Notification History 2. View log | | All past alerts displayed with timestamp | | | MEDIUM | | |
+TC-207 | Critical Alert - Out of Stock | Stock at 0 | 1. Check alerts when qty = 0 | Item: Mushroom, Qty: 0kg | Critical alert: "Out of Stock - Urgent" | | | HIGH | | |
+TC-208 | Alert Escalation - Multiple Low Stock Items | 3+ items below threshold | 1. System detects multiple low stock 2. Alert generated | Items: Rice, Chicken, Pork all low | Alert: "Critical: 3 items need reorder" | | | MEDIUM | | |
+TC-209 | Notification Retention - Delete Old Notifications | Notifications > 30 days old | 1. System auto-deletes old notifications 2. Check DB | | Notifications older than 30 days removed | | | LOW | | |
+TC-210 | Notification Performance - Load Time | 100+ notifications in DB | 1. Load notification dropdown 2. Measure time | | Dropdown loads in <1 second | | | MEDIUM | | |
+
+---
+
+SECTION I: REPORTS & ANALYTICS TESTS (TC-211 to TC-230)
+=========================================================
+
+TC-211 | Report Generation - Sales Forecast Report | Forecast data exists | 1. Navigate to Reports 2. Select "Sales Forecast" 3. Choose date range 4. Generate PDF | Date: 01/01/2025-31/01/2025 | PDF generated with forecast summary | | | HIGH | | |
+TC-212 | Report Generation - Accuracy Report | Forecast completed, actuals available | 1. Select "Forecast Accuracy" 2. Choose date range 3. Generate PDF | Period: 30 days | PDF shows MAPE, MAE, RMSE metrics | | | MEDIUM | | |
+TC-213 | Report Generation - Ingredient Demand Report | Demand calculated | 1. Select "Ingredient Demand" 2. Choose date range 3. Generate PDF | Period: Weekly | PDF includes ingredient list, quantities, units | | | MEDIUM | | |
+TC-214 | Report Generation - Inventory Report | Inventory data exists | 1. Select "Inventory Status" 2. Generate PDF | | PDF with all inventory items, quantities, values | | | MEDIUM | | |
+TC-215 | Report Export - Excel Format | Report selected | 1. Choose Excel format 2. Generate/Download | | Excel file with data in sheets | | | MEDIUM | | |
+TC-216 | Report PDF - Include Graphs | Forecast report generated | 1. Generate sales forecast PDF 2. Check for charts | | PDF includes accuracy trend graph | | | MEDIUM | | |
+TC-217 | Report PDF - Professional Formatting | PDF generated | 1. View PDF 2. Check layout & formatting | | Report has logo, headers, tables, charts | | | MEDIUM | | |
+TC-218 | Report Date Range - Custom Dates | Report generation dialog open | 1. Use DatePicker to select custom range 2. Generate | Start: 2025-06-01, End: 2025-06-30 | Report generated for selected period | | | MEDIUM | | |
+TC-219 | Report Download - File Naming | Report generated | 1. Download report 2. Check filename | | Filename: "Sales-Forecast-2025-01-31.pdf" | | | MEDIUM | | |
+TC-220 | Report Download - Correct File Type | Report generated | 1. Download PDF report 2. Check MIME type | | MIME type: application/pdf | | | MEDIUM | | |
+TC-221 | Dashboard Analytics - KPI Cards Display | Dashboard loaded | 1. View KPI section 2. Check cards | Cards: Predicted Sales, Actual Sales, Accuracy, Stock Alerts | All KPIs display with values | | | HIGH | | |
+TC-222 | Dashboard Analytics - Sales Overview Graph | Sales data exists | 1. View Sales Overview graph 2. Check data | Actual: Blue line, Forecast: Orange line | Graph correctly displays both series | | | HIGH | | |
+TC-223 | Dashboard Analytics - Sales Calendar | Sales events exist | 1. View Sales Calendar 2. Check event indicators | Calendar shows dates with colored indicators | High-sale days highlighted | | | MEDIUM | | |
+TC-224 | Dashboard Analytics - Product Performance Panel | Sales data exists | 1. View Product Performance 2. Check best-selling | Best: Biryani (500 plates/month) | Top 5 products listed | | | MEDIUM | | |
+TC-225 | Dashboard Analytics - Demand Trends | Historical demand available | 1. View Demand Trends section 2. Check trend lines | Trend: Upward (over 30 days) | Trend indicator shown | | | MEDIUM | | |
+TC-226 | Analytics Page - Multi-Tab Interface | Analytics feature accessible | 1. Navigate to Analytics 2. View tabs | Tabs: Forecasting, Ingredient Demand, Product Performance | All tabs selectable | | | MEDIUM | | |
+TC-227 | Product Performance - Best Selling Products | Sales data exists | 1. View Product Performance tab 2. See ranking | 1. Biryani, 2. Curry, 3. Rice Plate | Ranking displayed with sales counts | | | MEDIUM | | |
+TC-228 | Product Performance - Demand Tier Visualization | Classifications exist | 1. View demand tiers 2. Check visualization | Tiers: High (40%), Medium (45%), Low (15%) | Pie/bar chart showing distribution | | | MEDIUM | | |
+TC-229 | Analytics Data Export - All Charts to PDF | Multiple analytics charts available | 1. Click "Export All" 2. Generate PDF | | PDF with all charts & data | | | MEDIUM | | |
+TC-230 | Analytics Performance - Page Load Time | Multiple data sources loaded | 1. Navigate to Analytics 2. Measure load time | | Analytics page loads in <3 seconds | | | MEDIUM | | |
+
+---
+
+SECTION J: API & BACKEND TESTS (TC-231 to TC-260)
+=================================================
+
+TC-231 | API - POST /auth/register Endpoint | None | 1. POST with email, password 2. Check response | Email: test@example.com, Password: Test@123 | Response: 201 Created, user record created | | | HIGH | | |
+TC-232 | API - GET /products Endpoint | Products exist | 1. GET /api/products 2. Send auth token | Auth: Bearer token | Response: 200 OK, product list returned | | | HIGH | | |
+TC-233 | API - POST /products Endpoint | Authenticated user | 1. POST /api/products 2. Send product data | Product: New Dish, Price: 300 | Response: 201 Created, product saved | | | HIGH | | |
+TC-234 | API - PUT /products/:id Endpoint | Product exists | 1. PUT /api/products/1 2. Update data | ID: 1, Price: 350 | Response: 200 OK, product updated | | | HIGH | | |
+TC-235 | API - DELETE /products/:id Endpoint | Product exists, no dependencies | 1. DELETE /api/products/1 2. Confirm | Product ID: 1 | Response: 200 OK, product deleted | | | HIGH | | |
+TC-236 | API - Unauthorized Access | Protected endpoint | 1. Call endpoint without token | No Authorization header | Response: 401 Unauthorized | | | HIGH | | |
+TC-237 | API - Invalid Token | Protected endpoint | 1. Send malformed token | Token: "invalid_jwt_string" | Response: 401 Unauthorized | | | HIGH | | |
+TC-238 | API - Rate Limiting | Multiple requests in short time | 1. Send 100+ requests in 1 minute | Same endpoint, rapid | Response: 429 Too Many Requests | | | MEDIUM | | |
+TC-239 | API - CORS Policy | Frontend from different domain | 1. Request from frontend.example.com 2. Call api.example.com | Origin: frontend.example.com | Response allowed or blocked per CORS config | | | MEDIUM | | |
+TC-240 | API - Request Validation - Missing Fields | POST with missing required field | 1. POST /products without name 2. Send | Missing: name field | Response: 400 Bad Request | | | HIGH | | |
+TC-241 | API - Request Validation - Invalid Data Type | POST with wrong data type | 1. POST /products with price as string 2. Send | Price: "abc" (should be number) | Response: 400 Bad Request | | | HIGH | | |
+TC-242 | API - Error Response Format | API returns error | 1. Trigger API error 2. Check response | | Response includes error message & code | | | MEDIUM | | |
+TC-243 | API - Success Response Format | API succeeds | 1. Call successful endpoint 2. Check response | | Response includes data & status code | | | MEDIUM | | |
+TC-244 | API - Pagination - Limit Parameter | GET /products with limit | 1. GET /products?limit=10 | Limit: 10 | Returns max 10 items | | | MEDIUM | | |
+TC-245 | API - Pagination - Offset Parameter | GET /products with offset | 1. GET /products?limit=10&offset=20 | Offset: 20, Limit: 10 | Returns items 21-30 | | | MEDIUM | | |
+TC-246 | API - Filtering - Query Parameters | GET with filter | 1. GET /products?category=Rice | Category: Rice | Returns products in Rice category | | | MEDIUM | | |
+TC-247 | API - Sorting - Sort Parameter | GET with sort | 1. GET /products?sort=price&order=asc | Sort by price ascending | Products sorted by price | | | MEDIUM | | |
+TC-248 | API - Search - Full-Text Search | GET with search term | 1. GET /products?search=biryani | Search: biryani | Returns matching products | | | MEDIUM | | |
+TC-249 | API - Batch Operations - Bulk Delete | Multiple product IDs | 1. DELETE /products with ids array | IDs: [1, 2, 3] | Multiple products deleted | | | MEDIUM | | |
+TC-250 | API - Upload Endpoint - Multipart Form Data | File upload via API | 1. POST /upload with file in multipart 2. Send | File: sales_data.csv | Response: 200 OK, file processed | | | HIGH | | |
+TC-251 | API - Upload Endpoint - Authentication | Upload requires token | 1. POST /upload without token 2. Try upload | No Authorization header | Response: 401 Unauthorized | | | HIGH | | |
+TC-252 | API - Response Time - List Endpoint | GET /products with 1000 items | 1. Call endpoint 2. Measure response time | | Response time <500ms | | | MEDIUM | | |
+TC-253 | API - Response Time - Forecast Endpoint | Forecast generation | 1. POST /forecast 2. Measure time | | Response time <30 seconds | | | MEDIUM | | |
+TC-254 | API - Webhook Support (if implemented) | Webhook endpoint available | 1. POST to webhook URL 2. Send event | Event: forecast_complete | Webhook handler executes | | | LOW | | |
+TC-255 | API - Deprecation Warning | Old API version called | 1. Use deprecated endpoint | | Response includes deprecation warning | | | LOW | | |
+TC-256 | API - Custom Headers - X-Request-ID | API responds with header | 1. Send request 2. Check response headers | | Response includes X-Request-ID | | | MEDIUM | | |
+TC-257 | API - Custom Headers - API Version | Version tracking | 1. Check API-Version header | | Response shows API version | | | MEDIUM | | |
+TC-258 | API - Concurrent Requests - Race Condition | Same resource updated concurrently | 1. Send 2 PUT requests for same product 2. Verify final state | Requests: PUT price to 300, PUT to 400 | Last write wins or conflict handling | | | MEDIUM | | |
+TC-259 | API - Transaction Support - Multi-step Operations | Create product + ingredients in sequence | 1. Create product 2. Add ingredients 3. Verify all succeeded | | All operations succeed or all rollback | | | MEDIUM | | |
+TC-260 | API - Database Connection - Error Handling | Database offline | 1. Attempt API call when DB unavailable | DB: Offline | Response: 503 Service Unavailable | | | HIGH | | |
+
+---
+
+SECTION K: SECURITY TESTS (TC-261 to TC-280)
+============================================
+
+TC-261 | SQL Injection Prevention - Product Name Input | User enters SQL in name field | 1. Enter: '; DROP TABLE products;-- 2. Save | Malicious SQL injected | Input treated as literal string, no injection | | | HIGH | | |
+TC-262 | SQL Injection Prevention - Search Field | User enters SQL in search | 1. Search: '; DELETE FROM users;-- 2. Submit | Malicious SQL in search | Input treated as literal, query safe | | | HIGH | | |
+TC-263 | XSS Prevention - Product Name XSS | User enters JS in name | 1. Enter: <script>alert('XSS')</script> 2. Save | Malicious JS injected | Script not executed, stored as text | | | HIGH | | |
+TC-264 | XSS Prevention - Output Encoding | Stored XSS attempt rendered | 1. Store <img src=x> 2. View product | Stored: <img src=x> | Output encoded, displayed as text, not executed | | | HIGH | | |
+TC-265 | CSRF Protection - Cross-Site Request Forgery | POST from different site | 1. Attacker sends hidden POST form 2. User tricked into clicking | CSRF token not provided | Request rejected, 403 Forbidden | | | HIGH | | |
+TC-266 | Password Hashing - Plaintext Prevention | Password stored | 1. Query database 2. Check password field | | Password stored as bcrypt/hash, not plaintext | | | HIGH | | |
+TC-267 | Password Strength Enforcement | Weak password attempt | 1. Create password: "123456" 2. Try to save | Password: Too weak | Rejected, requires stronger password | | | HIGH | | |
+TC-268 | JWT Signature Verification - Tampered Token | JWT payload modified | 1. Modify token payload 2. Use in request | Modified token | Signature verification fails, 401 Unauthorized | | | HIGH | | |
+TC-269 | JWT Expiration - Token Expiry Check | Expired JWT used | 1. Use token issued 1 hour ago 2. Call API | Token age: 1 hour (past expiry) | Request rejected, token expired | | | HIGH | | |
+TC-270 | Session Security - Secure Cookies | Session stored in cookie | 1. Check cookie attributes 2. Verify flags | | Cookie has HttpOnly, Secure, SameSite flags | | | HIGH | | |
+TC-271 | HTTPS Enforcement - Redirect HTTP to HTTPS | Non-secure request | 1. Visit http://app.example.com | | Redirected to https://app.example.com | | | HIGH | | |
+TC-272 | Helmet Security Headers - X-Frame-Options | Response headers checked | 1. Call API 2. Check response headers | | X-Frame-Options: DENY (prevents clickjacking) | | | MEDIUM | | |
+TC-273 | Helmet Security Headers - Content-Security-Policy | CSP header present | 1. Check response headers 2. Verify CSP | | Content-Security-Policy header configured | | | MEDIUM | | |
+TC-274 | Helmet Security Headers - X-Content-Type-Options | MIME type sniffing | 1. Check response headers | | X-Content-Type-Options: nosniff | | | MEDIUM | | |
+TC-275 | Authentication Bypass - Direct URL Access | Protected page accessed without auth | 1. Navigate to /dashboard without login | | Redirected to /login | | | HIGH | | |
+TC-276 | Authorization Bypass - User Access Another User's Data | User A tries to access User B's data | 1. User A queries User B's products via API | URL: /api/users/123/products (User B = 123) | 403 Forbidden - access denied | | | HIGH | | |
+TC-277 | File Upload Security - Executable File | Upload .exe or .sh file | 1. Attempt to upload executable 2. Submit | File: malware.exe | Upload blocked: "File type not allowed" | | | HIGH | | |
+TC-278 | File Upload Security - Virus Scanning | File with malware signature | 1. Upload file with EICAR signature 2. Upload | File: Virus-detected.csv | ClamAV detects, upload rejected | | | HIGH | | |
+TC-279 | Rate Limiting - Brute Force Protection | Multiple failed login attempts | 1. Try 10 wrong passwords in 1 min 2. Check | Attempts: 10 in 60 sec | Account temporarily locked or 429 response | | | HIGH | | |
+TC-280 | Input Validation - Special Characters | User input with special chars | 1. Enter: <>&"'%;/ 2. Save | | Input sanitized or escaped, safely stored | | | HIGH | | |
+
+---
+
+SECTION L: PERFORMANCE TESTS (TC-281 to TC-300)
+===============================================
+
+TC-281 | Page Load Time - Dashboard | Dashboard with multiple components | 1. Navigate to /dashboard 2. Measure load time | | Dashboard loads in <2 seconds | | | MEDIUM | | |
+TC-282 | Page Load Time - Analytics | Analytics page with graphs | 1. Navigate to /analytics 2. Measure load time | | Analytics loads in <3 seconds | | | MEDIUM | | |
+TC-283 | Page Load Time - Inventory Management | Inventory list with 100+ items | 1. Navigate to /inventory 2. Measure load time | | Page loads in <2 seconds | | | MEDIUM | | |
+TC-284 | API Response Time - GET Products | Request for product list | 1. GET /products 2. Measure time | | Response time <200ms | | | MEDIUM | | |
+TC-285 | API Response Time - GET Forecast | Forecast request | 1. GET /forecast 2. Measure time | | Response time <500ms | | | MEDIUM | | |
+TC-286 | Forecast Generation Time - 7-Day | Generate 7-day forecast | 1. POST /forecast/generate 2. Measure | Range: 7 days | Generated in <10 seconds | | | MEDIUM | | |
+TC-287 | Forecast Generation Time - 30-Day | Generate 30-day forecast | 1. POST /forecast/generate 2. Measure | Range: 30 days | Generated in <30 seconds | | | MEDIUM | | |
+TC-288 | File Upload Processing - 10MB File | Upload 10MB CSV | 1. Upload file 2. Measure processing | File: 10MB, ~5000 rows | Processed in <30 seconds | | | MEDIUM | | |
+TC-289 | File Upload Processing - 50MB File | Upload 50MB file | 1. Upload file 2. Measure time | File: 50MB | Processed in <2 minutes | | | MEDIUM | | |
+TC-290 | Database Query - List 1000 Products | Query 1000 products | 1. GET /products (1000 items) 2. Measure | Items: 1000 | Query executes in <500ms | | | MEDIUM | | |
+TC-291 | Database Query - Forecast Accuracy Calculation | Calculate accuracy on large dataset | 1. Calculate MAPE/MAE/RMSE for 500 records | Records: 500 | Calculation completes in <2 seconds | | | MEDIUM | | |
+TC-292 | Memory Usage - Dashboard Load | Dashboard loaded with full data | 1. Open dashboard 2. Monitor memory | | Memory usage <100MB (reasonable) | | | MEDIUM | | |
+TC-293 | Memory Leak - Repeated Page Navigation | Navigate between pages 10 times | 1. Go to dashboard, inventory, analytics, dashboard... | Iterations: 10 | Memory stable, no significant increase | | | MEDIUM | | |
+TC-294 | Concurrent Users - 10 Users | 10 users accessing system simultaneously | 1. Simulate 10 concurrent users 2. Monitor performance | Concurrent: 10 | System responsive, no timeout | | | MEDIUM | | |
+TC-295 | Concurrent Users - 50 Users | 50 users simultaneously | 1. Simulate 50 concurrent users 2. Monitor | Concurrent: 50 | System maintains <3 sec response time | | | MEDIUM | | |
+TC-296 | Database Connection Pool - Exhaustion | Max connections reached | 1. Create connections until limit 2. Try new request | Max connections: 10 | New requests queue, wait for available connection | | | MEDIUM | | |
+TC-297 | Caching - API Response Cache | Repeated request to same endpoint | 1. Call GET /products twice 2. Check cache | Request 2 | Response time faster due to caching | | | MEDIUM | | |
+TC-298 | Caching - Frontend Component Cache | React components memoization | 1. Rerender with same props 2. Check rerender | | Component not re-rendered unnecessarily | | | MEDIUM | | |
+TC-299 | Network Optimization - Gzip Compression | API response size | 1. Check response headers 2. Measure size | | Content-Encoding: gzip applied | | | MEDIUM | | |
+TC-300 | Network Optimization - Image Optimization | Logo/Image display | 1. Check image size & format 2. Verify optimization | | Images optimized (WebP or compressed) | | | MEDIUM | | |
+
+---
+
+SECTION M: INTEGRATION & WORKFLOW TESTS (TC-301 to TC-320)
+==========================================================
+
+TC-301 | End-to-End Registration Flow | None | 1. Register 2. Verify OTP 3. Create password 4. Login 5. Complete setup | Complete flow | User successfully logs into dashboard | | | HIGH | | |
+TC-302 | Complete Sales Forecasting Workflow | All modules work | 1. Upload sales data 2. Create products 3. Map ingredients 4. Generate forecast 5. View results | Full workflow | Forecast generated, displayed, stock alerts created | | | HIGH | | |
+TC-303 | Report Generation Workflow | Complete forecasting done | 1. Complete forecasting 2. Generate report 3. Export PDF 4. Verify content | | PDF report contains all forecast data | | | MEDIUM | | |
+TC-304 | Reorder List Generation | Low stock detected | 1. Identify low-stock items 2. Generate reorder list 3. Create PO 4. Export | | Reorder list with recommended quantities | | | MEDIUM | | |
+TC-305 | Daily Operations Workflow | All systems running | 1. Login 2. View dashboard 3. Check alerts 4. Review forecasts 5. Check inventory | Daily routine | All components accessible & data current | | | MEDIUM | | |
+TC-306 | Multi-User Collaboration - Product Addition | Multiple users in system | 1. User A adds product 2. User B views products 3. Check isolation | User A adds: Biryani, User B should see own products only | Data properly isolated | | | MEDIUM | | |
+TC-307 | Multi-User Collaboration - Forecast Viewing | Multiple users with forecasts | 1. User A views forecast 2. User B views forecast 3. Verify each sees own data | | Each user sees only their forecast data | | | MEDIUM | | |
+TC-308 | Data Consistency After Multiple Uploads | Multiple files uploaded | 1. Upload file A (100 rows) 2. Upload file B (50 rows) 3. Verify total | Total: 150 rows | All rows present, no duplicates/loss | | | MEDIUM | | |
+TC-309 | Cascade Deletion - Product with Dependencies | Product has ingredient mappings | 1. Delete product 2. Check if mappings deleted | Product: Biryani with ingredients | Mappings cascade-deleted or handled properly | | | MEDIUM | | |
+TC-310 | Cascade Deletion - Ingredient with Dependencies | Ingredient used in multiple products | 1. Attempt to delete ingredient 2. Check handling | Ingredient: Rice (used in 10 products) | Error: "Cannot delete, used in multiple products" | | | MEDIUM | | |
+TC-311 | Business Profile Setup Requirement | First-time user | 1. Login 2. Access dashboard | User redirected to setup | Business profile setup required before access | | | MEDIUM | | |
+TC-312 | Data Upload Requirement | Setup complete, no sales data | 1. Login 2. Access forecast page | | Redirected to upload or shown prompt | | | MEDIUM | | |
+TC-313 | State Persistence - Across Page Refresh | User logged in with data | 1. Open dashboard 2. Refresh page (F5) 3. Check state | | Dashboard state persisted, data still visible | | | MEDIUM | | |
+TC-314 | Authentication State - Session Expiry | User idle for long period | 1. Login 2. Wait 1+ hour idle 3. Attempt action | Idle time: >1 hour | Session expired, redirected to login | | | MEDIUM | | |
+TC-315 | Frontend-Backend Sync - User Data Update | Data updated in backend | 1. Admin updates product in backend 2. User refreshes page | Backend: Price changed | User sees updated price | | | MEDIUM | | |
+TC-316 | Real-Time Notifications (if websocket enabled) | Stock alert generated | 1. Trigger stock alert 2. User sees notification immediately | Alert generated at T=0 | Notification appears instantly (not on refresh) | | | LOW | | |
+TC-317 | Browser Compatibility - Chrome | Application on Chrome | 1. Access app in Chrome | Browser: Chrome v120 | App fully functional | | | MEDIUM | | |
+TC-318 | Browser Compatibility - Firefox | Application on Firefox | 1. Access app in Firefox | Browser: Firefox v120 | App fully functional | | | MEDIUM | | |
+TC-319 | Browser Compatibility - Safari | Application on Safari | 1. Access app in Safari | Browser: Safari v17 | App fully functional | | | MEDIUM | | |
+TC-320 | Responsive Design - Mobile (320px) | App on mobile screen | 1. Access on mobile/320px viewport | Width: 320px | All content accessible, no horizontal scroll | | | MEDIUM | | |
+
+---
+
+SECTION N: DATA & COMPLIANCE TESTS (TC-321 to TC-335)
+=====================================================
+
+TC-321 | Data Privacy - User Data Export | User requests data export | 1. User clicks Export My Data 2. System generates export | Format: JSON/CSV | All personal data exported | | | MEDIUM | | |
+TC-322 | Data Privacy - Account Deletion | User requests account deletion | 1. User confirms deletion 2. System deletes account | | Account & personal data deleted (except legal requirements) | | | LOW | | |
+TC-323 | Audit Logging - User Actions | User actions logged | 1. Perform actions (login, create product, upload) 2. Check system_actions_log | | All actions logged with timestamp & user_id | | | MEDIUM | | |
+TC-324 | Audit Logging - Data Modifications | Product data modified | 1. Edit product 2. Check audit log | Change: Price 250→300 | Modification logged with old & new values | | | MEDIUM | | |
+TC-325 | Backup & Recovery - Backup Verification | Backups running | 1. Verify Supabase backups configured 2. Check backup schedule | | Daily backups enabled & tested | | | MEDIUM | | |
+TC-326 | Backup & Recovery - Restore Test | Simulate data loss | 1. Restore from backup 2. Verify data integrity | | Data restored to pre-loss state | | | LOW | | |
+TC-327 | GDPR Compliance - Consent Management | User creates account | 1. Show privacy & terms 2. Require consent 3. Log | | Consent recorded, linked to user | | | LOW | | |
+TC-328 | GDPR Compliance - Right to Forget | User requests deletion | 1. User requests account deletion 2. System anonymizes data | | PII removed, activity logs kept if legal | | | LOW | | |
+TC-329 | Data Retention Policy - Automatic Deletion | Old data reaches retention limit | 1. Configure retention: 365 days 2. Check deletion | Data >365 days old | Deleted per policy | | | LOW | | |
+TC-330 | PCI-DSS Compliance (if payment processing) | Payment data handled | 1. Check if PCI-DSS applicable 2. Verify compliance | | Payment data encrypted, PCI standards met | | | LOW | | |
+TC-331 | Database Encryption - At Rest | Database data stored | 1. Verify Supabase encryption 2. Check keys | | Data encrypted using strong algorithms | | | MEDIUM | | |
+TC-332 | Data Transmission - Encryption in Transit | Data sent over network | 1. Check HTTPS configuration 2. Verify TLS | | All traffic encrypted with TLS 1.3+ | | | MEDIUM | | |
+TC-333 | API Key Security - Environment Variables | API keys in code | 1. Verify no hardcoded keys 2. Check .env usage | | All secrets in environment variables, not in code | | | HIGH | | |
+TC-334 | Secrets Management - Key Rotation | Supabase keys rotation | 1. Check key rotation policy 2. Rotate if needed | | Keys rotated periodically | | | MEDIUM | | |
+TC-335 | Compliance Documentation - Terms & Privacy | Legal policies available | 1. Check Terms of Service 2. Check Privacy Policy 3. Verify updates | | Current, accurate, accessible | | | LOW | | |
+
+---
+
+SECTION O: ERROR HANDLING & RESILIENCE TESTS (TC-336 to TC-350)
+================================================================
+
+TC-336 | Database Connection Lost - API Error Handling | Database offline | 1. Disconnect database 2. Call API | DB unavailable | Error: "Service temporarily unavailable" (503) | | | HIGH | | |
+TC-337 | Database Connection Lost - UI Recovery | Database reconnects | 1. Reconnect database 2. User retries action | DB reconnected | API call succeeds on retry | | | MEDIUM | | |
+TC-338 | Malformed JSON - Request Parsing Error | Invalid JSON sent | 1. POST with invalid JSON | Body: {invalid json} | Response: 400 Bad Request | | | HIGH | | |
+TC-339 | File Processing Timeout - Large File | Very large file upload | 1. Upload 200MB file 2. Process timeout | File: 200MB | Timeout error, user notified | | | MEDIUM | | |
+TC-340 | API Timeout - Slow Response | API endpoint slow | 1. Call slow endpoint 2. Wait >30 seconds | Endpoint: Slow processing | Timeout error after threshold | | | MEDIUM | | |
+TC-341 | Partial File Upload Failure | Upload interrupted | 1. Cancel upload mid-way 2. Check status | | Upload marked failed, rollback triggered | | | MEDIUM | | |
+TC-342 | Network Disconnection - In-Flight Request | Network drops mid-request | 1. Start API call 2. Disconnect network | Network: Offline | Error: "Network error" shown to user | | | MEDIUM | | |
+TC-343 | Frontend Error Boundary | JavaScript error in component | 1. Trigger unhandled exception | | Error boundary catches, shows error UI | | | MEDIUM | | |
+TC-344 | Retry Logic - Failed API Call | API call fails | 1. Fail request 2. Trigger retry | | Request retried (up to N times) | | | MEDIUM | | |
+TC-345 | Fallback Data - Stale Cache | API unavailable, cache exists | 1. Make request 2. API down, cache available | | Stale data shown with "offline" indicator | | | MEDIUM | | |
+TC-346 | User Guidance - Error Messages | Error occurs | 1. Trigger error 2. View error message | | Error message clear, actionable, helps resolve | | | MEDIUM | | |
+TC-347 | Logging - Error Recording | Error occurs in API | 1. Trigger error 2. Check server logs | | Error logged with stack trace, timestamp | | | MEDIUM | | |
+TC-348 | Monitoring - Performance Metrics | System running | 1. Monitor CPU, memory, request latency | | Metrics collected, dashboards available | | | MEDIUM | | |
+TC-349 | Health Check - API Status Endpoint | Health check endpoint | 1. GET /health 2. Check status | | Response: 200 OK, shows service status | | | MEDIUM | | |
+TC-350 | Graceful Degradation - Feature Unavailable | Optional feature fails (e.g., charts) | 1. Chart library fails to load 2. App continues | | App works without charts, fallback table shown | | | MEDIUM | | |
+
+================================================================================
+PART 3: TESTING GUIDELINES & EXECUTION PLAN
+================================================================================
+
+TESTING STRATEGY:
+- Unit Testing: Individual functions & components (Jest, React Testing Library)
+- Integration Testing: Module interactions & API flows
+- End-to-End (E2E) Testing: Complete user journeys (Cypress/Playwright)
+- Performance Testing: Load times, response times, concurrent users
+- Security Testing: Injections, XSS, CSRF, authentication
+- Accessibility Testing: WCAG compliance, screen readers, keyboard navigation
+- Cross-browser Testing: Chrome, Firefox, Safari, Edge
+- Mobile Testing: iOS Safari, Chrome Mobile (responsive design)
+
+TESTING ENVIRONMENT SETUP:
+- Frontend: npm run dev (Vite dev server on http://localhost:5173)
+- Backend: npm start (Express on http://localhost:5000)
+- Database: Supabase cloud instance
+- Tools: Postman (API), Cypress (E2E), Jest (Unit tests)
+
+CRITICAL PATHS (PRIORITY TESTING):
+1. Authentication (TC-001 to TC-030) - All HIGH priority
+2. Product Management (TC-046 to TC-080) - Core functionality
+3. Data Upload (TC-121 to TC-145) - Essential for forecasting
+4. Forecasting (TC-146 to TC-170) - Main value proposition
+5. API Endpoints (TC-231 to TC-260) - Backend reliability
+6. Security (TC-261 to TC-280) - Critical for production
+
+RECOMMENDED TEST EXECUTION SCHEDULE:
+- Week 1: Authentication & Registration (TC-001 to TC-045)
+- Week 2: Products & Inventory (TC-046 to TC-120)
+- Week 3: Upload & Processing (TC-121 to TC-200)
+- Week 4: Forecasting & Analytics (TC-146 to TC-230)
+- Week 5: API & Security (TC-231 to TC-280)
+- Week 6: Performance & Integration (TC-281 to TC-320)
+- Week 7: Compliance & Error Handling (TC-321 to TC-350)
+
+DATA REQUIREMENTS FOR TESTING:
+- Minimum 30 days historical sales data (60+ for accurate forecasts)
+- At least 5 products with complete ingredient mappings
+- Business profile with all required fields
+- Multiple users for multi-user testing
+- Test images for logo upload
+- CSV/Excel sample files for upload testing
+
+KNOWN ISSUES & CONSIDERATIONS:
+- Supabase FK: notifications.user_id references auth.users(id) - verify mapping
+- products.inactive_reason: Custom type (USER-DEFINED) - check DB compatibility
+- No cross-table transaction support - manual rollback required
+- OTP expiry: 15-minute window - test edge cases
+- Auto-login after password creation can fail - fallback to manual login
+- Error handling: Some Supabase errors may not be fully guarded
+
+REGRESSION TEST SET (Minimum):
+- TC-001: Registration flow
+- TC-014: Login
+- TC-046: Product creation
+- TC-050: Ingredient mapping
+- TC-121: File upload
+- TC-148: Forecast generation
+- TC-171: Ingredient demand
+- TC-192: Stock alerts
+- TC-231: API GET products
+- TC-276: Authorization check
+
+TEST METRICS TO TRACK:
+- Test Pass Rate (Target: 95%+)
+- Defect Density (Defects/KLOC)
+- Test Coverage (Target: 80%+)
+- Performance Metrics (Load times, API response)
+- Security Findings (Vulnerabilities detected)
+- User Experience (Accessibility, usability)
+
+================================================================================
+END OF COMPREHENSIVE TEST CASES DOCUMENT
+================================================================================

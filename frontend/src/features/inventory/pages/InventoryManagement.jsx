@@ -4,14 +4,14 @@ import "./InventoryManagement.css";
 import Navbar from "../../components/Navbar/Navbar";
 import { FaBoxes, FaClipboardList } from 'react-icons/fa';
 import Inventory from "./Inventory";
-import Product from "./Product";
+import Mapping from "../../datamanagement/components/MappingData";
 
 const InventoryManagement = () => {
   const [activeTab, setActiveTab] = useState("inventory");
 
   const tabs = [
     { id: "inventory", label: "Inventory Management", icon: FaBoxes },
-    { id: "products", label: "Product Management", icon: FaClipboardList },
+    { id: "mapping", label: "Product Mapping", icon: FaClipboardList },
   ];
 
   return (
@@ -45,7 +45,7 @@ const InventoryManagement = () => {
 
             <div className="tab-content">
               {activeTab === "inventory" && <Inventory />}
-              {activeTab === "products" && <Product />}
+              {activeTab === "mapping" && <Mapping />}
             </div>
           </div>
         </div>

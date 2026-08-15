@@ -1,4 +1,4 @@
-// backend/server.js
+// server.js
 const express = require('express');
 const cors = require('cors');
 const dotenv = require('dotenv');
@@ -13,6 +13,8 @@ const uploadRoutes = require('./routes/upload');
 const mappingRoutes = require('./routes/mapping');
 const settingsRoutes = require('./routes/settings');
 const notificationRoutes = require('./routes/notifications');
+const inventoryRoutes = require('./routes/inventory');
+const categoriesRoutes = require('./routes/categories');
 
 // Load environment variables
 dotenv.config({ path: path.join(__dirname, '.env') });
@@ -34,19 +36,9 @@ app.use(cors({
 }));
 
 // Rate Limiting - Prevent brute force attacks
-//const limiter = rateLimit({
-  //windowMs: 15 * 60 * 1000, // 15 minutes
-  //max: 100, // Limit each IP to 100 requests per windowMs
-  //message: {
-    //success: false,
-    //error: 'Too many requests, please try again later.'
-  //}
-//});
-//app.use('/api', limiter); 
-
 const limiter = rateLimit({
   windowMs: 15 * 60 * 1000,
-  max: process.env.NODE_ENV === 'production' ? 100 : 1000, // higher limit in dev
+  max: process.env.NODE_ENV === 'production' ? 100 : 1000,
   message: {
     success: false,
     error: 'Too many requests, please try again later.'
@@ -73,6 +65,8 @@ app.use('/api/upload', uploadRoutes);
 app.use('/api/mapping', mappingRoutes);
 app.use('/api/settings', settingsRoutes);
 app.use('/api/notifications', notificationRoutes);
+app.use('/api/inventory', inventoryRoutes);
+app.use('/api/categories', categoriesRoutes);
 
 // ============= HEALTH CHECK =============
 app.get('/health', (req, res) => {
@@ -104,11 +98,9 @@ app.use((req, res) => {
 app.use((err, req, res, next) => {
   console.error('Error:', err.message);
   
-  // Handle specific errors
   const status = err.status || 500;
   const message = err.message || 'Internal Server Error';
   
-  // Don't expose internal errors in production
   const response = {
     success: false,
     error: status === 500 && process.env.NODE_ENV === 'production' 
