@@ -198,7 +198,6 @@ const DataManagement = () => {
 
   const tabs = [
     { id: "upload", label: "Sales Data Upload" },
-    { id: "mapping", label: "Menu & Ingredient Mapping" },
     { id: "historical", label: "Historical Data Storage" },
   ];
 

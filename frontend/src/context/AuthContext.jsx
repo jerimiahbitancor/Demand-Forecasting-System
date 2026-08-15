@@ -17,8 +17,9 @@ export const AuthProvider = ({ children }) => {
   const [user, setUser] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
+  const [session, setSession] = useState(null);
 
-  // Registration flow state (stored in context + sessionStorage for refresh)
+  // Registration flow state
   const [registrationData, setRegistrationData] = useState(() => {
     const saved = sessionStorage.getItem('registration_data');
     return saved ? JSON.parse(saved) : {
@@ -28,13 +29,68 @@ export const AuthProvider = ({ children }) => {
     };
   });
 
-  // Sync user with custom table
+  // ============================================
+  // GET TOKEN - FIXED VERSION
+  // ============================================
+  const getToken = async () => {
+    try {
+      // First try to get from supabase session
+      const { data: { session: currentSession } } = await supabase.auth.getSession();
+      
+      if (currentSession?.access_token) {
+        // Store token in sessionStorage for backup
+        sessionStorage.setItem('access_token', currentSession.access_token);
+        return currentSession.access_token;
+      }
+
+      // If no session, try to get from sessionStorage
+      const storedToken = sessionStorage.getItem('access_token');
+      if (storedToken) {
+        // Verify if token is still valid
+        try {
+          const { data: { user } } = await supabase.auth.getUser(storedToken);
+          if (user) {
+            return storedToken;
+          }
+        } catch (e) {
+          console.warn('Stored token invalid');
+          sessionStorage.removeItem('access_token');
+        }
+      }
+
+      // Try to refresh session
+      const refreshToken = sessionStorage.getItem('refresh_token');
+      if (refreshToken) {
+        const { data: { session: refreshedSession }, error: refreshError } = 
+          await supabase.auth.refreshSession();
+        
+        if (!refreshError && refreshedSession?.access_token) {
+          sessionStorage.setItem('access_token', refreshedSession.access_token);
+          sessionStorage.setItem('refresh_token', refreshedSession.refresh_token);
+          return refreshedSession.access_token;
+        }
+      }
+
+      console.warn('No valid token found');
+      return null;
+    } catch (error) {
+      console.error('Error getting token:', error);
+      return null;
+    }
+  };
+
+  // ============================================
+  // SYNC USER WITH CUSTOM TABLE
+  // ============================================
   const syncUser = async () => {
     try {
-      const { data: { session } } = await supabase.auth.getSession();
-      const token = session?.access_token;
+      const token = await getToken();
+      if (!token) {
+        console.warn('No token available for sync');
+        return null;
+      }
 
-      if (!token) return null;
+      console.log('Syncing user with token:', token.substring(0, 20) + '...');
 
       const response = await fetch(`${API_URL}/auth/sync-user`, {
         method: 'POST',
@@ -44,7 +100,17 @@ export const AuthProvider = ({ children }) => {
         }
       });
 
-      if (!response.ok) return null;
+      if (!response.ok) {
+        if (response.status === 401) {
+          console.error('Token expired or invalid during sync');
+          // Clear invalid token
+          sessionStorage.removeItem('access_token');
+          sessionStorage.removeItem('refresh_token');
+          return null;
+        }
+        throw new Error(`Sync failed: ${response.status}`);
+      }
+
       const data = await response.json();
 
       if (data.user) {
@@ -62,43 +128,100 @@ export const AuthProvider = ({ children }) => {
     }
   };
 
-  // Get current token
-  const getToken = async () => {
+  // ============================================
+  // SET SESSION HELPER
+  // ============================================
+  const setUserSession = async (sessionData) => {
+    if (!sessionData) return null;
+
     try {
-      const { data: { session } } = await supabase.auth.getSession();
-      return session?.access_token || null;
+      const { data: sessionDataResult, error: setSessionError } = 
+        await supabase.auth.setSession({
+          access_token: sessionData.access_token,
+          refresh_token: sessionData.refresh_token,
+        });
+
+      if (setSessionError) {
+        console.error('Session error:', setSessionError);
+        return null;
+      }
+
+      if (sessionDataResult?.session?.user) {
+        setUser(sessionDataResult.session.user);
+        setSession(sessionDataResult.session);
+        
+        // Store tokens
+        sessionStorage.setItem('access_token', sessionDataResult.session.access_token);
+        sessionStorage.setItem('refresh_token', sessionDataResult.session.refresh_token);
+        
+        // Sync user with custom table
+        await syncUser();
+        
+        return sessionDataResult.session;
+      }
+
+      return null;
     } catch (error) {
-      console.error('Error getting token:', error);
+      console.error('Error setting session:', error);
       return null;
     }
   };
 
-  // Check auth on mount
+  // ============================================
+  // CHECK AUTH ON MOUNT
+  // ============================================
   useEffect(() => {
     const checkAuth = async () => {
       try {
-        const { data: { session } } = await supabase.auth.getSession();
+        setLoading(true);
         
-        if (session?.user) {
-          setUser(session.user);
-          // Persist token for other code paths that read sessionStorage
-          try {
-            if (session.access_token) {
-              sessionStorage.setItem('access_token', session.access_token);
-            }
-            if (session.refresh_token) {
-              sessionStorage.setItem('refresh_token', session.refresh_token);
-            }
-          } catch (e) {
-            console.warn('Failed to persist session tokens to sessionStorage', e);
+        // Get current session
+        const { data: { session: currentSession } } = await supabase.auth.getSession();
+        
+        if (currentSession?.user) {
+          console.log('Session found for user:', currentSession.user.email);
+          setUser(currentSession.user);
+          setSession(currentSession);
+          
+          // Store tokens
+          if (currentSession.access_token) {
+            sessionStorage.setItem('access_token', currentSession.access_token);
           }
+          if (currentSession.refresh_token) {
+            sessionStorage.setItem('refresh_token', currentSession.refresh_token);
+          }
+          
+          // Sync user with custom table
           await syncUser();
         } else {
-          setUser(null);
+          // Try to get from sessionStorage
+          const storedToken = sessionStorage.getItem('access_token');
+          if (storedToken) {
+            try {
+              const { data: { user } } = await supabase.auth.getUser(storedToken);
+              if (user) {
+                console.log('Restored user from stored token:', user.email);
+                setUser(user);
+                
+                // Try to refresh session
+                const { data: { session: refreshedSession } } = await supabase.auth.refreshSession();
+                if (refreshedSession) {
+                  setSession(refreshedSession);
+                  sessionStorage.setItem('access_token', refreshedSession.access_token);
+                  sessionStorage.setItem('refresh_token', refreshedSession.refresh_token);
+                }
+              }
+            } catch (e) {
+              console.warn('Stored token invalid, removing');
+              sessionStorage.removeItem('access_token');
+              sessionStorage.removeItem('refresh_token');
+            }
+          }
         }
       } catch (error) {
         console.error('Auth check failed:', error);
         setUser(null);
+        setSession(null);
       } finally {
         setLoading(false);
       }
@@ -106,25 +229,36 @@ export const AuthProvider = ({ children }) => {
 
     checkAuth();
 
+    // Listen for auth changes
     const { data: { subscription } } = supabase.auth.onAuthStateChange(
+      async (event, newSession) => {
       async (event, session) => {
         if (event === 'INITIAL_SESSION' || event === 'SIGNED_IN') return;
         console.log('Auth state changed:', event);
         
-        if (session?.user) {
-          setUser(session.user);
-          try {
-            if (session.access_token) sessionStorage.setItem('access_token', session.access_token);
-            if (session.refresh_token) sessionStorage.setItem('refresh_token', session.refresh_token);
-          } catch (e) {
-            console.warn('Failed to persist session tokens on auth change', e);
+        if (event === 'SIGNED_IN' || event === 'TOKEN_REFRESHED') {
+          if (newSession?.user) {
+            setUser(newSession.user);
+            setSession(newSession);
+            
+            // Store tokens
+            if (newSession.access_token) {
+              sessionStorage.setItem('access_token', newSession.access_token);
+            }
+            if (newSession.refresh_token) {
+              sessionStorage.setItem('refresh_token', newSession.refresh_token);
+            }
+            
+            // Sync user
+            await syncUser();
           }
-          await syncUser();
-        } else {
+        } else if (event === 'SIGNED_OUT') {
           setUser(null);
+          setSession(null);
           sessionStorage.removeItem('access_token');
           sessionStorage.removeItem('refresh_token');
         }
+        
         setLoading(false);
       }
     );
@@ -132,27 +266,8 @@ export const AuthProvider = ({ children }) => {
     return () => subscription.unsubscribe();
   }, []);
 
-  // Update registration data (saves to sessionStorage too)
-  const updateRegistrationData = (data) => {
-    setRegistrationData((prev) => {
-      const newData = { ...prev, ...data };
-      sessionStorage.setItem('registration_data', JSON.stringify(newData));
-      return newData;
-    });
-  };
-
-  // Clear registration data
-  const clearRegistrationData = () => {
-    setRegistrationData({
-      email: null,
-      userId: null,
-      otpVerified: false,
-    });
-    sessionStorage.removeItem('registration_data');
-  };
-
   // ============================================
-  // STEP 1: REGISTER (NO PASSWORD!)
+  // REGISTER
   // ============================================
   const register = async (userData) => {
     setLoading(true);
@@ -177,7 +292,6 @@ export const AuthProvider = ({ children }) => {
         throw new Error(data.error || 'Registration failed');
       }
 
-      // Store registration data in context + sessionStorage
       updateRegistrationData({
         email: data.email,
         userId: data.userId,
@@ -201,7 +315,7 @@ export const AuthProvider = ({ children }) => {
   };
 
   // ============================================
-  // STEP 2: VERIFY OTP
+  // VERIFY OTP
   // ============================================
   const verifyOTP = async (email, otp, userId) => {
     setLoading(true);
@@ -226,7 +340,6 @@ export const AuthProvider = ({ children }) => {
         throw new Error(data.error || 'Verification failed');
       }
 
-      // Mark OTP as verified
       updateRegistrationData({
         otpVerified: true,
       });
@@ -247,7 +360,7 @@ export const AuthProvider = ({ children }) => {
   };
 
   // ============================================
-  // STEP 3: CREATE PASSWORD
+  // CREATE PASSWORD
   // ============================================
   const createPassword = async (userId, email, password) => {
     setLoading(true);
@@ -264,45 +377,24 @@ export const AuthProvider = ({ children }) => {
       if (!response.ok) throw new Error(data.error || 'Failed to create password');
 
       if (data.session) {
-        // Set session
-        const { data: sessionData, error: setSessionError } = await supabase.auth.setSession({
-          access_token: data.session.access_token,
-          refresh_token: data.session.refresh_token,
-        });
+        // Use the setUserSession helper
+        const sessionResult = await setUserSession(data.session);
         
-        if (!setSessionError && sessionData?.session?.user) {
-          setUser(sessionData.session.user);
-          try {
-            if (sessionData.session.access_token) sessionStorage.setItem('access_token', sessionData.session.access_token);
-            if (sessionData.session.refresh_token) sessionStorage.setItem('refresh_token', sessionData.session.refresh_token);
-          } catch (e) {
-            console.warn('Failed to persist session tokens after createPassword', e);
-          }
-          
-          // Verify session was set
-          const { data: verifySession } = await supabase.auth.getSession();
-          console.log('Session verified:', !!verifySession.session);
-          
-          if (!verifySession.session) {
-            console.warn('Session not found after setSession');
-            return {
-              success: true,
-              session: data.session,
-              user: data.user,
-              requiresLogin: true,
-            };
-          }
-
-          await syncUser();
-        } else if (setSessionError) {
-          console.error('Session error:', setSessionError);
+        if (sessionResult) {
           return {
             success: true,
-            session: data.session,
+            session: sessionResult,
             user: data.user,
-            requiresLogin: true,
+            requiresLogin: false,
           };
         }
+        
+        return {
+          success: true,
+          session: data.session,
+          user: data.user,
+          requiresLogin: true,
+        };
       }
 
       return {
@@ -382,14 +474,29 @@ export const AuthProvider = ({ children }) => {
         throw error;
       }
 
-      setUser(data.user);
-      await syncUser();
-      
-      return { 
-        success: true, 
-        user: data.user,
-        session: data.session
-      };
+      if (data.user) {
+        setUser(data.user);
+        setSession(data.session);
+        
+        // Store tokens
+        if (data.session?.access_token) {
+          sessionStorage.setItem('access_token', data.session.access_token);
+        }
+        if (data.session?.refresh_token) {
+          sessionStorage.setItem('refresh_token', data.session.refresh_token);
+        }
+        
+        // Sync user with custom table
+        await syncUser();
+        
+        return { 
+          success: true, 
+          user: data.user,
+          session: data.session
+        };
+      }
+
+      return { success: false, error: 'Login failed' };
 
     } catch (error) {
       console.error('Login error:', error);
@@ -408,6 +515,7 @@ export const AuthProvider = ({ children }) => {
     try {
       await supabase.auth.signOut();
       setUser(null);
+      setSession(null);
       clearRegistrationData();
       sessionStorage.removeItem('access_token');
       sessionStorage.removeItem('refresh_token');
@@ -445,16 +553,41 @@ export const AuthProvider = ({ children }) => {
     }
   };
 
+  // ============================================
+  // UPDATE REGISTRATION DATA
+  // ============================================
+  const updateRegistrationData = (data) => {
+    setRegistrationData((prev) => {
+      const newData = { ...prev, ...data };
+      sessionStorage.setItem('registration_data', JSON.stringify(newData));
+      return newData;
+    });
+  };
+
+  // ============================================
+  // CLEAR REGISTRATION DATA
+  // ============================================
+  const clearRegistrationData = () => {
+    setRegistrationData({
+      email: null,
+      userId: null,
+      otpVerified: false,
+    });
+    sessionStorage.removeItem('registration_data');
+  };
+
   const value = {
     user,
+    session,
     loading,
     error,
     isAuthenticated: !!user,
     registrationData,
     updateRegistrationData,
     clearRegistrationData,
-    getToken, // <-- ADDED THIS
-    checkUploadStatus, // <-- ADDED THIS
+    getToken,
+    checkUploadStatus,
+    setUserSession,
     register,
     verifyOTP,
     createPassword,
