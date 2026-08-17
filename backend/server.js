@@ -79,7 +79,7 @@ app.get('/health', (req, res) => {
 // ============= ROOT =============
 app.get('/', (req, res) => {
   res.json({ 
-    name: 'Sales Forecasting API',
+    name: 'Demand Forecasting API',
     version: '1.0.0',
     status: 'running'
   });
