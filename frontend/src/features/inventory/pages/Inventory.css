@@ -710,9 +710,9 @@
 }
 
 .btn-primary:hover:not(:disabled) {
-  background: #2563eb;
+  background: #8c0707;
   transform: translateY(-1px);
-  box-shadow: 0 4px 12px rgba(59, 130, 246, 0.3);
+  box-shadow: 0 4px 12px rgba(246, 59, 59, 0.3);
 }
 
 .btn-primary:disabled {

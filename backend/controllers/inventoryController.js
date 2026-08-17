@@ -1,19 +1,20 @@
 // controllers/inventoryController.js
 const { supabase } = require('../config/supabase');
 
-// Helper function to get user ID from auth_id
-const getUserIdFromAuth = async (authId) => {
-  const { data: userData, error: userError } = await supabase
-    .from('user')
-    .select('id')
-    .eq('auth_id', authId)
-    .single();
-
-  if (userError || !userData) {
-    throw new Error('User not found');
+// Helper function to get user ID - SIMPLIFIED
+// Use req.user.id directly since it already contains the numeric user ID
+const getUserIdFromAuth = (req) => {
+  // The user object from req.user has the numeric id (727)
+  // which matches your user table's id column
+  const userId = req.user?.id;
+  
+  if (!userId) {
+    console.error('❌ No user id found in request');
+    throw new Error('User not authenticated');
   }
-
-  return userData.id;
+  
+  console.log('✅ Using user id directly:', userId);
+  return userId;
 };
 
 // Get all inventory items with user info
@@ -30,46 +31,28 @@ const getInventoryItems = async (req, res) => {
     } = req.query;
 
     console.log('📦 Fetching inventory items...');
-    console.log('Query params:', req.query);
 
+    // Get all items for summary stats (without pagination)
     let summaryQuery = supabase
       .from('inventory_items')
       .select('quantity, price, min_stock, category, is_archived');
 
-    let query = supabase
-      .from('inventory_items')
-      .select(`
-        *,
-        created_by_user:created_by(id, name, email),
-        updated_by_user:updated_by(id, name, email)
-      `, { count: 'exact' });
-
-    // Filter archived
     if (showArchived === 'true') {
-      query = query.eq('is_archived', true);
       summaryQuery = summaryQuery.eq('is_archived', true);
     } else {
-      query = query.eq('is_archived', false);
       summaryQuery = summaryQuery.eq('is_archived', false);
     }
 
-    // Search
     if (search) {
-      query = query.or(`name.ilike.%${search}%,category.ilike.%${search}%,batch.ilike.%${search}%`);
       summaryQuery = summaryQuery.or(`name.ilike.%${search}%,category.ilike.%${search}%,batch.ilike.%${search}%`);
     }
 
-    // Filter by category
     if (category && category !== 'All') {
-      query = query.eq('category', category);
       summaryQuery = summaryQuery.eq('category', category);
     }
 
     const { data: summaryData, error: summaryError } = await summaryQuery;
-    if (summaryError) {
-      console.error('❌ Supabase summary error:', summaryError);
-      throw summaryError;
-    }
+    if (summaryError) throw summaryError;
 
     const totalItems = summaryData?.length || 0;
     const totalStockValue = (summaryData || []).reduce((sum, item) => {
@@ -84,28 +67,40 @@ const getInventoryItems = async (req, res) => {
     }).length;
     const outOfStockItems = (summaryData || []).filter((item) => (Number(item.quantity) || 0) === 0).length;
 
-    // Sorting
+    // Main query with pagination
+    let query = supabase
+      .from('inventory_items')
+      .select('*', { count: 'exact' });
+
+    if (showArchived === 'true') {
+      query = query.eq('is_archived', true);
+    } else {
+      query = query.eq('is_archived', false);
+    }
+
+    if (search) {
+      query = query.or(`name.ilike.%${search}%,category.ilike.%${search}%,batch.ilike.%${search}%`);
+    }
+
+    if (category && category !== 'All') {
+      query = query.eq('category', category);
+    }
+
     const validSortFields = ['created_at', 'name', 'category', 'quantity', 'price', 'batch'];
     const sortField = validSortFields.includes(sortBy) ? sortBy : 'created_at';
     query = query.order(sortField, { ascending: sortOrder === 'asc' });
 
-    // Pagination
     const from = (page - 1) * limit;
     const to = from + limit - 1;
     query = query.range(from, to);
 
     const { data, error, count } = await query;
 
-    if (error) {
-      console.error('❌ Supabase error:', error);
-      throw error;
-    }
-
-    console.log(`✅ Found ${data?.length || 0} items, Total: ${count || 0}`);
+    if (error) throw error;
 
     res.json({
       success: true,
-      data,
+      data: data || [],
       total: count || 0,
       page: parseInt(page),
       limit: parseInt(limit),
@@ -123,17 +118,13 @@ const getInventoryItems = async (req, res) => {
   }
 };
 
-// Get single inventory item with user info
+// Get single inventory item
 const getInventoryItem = async (req, res) => {
   try {
     const { id } = req.params;
     const { data, error } = await supabase
       .from('inventory_items')
-      .select(`
-        *,
-        created_by_user:created_by(id, name, email),
-        updated_by_user:updated_by(id, name, email)
-      `)
+      .select('*')
       .eq('id', id)
       .single();
 
@@ -149,7 +140,7 @@ const getInventoryItem = async (req, res) => {
   }
 };
 
-// Create inventory item (WITHOUT supplier, location, notes)
+// Create inventory item
 const createInventoryItem = async (req, res) => {
   try {
     const {
@@ -162,7 +153,8 @@ const createInventoryItem = async (req, res) => {
       batch
     } = req.body;
 
-    // Validate required fields
+    console.log('📝 Creating inventory item:', { name, category, quantity, price });
+
     if (!name || !category || quantity === undefined || price === undefined) {
       return res.status(400).json({
         success: false,
@@ -170,31 +162,35 @@ const createInventoryItem = async (req, res) => {
       });
     }
 
-    // Get user ID from auth_id
-    const userId = await getUserIdFromAuth(req.user.id);
+    // Get user ID directly from req.user.id
+    const userId = getUserIdFromAuth(req);
+    console.log('👤 User ID:', userId);
+
+    const insertData = {
+      name: name.trim(),
+      category: category.trim(),
+      unit: unit || 'pcs',
+      quantity: parseFloat(quantity),
+      price: parseFloat(price),
+      min_stock: min_stock ? parseFloat(min_stock) : 0,
+      batch: batch || null,
+      created_by: userId,
+      updated_by: userId
+    };
+
+    console.log('📦 Insert data:', insertData);
 
     const { data, error } = await supabase
       .from('inventory_items')
-      .insert([{
-        name: name.trim(),
-        category: category.trim(),
-        unit: unit || 'pcs',
-        quantity: parseFloat(quantity),
-        price: parseFloat(price),
-        min_stock: min_stock ? parseFloat(min_stock) : 0,
-        batch: batch || null,
-        created_by: userId,
-        updated_by: userId
-      }])
-      .select(`
-        *,
-        created_by_user:created_by(id, name, email)
-      `)
+      .insert([insertData])
+      .select()
       .single();
 
-    if (error) throw error;
+    if (error) {
+      console.error('❌ Error creating item:', error);
+      throw error;
+    }
 
-    // Log transaction
     await supabase
       .from('inventory_transactions')
       .insert([{
@@ -208,14 +204,16 @@ const createInventoryItem = async (req, res) => {
         created_by: userId
       }]);
 
+    console.log('✅ Item created successfully:', data.id);
+
     res.json({ success: true, data, message: 'Item added successfully' });
   } catch (error) {
-    console.error('Error creating item:', error);
+    console.error('❌ Error creating item:', error);
     res.status(500).json({ success: false, error: error.message });
   }
 };
 
-// Update inventory item (WITHOUT supplier, location, notes)
+// Update inventory item
 const updateInventoryItem = async (req, res) => {
   try {
     const { id } = req.params;
@@ -229,6 +227,8 @@ const updateInventoryItem = async (req, res) => {
       batch
     } = req.body;
 
+    console.log('📝 Updating inventory item:', { id, name, category, quantity, price });
+
     // Get current item
     const { data: currentItem, error: fetchError } = await supabase
       .from('inventory_items')
@@ -237,37 +237,44 @@ const updateInventoryItem = async (req, res) => {
       .single();
 
     if (fetchError || !currentItem) {
+      console.error('❌ Item not found:', id);
       return res.status(404).json({ success: false, error: 'Item not found' });
     }
 
-    // Get user ID from auth_id
-    const userId = await getUserIdFromAuth(req.user.id);
+    // Get user ID directly from req.user.id
+    const userId = getUserIdFromAuth(req);
+    console.log('👤 User ID:', userId);
+
+    // Build update data - ONLY fields that exist in the table
+    const updateData = {
+      updated_by: userId
+    };
+
+    if (name !== undefined && name !== null) updateData.name = name.trim();
+    if (category !== undefined && category !== null) updateData.category = category.trim();
+    if (unit !== undefined && unit !== null) updateData.unit = unit;
+    if (quantity !== undefined && quantity !== null) updateData.quantity = parseFloat(quantity);
+    if (price !== undefined && price !== null) updateData.price = parseFloat(price);
+    if (min_stock !== undefined && min_stock !== null) updateData.min_stock = parseFloat(min_stock) || 0;
+    if (batch !== undefined && batch !== null) updateData.batch = batch || null;
+
+    console.log('📦 Update data:', updateData);
 
     // Update item
     const { data, error } = await supabase
       .from('inventory_items')
-      .update({
-        name: name?.trim(),
-        category: category?.trim(),
-        unit: unit || 'pcs',
-        quantity: parseFloat(quantity),
-        price: parseFloat(price),
-        min_stock: min_stock ? parseFloat(min_stock) : 0,
-        batch: batch || null,
-        updated_by: userId
-      })
+      .update(updateData)
       .eq('id', id)
-      .select(`
-        *,
-        created_by_user:created_by(id, name, email),
-        updated_by_user:updated_by(id, name, email)
-      `)
+      .select()
       .single();
 
-    if (error) throw error;
+    if (error) {
+      console.error('❌ Error updating item:', error);
+      throw error;
+    }
 
     // Log transaction if quantity changed
-    if (parseFloat(quantity) !== currentItem.quantity) {
+    if (quantity !== undefined && parseFloat(quantity) !== currentItem.quantity) {
       await supabase
         .from('inventory_transactions')
         .insert([{
@@ -282,9 +289,11 @@ const updateInventoryItem = async (req, res) => {
         }]);
     }
 
+    console.log('✅ Item updated successfully:', data.id);
+
     res.json({ success: true, data, message: 'Item updated successfully' });
   } catch (error) {
-    console.error('Error updating item:', error);
+    console.error('❌ Error updating item:', error);
     res.status(500).json({ success: false, error: error.message });
   }
 };
@@ -293,6 +302,7 @@ const updateInventoryItem = async (req, res) => {
 const deleteInventoryItem = async (req, res) => {
   try {
     const { id } = req.params;
+    console.log('🗑️ Deleting inventory item:', id);
 
     const { error } = await supabase
       .from('inventory_items')
@@ -301,6 +311,7 @@ const deleteInventoryItem = async (req, res) => {
 
     if (error) throw error;
 
+    console.log('✅ Item deleted successfully:', id);
     res.json({ success: true, message: 'Item deleted successfully' });
   } catch (error) {
     console.error('Error deleting item:', error);
@@ -312,11 +323,11 @@ const deleteInventoryItem = async (req, res) => {
 const archiveInventoryItem = async (req, res) => {
   try {
     const { id } = req.params;
+    console.log('📦 Archiving inventory item:', id);
 
-    // Get user ID from auth_id
-    const userId = await getUserIdFromAuth(req.user.id);
+    const userId = getUserIdFromAuth(req);
+    console.log('👤 User ID:', userId);
 
-    // Get current item to check archive status
     const { data: currentItem, error: fetchError } = await supabase
       .from('inventory_items')
       .select('is_archived')
@@ -327,7 +338,6 @@ const archiveInventoryItem = async (req, res) => {
       return res.status(404).json({ success: false, error: 'Item not found' });
     }
 
-    // Toggle archive status
     const { data, error } = await supabase
       .from('inventory_items')
       .update({
@@ -335,15 +345,12 @@ const archiveInventoryItem = async (req, res) => {
         updated_by: userId
       })
       .eq('id', id)
-      .select(`
-        *,
-        created_by_user:created_by(id, name, email),
-        updated_by_user:updated_by(id, name, email)
-      `)
+      .select()
       .single();
 
     if (error) throw error;
 
+    console.log('✅ Item archived successfully:', id);
     res.json({ 
       success: true, 
       data, 
@@ -361,6 +368,8 @@ const restockInventoryItem = async (req, res) => {
     const { id } = req.params;
     const { quantity, reason, notes } = req.body;
 
+    console.log('📦 Restocking inventory item:', { id, quantity });
+
     if (!quantity || parseFloat(quantity) <= 0) {
       return res.status(400).json({
         success: false,
@@ -368,7 +377,6 @@ const restockInventoryItem = async (req, res) => {
       });
     }
 
-    // Get current item
     const { data: currentItem, error: fetchError } = await supabase
       .from('inventory_items')
       .select('*')
@@ -379,11 +387,11 @@ const restockInventoryItem = async (req, res) => {
       return res.status(404).json({ success: false, error: 'Item not found' });
     }
 
-    // Get user ID from auth_id
-    const userId = await getUserIdFromAuth(req.user.id);
+    const userId = getUserIdFromAuth(req);
+    console.log('👤 User ID:', userId);
+    
     const newQuantity = currentItem.quantity + parseFloat(quantity);
 
-    // Update quantity
     const { data, error } = await supabase
       .from('inventory_items')
       .update({
@@ -391,16 +399,11 @@ const restockInventoryItem = async (req, res) => {
         updated_by: userId
       })
       .eq('id', id)
-      .select(`
-        *,
-        created_by_user:created_by(id, name, email),
-        updated_by_user:updated_by(id, name, email)
-      `)
+      .select()
       .single();
 
     if (error) throw error;
 
-    // Log transaction
     await supabase
       .from('inventory_transactions')
       .insert([{
@@ -414,6 +417,7 @@ const restockInventoryItem = async (req, res) => {
         created_by: userId
       }]);
 
+    console.log('✅ Item restocked successfully:', { id, newQuantity });
     res.json({
       success: true,
       data,
@@ -425,7 +429,7 @@ const restockInventoryItem = async (req, res) => {
   }
 };
 
-// Get transaction history with user info
+// Get transaction history
 const getItemTransactions = async (req, res) => {
   try {
     const { id } = req.params;
@@ -433,10 +437,7 @@ const getItemTransactions = async (req, res) => {
 
     const { data, error } = await supabase
       .from('inventory_transactions')
-      .select(`
-        *,
-        created_by_user:created_by(id, name, email)
-      `)
+      .select('*')
       .eq('item_id', id)
       .order('created_at', { ascending: false })
       .limit(parseInt(limit));

@@ -34,13 +34,14 @@
   --color-bg-hover: #f1f2f3;
 }
 
+/* ============ CONTAINER ============ */
 .mapping-container {
   padding: 24px;
   background: var(--color-bg-primary);
   min-height: 100vh;
 }
 
-/* Header */
+/* ============ HEADER ============ */
 .mapping-header {
   display: flex;
   justify-content: space-between;
@@ -72,31 +73,7 @@
   50% { opacity: 0.3; }
 }
 
-.btn-upload {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 10px 20px;
-  background: var(--color-red-primary);
-  color: var(--color-white);
-  border: none;
-  border-radius: 4px;
-  font-weight: 500;
-  font-size: 14px;
-  cursor: pointer;
-  transition: background 0.2s, transform 0.1s;
-}
-
-.btn-upload:hover {
-  background: var(--color-red-hover);
-  transform: translateY(-1px);
-}
-
-.btn-upload:active {
-  transform: translateY(0);
-}
-
-/* Controls */
+/* ============ CONTROLS ============ */
 .mapping-controls {
   display: flex;
   justify-content: space-between;
@@ -160,13 +137,10 @@
 }
 
 .filter-wrapper {
-  display: flex;
+display: flex;
     gap: 10px;
-    align-items: flex-start;
+    align-items: center;
     flex-wrap: nowrap;
-    flex-direction: row;
-    align-content: space-between;
-    justify-content: space-between;
 }
 
 .filter-select,
@@ -217,7 +191,32 @@
   border-color: var(--color-red-primary);
 }
 
-/* Responsive Controls */
+.btn-add-product {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 20px;
+  background: var(--color-red-primary);
+  color: var(--color-white);
+  border: none;
+  border-radius: 4px;
+  font-weight: 500;
+  font-size: 14px;
+  cursor: pointer;
+  transition: background 0.2s, transform 0.1s;
+  height: 40px;
+}
+
+.btn-add-product:hover {
+  background: var(--color-red-hover);
+  transform: translateY(-1px);
+}
+
+.btn-add-product:active {
+  transform: translateY(0);
+}
+
+/* ============ RESPONSIVE CONTROLS ============ */
 @media (max-width: 768px) {
   .mapping-controls {
     flex-wrap: wrap;
@@ -254,6 +253,11 @@
     height: 38px;
     width: 38px;
   }
+
+  .btn-add-product {
+    height: 38px;
+    justify-content: center;
+  }
 }
 
 @media (max-width: 480px) {
@@ -270,7 +274,7 @@
   }
 }
 
-/* Table */
+/* ============ TABLE ============ */
 .mapping-section {
   background: var(--color-bg-white);
   border-radius: 8px;
@@ -317,13 +321,13 @@
   border-bottom: none;
 }
 
-/* Product Name */
+/* ============ PRODUCT NAME ============ */
 .product-name {
   font-weight: 500;
   color: var(--color-text-primary);
 }
 
-/* Category Badge */
+/* ============ CATEGORY BADGE ============ */
 .category-badge {
   display: inline-block;
   padding: 2px 10px;
@@ -334,7 +338,7 @@
   font-weight: 500;
 }
 
-/* Ingredients */
+/* ============ INGREDIENTS ============ */
 .ingredients-cell {
   max-width: 300px;
 }
@@ -367,13 +371,13 @@
   font-style: italic;
 }
 
-/* Price Cell */
+/* ============ PRICE CELL ============ */
 .price-cell {
   font-weight: 600;
   color: var(--color-red-primary);
 }
 
-/* Status Cell */
+/* ============ STATUS CELL ============ */
 .status-cell {
   min-width: 190px;
 }
@@ -399,6 +403,11 @@
 .status-badge.active {
   background: rgba(15, 153, 24, 0.12);
   color: var(--color-success);
+}
+
+.status-badge.inactive {
+  background: rgba(239, 68, 68, 0.12);
+  color: var(--color-error);
 }
 
 .status-badge.new {
@@ -449,35 +458,71 @@
   opacity: 1;
 }
 
-/* Action Buttons */
-.action-btn {
-  padding: 6px 8px;
+/* ============ ACTION BUTTONS ============ */
+.mapping-action-buttons {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.mapping-action-btn {
+  width: 32px;
+  height: 32px;
   border: none;
-  border-radius: 4px;
+  border-radius: 6px;
   cursor: pointer;
-  transition: all 0.2s;
+  transition: all 0.2s ease;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 14px;
   background: transparent;
+  color: #6b7280;
 }
 
-.action-btn.edit {
-  color: var(--color-uploading);
+.mapping-action-btn:hover {
+  background: var(--color-bg-hover);
+  transform: scale(1.05);
 }
 
-.action-btn.edit:hover {
-  background: var(--color-red-light);
-  color: var(--color-red-primary);
+.mapping-action-btn.view {
+  color: #4338ca;
 }
 
-.action-btn.delete {
-  color: var(--color-error);
+.mapping-action-btn.view:hover {
+  background: #e0e7ff;
+  color: #4338ca;
 }
 
-.action-btn.delete:hover {
-  background: var(--color-red-light);
-  color: var(--color-red-primary);
+.mapping-action-btn.edit {
+  color: #2563eb;
 }
 
-/* Loading and Empty States */
+.mapping-action-btn.edit:hover {
+  background: #dbeafe;
+  color: #2563eb;
+}
+
+.mapping-action-btn.archive {
+  color: #d97706;
+}
+
+.mapping-action-btn.archive:hover {
+  background: #fef3c7;
+  color: #d97706;
+}
+
+.mapping-action-btn.reactivate {
+  color: #065f46;
+}
+
+.mapping-action-btn.reactivate:hover {
+  background: #d1fae5;
+  color: #065f46;
+}
+
+/* ============ LOADING AND EMPTY STATES ============ */
 .loading-state,
 .empty-state {
   padding: 40px;
@@ -485,7 +530,7 @@
   color: var(--color-text-light);
 }
 
-/* Pagination */
+/* ============ PAGINATION ============ */
 .pagination {
   display: flex;
   justify-content: space-between;
@@ -565,7 +610,7 @@
   cursor: default;
 }
 
-/* Responsive Pagination */
+/* ============ RESPONSIVE PAGINATION ============ */
 @media (max-width: 768px) {
   .pagination {
     flex-wrap: wrap;
@@ -586,7 +631,7 @@
   }
 }
 
-/* Modal Styles */
+/* ============ MODAL STYLES ============ */
 .modal-overlay {
   position: fixed;
   top: 0;
@@ -594,16 +639,18 @@
   right: 0;
   bottom: 0;
   background: rgba(0, 0, 0, 0.5);
+  backdrop-filter: blur(4px);
   display: flex;
   align-items: center;
   justify-content: center;
-  z-index: 1000;
-  animation: fadeIn 0.3s ease;
+  z-index: 9999;
+  padding: 20px;
+  animation: fadeIn 0.2s ease;
 }
 
 .modal-content {
   background: var(--color-bg-white);
-  border-radius: 8px;
+  border-radius: 12px;
   width: 90%;
   max-width: 800px;
   max-height: 80vh;
@@ -612,12 +659,19 @@
   box-shadow: 0 10px 40px rgba(0, 0, 0, 0.2);
 }
 
+.modal-sm { max-width: 400px; max-height: 60vh; }
+.modal-md { max-width: 500px; max-height: 65vh; }
+.modal-lg { max-width: 700px; max-height: 75vh; }
+.modal-xl { max-width: 900px; max-height: 80vh; }
+
 .modal-header {
   display: flex;
   justify-content: space-between;
   align-items: center;
   padding: 16px 24px;
   border-bottom: 2px solid var(--color-red-primary);
+  flex-shrink: 0;
+  background: #fafafa;
 }
 
 .modal-header h3 {
@@ -627,23 +681,64 @@
   color: var(--color-red-primary);
 }
 
-.modal-close {
+.modal-close-btn {
   background: none;
   border: none;
+  font-size: 1.25rem;
   color: var(--color-text-light);
   cursor: pointer;
   padding: 4px;
-  transition: color 0.2s;
+  border-radius: 6px;
+  transition: all 0.2s;
+  display: flex;
+  align-items: center;
 }
 
-.modal-close:hover {
+.modal-close-btn:hover {
+  background: #f3f4f6;
   color: var(--color-error);
+}
+
+.modal-close-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
 }
 
 .modal-body {
   padding: 20px 24px;
+  overflow-y: auto;
+  flex: 1;
 }
 
+.modal-body::-webkit-scrollbar {
+  width: 6px;
+}
+
+.modal-body::-webkit-scrollbar-track {
+  background: #f1f1f1;
+  border-radius: 3px;
+}
+
+.modal-body::-webkit-scrollbar-thumb {
+  background: #c1c7cd;
+  border-radius: 3px;
+}
+
+.modal-body::-webkit-scrollbar-thumb:hover {
+  background: #a8b0b8;
+}
+
+.modal-footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: 12px;
+  padding: 14px 24px;
+  border-top: 1px solid var(--color-border-light);
+  flex-shrink: 0;
+  background: #fafafa;
+}
+
+/* ============ FORM STYLES ============ */
 .form-group {
   margin-bottom: 16px;
 }
@@ -656,12 +751,14 @@
   font-size: 13px;
 }
 
-.form-group .required {
+.form-group .required,
+.required-star {
   color: var(--color-error);
 }
 
 .form-group input,
-.form-group select {
+.form-group select,
+.form-group textarea {
   width: 100%;
   padding: 8px 12px;
   border: 1px solid var(--color-border);
@@ -673,7 +770,8 @@
 }
 
 .form-group input:focus,
-.form-group select:focus {
+.form-group select:focus,
+.form-group textarea:focus {
   border-color: var(--color-red-primary);
   box-shadow: 0 0 0 3px rgba(122, 1, 1, 0.1);
 }
@@ -683,23 +781,51 @@
   border-color: var(--color-border-hover);
 }
 
-/* Form Row */
+.form-group input.error {
+  border-color: var(--color-error);
+}
+
+.form-group input.error:focus {
+  box-shadow: 0 0 0 3px rgba(239, 68, 68, 0.1);
+}
+
+.form-group input.readonly {
+  background: #f3f4f6;
+  color: #6b7280;
+  cursor: not-allowed;
+}
+
+.error-text {
+  color: var(--color-error);
+  font-size: 12px;
+  margin-top: 4px;
+  display: block;
+}
+
+/* ============ FORM ROW ============ */
 .form-row {
   display: grid;
   grid-template-columns: 1fr 1fr;
   gap: 16px;
 }
 
-/* Ingredient Input Row */
+/* ============ INGREDIENT INPUT ROW ============ */
 .ingredient-input-row {
   display: flex;
   gap: 8px;
   margin-bottom: 12px;
   align-items: center;
+  flex-wrap: wrap;
+}
+
+.ingredient-search-wrapper {
+  position: relative;
+  flex: 2;
 }
 
 .ingredient-name-input {
   flex: 2;
+  min-width: 120px;
   padding: 8px 12px;
   border: 1px solid var(--color-border);
   border-radius: 4px;
@@ -707,6 +833,7 @@
   outline: none;
   transition: border-color 0.2s;
   background: var(--color-bg-white);
+  width: 100%;
 }
 
 .ingredient-name-input:focus {
@@ -716,13 +843,13 @@
 
 .ingredient-qty-input {
   flex: 1;
+  min-width: 70px;
   padding: 8px 12px;
   border: 1px solid var(--color-border);
   border-radius: 4px;
   font-size: 14px;
   outline: none;
   transition: border-color 0.2s;
-  width: 80px;
   background: var(--color-bg-white);
 }
 
@@ -733,6 +860,7 @@
 
 .ingredient-unit-select {
   flex: 0.7;
+  min-width: 70px;
   padding: 8px 12px;
   border: 1px solid var(--color-border);
   border-radius: 4px;
@@ -773,12 +901,79 @@
   transform: translateY(0);
 }
 
-/* Ingredients Table in Modal */
+/* ============ INGREDIENT DROPDOWN ============ */
+.ingredient-dropdown {
+  position: absolute;
+  top: 100%;
+  left: 0;
+  right: 0;
+  max-height: 200px;
+  overflow-y: auto;
+  background: white;
+  border: 1px solid var(--color-border);
+  border-radius: 4px;
+  z-index: 1000;
+  box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+}
+
+.ingredient-dropdown-header {
+  padding: 6px 12px;
+  background: #f5f5f5;
+  font-size: 11px;
+  color: #666;
+  border-bottom: 1px solid var(--color-border);
+  font-weight: 500;
+}
+
+.ingredient-dropdown-item {
+  padding: 8px 12px;
+  cursor: pointer;
+  border-bottom: 1px solid #f0f0f0;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.ingredient-dropdown-item:hover {
+  background: #f5f5f5;
+}
+
+.ingredient-dropdown-stock {
+  font-size: 12px;
+  color: #666;
+}
+
+.ingredient-dropdown-loading,
+.ingredient-dropdown-empty {
+  position: absolute;
+  top: 100%;
+  left: 0;
+  right: 0;
+  padding: 12px;
+  background: white;
+  border: 1px solid var(--color-border);
+  border-radius: 4px;
+  z-index: 1000;
+  text-align: center;
+  color: #999;
+}
+
+.ingredient-id-tag {
+  font-size: 11px;
+  color: #999;
+  margin-left: 8px;
+}
+
+/* ============ INGREDIENTS TABLE IN MODAL ============ */
 .ingredients-table-wrapper {
   margin-top: 6px;
   border: 1px solid var(--color-border);
   border-radius: 4px;
   overflow: hidden;
+}
+
+.ingredients-table-wrapper.error-border {
+  border-color: var(--color-error);
 }
 
 .ingredients-modal-table {
@@ -824,15 +1019,81 @@
   font-style: italic;
 }
 
-/* Modal Footer */
-.modal-footer {
-  display: flex;
-  justify-content: flex-end;
-  gap: 12px;
-  padding: 14px 24px;
-  border-top: 1px solid var(--color-border-light);
+/* ============ REMOVE INGREDIENT BUTTON ============ */
+.action-btn.remove-ingredient {
+  background: #fee2e2;
+  color: #dc2626;
+  padding: 4px 6px;
+  border: none;
+  border-radius: 4px;
+  cursor: pointer;
+  transition: all 0.2s;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
 }
 
+.action-btn.remove-ingredient:hover {
+  background: #dc2626;
+  color: white;
+}
+
+/* ============ CONFIRMATION STYLES ============ */
+.confirmation-content {
+  text-align: center;
+  padding: 0.5rem 0;
+}
+
+.confirmation-icon {
+  width: 56px;
+  height: 56px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin: 0 auto 0.75rem;
+}
+
+.confirmation-icon.danger {
+  background: #fee2e2;
+  color: #dc2626;
+}
+
+.confirmation-icon.warning {
+  background: #fef3c7;
+  color: #d97706;
+}
+
+.confirmation-content h4 {
+  margin: 0 0 0.25rem 0;
+  color: var(--color-text-primary);
+  font-size: 1rem;
+}
+
+.confirmation-content p {
+  color: #6b7280;
+  margin-bottom: 0.75rem;
+  font-size: 0.9rem;
+}
+
+.item-details {
+  background: #f9fafb;
+  border-radius: 6px;
+  padding: 0.75rem;
+  text-align: left;
+}
+
+.item-details p {
+  margin: 0.125rem 0;
+  color: #374151;
+  font-size: 0.85rem;
+}
+
+.item-details strong {
+  color: #1f2937;
+}
+
+/* ============ BUTTONS ============ */
 .btn-secondary {
   padding: 8px 20px;
   background: var(--color-bg-light);
@@ -847,6 +1108,11 @@
 
 .btn-secondary:hover {
   background: var(--color-border-light);
+}
+
+.btn-secondary:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
 }
 
 .btn-primary {
@@ -864,16 +1130,48 @@
   transition: background 0.2s, transform 0.1s;
 }
 
-.btn-primary:hover {
+.btn-primary:hover:not(:disabled) {
   background: var(--color-red-hover);
   transform: translateY(-1px);
+  box-shadow: 0 4px 12px rgba(122, 1, 1, 0.3);
 }
 
 .btn-primary:active {
   transform: translateY(0);
 }
 
-/* Animations */
+.btn-primary:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.btn-warning {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 20px;
+  background: #f59e0b;
+  color: white;
+  border: none;
+  border-radius: 4px;
+  cursor: pointer;
+  font-weight: 500;
+  font-size: 13px;
+  transition: background 0.2s, transform 0.1s;
+}
+
+.btn-warning:hover:not(:disabled) {
+  background: #d97706;
+  transform: translateY(-1px);
+  box-shadow: 0 4px 12px rgba(245, 158, 11, 0.3);
+}
+
+.btn-warning:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+/* ============ ANIMATIONS ============ */
 @keyframes fadeIn {
   from { opacity: 0; }
   to { opacity: 1; }
@@ -890,7 +1188,16 @@
   }
 }
 
-/* Modal Responsive */
+@keyframes spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+
+.spinning {
+  animation: spin 1s linear infinite;
+}
+
+/* ============ RESPONSIVE MODAL ============ */
 @media (max-width: 768px) {
   .modal-content {
     width: 95%;
@@ -907,24 +1214,22 @@
   }
 
   .ingredient-input-row {
-    flex-wrap: wrap;
+    flex-direction: column;
+    align-items: stretch;
   }
 
-  .ingredient-name-input {
-    flex: 1 1 100%;
+  .ingredient-search-wrapper {
+    width: 100%;
   }
 
-  .ingredient-qty-input {
-    flex: 1;
-    width: auto;
-  }
-
+  .ingredient-name-input,
+  .ingredient-qty-input,
   .ingredient-unit-select {
-    flex: 0.8;
+    width: 100%;
+    min-width: auto;
   }
 
   .btn-add-ingredient {
-    flex: 1;
     justify-content: center;
   }
 
@@ -944,7 +1249,7 @@
   }
 }
 
-/* Small screens */
+/* ============ SMALL SCREENS ============ */
 @media (max-width: 480px) {
   .mapping-header {
     flex-direction: column;
