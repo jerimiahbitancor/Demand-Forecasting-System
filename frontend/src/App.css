@@ -193,7 +193,7 @@ input[type="checkbox"]:focus {
   box-shadow: 0 4px 16px rgba(187, 1, 20, 0.2);
   position: relative;
   overflow: hidden;
-  min-width: 300px;
+  min-width: 200px;
   justify-content: center;
 }
 
@@ -231,6 +231,8 @@ input[type="checkbox"]:focus {
   border-radius: 8px;
   cursor: pointer;
   transition: all 0.3s ease;
+  align-items: center;
+  justify-content: center;
 }
 
 .btn-secondary:hover {

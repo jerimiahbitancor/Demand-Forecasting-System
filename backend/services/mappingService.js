@@ -1,7 +1,5 @@
 // services/mappingService.js
 const { supabase, isConfigured, supabaseAdmin } = require('../config/supabase');
-const { deriveProductStatus } = require('./productStatusService');
-const { PRODUCT_STATUS_NOTES, ARCHIVE_REASONS } = require('./productStatusConstants');
 
 class MappingService {
   constructor() {
@@ -34,22 +32,6 @@ class MappingService {
       const num = parseInt(userId);
       if (!isNaN(num) && num > 0) {
         return num;
-      }
-      if (userId.length === 36) {
-        try {
-          const { data, error } = await supabaseAdmin.from('user')
-            .select('id')
-            .eq('auth_id', userId)
-            .maybeSingle();
-          
-          if (!error && data) {
-            return data.id;
-          }
-          return null;
-        } catch (error) {
-          console.error('Error getting numeric user ID:', error);
-          return null;
-        }
       }
     }
     
@@ -93,11 +75,7 @@ class MappingService {
         'products_inactive',
         'categories_active',
         'categories_inactive',
-        'totalProducts',
-        'searchTerm',
-        'selectedCategory',
-        'sortBy',
-        'currentPage'
+        'totalProducts'
       ];
       keys.forEach(key => {
         sessionStorage.removeItem(this.getSessionKey(userId, key));
@@ -106,6 +84,8 @@ class MappingService {
       // Silently fail
     }
   }
+
+  // ============ MAIN METHODS ============
 
   async getProducts(userId, category = null, search = null, forceRefresh = false, status = 'active') {
     try {
@@ -120,6 +100,7 @@ class MappingService {
         inactive: 'products_inactive'
       };
       const cacheKey = cacheKeys[status] || null;
+      
       if (!forceRefresh && cacheKey) {
         const cached = this.getFromSession(numericId, cacheKey);
         if (cached && Array.isArray(cached)) {
@@ -144,28 +125,26 @@ class MappingService {
         return [];
       }
 
-      console.log(`Fetching products${forceRefresh ? ' (forced refresh)' : ''}${status ? ` status=${status}` : ''}`);
+      console.log(`Fetching products from products table${forceRefresh ? ' (forced refresh)' : ''}${status ? ` status=${status}` : ''}`);
 
+      // Query from products table
       let query = supabaseAdmin.from('products')
-        .select(`
-          *,
-          product_ingredients (
-            quantity_per_serving,
-            ingredients (
-              id,
-              name,
-              unit
-            )
-          )
-        `)
+        .select('*')
         .order('name');
+
+      // Status filter
+      if (status === 'active') {
+        query = query.eq('is_active', true);
+      } else if (status === 'inactive') {
+        query = query.eq('is_active', false);
+      }
 
       if (category && category !== 'All') {
         query = query.eq('category', category);
       }
 
       if (search) {
-        query = query.ilike('name', `%${search}%`);
+        query = query.or(`name.ilike.%${search}%,category.ilike.%${search}%`);
       }
 
       const { data, error } = await query;
@@ -175,97 +154,63 @@ class MappingService {
         throw error;
       }
 
+      // Transform products data
+      const transformedData = (data || []).map(item => ({
+        id: item.id,
+        name: item.name,
+        price: item.price,
+        category: item.category || 'Uncategorized',
+        serving_size_label: item.serving_size_label || 'serving',
+        is_active: item.is_active,
+        created_at: item.created_at,
+        first_sold_date: item.first_sold_date,
+        inactive_reason: item.inactive_reason,
+        inactive_since: item.inactive_since,
+        // For ingredients, we need to fetch from product_ingredients
+        product_ingredients: []
+      }));
+
+      // Fetch ingredients for each product
+      for (let product of transformedData) {
+        const { data: ingredientsData, error: ingredientsError } = await supabaseAdmin
+          .from('product_ingredients')
+          .select(`
+            quantity_per_serving,
+            inventory_items!inner (
+              id,
+              name,
+              unit
+            )
+          `)
+          .eq('product_id', product.id);
+
+        if (!ingredientsError && ingredientsData) {
+          product.product_ingredients = ingredientsData.map(pi => ({
+            id: pi.inventory_items?.id,
+            quantity_per_serving: pi.quantity_per_serving,
+            ingredients: {
+              id: pi.inventory_items?.id,
+              name: pi.inventory_items?.name,
+              unit: pi.inventory_items?.unit
+            }
+          }));
+        }
+      }
+
       if (data && Array.isArray(data) && cacheKey) {
-        this.saveToSession(numericId, cacheKey, data);
-        this.saveToSession(numericId, 'totalProducts', data.length);
+        this.saveToSession(numericId, cacheKey, transformedData);
+        this.saveToSession(numericId, 'totalProducts', transformedData.length);
         
-        const categories = ['All', ...new Set(data.map(item => item.category).filter(Boolean))];
+        const categories = ['All', ...new Set(transformedData.map(item => item.category).filter(Boolean))];
         this.saveToSession(numericId, 'categories', categories);
       }
 
-      const enrichedProducts = await this.enrichProductsWithStatus(data || [], numericId);
-      const filteredByStatus = status === 'active'
-        ? enrichedProducts.filter((item) => item.is_active)
-        : status === 'inactive'
-          ? enrichedProducts.filter((item) => !item.is_active)
-          : enrichedProducts;
-
-      console.log(`Fetched ${filteredByStatus.length || 0} products from database`);
-      return filteredByStatus;
+      console.log(`Fetched ${transformedData.length || 0} products from database`);
+      return transformedData;
 
     } catch (error) {
       console.error('Error fetching products:', error);
       throw error;
-    }
-  }
-
-  async enrichProductsWithStatus(products, numericId) {
-    try {
-      if (!Array.isArray(products) || products.length === 0) {
-        return [];
-      }
-
-      if (!this.isSupabaseReady()) {
-        return products.map((product) => ({
-          ...product,
-          is_active: Boolean(product.is_active),
-          status: product.is_active ? 'active' : 'new',
-          status_label: product.is_active ? 'ACTIVE' : 'INACTIVE (NEW)',
-          status_reason: product.inactive_reason || PRODUCT_STATUS_NOTES.NEW_PRODUCT
-        }));
-      }
-
-      const productIds = [...new Set(products.map((product) => product.id).filter(Boolean))];
-      if (productIds.length === 0) {
-        return products;
-      }
-
-      const { data: sales, error: salesError } = await supabaseAdmin.from('daily_sales')
-        .select('product_id, sale_date')
-        .in('product_id', productIds);
-
-      if (salesError) {
-        console.error('Error fetching sales for product status enrichment:', salesError);
-        return products;
-      }
-
-      const salesByProduct = {};
-      (sales || []).forEach((sale) => {
-        const saleDate = new Date(sale.sale_date);
-        if (!salesByProduct[sale.product_id]) {
-          salesByProduct[sale.product_id] = { firstSoldDate: saleDate, lastSoldDate: saleDate };
-          return;
-        }
-
-        if (saleDate < salesByProduct[sale.product_id].firstSoldDate) {
-          salesByProduct[sale.product_id].firstSoldDate = saleDate;
-        }
-        if (saleDate > salesByProduct[sale.product_id].lastSoldDate) {
-          salesByProduct[sale.product_id].lastSoldDate = saleDate;
-        }
-      });
-
-      return products.map((product) => {
-        const status = deriveProductStatus({
-          firstSoldDate: salesByProduct[product.id]?.firstSoldDate || product.first_sold_date || null,
-          lastSoldDate: salesByProduct[product.id]?.lastSoldDate || null,
-          createdAt: product.created_at || null,
-          isActive: Boolean(product.is_active)
-        });
-
-        return {
-          ...product,
-          is_active: status.isActive,
-          status: status.status,
-          status_label: status.label,
-          status_reason: status.note || product.inactive_reason || '',
-          inactive_reason: status.note || product.inactive_reason || null,
-          inactive_since: product.inactive_since || null
-        };
-      });
-    } catch (error) {
-      console.error('Error enriching products with status:', error);
-      return products;
     }
   }
 
@@ -291,22 +236,12 @@ class MappingService {
         return null;
       }
 
-      console.log(`Fetching product ${id}`);
+      console.log(`Fetching product ${id} from products table`);
 
       const { data, error } = await supabaseAdmin.from('products')
-        .select(`
-          *,
-          product_ingredients (
-            quantity_per_serving,
-            ingredients (
-              id,
-              name,
-              unit
-            )
-          )
-        `)
+        .select('*')
         .eq('id', id)
-        .single();
+        .maybeSingle();
 
       if (error) {
         if (error.code === 'PGRST116') {
@@ -316,8 +251,52 @@ class MappingService {
         throw error;
       }
 
-      const [enrichedProduct] = await this.enrichProductsWithStatus([data], numericId);
-      return enrichedProduct || data;
+      if (!data) {
+        console.log(`Product ${id} not found`);
+        return null;
+      }
+
+      // Transform to product format
+      const transformedData = {
+        id: data.id,
+        name: data.name,
+        price: data.price,
+        category: data.category || 'Uncategorized',
+        serving_size_label: data.serving_size_label || 'serving',
+        is_active: data.is_active,
+        created_at: data.created_at,
+        first_sold_date: data.first_sold_date,
+        inactive_reason: data.inactive_reason,
+        inactive_since: data.inactive_since,
+        product_ingredients: []
+      };
+
+      // Fetch ingredients
+      const { data: ingredientsData, error: ingredientsError } = await supabaseAdmin
+        .from('product_ingredients')
+        .select(`
+          quantity_per_serving,
+          inventory_items!inner (
+            id,
+            name,
+            unit
+          )
+        `)
+        .eq('product_id', id);
+
+      if (!ingredientsError && ingredientsData) {
+        transformedData.product_ingredients = ingredientsData.map(pi => ({
+          id: pi.inventory_items?.id,
+          quantity_per_serving: pi.quantity_per_serving,
+          ingredients: {
+            id: pi.inventory_items?.id,
+            name: pi.inventory_items?.name,
+            unit: pi.inventory_items?.unit
+          }
+        }));
+      }
+
+      return transformedData;
 
     } catch (error) {
       console.error('Error fetching product:', error);
@@ -343,59 +322,74 @@ class MappingService {
         return mockProduct;
       }
 
-      console.log('Creating product');
+      console.log('Creating product in products table');
 
+      // Insert into products table
       const insertData = {
         name: productData.name.trim(),
         price: parseFloat(productData.price),
         category: productData.category || 'Uncategorized',
-        serving_size_label: productData.serving_size_label || null,
-        is_active: false,
-        inactive_reason: PRODUCT_STATUS_NOTES.NEW_PRODUCT,
-        inactive_since: this.formatDate(new Date())
+        serving_size_label: productData.serving_size_label || 'serving',
+        is_active: true
       };
 
       const { data: product, error: productError } = await supabaseAdmin.from('products')
         .insert(insertData)
         .select()
-        .single();
+        .maybeSingle();
 
       if (productError) {
         console.error('Error creating product:', productError);
         throw productError;
       }
 
+      // Insert ingredients into product_ingredients
       if (productData.ingredients && productData.ingredients.length > 0) {
-        console.log(`Adding ${productData.ingredients.length} ingredients to product ${product.id}`);
-        
         for (const ingredient of productData.ingredients) {
-          try {
-            const ingredientId = await this.getOrCreateIngredient(
-              ingredient.name,
-              ingredient.unit || 'kg',
-              numericId
-            );
+          // Find the inventory item by name
+          const { data: inventoryItem, error: inventoryError } = await supabaseAdmin
+            .from('inventory_items')
+            .select('id')
+            .ilike('name', ingredient.name)
+            .maybeSingle();
 
-            const { error: piError } = await supabaseAdmin.from('product_ingredients')
+          if (inventoryError) {
+            console.error('Error finding inventory item:', inventoryError);
+            continue;
+          }
+
+          if (inventoryItem) {
+            const { error: piError } = await supabaseAdmin
+              .from('product_ingredients')
               .insert({
                 product_id: product.id,
-                ingredient_id: ingredientId,
+                ingredient_id: inventoryItem.id,
                 quantity_per_serving: parseFloat(ingredient.quantity) || 1
               });
 
             if (piError) {
-              console.error(`Error adding ingredient ${ingredient.name}:`, piError);
+              console.error('Error adding ingredient to product:', piError);
             }
-          } catch (ingredientError) {
-            console.error(`Error processing ingredient ${ingredient.name}:`, ingredientError);
+          } else {
+            console.warn(`Inventory item "${ingredient.name}" not found, skipping`);
           }
         }
       }
 
       this.clearSession(numericId);
 
-      const completeProduct = await this.getProductById(product.id, numericId);
-      return completeProduct || product;
+      const transformedData = {
+        id: product.id,
+        name: product.name,
+        price: product.price,
+        category: product.category || 'Uncategorized',
+        serving_size_label: product.serving_size_label || 'serving',
+        is_active: product.is_active,
+        created_at: product.created_at,
+        product_ingredients: []
+      };
+
+      return transformedData;
 
     } catch (error) {
       console.error('Error creating product:', error);
@@ -423,102 +417,77 @@ class MappingService {
       }
 
       if (!this.isSupabaseReady()) {
-        // Fallback: return updated mock data
         return { ...existingProduct, ...productData };
       }
 
-      console.log(`Updating product ${id}`);
+      console.log(`Updating product ${id} in products table`);
 
       const updateData = {};
+      
       if (productData.name !== undefined) updateData.name = productData.name.trim();
       if (productData.price !== undefined) updateData.price = parseFloat(productData.price);
       if (productData.category !== undefined) updateData.category = productData.category || 'Uncategorized';
-      if (productData.serving_size_label !== undefined) updateData.serving_size_label = productData.serving_size_label || null;
-      if (productData.is_active !== undefined && productData.is_active === false) {
-        updateData.is_active = false;
-        updateData.inactive_reason = existingProduct.inactive_reason || PRODUCT_STATUS_NOTES.NEW_PRODUCT;
-        updateData.inactive_since = existingProduct.inactive_since || this.formatDate(new Date());
-      } else {
-        updateData.is_active = existingProduct.is_active;
-      }
+      if (productData.serving_size_label !== undefined) updateData.serving_size_label = productData.serving_size_label || 'serving';
+      if (productData.is_active !== undefined) updateData.is_active = productData.is_active;
 
       const { data: product, error: productError } = await supabaseAdmin.from('products')
         .update(updateData)
         .eq('id', id)
         .select()
-        .single();
+        .maybeSingle();
 
       if (productError) {
         console.error('Error updating product:', productError);
         throw productError;
       }
 
-      // Handle ingredients update
+      // Update ingredients if provided
       if (productData.ingredients !== undefined) {
-        // Validate ingredient payload before mutating DB.
-        const normalizedIngredients = Array.isArray(productData.ingredients)
-          ? productData.ingredients.map((ingredient) => ({
-              name: ingredient.name?.trim(),
-              quantity: ingredient.quantity !== undefined && ingredient.quantity !== null
-                ? parseFloat(ingredient.quantity)
-                : NaN,
-              unit: ingredient.unit?.trim() || 'kg'
-            }))
-          : [];
-
-        if (normalizedIngredients.some((ingredient) => !ingredient.name)) {
-          throw new Error('All ingredients must include a name.');
-        }
-
-        if (normalizedIngredients.some((ingredient) => isNaN(ingredient.quantity) || ingredient.quantity <= 0)) {
-          throw new Error('All ingredient quantities must be numbers greater than 0.');
-        }
-
         // Delete existing ingredients
-        const { error: deleteError } = await supabaseAdmin.from('product_ingredients')
+        await supabaseAdmin
+          .from('product_ingredients')
           .delete()
           .eq('product_id', id);
 
-        if (deleteError) {
-          console.error('Error deleting old ingredients:', deleteError);
-          throw deleteError;
-        }
+        // Insert new ingredients
+        for (const ingredient of productData.ingredients) {
+          const { data: inventoryItem, error: inventoryError } = await supabaseAdmin
+            .from('inventory_items')
+            .select('id')
+            .ilike('name', ingredient.name)
+            .maybeSingle();
 
-        // Add new ingredients
-        if (normalizedIngredients.length > 0) {
-          console.log(`📝 Updating ${normalizedIngredients.length} ingredients for product ${id}`);
-          
-          for (const ingredient of normalizedIngredients) {
-            try {
-              const ingredientId = await this.getOrCreateIngredient(
-                ingredient.name,
-                ingredient.unit,
-                userId
-              );
+          if (inventoryError) {
+            console.error('Error finding inventory item:', inventoryError);
+            continue;
+          }
 
-              const { error: piError } = await supabaseAdmin.from('product_ingredients')
-                .insert({
-                  product_id: id,
-                  ingredient_id: ingredientId,
-                  quantity_per_serving: ingredient.quantity
-                });
-
-              if (piError) {
-                console.error(`❌ Error adding ingredient ${ingredient.name}:`, piError);
-                throw piError;
-              }
-            } catch (ingredientError) {
-              console.error(`❌ Error processing ingredient ${ingredient.name || '[missing name]'}:`, ingredientError);
-              throw ingredientError;
-            }
+          if (inventoryItem) {
+            await supabaseAdmin
+              .from('product_ingredients')
+              .insert({
+                product_id: id,
+                ingredient_id: inventoryItem.id,
+                quantity_per_serving: parseFloat(ingredient.quantity) || 1
+              });
           }
         }
       }
 
       this.clearSession(numericId);
 
-      const completeProduct = await this.getProductById(product.id, numericId);
-      return completeProduct || product;
+      const transformedData = {
+        id: product.id,
+        name: product.name,
+        price: product.price,
+        category: product.category || 'Uncategorized',
+        serving_size_label: product.serving_size_label || 'serving',
+        is_active: product.is_active,
+        created_at: product.created_at,
+        product_ingredients: []
+      };
+
+      return transformedData;
 
     } catch (error) {
       console.error('Error updating product:', error);
@@ -544,8 +513,15 @@ class MappingService {
         return true;
       }
 
-      console.log(`Deleting product ${id}`);
+      console.log(`Deleting product ${id} from products table`);
 
+      // Delete ingredients first
+      await supabaseAdmin
+        .from('product_ingredients')
+        .delete()
+        .eq('product_id', id);
+
+      // Delete product
       const { error } = await supabaseAdmin.from('products')
         .delete()
         .eq('id', id);
@@ -566,128 +542,6 @@ class MappingService {
     }
   }
 
-  async getOrCreateIngredient(name, unit, userId) {
-    try {
-      const numericId = await this.getNumericUserId(userId);
-      if (!numericId) {
-        throw new Error('Valid User ID is required to create an ingredient');
-      }
-
-      if (!this.isSupabaseReady()) {
-        return Date.now();
-      }
-
-      const { data, error } = await supabaseAdmin.from('ingredients')
-        .select('id')
-        .ilike('name', name)
-        .maybeSingle();
-
-      if (error && error.code !== 'PGRST116') {
-        throw error;
-      }
-
-      if (data) {
-        return data.id;
-      }
-
-      console.log(`Creating new ingredient: ${name} (${unit})`);
-
-      const insertData = {
-        name: name.trim(),
-        unit: unit || 'kg'
-      };
-
-      const { data: newData, error: insertError } = await supabaseAdmin.from('ingredients')
-        .insert(insertData)
-        .select()
-        .single();
-
-      if (insertError) {
-        console.error('Error creating ingredient:', insertError);
-        throw insertError;
-      }
-
-      return newData.id;
-
-    } catch (error) {
-      console.error('Error getting/creating ingredient:', error);
-      throw error;
-    }
-  }
-
-  getAllowedArchiveReasons() {
-    return [
-      ARCHIVE_REASONS.DISCONTINUED,
-      ARCHIVE_REASONS.SEASONAL,
-      ARCHIVE_REASONS.OUT_OF_STOCK_TEMP
-    ];
-  }
-
-  getSystemStaleReasons() {
-    return [
-      PRODUCT_STATUS_NOTES.STALE,
-      PRODUCT_STATUS_NOTES.NEVER_SOLD
-    ];
-  }
-
-  formatDate(value) {
-    if (!value) return null;
-    const date = new Date(value);
-    if (isNaN(date.getTime())) return null;
-    return date.toISOString().split('T')[0];
-  }
-
-  async evaluateNewMenuProduct(productId, userId) {
-    try {
-      const numericId = await this.getNumericUserId(userId);
-      if (!numericId) {
-        throw new Error('Valid User ID is required for product evaluation');
-      }
-
-      const product = await this.getProductById(productId, numericId);
-      if (!product) {
-        return null;
-      }
-
-      if (product.first_sold_date) {
-        return product;
-      }
-
-      const { data, error } = await supabaseAdmin.from('daily_sales')
-        .select('sale_date')
-        .eq('product_id', productId)
-        .order('sale_date', { ascending: true })
-        .limit(1)
-        .maybeSingle();
-
-      if (error && error.code !== 'PGRST116') {
-        throw error;
-      }
-
-      if (data && data.sale_date) {
-        const firstSoldDate = this.formatDate(data.sale_date);
-        const { data: updated, error: updateError } = await supabaseAdmin.from('products')
-          .update({ first_sold_date: firstSoldDate })
-          .eq('id', productId)
-          .select()
-          .single();
-
-        if (updateError) {
-          console.error('Error updating first_sold_date:', updateError);
-          throw updateError;
-        }
-
-        this.clearSession(numericId);
-        return updated;
-      }
-
-      return product;
-    } catch (error) {
-      console.error('Error evaluating new menu product:', error);
-      throw error;
-    }
-  }
-
   async archiveProduct(id, reason, userId) {
     try {
       const numericId = await this.getNumericUserId(userId);
@@ -700,10 +554,6 @@ class MappingService {
       }
 
       const normalizedReason = reason.trim();
-      const allowedReasons = this.getAllowedArchiveReasons();
-      if (!allowedReasons.includes(normalizedReason)) {
-        throw new Error(`Invalid archive reason. Allowed reasons: ${allowedReasons.join(', ')}`);
-      }
 
       const existingProduct = await this.getProductById(id, numericId);
       if (!existingProduct) {
@@ -714,22 +564,21 @@ class MappingService {
         return {
           ...existingProduct,
           is_active: false,
-          inactive_reason: normalizedReason,
-          inactive_since: this.formatDate(new Date())
+          inactive_reason: normalizedReason
         };
       }
 
       const updateData = {
         is_active: false,
         inactive_reason: normalizedReason,
-        inactive_since: this.formatDate(new Date())
+        inactive_since: new Date().toISOString()
       };
 
       const { data: product, error } = await supabaseAdmin.from('products')
         .update(updateData)
         .eq('id', id)
         .select()
-        .single();
+        .maybeSingle();
 
       if (error) {
         console.error('Error archiving product:', error);
@@ -737,7 +586,16 @@ class MappingService {
       }
 
       this.clearSession(numericId);
-      return product;
+      
+      const transformedData = {
+        id: product.id,
+        name: product.name,
+        is_active: false,
+        inactive_reason: normalizedReason,
+        inactive_since: product.inactive_since
+      };
+      
+      return transformedData;
     } catch (error) {
       console.error('Error archiving product:', error);
       throw error;
@@ -756,15 +614,8 @@ class MappingService {
         throw new Error('Product not found or does not belong to user');
       }
 
-      if (existingProduct.is_active) {
+      if (existingProduct.is_active === true) {
         return existingProduct;
-      }
-
-      const manualReasons = this.getAllowedArchiveReasons();
-      const reason = existingProduct.inactive_reason;
-
-      if (reason === 'Discontinued' && !options.forceReactivate) {
-        throw new Error('Discontinued products require explicit confirmation to reactivate. Set forceReactivate=true to proceed.');
       }
 
       if (!this.isSupabaseReady()) {
@@ -786,194 +637,36 @@ class MappingService {
         .update(updateData)
         .eq('id', id)
         .select()
-        .single();
+        .maybeSingle();
 
       if (error) {
         console.error('Error reactivating product:', error);
         throw error;
       }
 
-      await this.evaluateNewMenuProduct(id, numericId);
       this.clearSession(numericId);
-      return product;
+      
+      const transformedData = {
+        id: product.id,
+        name: product.name,
+        is_active: true,
+        inactive_reason: null,
+        inactive_since: null
+      };
+      
+      return transformedData;
     } catch (error) {
       console.error('Error reactivating product:', error);
       throw error;
     }
   }
 
-  async reconcileProductActivation(userId) {
-    try {
-      const numericId = await this.getNumericUserId(userId);
-      if (!numericId) {
-        console.warn('Cannot reconcile product activation without a valid user ID');
-        return { reconciled: false, message: 'Missing user ID' };
-      }
-
-      if (!this.isSupabaseReady()) {
-        console.warn('Supabase not ready; skipping product activation reconciliation');
-        return { reconciled: false, message: 'Supabase unavailable' };
-      }
-
-      const cutoffDate = new Date();
-      cutoffDate.setDate(cutoffDate.getDate() - 28);
-      const cutoffIso = this.formatDate(cutoffDate);
-
-      const { data: products, error: productsError } = await supabaseAdmin.from('products')
-        .select('id, name, created_at, is_active, inactive_reason, inactive_since, first_sold_date');
-
-      if (productsError) {
-        console.error('Error fetching products for reconciliation:', productsError);
-        throw productsError;
-      }
-
-      if (!products || products.length === 0) {
-        return { reconciled: true, updated: 0, reactivated: 0, archived: 0 };
-      }
-
-      const productIds = products.map((product) => product.id);
-      const { data: sales, error: salesError } = await supabaseAdmin.from('daily_sales')
-        .select('product_id, sale_date')
-        .in('product_id', productIds);
-
-      if (salesError) {
-        console.error('Error fetching sales for product reconciliation:', salesError);
-        throw salesError;
-      }
-
-      const salesByProduct = {};
-      (sales || []).forEach((sale) => {
-        const saleDate = new Date(sale.sale_date);
-        const productId = sale.product_id;
-
-        if (!salesByProduct[productId]) {
-          salesByProduct[productId] = {
-            lastSale: saleDate,
-            firstSale: saleDate
-          };
-          return;
-        }
-
-        if (saleDate > salesByProduct[productId].lastSale) {
-          salesByProduct[productId].lastSale = saleDate;
-        }
-        if (saleDate < salesByProduct[productId].firstSale) {
-          salesByProduct[productId].firstSale = saleDate;
-        }
-      });
-
-      let updatedCount = 0;
-      let reactivatedCount = 0;
-      let archivedCount = 0;
-      let otherUpdatedCount = 0;
-
-      for (const product of products) {
-        const salesEntry = salesByProduct[product.id];
-        const lastSale = salesEntry?.lastSale || null;
-        const firstSale = salesEntry?.firstSale || null;
-        const createdAt = product.created_at ? new Date(product.created_at) : null;
-        const isActive = product.is_active;
-        const reason = product.inactive_reason;
-        const isSystemStale = this.getSystemStaleReasons().includes(reason);
-        const updateData = {};
-
-        if (!product.first_sold_date && firstSale) {
-          updateData.first_sold_date = this.formatDate(firstSale);
-        }
-
-        if (isActive) {
-          if (lastSale && lastSale < cutoffDate) {
-            updateData.is_active = false;
-            updateData.inactive_reason = PRODUCT_STATUS_NOTES.STALE;
-            updateData.inactive_since = this.formatDate(lastSale);
-          } else if (!lastSale && createdAt && createdAt < cutoffDate) {
-            updateData.is_active = false;
-            updateData.inactive_reason = PRODUCT_STATUS_NOTES.NEVER_SOLD;
-            updateData.inactive_since = this.formatDate(createdAt);
-          }
-        } else if (isSystemStale) {
-          if (lastSale && lastSale >= cutoffDate) {
-            const hasEnoughHistory = firstSale && firstSale <= cutoffDate;
-            if (hasEnoughHistory) {
-              updateData.is_active = true;
-              updateData.inactive_reason = null;
-              updateData.inactive_since = null;
-            } else {
-              updateData.is_active = false;
-              updateData.inactive_reason = PRODUCT_STATUS_NOTES.NEW_PRODUCT;
-            }
-          }
-        }
-
-        if (Object.keys(updateData).length > 0) {
-          const { data: updatedProduct, error: updateError } = await supabaseAdmin.from('products')
-            .update(updateData)
-            .eq('id', product.id)
-            .select()
-            .single();
-
-          if (updateError) {
-            console.error(`Error updating product ${product.id} during reconciliation:`, updateError);
-            continue;
-          }
-
-          if (updatedProduct) {
-            if (updateData.is_active === true && !isActive) {
-              reactivatedCount += 1;
-              console.log(`Reactivated product ${product.id} (${product.name}) after recent sales`);
-            } else if (updateData.is_active === false && isActive) {
-              archivedCount += 1;
-              console.log(`Archived product ${product.id} (${product.name}) due to stale sales`);
-            } else {
-              otherUpdatedCount += 1;
-              console.log(`Updated product ${product.id} (${product.name}) during reconciliation`);
-            }
-          }
-        }
-      }
-
-      if (archivedCount > 0 || reactivatedCount > 0 || otherUpdatedCount > 0) {
-        this.clearSession(numericId);
-      }
-
-      return {
-        reconciled: true,
-        updated: archivedCount + otherUpdatedCount,
-        reactivated: reactivatedCount,
-        archived: archivedCount
-      };
-    } catch (error) {
-      console.error('Error reconciling product activation:', error);
-      throw error;
-    }
-  }
-
-  async validateForecastEligibility(userId, productIds = null) {
-    try {
-      const numericId = await this.getNumericUserId(userId);
-      if (!numericId) {
-        return { activeProducts: [], missingMappings: [], errors: ['User not found'] };
-      }
-
-      const products = await this.getProducts(userId, null, null, true, 'active');
-      const selectedProducts = productIds && productIds.length > 0
-        ? products.filter((product) => productIds.includes(product.id))
-        : products;
-
-      const missingMappings = selectedProducts.filter((product) => !product.product_ingredients || product.product_ingredients.length === 0);
-      const errors = missingMappings.length > 0
-        ? ['Ingredient mapping missing']
-        : [];
-
-      return {
-        activeProducts: selectedProducts,
-        missingMappings,
-        errors
-      };
-    } catch (error) {
-      console.error('Error validating forecast eligibility:', error);
-      throw error;
-    }
+  getAllowedArchiveReasons() {
+    return [
+      'Discontinued product',
+      'Seasonal item',
+      'Out of stock temporarily'
+    ];
   }
 
   async getCategories(userId, forceRefresh = false, status = 'active') {

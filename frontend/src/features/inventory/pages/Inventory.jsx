@@ -592,7 +592,7 @@ const Inventory = () => {
           </select>
 
           <button 
-            className="inventory-btn-add-item"
+            className="btn-primary"
             onClick={() => {
               resetForm();
               setIsAddModalOpen(true);
@@ -621,7 +621,7 @@ const Inventory = () => {
               setIsAddModalOpen(true);
             }}
           >
-            <FaPlus /> Add First Item
+            Add First Item
           </button>
         </div>
       ) : (
@@ -925,7 +925,7 @@ const Inventory = () => {
                 onClick={handleAddItem}
                 disabled={isSubmitting}
               >
-                {isSubmitting ? 'Adding...' : <><FaPlus /> Add Item</>}
+                {isSubmitting ? 'Adding...' : <> Add Item</>}
               </button>
             </div>
           </div>

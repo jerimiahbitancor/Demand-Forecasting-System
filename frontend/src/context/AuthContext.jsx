@@ -30,23 +30,19 @@ export const AuthProvider = ({ children }) => {
   });
 
   // ============================================
-  // GET TOKEN - FIXED VERSION
+  // GET TOKEN
   // ============================================
   const getToken = async () => {
     try {
-      // First try to get from supabase session
       const { data: { session: currentSession } } = await supabase.auth.getSession();
       
       if (currentSession?.access_token) {
-        // Store token in sessionStorage for backup
         sessionStorage.setItem('access_token', currentSession.access_token);
         return currentSession.access_token;
       }
 
-      // If no session, try to get from sessionStorage
       const storedToken = sessionStorage.getItem('access_token');
       if (storedToken) {
-        // Verify if token is still valid
         try {
           const { data: { user } } = await supabase.auth.getUser(storedToken);
           if (user) {
@@ -58,7 +54,6 @@ export const AuthProvider = ({ children }) => {
         }
       }
 
-      // Try to refresh session
       const refreshToken = sessionStorage.getItem('refresh_token');
       if (refreshToken) {
         const { data: { session: refreshedSession }, error: refreshError } = 
@@ -80,7 +75,7 @@ export const AuthProvider = ({ children }) => {
   };
 
   // ============================================
-  // SYNC USER WITH CUSTOM TABLE
+  // SYNC USER WITH CUSTOM TABLE - FIXED
   // ============================================
   const syncUser = async () => {
     try {
@@ -103,7 +98,6 @@ export const AuthProvider = ({ children }) => {
       if (!response.ok) {
         if (response.status === 401) {
           console.error('Token expired or invalid during sync');
-          // Clear invalid token
           sessionStorage.removeItem('access_token');
           sessionStorage.removeItem('refresh_token');
           return null;
@@ -113,12 +107,18 @@ export const AuthProvider = ({ children }) => {
 
       const data = await response.json();
 
-      if (data.user) {
+      // Only update user if we got a valid user object
+      if (data.user && typeof data.user === 'object') {
+        console.log('✅ User synced:', data.user);
         setUser((prev) => ({
           ...prev,
           ...data.user,
         }));
         return data.user;
+      } else if (data.user && typeof data.user === 'number') {
+        // If the backend returns just the ID, we need to keep the existing user
+        console.log('⚠️ Backend returned numeric user ID, keeping existing user');
+        return user;
       }
 
       return null;
@@ -150,11 +150,9 @@ export const AuthProvider = ({ children }) => {
         setUser(sessionDataResult.session.user);
         setSession(sessionDataResult.session);
         
-        // Store tokens
         sessionStorage.setItem('access_token', sessionDataResult.session.access_token);
         sessionStorage.setItem('refresh_token', sessionDataResult.session.refresh_token);
         
-        // Sync user with custom table
         await syncUser();
         
         return sessionDataResult.session;
@@ -175,7 +173,6 @@ export const AuthProvider = ({ children }) => {
       try {
         setLoading(true);
         
-        // Get current session
         const { data: { session: currentSession } } = await supabase.auth.getSession();
         
         if (currentSession?.user) {
@@ -183,7 +180,6 @@ export const AuthProvider = ({ children }) => {
           setUser(currentSession.user);
           setSession(currentSession);
           
-          // Store tokens
           if (currentSession.access_token) {
             sessionStorage.setItem('access_token', currentSession.access_token);
           }
@@ -191,10 +187,8 @@ export const AuthProvider = ({ children }) => {
             sessionStorage.setItem('refresh_token', currentSession.refresh_token);
           }
           
-          // Sync user with custom table
           await syncUser();
         } else {
-          // Try to get from sessionStorage
           const storedToken = sessionStorage.getItem('access_token');
           if (storedToken) {
             try {
@@ -203,7 +197,6 @@ export const AuthProvider = ({ children }) => {
                 console.log('Restored user from stored token:', user.email);
                 setUser(user);
                 
-                // Try to refresh session
                 const { data: { session: refreshedSession } } = await supabase.auth.refreshSession();
                 if (refreshedSession) {
                   setSession(refreshedSession);
@@ -229,7 +222,6 @@ export const AuthProvider = ({ children }) => {
 
     checkAuth();
 
-    // Listen for auth changes
     const { data: { subscription } } = supabase.auth.onAuthStateChange(
       async (event, newSession) => {
       async (event, session) => {
@@ -241,7 +233,6 @@ export const AuthProvider = ({ children }) => {
             setUser(newSession.user);
             setSession(newSession);
             
-            // Store tokens
             if (newSession.access_token) {
               sessionStorage.setItem('access_token', newSession.access_token);
             }
@@ -249,7 +240,6 @@ export const AuthProvider = ({ children }) => {
               sessionStorage.setItem('refresh_token', newSession.refresh_token);
             }
             
-            // Sync user
             await syncUser();
           }
         } else if (event === 'SIGNED_OUT') {
@@ -377,7 +367,6 @@ export const AuthProvider = ({ children }) => {
       if (!response.ok) throw new Error(data.error || 'Failed to create password');
 
       if (data.session) {
-        // Use the setUserSession helper
         const sessionResult = await setUserSession(data.session);
         
         if (sessionResult) {
@@ -478,7 +467,6 @@ export const AuthProvider = ({ children }) => {
         setUser(data.user);
         setSession(data.session);
         
-        // Store tokens
         if (data.session?.access_token) {
           sessionStorage.setItem('access_token', data.session.access_token);
         }
@@ -486,7 +474,6 @@ export const AuthProvider = ({ children }) => {
           sessionStorage.setItem('refresh_token', data.session.refresh_token);
         }
         
-        // Sync user with custom table
         await syncUser();
         
         return { 
