@@ -10,8 +10,8 @@ const InventoryManagement = () => {
   const [activeTab, setActiveTab] = useState("inventory");
 
   const tabs = [
-    { id: "inventory", label: "Inventory Management", icon: FaBoxes },
-    { id: "mapping", label: "Product Mapping", icon: FaClipboardList },
+    { id: "inventory", label: "Ingredient Management", icon: FaBoxes },
+    { id: "mapping", label: "Product Management", icon: FaClipboardList },
   ];
 
   return (

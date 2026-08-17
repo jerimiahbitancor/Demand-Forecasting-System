@@ -13,7 +13,11 @@ import {
   FiInfo,
   FiEye,
   FiArchive,
-  FiRotateCcw
+  FiRotateCcw,
+  FiClipboard,
+  FiDollarSign,
+  FiAlertTriangle,
+  FiLink
 } from "react-icons/fi";
 import axios from 'axios';
 import toast from 'react-hot-toast';
@@ -72,6 +76,14 @@ const MappingData = () => {
   const [mappingData, setMappingData] = useState([]);
   const [categories, setCategories] = useState(['All']);
   const [totalProducts, setTotalProducts] = useState(0);
+
+  // ============ PRODUCT STATS ============
+  const [productStats, setProductStats] = useState({
+    total_menu_items: 0,
+    avg_cogs: 0,
+    low_margin_products: 0,
+    unmapped_products: 0
+  });
 
   const [statusFilter, setStatusFilter] = useState(() => {
     return sessionStorage.getItem(STORAGE_KEYS.STATUS_FILTER) || 'active';
@@ -159,6 +171,35 @@ const MappingData = () => {
     return client;
   }, [getToken]);
 
+  // ============ UPDATE STATS ============
+  const updateStats = useCallback((items) => {
+    const total = items.length;
+    
+    // Calculate average COGS (Cost of Goods Sold) - estimated as 60% of price
+    const totalCOGS = items.reduce((sum, item) => sum + ((item.price || 0) * 0.6), 0);
+    const avgCOGS = total > 0 ? totalCOGS / total : 0;
+    
+    // Low margin products (margin < 30%)
+    const lowMarginProducts = items.filter(item => {
+      const price = item.price || 0;
+      const cogs = price * 0.6;
+      const margin = price > 0 ? ((price - cogs) / price) * 100 : 0;
+      return margin < 30 && price > 0;
+    }).length;
+    
+    // Unmapped products (no ingredients mapped)
+    const unmappedProducts = items.filter(item => 
+      !item.product_ingredients || item.product_ingredients.length === 0
+    ).length;
+    
+    setProductStats({
+      total_menu_items: total,
+      avg_cogs: avgCOGS,
+      low_margin_products: lowMarginProducts,
+      unmapped_products: unmappedProducts
+    });
+  }, []);
+
   // ============ FETCH INVENTORY ITEMS FOR INGREDIENTS ============
   const fetchInventoryItems = useCallback(async () => {
     try {
@@ -202,8 +243,10 @@ const MappingData = () => {
       const storedTotal = sessionStorage.getItem(STORAGE_KEYS.TOTAL_PRODUCTS + cacheSuffix);
       const lastFetch = sessionStorage.getItem(STORAGE_KEYS.LAST_FETCH + cacheSuffix);
       
+      // 👇 FIX: Only use cache if NOT forceRefresh
       const cacheValid = lastFetch && (Date.now() - parseInt(lastFetch)) < 5 * 60 * 1000;
       
+      // 👇 FIX: Skip cache entirely when forceRefresh is true
       if (!forceRefresh && storedData && storedCategories && storedTotal && cacheValid) {
         const parsedData = JSON.parse(storedData);
         const parsedCategories = JSON.parse(storedCategories);
@@ -212,18 +255,20 @@ const MappingData = () => {
         setMappingData(parsedData);
         setCategories(parsedCategories);
         setTotalProducts(parsedTotal);
+        updateStats(parsedData);
         setLastUpdated(new Date());
         setLoading(false);
         await fetchInventoryItems();
         return;
       }
 
+      // 👇 FIX: Always fetch fresh when forceRefresh is true
       const productsResponse = await apiClient.get('/mapping/products', {
         params: {
           status: statusFilter,
           category: selectedCategory === 'All' ? null : selectedCategory,
           search: searchTerm || null,
-          forceRefresh: forceRefresh ? 'true' : 'false'
+          forceRefresh: 'true' // Always force refresh on API side
         },
         signal: abortControllerRef.current.signal
       });
@@ -232,6 +277,7 @@ const MappingData = () => {
         const data = productsResponse.data.data || [];
         setMappingData(data);
         setTotalProducts(data.length);
+        updateStats(data);
         setLastUpdated(new Date());
         const cacheSuffix = statusFilter === 'inactive' ? '_inactive' : '';
         sessionStorage.setItem(STORAGE_KEYS.MAPPING_DATA + cacheSuffix, JSON.stringify(data));
@@ -242,7 +288,7 @@ const MappingData = () => {
       const categoriesResponse = await apiClient.get('/mapping/categories', {
         params: {
           status: statusFilter,
-          forceRefresh: forceRefresh ? 'true' : 'false'
+          forceRefresh: 'true' // Always force refresh on API side
         }
       });
       
@@ -268,20 +314,19 @@ const MappingData = () => {
     } finally {
       setLoading(false);
     }
-  }, [apiClient, selectedCategory, searchTerm, statusFilter, fetchInventoryItems]);
+  }, [apiClient, selectedCategory, searchTerm, statusFilter, fetchInventoryItems, updateStats]);
 
   // ============ AUTO REFRESH ============
   const startAutoRefresh = useCallback(() => {
-    // Clear existing interval
     if (autoRefreshIntervalRef.current) {
       clearInterval(autoRefreshIntervalRef.current);
     }
     
-    // Start new interval (refresh every 60 seconds)
+    // 👇 FIX: Set to 5 seconds (5000ms)
     autoRefreshIntervalRef.current = setInterval(() => {
       console.log('🔄 Auto-refreshing mapping data...');
-      fetchData(true);
-    }, 60000); // 60 seconds
+      fetchData(true); // 👈 Pass true to bypass cache
+    }, 5000); // 5 seconds
     
     return autoRefreshIntervalRef.current;
   }, [fetchData]);
@@ -339,18 +384,15 @@ const MappingData = () => {
     sessionStorage.setItem(STORAGE_KEYS.CURRENT_PAGE, currentPage.toString());
   }, [currentPage]);
 
-  // Initial load and dependency changes
   useEffect(() => {
     if (isInitialMount.current) {
       isInitialMount.current = false;
       setTimeout(() => {
         fetchData(false);
-        // Start auto-refresh after initial load
         startAutoRefresh();
       }, 100);
     } else {
       debouncedFetch();
-      // Restart auto-refresh on filter changes
       stopAutoRefresh();
       startAutoRefresh();
     }
@@ -470,9 +512,7 @@ const MappingData = () => {
         toast.success(isEditMode ? 'Product updated successfully!' : 'Product created successfully!');
         resetForm();
         setIsModalOpen(false);
-        // Refresh data immediately after save
         await fetchData(true);
-        // Reset auto-refresh timer
         stopAutoRefresh();
         startAutoRefresh();
       }
@@ -556,9 +596,7 @@ const MappingData = () => {
         toast.success('Product archived successfully!');
         setIsArchiveModalOpen(false);
         setSelectedItem(null);
-        // Refresh data immediately after archive
         await fetchData(true);
-        // Reset auto-refresh timer
         stopAutoRefresh();
         startAutoRefresh();
       }
@@ -584,9 +622,7 @@ const MappingData = () => {
 
       if (response.data.success) {
         toast.success('Product reactivated successfully!');
-        // Refresh data immediately after reactivation
         await fetchData(true);
-        // Reset auto-refresh timer
         stopAutoRefresh();
         startAutoRefresh();
       }
@@ -792,9 +828,48 @@ const MappingData = () => {
 
   return (
     <div className="mapping-container">
+      {/* Stats Cards - 4 Cards */}
+      <div className="mapping-stats-cards">
+        <div className="mapping-stat-card">
+          <div className="mapping-stat-card-content">
+            
+            <p className="mapping-stat-card-label">Total Menu Items</p>
+            <p className="mapping-stat-card-value">{productStats.total_menu_items}</p>
+            <p className="mapping-stat-card-change positive">Active products</p>
+          </div>
+        </div>
+
+        <div className="mapping-stat-card">
+          <div className="mapping-stat-card-content">
+    
+            <p className="mapping-stat-card-label">Average COGS</p>
+            <p className="mapping-stat-card-value">₱ {productStats.avg_cogs.toFixed(2)}</p>
+            <p className="mapping-stat-card-change">Cost of Goods Sold</p>
+          </div>
+        </div>
+
+        <div className="mapping-stat-card warning">
+          <div className="mapping-stat-card-content">
+           
+            <p className="mapping-stat-card-label">Low Margin Products</p>
+            <p className="mapping-stat-card-value">{productStats.low_margin_products}</p>
+            <p className="mapping-stat-card-change warning-text">Margin &lt; 30%</p>
+          </div>
+        </div>
+
+        <div className="mapping-stat-card info">
+          <div className="mapping-stat-card-content">
+            
+            <p className="mapping-stat-card-label">Unmapped Products</p>
+            <p className="mapping-stat-card-value">{productStats.unmapped_products}</p>
+            <p className="mapping-stat-card-change">Missing ingredients</p>
+          </div>
+        </div>
+      </div>
+
       <div className="mapping-header">
         <h2 className="mapping-title">
-          Product Mapping ({totalProducts} products)
+          Product Mapping 
           {loading && <span className="loading-spinner">...</span>}
           {!loading && lastUpdated && (
             <span className="last-updated">
@@ -806,7 +881,7 @@ const MappingData = () => {
 
       <div className="mapping-controls">
         <div className="search-wrapper">
-          <FiSearch className="search-icon" />
+          <div className="search-icon" />
           <input
             type="text"
             placeholder="Search product or ingredient..."
@@ -851,13 +926,6 @@ const MappingData = () => {
               </option>
             ))}
           </select>
-          <button 
-            className="btn-refresh" 
-            onClick={() => fetchData(true)} 
-            disabled={loading}
-          >
-            <FiRefreshCw size={16} className={loading ? 'spinning' : ''} />
-          </button>
           <button 
             className="btn-add-product"
             onClick={() => {
@@ -1015,7 +1083,7 @@ const MappingData = () => {
             <div className="modal-header">
               <h3>{isViewMode ? 'Product Details' : (isEditMode ? 'Edit Product' : 'Add New Product')}</h3>
               <button className="modal-close-btn" onClick={closeModal} disabled={isSaving}>
-                <FaTimes size={24} />
+                <FiX size={24} />
               </button>
             </div>
 
@@ -1304,7 +1372,7 @@ const MappingData = () => {
               <button className="modal-close-btn" onClick={() => {
                 if (!isArchiving) setIsArchiveModalOpen(false);
               }} disabled={isArchiving}>
-                <FaTimes size={24} />
+                <FiX size={24} />
               </button>
             </div>
 

@@ -17,7 +17,11 @@ import {
   FaArchive,
   FaShoppingCart,
   FaTimes,
-  FaSave
+  FaSave,
+  FaChartLine,
+  FaBoxes,
+  FaExclamationTriangle,
+  FaCalculator
 } from 'react-icons/fa';
 import axios from 'axios';
 import toast from 'react-hot-toast';
@@ -42,7 +46,8 @@ const Inventory = () => {
     totalStockValue: 0,
     totalItems: 0,
     lowStockAlerts: 0,
-    outOfStockItems: 0
+    outOfStockItems: 0,
+    forecastedDeduction: 0
   });
   
   // Modal States
@@ -69,10 +74,7 @@ const Inventory = () => {
     quantity: '',
     price: '',
     batch: '',
-    min_stock: '',
-    supplier: '',
-    location: '',
-    notes: ''
+    min_stock: ''
   });
 
   const [restockData, setRestockData] = useState({
@@ -186,11 +188,17 @@ const Inventory = () => {
         const summary = response.data.summary || {};
         setInventoryItems(response.data.data || []);
         setTotalItems(summary.totalItems ?? response.data.total ?? 0);
+        
+        // Calculate forecasted deduction (30% of total stock value as a forecast)
+        const totalStockValue = summary.totalStockValue ?? 0;
+        const forecastedDeduction = totalStockValue * 0.3; // 30% forecasted deduction
+        
         setSummaryStats({
-          totalStockValue: summary.totalStockValue ?? 0,
+          totalStockValue: totalStockValue,
           totalItems: summary.totalItems ?? 0,
           lowStockAlerts: summary.lowStockAlerts ?? 0,
-          outOfStockItems: summary.outOfStockItems ?? 0
+          outOfStockItems: summary.outOfStockItems ?? 0,
+          forecastedDeduction: forecastedDeduction
         });
       }
     } catch (error) {
@@ -430,10 +438,7 @@ const Inventory = () => {
       quantity: '',
       price: '',
       batch: '',
-      min_stock: '',
-      supplier: '',
-      location: '',
-      notes: ''
+      min_stock: ''
     });
     setFormErrors({});
   };
@@ -447,10 +452,7 @@ const Inventory = () => {
       quantity: item.quantity?.toString() || '',
       price: item.price?.toString() || '',
       batch: item.batch || '',
-      min_stock: item.min_stock?.toString() || '',
-      supplier: item.supplier || '',
-      location: item.location || '',
-      notes: item.notes || ''
+      min_stock: item.min_stock?.toString() || ''
     });
     setIsEditModalOpen(true);
   };
@@ -527,6 +529,7 @@ const Inventory = () => {
   const totalStockValue = summaryStats.totalStockValue;
   const lowStockAlerts = summaryStats.lowStockAlerts;
   const outOfStockItems = summaryStats.outOfStockItems;
+  const forecastedDeduction = summaryStats.forecastedDeduction;
 
   // Pagination
   const totalPages = Math.ceil(totalItems / itemsPerPage);
@@ -534,29 +537,49 @@ const Inventory = () => {
   // ============ RENDER ============
   return (
     <div className="inventory-component">
-      {/* Stats Cards */}
+      {/* Stats Cards - 4 Cards */}
       <div className="inventory-stats-cards">
         <div className="inventory-stat-card">
           <div className="inventory-stat-card-content">
-            <p className="inventory-stat-card-label">All Items Value</p>
+            <div className="inventory-stat-card-icon">
+             
+            </div>
+            <p className="inventory-stat-card-label">Total Stock Value</p>
             <p className="inventory-stat-card-value">{formatCurrency(totalStockValue)}</p>
             <p className="inventory-stat-card-change positive">All items: {summaryStats.totalItems || inventoryItems.length}</p>
           </div>
         </div>
 
+        <div className="inventory-stat-card">
+          <div className="inventory-stat-card-content">
+            <div className="inventory-stat-card-icon">
+            
+            </div>
+            <p className="inventory-stat-card-label">Total Items</p>
+            <p className="inventory-stat-card-value">{summaryStats.totalItems || inventoryItems.length}</p>
+            <p className="inventory-stat-card-change">Active inventory items</p>
+          </div>
+        </div>
+
         <div className="inventory-stat-card warning">
           <div className="inventory-stat-card-content">
+            <div className="inventory-stat-card-icon">
+            
+            </div>
             <p className="inventory-stat-card-label">Low Stock Alerts</p>
             <p className="inventory-stat-card-value">{lowStockAlerts}</p>
             <p className="inventory-stat-card-change warning-text">Requires attention</p>
           </div>
         </div>
 
-        <div className="inventory-stat-card danger">
+        <div className="inventory-stat-card info">
           <div className="inventory-stat-card-content">
-            <p className="inventory-stat-card-label">Out of Stock</p>
-            <p className="inventory-stat-card-value">{outOfStockItems}</p>
-            <p className="inventory-stat-card-change danger-text">Need restock</p>
+            <div className="inventory-stat-card-icon">
+             
+            </div>
+            <p className="inventory-stat-card-label">Forecasted Deduction</p>
+            <p className="inventory-stat-card-value">{formatCurrency(forecastedDeduction)}</p>
+            <p className="inventory-stat-card-change">30% of total stock value</p>
           </div>
         </div>
       </div>
@@ -1051,11 +1074,6 @@ const Inventory = () => {
                     placeholder="Enter batch number"
                   />
                 </div>
-
-                
-
-               
-                
               </div>
             </div>
 
