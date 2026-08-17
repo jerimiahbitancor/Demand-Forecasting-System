@@ -1,8 +1,6 @@
 const { supabase, supabaseAdmin } = require('../config/supabase');
-const { verifyOTP } = require('../services/otpService');
-const passwordResetController = require('./passwordResetController');
+const { generateOTP, sendOTPEmail, toPH, nowPH, toSafeISOString, getOtpExpiryTime } = require('../services/otpService');
 
-// Send OTP to the account email (when user is logged in in Account Settings)
 const sendChangePasswordCode = async (req, res) => {
   try {
     const email = (req.user && req.user.email) || (req.body && req.body.email);
@@ -15,7 +13,7 @@ const sendChangePasswordCode = async (req, res) => {
 
     const { data: user, error: userError } = await supabaseAdmin
       .from('user')
-      .select('id')
+      .select('id, email')
       .ilike('email', normalizedEmail)
       .single();
 
@@ -23,16 +21,41 @@ const sendChangePasswordCode = async (req, res) => {
       return res.status(404).json({ error: 'User not found' });
     }
 
-    req.body = req.body || {};
-    req.body.email = normalizedEmail;
-    return passwordResetController.sendCode(req, res);
+    const verificationCode = generateOTP();
+    const expiresAt = toSafeISOString(getOtpExpiryTime());
+
+    const { error: upsertError } = await supabaseAdmin
+      .from('password_resets')
+      .upsert(
+        {
+          user_id: user.id,
+          email: normalizedEmail,
+          verification_code: verificationCode,
+          expires_at: expiresAt,
+          is_used: false,
+        },
+        { onConflict: 'user_id' }
+      );
+
+    if (upsertError) {
+      throw upsertError;
+    }
+
+    // respond immediately, send email in background to avoid blocking
+    res.status(200).json({
+      success: true,
+      message: 'Verification code sent to your email',
+    });
+
+    sendOTPEmail(normalizedEmail, verificationCode, 'reset').catch((err) => {
+      console.error('Background sendOTPEmail error (change password):', err);
+    });
   } catch (error) {
     console.error('sendChangePasswordCode error:', error);
     return res.status(500).json({ error: 'Failed to send verification code: ' + error.message });
   }
 };
 
-// Verify code submitted by user (account settings)
 const verifyChangePasswordCode = async (req, res) => {
   try {
     const code = req.body && req.body.code;
@@ -43,20 +66,66 @@ const verifyChangePasswordCode = async (req, res) => {
     }
 
     const normalizedEmail = String(email).trim().toLowerCase();
-    const result = await verifyOTP(normalizedEmail, code, 'reset', false);
 
-    if (!result.valid) {
-      return res.status(401).json({ error: result.error || 'Invalid code' });
+    const { data: user, error: userError } = await supabaseAdmin
+      .from('user')
+      .select('id')
+      .ilike('email', normalizedEmail)
+      .single();
+
+    if (userError || !user) {
+      return res.status(401).json({ error: 'Invalid email or code' });
     }
 
-    return res.status(200).json({ success: true, message: 'Code verified successfully' });
+    const { data: resetRecord, error: resetError } = await supabaseAdmin
+      .from('password_resets')
+      .select('id, verification_code, expires_at, is_used')
+      .eq('user_id', user.id)
+      .single();
+
+    if (resetError || !resetRecord) {
+      console.log('Reset record not found for user:', user.id, normalizedEmail);
+      return res.status(401).json({ error: 'Invalid email or code' });
+    }
+
+    if (resetRecord.is_used) {
+      console.log('Code already used:', resetRecord.id);
+      return res.status(401).json({ error: 'This code has already been used' });
+    }
+
+    const currentTime = nowPH();
+    const expiresTime = toPH(resetRecord.expires_at);
+    const timeDiff = expiresTime.diff(currentTime);
+
+    console.log('Code validation:', {
+      currentTimePH: currentTime.format(),
+      expiresAtPH: expiresTime.format(),
+      secondsRemaining: Math.round(timeDiff / 1000),
+      isExpired: timeDiff <= 0,
+    });
+
+    if (timeDiff <= 0) {
+      return res.status(401).json({ error: 'Verification code has expired' });
+    }
+
+    const dbCode = String(resetRecord.verification_code).trim();
+    const userCode = String(code).trim();
+
+    if (dbCode !== userCode) {
+      console.log('Code mismatch:', { expected: dbCode, received: userCode });
+      return res.status(401).json({ error: 'Invalid code' });
+    }
+
+    res.status(200).json({
+      success: true,
+      message: 'Code verified successfully',
+    });
   } catch (error) {
     console.error('verifyChangePasswordCode error:', error);
     return res.status(500).json({ error: 'Failed to verify code: ' + error.message });
   }
 };
 
-// Change password after code verification
 const changePassword = async (req, res) => {
   try {
     const { code, password } = req.body || {};
@@ -72,11 +141,6 @@ const changePassword = async (req, res) => {
 
     const normalizedEmail = String(email).trim().toLowerCase();
 
-    const verifyResult = await verifyOTP(normalizedEmail, code, 'reset', true);
-    if (!verifyResult.valid) {
-      return res.status(401).json({ error: verifyResult.error || 'Invalid code' });
-    }
-
     const { data: user, error: userError } = await supabaseAdmin
       .from('user')
       .select('id, auth_id')
@@ -84,7 +148,28 @@ const changePassword = async (req, res) => {
       .single();
 
     if (userError || !user) {
-      return res.status(404).json({ error: 'User not found' });
+      return res.status(401).json({ error: 'Invalid request' });
+    }
+
+    const { data: resetRecord, error: resetError } = await supabaseAdmin
+      .from('password_resets')
+      .select('id, verification_code, is_used')
+      .eq('user_id', user.id)
+      .single();
+
+    if (resetError || !resetRecord) {
+      return res.status(401).json({ error: 'Invalid request' });
+    }
+
+    if (resetRecord.is_used) {
+      return res.status(401).json({ error: 'This code has already been used' });
+    }
+
+    const dbCode = String(resetRecord.verification_code).trim();
+    const userCode = String(code).trim();
+
+    if (dbCode !== userCode) {
+      return res.status(401).json({ error: 'Invalid code' });
     }
 
     let authId = user.auth_id;
@@ -121,6 +206,18 @@ const changePassword = async (req, res) => {
     const { error: updateError } = await supabaseAdmin.auth.admin.updateUserById(authId, { password });
     if (updateError) throw updateError;
 
+    const { error: markError } = await supabaseAdmin
+      .from('password_resets')
+      .update({ 
+        is_used: true,
+        used_at: nowPH().toISOString()
+      })
+      .eq('id', resetRecord.id);
+
+    if (markError) {
+      throw markError;
+    }
+
     const now = new Date().toISOString();
     const { error: timestampError } = await supabaseAdmin
       .from('user')
@@ -129,8 +226,8 @@ const changePassword = async (req, res) => {
 
     if (timestampError) {
       console.warn('Could not update last_password_change field, falling back to updated_at:', timestampError.message);
-        const { error: fallbackError } = await supabaseAdmin
-          .from('user')
+      const { error: fallbackError } = await supabaseAdmin
+        .from('user')
         .update({ updated_at: now })
         .eq('id', user.id);
       if (fallbackError) {
