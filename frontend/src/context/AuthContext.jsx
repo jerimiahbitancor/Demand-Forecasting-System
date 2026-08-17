@@ -224,22 +224,21 @@ export const AuthProvider = ({ children }) => {
 
     const { data: { subscription } } = supabase.auth.onAuthStateChange(
       async (event, newSession) => {
-      async (event, session) => {
         if (event === 'INITIAL_SESSION' || event === 'SIGNED_IN') return;
         console.log('Auth state changed:', event);
-        
+
         if (event === 'SIGNED_IN' || event === 'TOKEN_REFRESHED') {
           if (newSession?.user) {
             setUser(newSession.user);
             setSession(newSession);
-            
+
             if (newSession.access_token) {
               sessionStorage.setItem('access_token', newSession.access_token);
             }
             if (newSession.refresh_token) {
               sessionStorage.setItem('refresh_token', newSession.refresh_token);
             }
-            
+
             await syncUser();
           }
         } else if (event === 'SIGNED_OUT') {
@@ -248,7 +247,7 @@ export const AuthProvider = ({ children }) => {
           sessionStorage.removeItem('access_token');
           sessionStorage.removeItem('refresh_token');
         }
-        
+
         setLoading(false);
       }
     );
@@ -586,4 +585,4 @@ export const AuthProvider = ({ children }) => {
   };
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
-};
+}; 
