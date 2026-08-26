@@ -1,3 +1,4 @@
+import { useEffect, useState } from "react";
 import { FaClock, FaTimes, FaBoxes, FaHistory, FaArrowLeft, FaArrowRight, FaTag, FaExclamationTriangle, FaInfoCircle } from "react-icons/fa";
 import Tippy from "@tippyjs/react";
 import "tippy.js/dist/tippy.css";
@@ -5,7 +6,41 @@ import "tippy.js/animations/scale.css";
 import InventoryModal from "./InventoryModal";
 import "./HistoryModal.css";
 
-const HistoryModal = ({ item, onClose }) => {
+const HistoryModal = ({ item, apiClient, onClose }) => {
+  const [transactions, setTransactions] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [currentPage, setCurrentPage] = useState(1);
+  const [totalPages, setTotalPages] = useState(0);
+  const itemId = item?.id;
+
+  useEffect(() => {
+    if (!item) return undefined;
+    let active = true;
+
+    const fetchTransactions = async () => {
+      setLoading(true);
+      try {
+        const response = await apiClient.get(`/inventory/items/${itemId}/transactions`, {
+          params: { page: currentPage, limit: 10 },
+        });
+        if (active) {
+          setTransactions(response.data.data || []);
+          setTotalPages(response.data.totalPages || 0);
+        }
+      } catch (error) {
+        if (active) setTransactions([]);
+        console.error('Error fetching transaction history:', error);
+      } finally {
+        if (active) setLoading(false);
+      }
+    };
+
+    fetchTransactions();
+    return () => {
+      active = false;
+    };
+  }, [apiClient, item, itemId, currentPage]);
+
   if (!item) return null;
 
   // Get stock status
@@ -25,30 +60,6 @@ const HistoryModal = ({ item, onClose }) => {
   };
 
   const status = getStockStatus(item);
-
-  // Sample transaction data - replace with actual data from API
-  const transactions = [
-    {
-      id: 1,
-      date: "2026-08-15",
-      time: "14:30",
-      transaction: "Restock",
-      quantityChange: "+10",
-      newBalance: "12.0 kg",
-      source: "Purchase",
-      type: "restock"
-    },
-    {
-      id: 2,
-      date: "YYYY-MM-DD",
-      time: "10:15",
-      transaction: "Sale",
-      quantityChange: "-14",
-      newBalance: "2.0 kg",
-      source: "Sales Data Upload",
-      type: "sale"
-    }
-  ];
 
   return (
     <InventoryModal className="modal-lg inventory-history-modal" onClose={onClose}>
@@ -167,7 +178,14 @@ const HistoryModal = ({ item, onClose }) => {
         </div>
 
         {/* Empty State or Table */}
-        {(!item.transactions || item.transactions.length === 0) && (
+        {loading && (
+          <div className="history-empty-state">
+            <FaClock size={48} />
+            <p className="empty-sub-text">Loading stock movements...</p>
+          </div>
+        )}
+
+        {!loading && transactions.length === 0 && (
           <div className="history-empty-state">
             <FaClock size={48} />
             <p className="empty-sub-text">
@@ -176,7 +194,7 @@ const HistoryModal = ({ item, onClose }) => {
           </div>
         )}
 
-        {item.transactions && item.transactions.length > 0 && (
+        {!loading && transactions.length > 0 && (
           <>
             {/* Table */}
             <div className="history-table-wrapper">
@@ -192,43 +210,60 @@ const HistoryModal = ({ item, onClose }) => {
                   </tr>
                 </thead>
                 <tbody>
-                  {transactions.map((t, index) => (
-                    <tr key={t.id}>
+                  {transactions.map((transaction, index) => {
+                    const transactionDate = transaction.created_at ? new Date(transaction.created_at) : null;
+                    const quantityChange = Number(transaction.quantity) || 0;
+                    const transactionType = transaction.transaction_type || 'adjustment';
+                    return (
+                    <tr key={transaction.id}>
                       <td>{index + 1}</td>
                       <td>
-                        {t.date} <br />
-                        <span className="time-text">{t.time}</span>
+                        {transactionDate ? transactionDate.toLocaleDateString() : 'N/A'} <br />
+                        <span className="time-text">{transactionDate ? transactionDate.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : ''}</span>
                       </td>
                       <td>
-                        <span className={`transaction-badge ${t.type}`}>
-                          {t.transaction}
+                        <span className={`transaction-badge ${transactionType}`}>
+                          {transactionType.charAt(0).toUpperCase() + transactionType.slice(1)}
                         </span>
                       </td>
-                      <td className={t.quantityChange.startsWith('+') ? 'positive-change' : 'negative-change'}>
-                        {t.quantityChange}
+                      <td className={quantityChange >= 0 ? 'positive-change' : 'negative-change'}>
+                        {quantityChange >= 0 ? '+' : ''}{quantityChange}
                       </td>
-                      <td>{t.newBalance}</td>
-                      <td>{t.source}</td>
+                      <td>{transaction.new_quantity ?? 0} {item.unit || 'pcs'}</td>
+                      <td>{transaction.reason || transaction.notes || 'Inventory update'}</td>
                     </tr>
-                  ))}
+                    );
+                  })}
                 </tbody>
               </table>
             </div>
 
             {/* Pagination */}
             <div className="history-pagination">
-              <button className="page-btn" disabled>
+              <button
+                className="page-btn"
+                onClick={() => setCurrentPage((page) => Math.max(page - 1, 1))}
+                disabled={currentPage === 1 || loading}
+              >
                 <FaArrowLeft /> Previous
               </button>
               <div className="page-numbers">
-                <button className="page-number active">1</button>
-                <button className="page-number">2</button>
-                <button className="page-number">3</button>
-                <span className="page-dots">...</span>
-                <button className="page-number">67</button>
-                <button className="page-number">68</button>
+                {Array.from({ length: totalPages }, (_, index) => index + 1).map((page) => (
+                  <button
+                    key={page}
+                    className={`page-number ${currentPage === page ? 'active' : ''}`}
+                    onClick={() => setCurrentPage(page)}
+                    disabled={loading}
+                  >
+                    {page}
+                  </button>
+                ))}
               </div>
-              <button className="page-btn">
+              <button
+                className="page-btn"
+                onClick={() => setCurrentPage((page) => Math.min(page + 1, totalPages))}
+                disabled={currentPage === totalPages || totalPages === 0 || loading}
+              >
                 Next <FaArrowRight />
               </button>
             </div>

@@ -15,7 +15,7 @@ const ArchiveModal = ({ item, isSubmitting, onConfirm, onClose }) => {
       <div className="inventory-archive-header">
         <div className="inventory-archive-header-left">
           <div className="inventory-archive-item-row">
-                      <p>Do you want to archive <span className="item-name">{item.name || "Unnamed"}</span>?</p>
+                      <p className="inv">Do you want to archive <span className="item-name">{item.name || "Unnamed"}</span>?</p>
 
           </div>
         </div>

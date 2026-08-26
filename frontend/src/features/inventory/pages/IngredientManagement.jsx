@@ -5,7 +5,6 @@ import {
   FaPlus, 
   FaEdit, 
   FaTrash, 
-  FaEye,
   FaSortAmountDown,
   FaSortAmountUp,
   FaBoxOpen,
@@ -146,7 +145,7 @@ const IngredientManagement = () => {
         }
         if (error.response?.status === 401) {
           toast.error('Session expired. Please login again.');
-          window.location.href = '/login';
+          window.location.assign('/login');
         }
         return Promise.reject(error);
       }
@@ -511,11 +510,6 @@ const IngredientManagement = () => {
   const openRestoreModal = (item) => {
     setSelectedItem(item);
     setIsRestoreModalOpen(true);
-  };
-
-  const openViewModal = (item) => {
-    setSelectedItem(item);
-    setIsViewModalOpen(true);
   };
 
   // ============ UTILITY FUNCTIONS ============
@@ -1028,8 +1022,7 @@ const IngredientManagement = () => {
       {isArchiveModalOpen && <ArchiveModal item={selectedItem} isSubmitting={isSubmitting} onConfirm={handleArchiveItem} onClose={() => setIsArchiveModalOpen(false)} />}
       {isRestoreModalOpen && <InventoryConfirmationModal type="restore" item={selectedItem} isSubmitting={isSubmitting} onConfirm={handleRestoreItem} onClose={() => setIsRestoreModalOpen(false)} />}
       {isRestockModalOpen && <RestockModal item={selectedItem} data={restockData} isSubmitting={isSubmitting} onChange={setRestockData} onSubmit={handleRestock} onClose={() => { setIsRestockModalOpen(false); setRestockData({ quantity: '', reason: '', notes: '' }); }} />}
-      {isHistoryModalOpen && <HistoryModal item={selectedItem} onClose={() => setIsHistoryModalOpen(false)} />}
-      {isViewModalOpen && <ViewItemModal item={selectedItem} getStockStatus={getStockStatus} formatCurrency={formatCurrency} formatDate={formatDate} onClose={() => setIsViewModalOpen(false)} />}
+      {isHistoryModalOpen && <HistoryModal key={selectedItem?.id} item={selectedItem} apiClient={apiClient} onClose={() => setIsHistoryModalOpen(false)} />}
 
       {legacyModalsEnabled() && <>
       {/* Add Modal */}
