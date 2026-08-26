@@ -1,4 +1,4 @@
-// components/Inventory.jsx
+// components/IngredientManagement.jsx
 import { useState, useEffect, useMemo, useCallback, useRef } from "react";
 import "./Inventory.css";
 import { 
