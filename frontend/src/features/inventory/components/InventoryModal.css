@@ -1,0 +1,120 @@
+.inventory-modal-overlay {
+  position: fixed;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  padding: 1rem;
+  background: rgba(0, 0, 0, 0.5);
+  backdrop-filter: blur(4px);
+  z-index: 9999;
+  animation: inventoryModalFadeIn 0.2s ease;
+}
+
+.inventory-modal-content {
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  max-width: 520px;
+  max-height: 90vh;
+  overflow: hidden;
+  background: #ffffff;
+  border-radius: 12px;
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
+  animation: inventoryModalSlideUp 0.3s ease;
+}
+
+.inventory-modal-content.modal-md {
+  max-width: 520px;
+  max-height: 85vh;
+}
+
+.inventory-modal-content.modal-lg {
+  max-width: 650px;
+}
+
+.inventory-modal-header {
+  display: flex;
+  flex-shrink: 0;
+  align-items: center;
+  justify-content: space-between;
+  padding: 1.25rem 1.5rem 0.5rem;
+  background: #ffffff;
+}
+
+.inventory-modal-body {
+  flex: 1;
+  padding: 0.5rem 1.5rem 1rem;
+  overflow-y: auto;
+}
+
+.inventory-modal-body::-webkit-scrollbar {
+  width: 5px;
+}
+
+.inventory-modal-body::-webkit-scrollbar-thumb {
+  background: #c1c7cd;
+  border-radius: 3px;
+}
+
+.inventory-modal-footer {
+  display: flex;
+  flex-shrink: 0;
+  justify-content: flex-end;
+  gap: 0.75rem;
+  padding: 1rem 1.5rem;
+  border-top: 1px solid #e5e7eb;
+  background: #fafafa;
+}
+
+@keyframes inventoryModalFadeIn {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+@keyframes inventoryModalSlideUp {
+  from {
+    opacity: 0;
+    transform: translateY(20px) scale(0.95);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+@media (max-width: 768px) {
+  .inventory-modal-overlay {
+    padding: 0.5rem;
+  }
+
+  .inventory-modal-content,
+  .inventory-modal-content.modal-md,
+  .inventory-modal-content.modal-lg {
+    max-width: 98%;
+    max-height: 95vh;
+    border-radius: 8px;
+  }
+
+  .inventory-modal-header,
+  .inventory-modal-body,
+  .inventory-modal-footer {
+    padding-left: 1rem;
+    padding-right: 1rem;
+  }
+}
+
+@media (max-width: 480px) {
+  .inventory-modal-overlay {
+    padding: 0.25rem;
+  }
+
+  .inventory-modal-content,
+  .inventory-modal-content.modal-md,
+  .inventory-modal-content.modal-lg {
+    max-width: 100%;
+    max-height: 98vh;
+    border-radius: 6px;
+  }
+}

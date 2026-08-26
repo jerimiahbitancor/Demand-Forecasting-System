@@ -740,7 +740,6 @@
 
 .modal-content {
   background: var(--color-bg-white);
-  border-radius: 12px;
   width: 90%;
   max-width: 800px;
   max-height: 80vh;
@@ -761,7 +760,6 @@
   justify-content: space-between;
   align-items: center;
   padding: 16px 24px;
-  border-bottom: 2px solid var(--color-red-primary);
   flex-shrink: 0;
   background: #fafafa;
 }
@@ -774,16 +772,15 @@
 }
 
 .modal-close-btn {
-  background: none;
-  border: none;
-  font-size: 1.25rem;
-  color: var(--color-text-light);
-  cursor: pointer;
-  padding: 4px;
-  border-radius: 6px;
-  transition: all 0.2s;
-  display: flex;
-  align-items: center;
+background: none;
+    border: none;
+    font-size: 1.25rem;
+    color: var(--color-text-light);
+    cursor: pointer;
+    transition: all 0.2s;
+    display: flex;
+    align-items: center;
+    justify-content: center;
 }
 
 .modal-close-btn:hover {

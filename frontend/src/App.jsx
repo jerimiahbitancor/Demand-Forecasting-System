@@ -20,7 +20,7 @@ import IngredientDemand from './features/analytics/components/IngredientDemand';
 import Settings from './features/settings/pages/Settings';
 import Analytics from './features/analytics/pages/Analytics';
 import InventoryManagement from './features/inventory/pages/InventoryManagement';
-import Inventory from './features/inventory/pages/Inventory';
+import IngredientManagement from './features/inventory/pages/IngredientManagement';
 import './App.css';
 import './RouteGuard.css'
 
@@ -157,7 +157,7 @@ function App() {
         <Route path="/dashboard" element={<Gated><Dashboard /></Gated>} />
         <Route path="/analytics" element={<Gated><Analytics /></Gated>} />
         <Route path="/inventory-management" element={<InventoryManagement />} />
-        <Route path="/inventory" element={<Inventory />} />
+        <Route path="/ingredient-management" element={<IngredientManagement />} />
         {/* Analytics sub-routes */}
         <Route path="/forecasting" element={<Gated><Forecasting /></Gated>} />
         <Route path="/product-performance" element={<Gated><ProductPerformance /></Gated>} />

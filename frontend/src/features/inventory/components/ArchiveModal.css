@@ -1,0 +1,241 @@
+/* ArchiveModal.css */
+
+.inventory-archive-modal .inventory-archive-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 1rem;
+  border-bottom: none;
+  background: white;
+}
+
+.inventory-archive-modal .inventory-archive-header-left {
+  display: flex;
+  flex-direction: row;
+  gap: 0.5rem;
+  flex: 1;
+}
+
+.inventory-archive-modal .inventory-archive-item-row {
+  display: flex;
+  align-items: flex-start;
+  flex-wrap: wrap;
+  flex-direction: row;
+  justify-content: flex-start;
+  align-content: center;
+  padding-left: 1rem;
+}
+
+.inventory-archive-modal .item-name {
+  font-size: 1.5rem;
+  font-weight: 700;
+  color: #1f2937;
+  letter-spacing: -0.02em;
+}
+
+.inventory-archive-modal .btn-archive {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  color: #6b7280;
+  border-radius: 6px;
+  font-size: 0.75rem;
+  font-weight: 500;
+  cursor: default;
+  opacity: 0.7;
+}
+
+/* Body */
+.inventory-archive-modal .inventory-archive-body {
+  padding: 0.5rem 1.5rem 0.75rem 1.5rem;
+  overflow-y: auto;
+  flex: 1;
+}
+
+.inventory-archive-modal .inventory-archive-content {
+  padding: 0.5rem 0;
+  text-align: center;
+}
+
+.confirmation-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin: 0 auto 0.75rem;
+}
+
+.confirmation-icon.warning {
+  color: #f59e0b;
+}
+
+.inventory-archive-modal .inventory-archive-content h4 {
+  margin: 0 0 1rem;
+  color: #1f2937;
+  font-size: 1.1rem;
+  font-weight: 600;
+}
+
+/* Archive Info Card */
+.archive-info-card {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.75rem;
+  background: #f9fafb;
+  border-radius: 8px;
+  padding: 12px 20px;
+  border: 1.5px solid #e5e7eb;
+  margin: 0 auto 1rem;
+  max-width: 280px;
+}
+
+.archive-info-label {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  font-size: 0.7rem;
+  font-weight: 600;
+  color: #6b7280;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.archive-info-icon {
+  font-size: 0.8rem;
+  color: #6b7280;
+}
+
+.archive-info-value {
+  font-size: 1rem;
+  font-weight: 600;
+  color: #1f2937;
+}
+
+/* Warning Text */
+.archive-warning-text {
+  color: #6b7280;
+  font-size: 0.85rem;
+  line-height: 1.5;
+  max-width: 480px;
+  margin: 0 auto;
+}
+
+/* Footer */
+.inventory-archive-modal .inventory-archive-footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: 0.75rem;
+  padding: 0.75rem 1.5rem 1.25rem 1.5rem;
+  border-top: 1px solid #f3f4f6;
+  background: white;
+  flex-shrink: 0;
+}
+
+.inventory-archive-modal .inventory-archive-footer .btn-secondary {
+  padding: 0.4rem 1.25rem;
+  background: transparent;
+  color: #6b7280;
+  border: none;
+  border-radius: 6px;
+  font-weight: 500;
+  font-size: 0.8rem;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.inventory-archive-modal .inventory-archive-footer .btn-secondary:hover {
+  color: #374151;
+}
+
+.inventory-archive-modal .inventory-archive-footer .btn-warning {
+  padding: 0.4rem 1.25rem;
+  background: #f59e0b;
+  color: white;
+  border: none;
+  border-radius: 6px;
+  font-weight: 600;
+  font-size: 0.8rem;
+  cursor: pointer;
+  transition: all 0.2s;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+.inventory-archive-modal .inventory-archive-footer .btn-warning:hover {
+  background: #d97706;
+  transform: translateY(-1px);
+  box-shadow: 0 4px 12px rgba(245, 158, 11, 0.3);
+}
+
+.inventory-archive-modal .inventory-archive-footer .btn-warning:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+  transform: none;
+}
+
+/* Mobile Responsive */
+@media (max-width: 768px) {
+  .inventory-archive-modal .inventory-archive-header {
+    padding: 0.75rem 1rem 0.25rem 1rem;
+  }
+
+  .inventory-archive-modal .inventory-archive-body {
+    padding: 0.25rem 1rem 0.5rem 1rem;
+  }
+
+  .inventory-archive-modal .inventory-archive-footer {
+    padding: 0.5rem 1rem 0.75rem 1rem;
+  }
+
+  .inventory-archive-modal .item-name {
+    font-size: 1.2rem;
+  }
+
+  .inventory-archive-modal .inventory-archive-item-row {
+    gap: 0.5rem;
+    flex-direction: column;
+    align-items: flex-start;
+  }
+
+  .archive-info-card {
+    max-width: 100%;
+    padding: 10px 16px;
+  }
+
+  .archive-warning-text {
+    font-size: 0.8rem;
+  }
+}
+
+@media (max-width: 480px) {
+  .inventory-archive-modal .inventory-archive-footer {
+    flex-direction: column-reverse;
+  }
+
+  .inventory-archive-modal .inventory-archive-footer button {
+    width: 100%;
+    justify-content: center;
+  }
+
+  .inventory-archive-modal .inventory-archive-header-left {
+    width: 100%;
+  }
+
+  .confirmation-icon.warning svg {
+    width: 32px;
+    height: 32px;
+  }
+
+  .inventory-archive-modal .inventory-archive-content h4 {
+    font-size: 1rem;
+  }
+}
+
+p{
+    margin: 0;
+    font-size: 1.5rem;
+    font-weight: 400;
+    color: #1f2937;
+    letter-spacing: -0.02em;
+}

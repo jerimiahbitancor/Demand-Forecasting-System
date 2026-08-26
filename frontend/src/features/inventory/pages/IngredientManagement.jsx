@@ -3,7 +3,6 @@ import { useState, useEffect, useMemo, useCallback, useRef } from "react";
 import "./Inventory.css";
 import { 
   FaPlus, 
-  FaSearch, 
   FaEdit, 
   FaTrash, 
   FaEye,
@@ -18,18 +17,25 @@ import {
   FaShoppingCart,
   FaTimes,
   FaSave,
-  FaChartLine,
-  FaBoxes,
-  FaExclamationTriangle,
-  FaCalculator
+  FaUndo,
+  FaInfoCircle,
 } from 'react-icons/fa';
 import axios from 'axios';
 import toast from 'react-hot-toast';
 import { useAuth } from "../../../context/AuthContext";
+import Tippy from '@tippyjs/react';
+import 'tippy.js/dist/tippy.css';
+import 'tippy.js/animations/scale.css';
+import AddIngredientModal from '../components/AddIngredientModal';
+import EditIngredientModal from '../components/EditIngredientModal';
+import InventoryConfirmationModal from '../components/InventoryConfirmationModal';
+import RestockModal from '../components/RestockModal';
+import HistoryModal from '../components/HistoryModal';
+import ArchiveModal from '../components/ArchiveModal';
 
 const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:5000/api';
 
-const Inventory = () => {
+const IngredientManagement = () => {
   const { getToken } = useAuth();
   
   // ============ STATE ============
@@ -39,15 +45,22 @@ const Inventory = () => {
   const [sortField, setSortField] = useState("created_at");
   const [sortDirection, setSortDirection] = useState("desc");
   const [currentPage, setCurrentPage] = useState(1);
-  const [itemsPerPage] = useState(5);
+  const [itemsPerPage] = useState(10);
   const [totalItems, setTotalItems] = useState(0);
   const [categories, setCategories] = useState([]);
+  const [selectedCategory, setSelectedCategory] = useState("All");
+  const [statusFilter, setStatusFilter] = useState("All");
+  const [selectedDate, setSelectedDate] = useState("");
   const [summaryStats, setSummaryStats] = useState({
     totalStockValue: 0,
     totalItems: 0,
     lowStockAlerts: 0,
     outOfStockItems: 0,
-    forecastedDeduction: 0
+    forecastedDeduction: 0,
+    excessStock: 0,
+    normalStock: 0,
+    criticalStock: 0,
+    archivedItems: 0
   });
   
   // Modal States
@@ -58,6 +71,7 @@ const Inventory = () => {
   const [isHistoryModalOpen, setIsHistoryModalOpen] = useState(false);
   const [isArchiveModalOpen, setIsArchiveModalOpen] = useState(false);
   const [isViewModalOpen, setIsViewModalOpen] = useState(false);
+  const [isRestoreModalOpen, setIsRestoreModalOpen] = useState(false);
   const [selectedItem, setSelectedItem] = useState(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
 
@@ -65,6 +79,7 @@ const Inventory = () => {
   const isInitialMount = useRef(true);
   const fetchTimeoutRef = useRef(null);
   const abortControllerRef = useRef(null);
+  const legacyModalsEnabled = () => false;
 
   // Form State
   const [formData, setFormData] = useState({
@@ -74,7 +89,8 @@ const Inventory = () => {
     quantity: '',
     price: '',
     batch: '',
-    min_stock: ''
+    min_stock: '',
+    market_price: ''
   });
 
   const [restockData, setRestockData] = useState({
@@ -95,15 +111,12 @@ const Inventory = () => {
       timeout: 10000
     });
 
-    // Request interceptor - Add token
     client.interceptors.request.use(
       async (config) => {
         try {
           const token = await getToken();
           if (token) {
             config.headers.Authorization = `Bearer ${token}`;
-          } else {
-            console.warn('No token available for request:', config.url);
           }
           return config;
         } catch (error) {
@@ -114,15 +127,12 @@ const Inventory = () => {
       (error) => Promise.reject(error)
     );
 
-    // Response interceptor - Handle 401 and 429
     client.interceptors.response.use(
       (response) => response,
       async (error) => {
-        // Handle 429 Too Many Requests
         if (error.response?.status === 429) {
           console.warn('Rate limit hit, waiting before retry...');
           await new Promise(resolve => setTimeout(resolve, 2000));
-          
           try {
             const newToken = await getToken();
             if (newToken) {
@@ -134,24 +144,9 @@ const Inventory = () => {
             console.error('Retry failed:', retryError);
           }
         }
-        
         if (error.response?.status === 401) {
-          console.warn('401 Unauthorized - Attempting to refresh');
-          try {
-            const newToken = await getToken();
-            if (newToken) {
-              const originalRequest = error.config;
-              originalRequest.headers.Authorization = `Bearer ${newToken}`;
-              return client(originalRequest);
-            } else {
-              toast.error('Session expired. Please login again.');
-              window.location.href = '/login';
-            }
-          } catch (refreshError) {
-            console.error('Token refresh failed:', refreshError);
-            toast.error('Session expired. Please login again.');
-            window.location.href = '/login';
-          }
+          toast.error('Session expired. Please login again.');
+          window.location.href = '/login';
         }
         return Promise.reject(error);
       }
@@ -160,54 +155,110 @@ const Inventory = () => {
     return client;
   }, [getToken]);
 
-  // ============ FETCH DATA WITH ABORT CONTROLLER ============
+  // ============ GET STOCK STATUS ============
+  const getStockStatus = useCallback((item) => {
+    if (!item || item.is_archived) {
+      return { 
+        label: 'Archived', 
+        className: 'status-archived',
+        color: '#6b7280'
+      };
+    }
+    if (item.quantity === 0) {
+      return { 
+        label: 'Critical Stock', 
+        className: 'status-critical',
+        color: '#dc2626'
+      };
+    } else if (item.quantity <= (item.min_stock || 0) * 0.5) {
+      return { 
+        label: 'Critical Stock', 
+        className: 'status-critical',
+        color: '#dc2626'
+      };
+    } else if (item.quantity <= (item.min_stock || 0)) {
+      return { 
+        label: 'Low Stock', 
+        className: 'status-low',
+        color: '#f59e0b'
+      };
+    } else if (item.quantity >= (item.min_stock || 0) * 3) {
+      return { 
+        label: 'Excess Stock', 
+        className: 'status-excess',
+        color: '#3b82f6'
+      };
+    } else {
+      return { 
+        label: 'Normal Stock', 
+        className: 'status-normal',
+        color: '#16a34a'
+      };
+    }
+  }, []);
+
+  // ============ FETCH DATA ============
   const fetchInventory = useCallback(async () => {
-    // Cancel any pending requests
     if (abortControllerRef.current) {
       abortControllerRef.current.abort();
     }
-    
-    // Create new abort controller
     abortControllerRef.current = new AbortController();
 
     try {
       setLoading(true);
       
+      const params = {
+        search: searchTerm || null,
+        sortBy: sortField,
+        sortOrder: sortDirection,
+        page: currentPage,
+        limit: itemsPerPage
+      };
+
+      if (selectedCategory !== "All") {
+        params.category = selectedCategory;
+      }
+
+      if (statusFilter === "archived") {
+        params.archived = true;
+      } else if (statusFilter !== "All") {
+        params.status = statusFilter;
+      }
+
+      if (selectedDate) {
+        params.date = selectedDate;
+      }
+
       const response = await apiClient.get('/inventory/items', {
-        params: {
-          search: searchTerm || null,
-          sortBy: sortField,
-          sortOrder: sortDirection,
-          page: currentPage,
-          limit: itemsPerPage
-        },
+        params,
         signal: abortControllerRef.current.signal
       });
 
       if (response.data.success) {
         const summary = response.data.summary || {};
-        setInventoryItems(response.data.data || []);
+        const data = response.data.data || [];
+        setInventoryItems(data);
         setTotalItems(summary.totalItems ?? response.data.total ?? 0);
-        
-        // Calculate forecasted deduction (30% of total stock value as a forecast)
+
         const totalStockValue = summary.totalStockValue ?? 0;
-        const forecastedDeduction = totalStockValue * 0.3; // 30% forecasted deduction
-        
+        const forecastedDeduction = totalStockValue * 0.3;
+
         setSummaryStats({
           totalStockValue: totalStockValue,
-          totalItems: summary.totalItems ?? 0,
+          totalItems: summary.totalItems ?? data.length,
           lowStockAlerts: summary.lowStockAlerts ?? 0,
           outOfStockItems: summary.outOfStockItems ?? 0,
-          forecastedDeduction: forecastedDeduction
+          forecastedDeduction: forecastedDeduction,
+          excessStock: summary.excessStock ?? 0,
+          normalStock: summary.normalStock ?? 0,
+          criticalStock: summary.criticalStock ?? 0,
+          archivedItems: summary.archivedItems ?? 0
         });
       }
     } catch (error) {
-      // Ignore aborted requests
       if (error.name === 'CanceledError' || error.code === 'ERR_CANCELED') {
-        console.log('Request cancelled');
         return;
       }
-      
       console.error('Error fetching inventory:', error);
       if (error.response?.status !== 401 && error.response?.status !== 429) {
         toast.error('Failed to load inventory items');
@@ -215,51 +266,40 @@ const Inventory = () => {
     } finally {
       setLoading(false);
     }
-  }, [apiClient, searchTerm, sortField, sortDirection, currentPage, itemsPerPage]);
+  }, [apiClient, searchTerm, sortField, sortDirection, currentPage, itemsPerPage, selectedCategory, statusFilter, selectedDate]);
 
   const fetchCategories = useCallback(async () => {
     try {
       const response = await apiClient.get('/categories');
       if (response.data.success) {
-        setCategories(response.data.data || []);
+        setCategories(['All', ...(response.data.data || [])]);
       }
     } catch (error) {
       console.error('Error fetching categories:', error);
-      if (error.response?.status !== 401 && error.response?.status !== 429) {
-        toast.error('Failed to load categories');
-      }
     }
   }, [apiClient]);
 
-  // Debounced fetch function
   const debouncedFetch = useCallback(() => {
-    // Clear existing timeout
     if (fetchTimeoutRef.current) {
       clearTimeout(fetchTimeoutRef.current);
     }
-    
-    // Set new timeout
     fetchTimeoutRef.current = setTimeout(() => {
       fetchInventory();
     }, 300);
   }, [fetchInventory]);
 
-  // ============ INITIAL LOAD AND DEPENDENCY CHANGES ============
+  // ============ INITIAL LOAD ============
   useEffect(() => {
-    // Only run on mount or when dependencies change
     if (isInitialMount.current) {
       isInitialMount.current = false;
-      // Initial load with slight delay to prevent rate limiting
       setTimeout(() => {
         fetchInventory();
         fetchCategories();
       }, 100);
     } else {
-      // Subsequent loads with debounce
       debouncedFetch();
     }
 
-    // Cleanup
     return () => {
       if (fetchTimeoutRef.current) {
         clearTimeout(fetchTimeoutRef.current);
@@ -268,7 +308,7 @@ const Inventory = () => {
         abortControllerRef.current.abort();
       }
     };
-  }, [fetchInventory, fetchCategories, debouncedFetch, searchTerm, sortField, sortDirection, currentPage]);
+  }, [fetchInventory, fetchCategories, debouncedFetch, searchTerm, sortField, sortDirection, currentPage, selectedCategory, statusFilter, selectedDate]);
 
   // ============ CRUD OPERATIONS ============
   const handleAddItem = async () => {
@@ -280,6 +320,7 @@ const Inventory = () => {
         ...formData,
         quantity: parseFloat(formData.quantity),
         price: parseFloat(formData.price),
+        market_price: parseFloat(formData.market_price) || 0,
         min_stock: parseFloat(formData.min_stock) || 0
       });
 
@@ -287,16 +328,11 @@ const Inventory = () => {
         toast.success('Item added successfully!');
         resetForm();
         setIsAddModalOpen(false);
-        // Wait before fetching to avoid rate limit
         setTimeout(() => fetchInventory(), 500);
         setTimeout(() => fetchCategories(), 500);
       }
     } catch (error) {
-      if (error.response?.status === 429) {
-        toast.error('Too many requests. Please wait a moment.');
-      } else {
-        toast.error(error.response?.data?.error || 'Failed to add item');
-      }
+      toast.error(error.response?.data?.error || 'Failed to add item');
     } finally {
       setIsSubmitting(false);
     }
@@ -311,6 +347,7 @@ const Inventory = () => {
         ...formData,
         quantity: parseFloat(formData.quantity),
         price: parseFloat(formData.price),
+        market_price: parseFloat(formData.market_price) || 0,
         min_stock: parseFloat(formData.min_stock) || 0
       });
 
@@ -321,11 +358,7 @@ const Inventory = () => {
         setTimeout(() => fetchInventory(), 500);
       }
     } catch (error) {
-      if (error.response?.status === 429) {
-        toast.error('Too many requests. Please wait a moment.');
-      } else {
-        toast.error(error.response?.data?.error || 'Failed to update item');
-      }
+      toast.error(error.response?.data?.error || 'Failed to update item');
     } finally {
       setIsSubmitting(false);
     }
@@ -341,11 +374,7 @@ const Inventory = () => {
         setTimeout(() => fetchInventory(), 500);
       }
     } catch (error) {
-      if (error.response?.status === 429) {
-        toast.error('Too many requests. Please wait a moment.');
-      } else {
-        toast.error(error.response?.data?.error || 'Failed to delete item');
-      }
+      toast.error(error.response?.data?.error || 'Failed to delete item');
     } finally {
       setIsSubmitting(false);
     }
@@ -372,11 +401,7 @@ const Inventory = () => {
         setTimeout(() => fetchInventory(), 500);
       }
     } catch (error) {
-      if (error.response?.status === 429) {
-        toast.error('Too many requests. Please wait a moment.');
-      } else {
-        toast.error(error.response?.data?.error || 'Failed to restock item');
-      }
+      toast.error(error.response?.data?.error || 'Failed to restock item');
     } finally {
       setIsSubmitting(false);
     }
@@ -392,11 +417,23 @@ const Inventory = () => {
         setTimeout(() => fetchInventory(), 500);
       }
     } catch (error) {
-      if (error.response?.status === 429) {
-        toast.error('Too many requests. Please wait a moment.');
-      } else {
-        toast.error(error.response?.data?.error || 'Failed to archive item');
+      toast.error(error.response?.data?.error || 'Failed to archive item');
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
+  const handleRestoreItem = async () => {
+    setIsSubmitting(true);
+    try {
+      const response = await apiClient.patch(`/inventory/items/${selectedItem.id}/restore`);
+      if (response.data.success) {
+        toast.success('Item restored successfully!');
+        setIsRestoreModalOpen(false);
+        setTimeout(() => fetchInventory(), 500);
       }
+    } catch (error) {
+      toast.error(error.response?.data?.error || 'Failed to restore item');
     } finally {
       setIsSubmitting(false);
     }
@@ -405,21 +442,17 @@ const Inventory = () => {
   // ============ FORM HANDLERS ============
   const validateForm = () => {
     const errors = {};
-    
     if (!formData.name || formData.name.trim() === '') {
       errors.name = 'Item name is required';
     }
-    
     if (!formData.category || formData.category.trim() === '') {
       errors.category = 'Category is required';
     }
-    
     if (!formData.quantity || formData.quantity === '') {
       errors.quantity = 'Quantity is required';
     } else if (isNaN(parseFloat(formData.quantity)) || parseFloat(formData.quantity) < 0) {
       errors.quantity = 'Quantity must be a valid number';
     }
-    
     if (!formData.price || formData.price === '') {
       errors.price = 'Price is required';
     } else if (isNaN(parseFloat(formData.price)) || parseFloat(formData.price) < 0) {
@@ -438,7 +471,8 @@ const Inventory = () => {
       quantity: '',
       price: '',
       batch: '',
-      min_stock: ''
+      min_stock: '',
+      market_price: ''
     });
     setFormErrors({});
   };
@@ -452,14 +486,10 @@ const Inventory = () => {
       quantity: item.quantity?.toString() || '',
       price: item.price?.toString() || '',
       batch: item.batch || '',
-      min_stock: item.min_stock?.toString() || ''
+      min_stock: item.min_stock?.toString() || '',
+      market_price: item.market_price?.toString() || ''
     });
     setIsEditModalOpen(true);
-  };
-
-  const openDeleteModal = (item) => {
-    setSelectedItem(item);
-    setIsDeleteModalOpen(true);
   };
 
   const openRestockModal = (item) => {
@@ -478,23 +508,17 @@ const Inventory = () => {
     setIsArchiveModalOpen(true);
   };
 
+  const openRestoreModal = (item) => {
+    setSelectedItem(item);
+    setIsRestoreModalOpen(true);
+  };
+
   const openViewModal = (item) => {
     setSelectedItem(item);
     setIsViewModalOpen(true);
   };
 
   // ============ UTILITY FUNCTIONS ============
-  const getStockStatus = (item) => {
-    if (!item) return { label: 'Unknown', className: 'status-unknown' };
-    if (item.quantity === 0) {
-      return { label: 'Out of Stock', className: 'status-out' };
-    } else if (item.quantity <= (item.min_stock || 0)) {
-      return { label: 'Low Stock', className: 'status-low' };
-    } else {
-      return { label: 'In Stock', className: 'status-in' };
-    }
-  };
-
   const formatDate = (dateString) => {
     if (!dateString) return 'N/A';
     try {
@@ -514,7 +538,6 @@ const Inventory = () => {
     return `₱ ${parseFloat(amount).toFixed(2)}`;
   };
 
-  // ============ SORT HANDLERS ============
   const handleSort = (field) => {
     if (sortField === field) {
       setSortDirection(sortDirection === 'asc' ? 'desc' : 'asc');
@@ -525,14 +548,18 @@ const Inventory = () => {
     setCurrentPage(1);
   };
 
-  // Calculate stats from overall filtered inventory, not the current page
-  const totalStockValue = summaryStats.totalStockValue;
-  const lowStockAlerts = summaryStats.lowStockAlerts;
-  const outOfStockItems = summaryStats.outOfStockItems;
-  const forecastedDeduction = summaryStats.forecastedDeduction;
-
   // Pagination
   const totalPages = Math.ceil(totalItems / itemsPerPage);
+
+  // ============ STOCK LEGEND ============
+  const stockLegend = [
+    { label: 'No Forecast', color: '#9ca3af', className: 'legend-no-forecast' },
+    { label: 'Archived', color: '#6b7280', className: 'legend-archived' },
+    { label: 'Excess Stock', color: '#3b82f6', className: 'legend-excess' },
+    { label: 'Normal Stock', color: '#16a34a', className: 'legend-normal' },
+    { label: 'Low Stock', color: '#f59e0b', className: 'legend-low' },
+    { label: 'Critical Stock', color: '#dc2626', className: 'legend-critical' }
+  ];
 
   // ============ RENDER ============
   return (
@@ -541,21 +568,82 @@ const Inventory = () => {
       <div className="inventory-stats-cards">
         <div className="inventory-stat-card">
           <div className="inventory-stat-card-content">
-            <div className="inventory-stat-card-icon">
-             
+            <div className="inventory-stat-card-header">
+              <p className="inventory-stat-card-label">Total Stock Value</p>
+              <Tippy
+                content={(
+                  <div className="inventory-card-tooltip">
+                    <strong>How Total Stock Value is computed</strong>
+                    <span>Each ingredient's current quantity is multiplied by its unit price.</span>
+                    <table className="inventory-card-tooltip-table">
+                      <thead>
+                        <tr>
+                          <th>Ingredient</th>
+                          <th>You have</th>
+                          <th>Price</th>
+                          <th>Value</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        <tr><td>Pork</td><td>8 kg</td><td>₱400/kg</td><td>₱3,200</td></tr>
+                        <tr><td>Chicken</td><td>6 kg</td><td>₱220/kg</td><td>₱1,320</td></tr>
+                        <tr><td>Rice</td><td>25 kg</td><td>₱52/kg</td><td>₱1,300</td></tr>
+                        <tr><td>Garlic, oil, soy sauce...</td><td>Various</td><td>Various</td><td>₱1,220</td></tr>
+                        <tr className="inventory-card-tooltip-total"><th>Total</th><th></th><th></th><th>₱7,040</th></tr>
+                      </tbody>
+                    </table>
+                    <table className="inventory-card-tooltip-comparison">
+                      <tbody>
+                        <tr><th>This Month</th><td>₱7,040</td></tr>
+                        <tr><th>Last Month</th><td>₱6,300</td></tr>
+                        <tr><th>Change</th><td>+₱740 (+12%)</td></tr>
+                      </tbody>
+                    </table>
+                    <span>Your stock value went up ₱740 (+12%) from last month. This is fine if sales went up too, but if sales stayed the same, you may have bought more ingredients than needed.</span>
+                  </div>
+                )}
+                placement="top"
+                animation="scale"
+                duration={200}
+                theme="dark"
+                arrow
+                delay={[100, 0]}
+                maxWidth={380}
+                interactive
+                trigger="mouseenter focus click"
+                appendTo={() => document.body}
+                zIndex={100000}
+              >
+                <span className="inventory-card-info" tabIndex={0} aria-label="Total stock value information">
+                  <FaInfoCircle />
+                </span>
+              </Tippy>
             </div>
-            <p className="inventory-stat-card-label">Total Stock Value</p>
-            <p className="inventory-stat-card-value">{formatCurrency(totalStockValue)}</p>
-            <p className="inventory-stat-card-change positive">All items: {summaryStats.totalItems || inventoryItems.length}</p>
+            <p className="inventory-stat-card-value">{formatCurrency(summaryStats.totalStockValue)}</p>
+            <p className="inventory-stat-card-change positive">+% from last month</p>
           </div>
         </div>
 
         <div className="inventory-stat-card">
           <div className="inventory-stat-card-content">
-            <div className="inventory-stat-card-icon">
-            
+            <div className="inventory-stat-card-header">
+              <p className="inventory-stat-card-label">Total Items</p>
+              <Tippy
+                content="Total number of active ingredients. Archived ingredients are not counted."
+                placement="top"
+                animation="scale"
+                duration={200}
+                theme="dark"
+                arrow
+                trigger="mouseenter focus click"
+                appendTo={() => document.body}
+                zIndex={100000}
+              >
+                <span className="inventory-card-info" tabIndex={0} aria-label="Total items information">
+                  <FaInfoCircle />
+                </span>
+              </Tippy>
             </div>
-            <p className="inventory-stat-card-label">Total Items</p>
             <p className="inventory-stat-card-value">{summaryStats.totalItems || inventoryItems.length}</p>
             <p className="inventory-stat-card-change">Active inventory items</p>
           </div>
@@ -563,25 +651,82 @@ const Inventory = () => {
 
         <div className="inventory-stat-card warning">
           <div className="inventory-stat-card-content">
-            <div className="inventory-stat-card-icon">
-            
+            <div className="inventory-stat-card-header">
+              <p className="inventory-stat-card-label">Low Stock Alerts</p>
+              <Tippy
+                content="This counts ingredients that are running low or almost out, where current stock may not cover tomorrow's expected usage. Only ingredients linked to a product recipe are counted. Click to filter the table and see which ingredients need restocking right away."
+                placement="top"
+                animation="scale"
+                duration={200}
+                theme="dark"
+                arrow
+                delay={[100, 0]}
+                maxWidth={380}
+                interactive
+                trigger="mouseenter focus click"
+                appendTo={() => document.body}
+                zIndex={100000}
+              >
+                <span className="inventory-card-info" tabIndex={0} aria-label="Low stock alerts information">
+                  <FaInfoCircle />
+                </span>
+              </Tippy>
             </div>
-            <p className="inventory-stat-card-label">Low Stock Alerts</p>
-            <p className="inventory-stat-card-value">{lowStockAlerts}</p>
-            <p className="inventory-stat-card-change warning-text">Requires attention</p>
+            <div className="inventory-stock-alerts-group">
+              <span className="alert-badge alert-excess" style={{ backgroundColor: '#3b82f6' }}>
+                {summaryStats.excessStock}
+              </span>
+              <span className="alert-badge alert-normal" style={{ backgroundColor: '#16a34a' }}>
+                {summaryStats.normalStock}
+              </span>
+              <span className="alert-badge alert-low" style={{ backgroundColor: '#f59e0b' }}>
+                {summaryStats.lowStockAlerts}
+              </span>
+              <span className="alert-badge alert-critical" style={{ backgroundColor: '#dc2626' }}>
+                {summaryStats.criticalStock}
+              </span>
+            </div>
+            <p className="inventory-stat-card-change">Ingredient Alerts</p>
           </div>
         </div>
 
         <div className="inventory-stat-card info">
           <div className="inventory-stat-card-content">
-            <div className="inventory-stat-card-icon">
-             
+            <div className="inventory-stat-card-header">
+              <p className="inventory-stat-card-label">Unmapped Ingredients</p>
+              <Tippy
+                content="These are ingredients in your inventory that are not connected to a product recipe yet. Because the system does not know which dish uses them, it cannot calculate usage or give them a stock status, so they appear as No Forecast in the table. Go to Product Management and add these ingredients to the recipes of the dishes that use them."
+                placement="top"
+                animation="scale"
+                duration={200}
+                theme="dark"
+                arrow
+                delay={[100, 0]}
+                maxWidth={380}
+                interactive
+                trigger="mouseenter focus click"
+                appendTo={() => document.body}
+                zIndex={100000}
+              >
+                <span className="inventory-card-info" tabIndex={0} aria-label="Unmapped ingredients information">
+                  <FaInfoCircle />
+                </span>
+              </Tippy>
             </div>
-            <p className="inventory-stat-card-label">Forecasted Deduction</p>
-            <p className="inventory-stat-card-value">{formatCurrency(forecastedDeduction)}</p>
-            <p className="inventory-stat-card-change">30% of total stock value</p>
+            <p className="inventory-stat-card-value">2</p>
+            <p className="inventory-stat-card-change">not in any products</p>
           </div>
         </div>
+      </div>
+
+      {/* Stock Legend */}
+      <div className="inventory-legend-container">
+        {stockLegend.map((legend, index) => (
+          <div key={index} className="inventory-legend-item">
+            <span className="legend-dot" style={{ backgroundColor: legend.color }}></span>
+            <span className="legend-label">{legend.label}</span>
+          </div>
+        ))}
       </div>
 
       {/* Controls */}
@@ -603,6 +748,48 @@ const Inventory = () => {
         <div className="inventory-controls-right">
           <select 
             className="inventory-sort-select"
+            value={selectedCategory}
+            aria-label="Filter inventory by category"
+            onChange={(e) => {
+              setSelectedCategory(e.target.value);
+              setCurrentPage(1);
+            }}
+          >
+            {categories.map(cat => (
+              <option key={cat} value={cat}>{cat === 'All' ? 'All Categories' : cat}</option>
+            ))}
+          </select>
+
+          <select 
+            className="inventory-sort-select"
+            value={statusFilter}
+            onChange={(e) => {
+              setStatusFilter(e.target.value);
+              setCurrentPage(1);
+            }}
+          >
+            <option value="All">All Status</option>
+            <option value="Normal Stock">Normal Stock</option>
+            <option value="Low Stock">Low Stock</option>
+            <option value="Critical Stock">Critical Stock</option>
+            <option value="Excess Stock">Excess Stock</option>
+            <option value="archived">Archived</option>
+          </select>
+
+          <input
+            type="date"
+            className="inventory-sort-select inventory-date-filter"
+            value={selectedDate}
+            onChange={(e) => {
+              setSelectedDate(e.target.value);
+              setCurrentPage(1);
+            }}
+            aria-label="Filter inventory by date"
+            title="Filter by date"
+          />
+
+          <select 
+            className="inventory-sort-select"
             value={sortField}
             onChange={(e) => handleSort(e.target.value)}
           >
@@ -610,7 +797,7 @@ const Inventory = () => {
             <option value="name">Sort By: Name</option>
             <option value="category">Sort By: Category</option>
             <option value="quantity">Sort By: Quantity</option>
-            <option value="price">Sort By: Price</option>
+            <option value="price">Sort By: Unit Cost</option>
             <option value="batch">Sort By: Batch</option>
           </select>
 
@@ -654,26 +841,24 @@ const Inventory = () => {
               <thead>
                 <tr>
                   <th>#</th>
-                  <th className="sortable" onClick={() => handleSort('created_at')}>
-                    Date {sortField === 'created_at' && (sortDirection === 'asc' ? <FaSortAmountUp /> : <FaSortAmountDown />)}
-                  </th>
                   <th className="sortable" onClick={() => handleSort('name')}>
                     Item Name {sortField === 'name' && (sortDirection === 'asc' ? <FaSortAmountUp /> : <FaSortAmountDown />)}
                   </th>
+                  <th>Unit</th>
                   <th className="sortable" onClick={() => handleSort('category')}>
                     Category {sortField === 'category' && (sortDirection === 'asc' ? <FaSortAmountUp /> : <FaSortAmountDown />)}
                   </th>
-                  <th>Unit</th>
                   <th className="sortable" onClick={() => handleSort('quantity')}>
-                    Quantity {sortField === 'quantity' && (sortDirection === 'asc' ? <FaSortAmountUp /> : <FaSortAmountDown />)}
+                    Current Stock {sortField === 'quantity' && (sortDirection === 'asc' ? <FaSortAmountUp /> : <FaSortAmountDown />)}
                   </th>
                   <th className="sortable" onClick={() => handleSort('price')}>
-                    Price {sortField === 'price' && (sortDirection === 'asc' ? <FaSortAmountUp /> : <FaSortAmountDown />)}
+                    Unit Cost {sortField === 'price' && (sortDirection === 'asc' ? <FaSortAmountUp /> : <FaSortAmountDown />)}
                   </th>
-                  <th className="sortable" onClick={() => handleSort('batch')}>
-                    Batch {sortField === 'batch' && (sortDirection === 'asc' ? <FaSortAmountUp /> : <FaSortAmountDown />)}
+                  <th>Market Price</th>
+                  <th className="sortable" onClick={() => handleSort('updated_at')}>
+                    Last Updated {sortField === 'updated_at' && (sortDirection === 'asc' ? <FaSortAmountUp /> : <FaSortAmountDown />)}
                   </th>
-                  <th>Stock Status</th>
+                  <th>Status</th>
                   <th>Actions</th>
                 </tr>
               </thead>
@@ -681,52 +866,53 @@ const Inventory = () => {
                 {inventoryItems.map((item, index) => {
                   const status = getStockStatus(item);
                   const displayIndex = (currentPage - 1) * itemsPerPage + index + 1;
+                  const isArchived = item.is_archived;
                   return (
-                    <tr key={item.id || index}>
+                    <tr key={item.id || index} className={isArchived ? 'archived-row' : ''}>
                       <td>{displayIndex}</td>
-                      <td>{formatDate(item.created_at)}</td>
                       <td className="inventory-item-name-cell">
                         <span className="inventory-item-name">{item.name || 'Unnamed'}</span>
                       </td>
-                      <td><span className="category-badge">{item.category || 'Uncategorized'}</span></td>
                       <td>{item.unit || 'pcs'}</td>
+                      <td><span className="category-badge">{item.category || 'Uncategorized'}</span></td>
                       <td className={
-                        (item.quantity || 0) === 0 ? 'inventory-out-of-stock' : 
-                        (item.quantity || 0) <= (item.min_stock || 0) ? 'inventory-low-stock' : ''
+                        status.className === 'status-critical' ? 'inventory-critical-stock' : 
+                        status.className === 'status-low' ? 'inventory-low-stock' : 
+                        status.className === 'status-excess' ? 'inventory-excess-stock' : 
+                        status.className === 'status-normal' ? 'inventory-normal-stock' : ''
                       }>
                         {item.quantity || 0}
                       </td>
                       <td>{formatCurrency(item.price)}</td>
-                      <td>{item.batch || 'N/A'}</td>
+                      <td>{formatCurrency(item.market_price || item.price)}</td>
+                      <td>{formatDate(item.updated_at || item.created_at)}</td>
                       <td>
                         <span className={`inventory-stock-status ${status.className}`}>
-                          <span className="inventory-status-dot"></span>
+                          <span className="inventory-status-dot" style={{ backgroundColor: status.color }}></span>
                           {status.label}
                         </span>
                       </td>
                       <td>
                         <div className="inventory-action-buttons">
-                          <button 
-                            className="inventory-action-btn view"
-                            onClick={() => openViewModal(item)}
-                            title="View Details"
-                          >
-                            <FaEye size={14} />
-                          </button>
-                          <button 
-                            className="inventory-action-btn edit"
-                            onClick={() => openEditModal(item)}
-                            title="Edit"
-                          >
-                            <FaEdit size={14} />
-                          </button>
-                          <button 
-                            className="inventory-action-btn restock"
-                            onClick={() => openRestockModal(item)}
-                            title="Restock"
-                          >
-                            <FaShoppingCart size={14} />
-                          </button>
+                          
+                          {!isArchived && (
+                            <>
+                              <button 
+                                className="inventory-action-btn edit"
+                                onClick={() => openEditModal(item)}
+                                title="Edit"
+                              >
+                                <FaEdit size={14} />
+                              </button>
+                              <button 
+                                className="inventory-action-btn restock"
+                                onClick={() => openRestockModal(item)}
+                                title="Add Stock"
+                              >
+                                <FaShoppingCart size={14} />
+                              </button>
+                            </>
+                          )}
                           <button 
                             className="inventory-action-btn history"
                             onClick={() => openHistoryModal(item)}
@@ -734,20 +920,24 @@ const Inventory = () => {
                           >
                             <FaHistory size={14} />
                           </button>
-                          <button 
-                            className="inventory-action-btn archive"
-                            onClick={() => openArchiveModal(item)}
-                            title="Archive"
-                          >
-                            <FaArchive size={14} />
-                          </button>
-                          <button 
-                            className="inventory-action-btn delete"
-                            onClick={() => openDeleteModal(item)}
-                            title="Delete"
-                          >
-                            <FaTrash size={14} />
-                          </button>
+                          {!isArchived ? (
+                            <button 
+                              className="inventory-action-btn archive"
+                              onClick={() => openArchiveModal(item)}
+                              title="Archive"
+                            >
+                              <FaArchive size={14} />
+                            </button>
+                          ) : (
+                            <button 
+                              className="inventory-action-btn restore"
+                              onClick={() => openRestoreModal(item)}
+                              title="Restore"
+                            >
+                              <FaUndo size={14} />
+                            </button>
+                          )}
+                        
                         </div>
                       </td>
                     </tr>
@@ -780,7 +970,6 @@ const Inventory = () => {
                   } else {
                     pageNumber = currentPage - 2 + i;
                   }
-                  
                   if (pageNumber > 0 && pageNumber <= totalPages) {
                     return (
                       <button
@@ -808,9 +997,44 @@ const Inventory = () => {
         </>
       )}
 
-      {/* ============ ADD MODAL ============ */}
+      {/* ============ MODALS ============ */}
+      <AddIngredientModal
+        isOpen={isAddModalOpen}
+        isSubmitting={isSubmitting}
+        formData={formData}
+        formErrors={formErrors}
+        categories={categories}
+        onChange={setFormData}
+        onSubmit={handleAddItem}
+        onClose={() => {
+          setIsAddModalOpen(false);
+          resetForm();
+        }}
+      />
+      <EditIngredientModal
+        isOpen={isEditModalOpen}
+        isSubmitting={isSubmitting}
+        formData={formData}
+        formErrors={formErrors}
+        categories={categories}
+        onChange={setFormData}
+        onSubmit={handleUpdateItem}
+        onClose={() => {
+          setIsEditModalOpen(false);
+          resetForm();
+        }}
+      />
+      {isDeleteModalOpen && <InventoryConfirmationModal type="delete" item={selectedItem} isSubmitting={isSubmitting} onConfirm={handleDeleteItem} onClose={() => setIsDeleteModalOpen(false)} />}
+      {isArchiveModalOpen && <ArchiveModal item={selectedItem} isSubmitting={isSubmitting} onConfirm={handleArchiveItem} onClose={() => setIsArchiveModalOpen(false)} />}
+      {isRestoreModalOpen && <InventoryConfirmationModal type="restore" item={selectedItem} isSubmitting={isSubmitting} onConfirm={handleRestoreItem} onClose={() => setIsRestoreModalOpen(false)} />}
+      {isRestockModalOpen && <RestockModal item={selectedItem} data={restockData} isSubmitting={isSubmitting} onChange={setRestockData} onSubmit={handleRestock} onClose={() => { setIsRestockModalOpen(false); setRestockData({ quantity: '', reason: '', notes: '' }); }} />}
+      {isHistoryModalOpen && <HistoryModal item={selectedItem} onClose={() => setIsHistoryModalOpen(false)} />}
+      {isViewModalOpen && <ViewItemModal item={selectedItem} getStockStatus={getStockStatus} formatCurrency={formatCurrency} formatDate={formatDate} onClose={() => setIsViewModalOpen(false)} />}
+
+      {legacyModalsEnabled() && <>
+      {/* Add Modal */}
       {isAddModalOpen && (
-        <div className="modal-overlay" onClick={() => {
+        <div className="modal-overlay1" onClick={() => {
           if (!isSubmitting) {
             setIsAddModalOpen(false);
             resetForm();
@@ -818,7 +1042,7 @@ const Inventory = () => {
         }}>
           <div className="modal-content modal-lg" onClick={(e) => e.stopPropagation()}>
             <div className="modal-header">
-              <h3 className="modal-title">Add New Inventory Item</h3>
+              <h3 className="modal-title">Add New Ingredient</h3>
               <button className="modal-close-btn" onClick={() => {
                 if (!isSubmitting) {
                   setIsAddModalOpen(false);
@@ -851,7 +1075,7 @@ const Inventory = () => {
                     onChange={(e) => setFormData({...formData, category: e.target.value})}
                   >
                     <option value="">Select Category</option>
-                    {categories.map(cat => (
+                    {categories.filter(cat => cat !== 'All').map(cat => (
                       <option key={cat} value={cat}>{cat}</option>
                     ))}
                     <option value="Other">Other</option>
@@ -877,7 +1101,7 @@ const Inventory = () => {
                 </div>
 
                 <div className="form-group">
-                  <label className="form-label">Quantity <span className="required-star">*</span></label>
+                  <label className="form-label">Initial Quantity <span className="required-star">*</span></label>
                   <input
                     type="number"
                     className={`form-input ${formErrors.quantity ? 'error' : ''}`}
@@ -891,7 +1115,7 @@ const Inventory = () => {
                 </div>
 
                 <div className="form-group">
-                  <label className="form-label">Price per Unit <span className="required-star">*</span></label>
+                  <label className="form-label">Unit Cost/Price Per Unit <span className="required-star">*</span></label>
                   <input
                     type="number"
                     className={`form-input ${formErrors.price ? 'error' : ''}`}
@@ -904,29 +1128,11 @@ const Inventory = () => {
                   {formErrors.price && <span className="form-error">{formErrors.price}</span>}
                 </div>
 
-                <div className="form-group">
-                  <label className="form-label">Minimum Stock Level</label>
-                  <input
-                    type="number"
-                    className="form-input"
-                    value={formData.min_stock}
-                    onChange={(e) => setFormData({...formData, min_stock: e.target.value})}
-                    placeholder="0"
-                    min="0"
-                    step="1"
-                  />
-                </div>
+               
 
-                <div className="form-group">
-                  <label className="form-label">Batch Number</label>
-                  <input
-                    type="text"
-                    className="form-input"
-                    value={formData.batch}
-                    onChange={(e) => setFormData({...formData, batch: e.target.value})}
-                    placeholder="Enter batch number"
-                  />
-                </div>
+                
+
+               
               </div>
             </div>
 
@@ -948,14 +1154,14 @@ const Inventory = () => {
                 onClick={handleAddItem}
                 disabled={isSubmitting}
               >
-                {isSubmitting ? 'Adding...' : <> Add Item</>}
+                {isSubmitting ? 'Adding...' : <><FaPlus /> Add Item</>}
               </button>
             </div>
           </div>
         </div>
       )}
 
-      {/* ============ EDIT MODAL ============ */}
+      {/* Edit Modal */}
       {isEditModalOpen && (
         <div className="modal-overlay" onClick={() => {
           if (!isSubmitting) {
@@ -998,7 +1204,7 @@ const Inventory = () => {
                     onChange={(e) => setFormData({...formData, category: e.target.value})}
                   >
                     <option value="">Select Category</option>
-                    {categories.map(cat => (
+                    {categories.filter(cat => cat !== 'All').map(cat => (
                       <option key={cat} value={cat}>{cat}</option>
                     ))}
                     <option value="Other">Other</option>
@@ -1038,7 +1244,7 @@ const Inventory = () => {
                 </div>
 
                 <div className="form-group">
-                  <label className="form-label">Price per Unit <span className="required-star">*</span></label>
+                  <label className="form-label">Unit Cost <span className="required-star">*</span></label>
                   <input
                     type="number"
                     className={`form-input ${formErrors.price ? 'error' : ''}`}
@@ -1052,28 +1258,21 @@ const Inventory = () => {
                 </div>
 
                 <div className="form-group">
-                  <label className="form-label">Minimum Stock Level</label>
+                  <label className="form-label">Market Price</label>
                   <input
                     type="number"
                     className="form-input"
-                    value={formData.min_stock}
-                    onChange={(e) => setFormData({...formData, min_stock: e.target.value})}
-                    placeholder="0"
+                    value={formData.market_price}
+                    onChange={(e) => setFormData({...formData, market_price: e.target.value})}
+                    placeholder="0.00"
                     min="0"
-                    step="1"
+                    step="0.01"
                   />
                 </div>
 
-                <div className="form-group">
-                  <label className="form-label">Batch Number</label>
-                  <input
-                    type="text"
-                    className="form-input"
-                    value={formData.batch}
-                    onChange={(e) => setFormData({...formData, batch: e.target.value})}
-                    placeholder="Enter batch number"
-                  />
-                </div>
+                
+
+                
               </div>
             </div>
 
@@ -1102,7 +1301,7 @@ const Inventory = () => {
         </div>
       )}
 
-      {/* ============ DELETE MODAL ============ */}
+      {/* Delete Modal */}
       {isDeleteModalOpen && (
         <div className="modal-overlay" onClick={() => {
           if (!isSubmitting) setIsDeleteModalOpen(false);
@@ -1155,7 +1354,7 @@ const Inventory = () => {
         </div>
       )}
 
-      {/* ============ RESTOCK MODAL ============ */}
+      {/* Restock Modal */}
       {isRestockModalOpen && (
         <div className="modal-overlay" onClick={() => {
           if (!isSubmitting) {
@@ -1165,7 +1364,7 @@ const Inventory = () => {
         }}>
           <div className="modal-content modal-md" onClick={(e) => e.stopPropagation()}>
             <div className="modal-header">
-              <h3 className="modal-title">Restock: {selectedItem?.name}</h3>
+              <h3 className="modal-title">Add Stock: {selectedItem?.name}</h3>
               <button className="modal-close-btn" onClick={() => {
                 if (!isSubmitting) {
                   setIsRestockModalOpen(false);
@@ -1245,14 +1444,14 @@ const Inventory = () => {
                 onClick={handleRestock}
                 disabled={isSubmitting}
               >
-                {isSubmitting ? 'Processing...' : <><FaShoppingCart /> Restock</>}
+                {isSubmitting ? 'Processing...' : <><FaShoppingCart /> Add Stock</>}
               </button>
             </div>
           </div>
         </div>
       )}
 
-      {/* ============ HISTORY MODAL ============ */}
+      {/* History Modal */}
       {isHistoryModalOpen && (
         <div className="modal-overlay" onClick={() => setIsHistoryModalOpen(false)}>
           <div className="modal-content modal-lg" onClick={(e) => e.stopPropagation()}>
@@ -1268,33 +1467,10 @@ const Inventory = () => {
                 <div className="item-summary">
                   <p><strong>Current Stock:</strong> {selectedItem?.quantity || 0} {selectedItem?.unit || 'pcs'}</p>
                   <p><strong>Category:</strong> {selectedItem?.category || 'N/A'}</p>
-                  <p><strong>Batch:</strong> {selectedItem?.batch || 'N/A'}</p>
                 </div>
 
                 <div className="history-timeline">
                   <h4>Transaction History</h4>
-                  <div className="timeline-item">
-                    <div className="timeline-dot"></div>
-                    <div className="timeline-content">
-                      <div className="timeline-header">
-                        <span className="timeline-date">{formatDate(new Date())}</span>
-                        <span className="timeline-type restock">Restock</span>
-                      </div>
-                      <p>Added 50 units</p>
-                      <p className="timeline-note">Purchase Order #PO-2024-001</p>
-                    </div>
-                  </div>
-                  <div className="timeline-item">
-                    <div className="timeline-dot"></div>
-                    <div className="timeline-content">
-                      <div className="timeline-header">
-                        <span className="timeline-date">{formatDate(new Date(Date.now() - 86400000))}</span>
-                        <span className="timeline-type usage">Usage</span>
-                      </div>
-                      <p>Used 10 units in production</p>
-                      <p className="timeline-note">Batch #B-2024-015</p>
-                    </div>
-                  </div>
                   <div className="timeline-empty">
                     <FaClock size={32} />
                     <p>Full transaction history will be available here</p>
@@ -1302,13 +1478,11 @@ const Inventory = () => {
                 </div>
               </div>
             </div>
-
-          
           </div>
         </div>
       )}
 
-      {/* ============ ARCHIVE MODAL ============ */}
+      {/* Archive Modal */}
       {isArchiveModalOpen && (
         <div className="modal-overlay" onClick={() => {
           if (!isSubmitting) setIsArchiveModalOpen(false);
@@ -1336,7 +1510,6 @@ const Inventory = () => {
                 <div className="item-details">
                   <p><strong>Category:</strong> {selectedItem?.category || 'N/A'}</p>
                   <p><strong>Quantity:</strong> {selectedItem?.quantity || 0} {selectedItem?.unit || 'pcs'}</p>
-                  <p><strong>Status:</strong> {(selectedItem?.quantity || 0) === 0 ? 'Out of Stock' : 'In Stock'}</p>
                 </div>
               </div>
             </div>
@@ -1361,7 +1534,60 @@ const Inventory = () => {
         </div>
       )}
 
-      {/* ============ VIEW MODAL ============ */}
+      {/* Restore Modal */}
+      {isRestoreModalOpen && (
+        <div className="modal-overlay" onClick={() => {
+          if (!isSubmitting) setIsRestoreModalOpen(false);
+        }}>
+          <div className="modal-content modal-md" onClick={(e) => e.stopPropagation()}>
+            <div className="modal-header">
+              <h3 className="modal-title">Restore Item</h3>
+              <button className="modal-close-btn" onClick={() => {
+                if (!isSubmitting) setIsRestoreModalOpen(false);
+              }}>
+                <FaTimes />
+              </button>
+            </div>
+
+            <div className="modal-body">
+              <div className="confirmation-content">
+                <div className="confirmation-icon success" style={{ background: '#dcfce7', color: '#16a34a' }}>
+                  <FaUndo size={32} />
+                </div>
+                <h4>Restore this item?</h4>
+                <p>
+                  You are about to restore <strong>"{selectedItem?.name}"</strong>.
+                  The item will be visible in the main inventory again.
+                </p>
+                <div className="item-details">
+                  <p><strong>Category:</strong> {selectedItem?.category || 'N/A'}</p>
+                  <p><strong>Quantity:</strong> {selectedItem?.quantity || 0} {selectedItem?.unit || 'pcs'}</p>
+                </div>
+              </div>
+            </div>
+
+            <div className="modal-footer">
+              <button 
+                className="btn-secondary" 
+                onClick={() => setIsRestoreModalOpen(false)}
+                disabled={isSubmitting}
+              >
+                Cancel
+              </button>
+              <button 
+                className="btn-primary" 
+                onClick={handleRestoreItem}
+                disabled={isSubmitting}
+                style={{ background: '#16a34a' }}
+              >
+                {isSubmitting ? 'Restoring...' : <><FaUndo /> Restore Item</>}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* View Modal */}
       {isViewModalOpen && (
         <div className="modal-overlay" onClick={() => setIsViewModalOpen(false)}>
           <div className="modal-content modal-lg" onClick={(e) => e.stopPropagation()}>
@@ -1393,13 +1619,15 @@ const Inventory = () => {
                     </div>
                     <div className="detail-item">
                       <label>Quantity</label>
-                      <p className={(selectedItem.quantity || 0) === 0 ? 'danger-text' : ''}>
-                        {selectedItem.quantity || 0}
-                      </p>
+                      <p>{selectedItem.quantity || 0}</p>
                     </div>
                     <div className="detail-item">
-                      <label>Price</label>
+                      <label>Unit Cost</label>
                       <p>{formatCurrency(selectedItem.price)}</p>
+                    </div>
+                    <div className="detail-item">
+                      <label>Market Price</label>
+                      <p>{formatCurrency(selectedItem.market_price || selectedItem.price)}</p>
                     </div>
                     <div className="detail-item">
                       <label>Minimum Stock</label>
@@ -1409,7 +1637,10 @@ const Inventory = () => {
                       <label>Batch</label>
                       <p>{selectedItem.batch || 'N/A'}</p>
                     </div>
-                  
+                    <div className="detail-item">
+                      <label>Status</label>
+                      <p>{selectedItem.is_archived ? 'Archived' : 'Active'}</p>
+                    </div>
                     <div className="detail-item full-width">
                       <label>Created</label>
                       <p>{formatDate(selectedItem.created_at)}</p>
@@ -1424,13 +1655,12 @@ const Inventory = () => {
                 </div>
               )}
             </div>
-
-          
           </div>
         </div>
       )}
+      </>}
     </div>
   );
 };
 
-export default Inventory;
+export default IngredientManagement;
