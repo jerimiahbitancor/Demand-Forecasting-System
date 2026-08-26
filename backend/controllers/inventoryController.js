@@ -27,7 +27,8 @@ const getInventoryItems = async (req, res) => {
       sortOrder = 'desc',
       page = 1,
       limit = 5,
-      showArchived = false
+      showArchived = false,
+      date
     } = req.query;
 
     console.log('📦 Fetching inventory items...');
@@ -51,6 +52,17 @@ const getInventoryItems = async (req, res) => {
       summaryQuery = summaryQuery.eq('category', category);
     }
 
+    if (date) {
+      const startDate = new Date(`${date}T00:00:00.000Z`);
+      const endDate = new Date(startDate);
+      endDate.setUTCDate(endDate.getUTCDate() + 1);
+      if (!Number.isNaN(startDate.getTime())) {
+        summaryQuery = summaryQuery
+          .gte('created_at', startDate.toISOString())
+          .lt('created_at', endDate.toISOString());
+      }
+    }
+
     const { data: summaryData, error: summaryError } = await summaryQuery;
     if (summaryError) throw summaryError;
 
@@ -66,6 +78,22 @@ const getInventoryItems = async (req, res) => {
       return quantity <= minStock && quantity > 0;
     }).length;
     const outOfStockItems = (summaryData || []).filter((item) => (Number(item.quantity) || 0) === 0).length;
+    const stockCounts = (summaryData || []).reduce((counts, item) => {
+      const quantity = Number(item.quantity) || 0;
+      const minStock = Number(item.min_stock) || 0;
+
+      if (quantity === 0 || quantity <= minStock * 0.5) {
+        counts.criticalStock++;
+      } else if (quantity <= minStock) {
+        counts.lowStock++;
+      } else if (quantity >= minStock * 3) {
+        counts.excessStock++;
+      } else {
+        counts.normalStock++;
+      }
+
+      return counts;
+    }, { excessStock: 0, normalStock: 0, lowStock: 0, criticalStock: 0 });
 
     // Main query with pagination
     let query = supabase
@@ -84,6 +112,17 @@ const getInventoryItems = async (req, res) => {
 
     if (category && category !== 'All') {
       query = query.eq('category', category);
+    }
+
+    if (date) {
+      const startDate = new Date(`${date}T00:00:00.000Z`);
+      const endDate = new Date(startDate);
+      endDate.setUTCDate(endDate.getUTCDate() + 1);
+      if (!Number.isNaN(startDate.getTime())) {
+        query = query
+          .gte('created_at', startDate.toISOString())
+          .lt('created_at', endDate.toISOString());
+      }
     }
 
     const validSortFields = ['created_at', 'name', 'category', 'quantity', 'price', 'batch'];
@@ -108,8 +147,11 @@ const getInventoryItems = async (req, res) => {
       summary: {
         totalItems,
         totalStockValue,
-        lowStockAlerts,
-        outOfStockItems
+        lowStockAlerts: stockCounts.lowStock,
+        outOfStockItems,
+        excessStock: stockCounts.excessStock,
+        normalStock: stockCounts.normalStock,
+        criticalStock: stockCounts.criticalStock
       }
     });
   } catch (error) {

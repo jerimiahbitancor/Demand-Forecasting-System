@@ -12,7 +12,6 @@ import {
   FiPlus
 } from "react-icons/fi";
 import HistoricalData from "./HistoricalData";
-import MappingData from "./MappingData";
 import axios from 'axios';
 import * as XLSX from 'xlsx';
 import toast from 'react-hot-toast';
@@ -1180,11 +1179,15 @@ const UploadData = ({
                     <p className="stat-value success">{salesPreviewData.validRecords || 0}</p>
                   </div>
                   <div className="stat-box">
+                    <p className="stat-label">Product Records</p>
+                    <p className="stat-value success">{salesPreviewData.validRecords || 0}</p>
+                  </div>
+                  <div className="stat-box">
                     <p className="stat-label">Invalid Records</p>
                     <p className="stat-value error">{salesPreviewData.invalidRecords || 0}</p>
                   </div>
                   <div className="stat-box">
-                    <p className="stat-label">System Match</p>
+                    <p className="stat-label">Columns Match</p>
                     <p className="stat-value">{salesPreviewData.systemMatch || '0%'}</p>
                   </div>
                   <div className="stat-box">

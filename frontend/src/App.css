@@ -180,12 +180,12 @@ input[type="checkbox"]:focus {
 
 .btn-primary {
   width: 100%;
-  padding: 9px;
+  padding: 8px;
   background: var(--color-red-primary);
   color: #ffffff;
   font-size: 16px;
-  font-weight: 600;
-  line-height: 20px;
+  font-weight: 500;
+  line-height: 14px;
   border: none;
   border-radius: 8px;
   cursor: pointer;
@@ -225,8 +225,8 @@ input[type="checkbox"]:focus {
   background: #ffffff;
   color: #5c403c;
   font-size: 16px;
-  font-weight: 600;
-  line-height: 24px;
+  font-weight: 500;
+  line-height: 14px;
   border: 1px solid #ced4da;
   border-radius: 8px;
   cursor: pointer;

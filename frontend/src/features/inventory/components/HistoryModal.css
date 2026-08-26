@@ -1,0 +1,542 @@
+/* HistoryModal.css - Matches RestockModal styling */
+
+.inventory-history-modal .inventory-history-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 1rem;
+  border-bottom: none;
+  background: white;
+}
+
+.inventory-history-modal .inventory-history-header-left {
+  display: flex;
+  flex-direction: row;
+  gap: 0.5rem;
+  flex: 1;
+}
+
+.inventory-history-modal .inventory-history-item-row {
+  display: flex;
+  align-items: flex-start;
+  flex-wrap: wrap;
+  flex-direction: row;
+  justify-content: flex-start;
+  align-content: center;
+  padding-left: 1rem;
+}
+
+.inventory-history-modal .item-name {
+  font-size: 1.5rem;
+  font-weight: 700;
+  color: #1f2937;
+  letter-spacing: -0.02em;
+}
+
+.inventory-history-modal .btn-history {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  color: #6b7280;
+  border-radius: 6px;
+  font-size: 0.75rem;
+  font-weight: 500;
+  cursor: default;
+  opacity: 0.7;
+}
+
+/* Inline Info Cards */
+.inventory-history-modal .inventory-history-info-cards-inline {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  margin-top: 0.25rem;
+  flex-wrap: nowrap;
+  flex-direction: row;
+  align-content: flex-end;
+  justify-content: flex-end;
+}
+
+.inventory-history-modal .info-card-inline {
+display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    background: #f9fafb;
+    border-radius: 8px;
+    padding: 12px 16px;
+    border: 1.5px solid #e5e7eb;
+    font-size: 0.75rem;
+    min-width: 100px;
+    box-shadow: 0 1px 2px rgba(0, 0, 0, 0.05);
+    flex-wrap: wrap;
+    justify-content: center;
+}
+
+.inventory-history-modal .status-card-inline {
+  transition: all 0.3s ease;
+}
+
+.inventory-history-modal .info-card-label-inline {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  font-size: 0.65rem;
+  font-weight: 600;
+  color: #6b7280;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  white-space: nowrap;
+}
+
+.inventory-history-modal .info-icon-inline {
+  font-size: 0.7rem;
+  color: #6b7280;
+}
+
+.inventory-history-modal .info-card-value-inline {
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: #1f2937;
+  white-space: nowrap;
+}
+
+.inventory-history-modal .status-badge-inline {
+  display: inline-block;
+  padding: 0.15rem 0.6rem;
+  border-radius: 4px;
+  font-size: 0.65rem;
+  font-weight: 600;
+  color: white;
+  letter-spacing: 0.02em;
+}
+
+/* Body */
+.inventory-history-modal .inventory-history-body {
+  padding: 0.5rem 1.5rem 0.75rem 1.5rem;
+  overflow-y: auto;
+  flex: 1;
+}
+
+.history-title {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-size: 1rem;
+  font-weight: 600;
+  color: #1f2937;
+  margin: 0 0 0.75rem 0;
+}
+
+.history-title-icon {
+  color: #6b7280;
+}
+
+/* Transaction Legend */
+.transaction-legend {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+  padding: 0.5rem 0;
+  margin-bottom: 1rem;
+  border-bottom: 1px solid #f3f4f6;
+}
+
+.legend-label {
+  font-size: 0.75rem;
+  font-weight: 500;
+  color: #6b7280;
+}
+
+.transaction-types-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+}
+
+.transaction-types-info {
+  display: inline-flex;
+  align-items: center;
+  color: #6b7280;
+  cursor: help;
+}
+
+.transaction-types-info:hover,
+.transaction-types-info:focus {
+  color: #a31d1d;
+  outline: none;
+}
+
+.transaction-types-tooltip {
+  display: flex;
+  flex-direction: column;
+  gap: 0.45rem;
+  line-height: 1.4;
+}
+
+.legend-items {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+}
+
+.legend-item {
+  display: flex;
+  align-items: center;
+  gap: 0.3rem;
+  font-size: 0.7rem;
+  color: #374151;
+}
+
+.legend-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  display: inline-block;
+}
+
+.legend-dot.sale {
+  background: #3b82f6;
+}
+.legend-dot.restock {
+  background: #16a34a;
+}
+.legend-dot.adjustment {
+  background: #f59e0b;
+}
+.legend-dot.return {
+  background: #8b5cf6;
+}
+
+.legend-sub {
+  font-size: 0.6rem;
+  color: #9ca3af;
+  font-weight: 400;
+}
+
+/* Empty State */
+.history-empty-state {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 3rem 1rem;
+  text-align: center;
+  color: #6b7280;
+}
+
+.history-empty-state svg {
+  color: #d1d5db;
+  margin-bottom: 0.75rem;
+}
+
+.history-empty-state p {
+  font-size: 0.9rem;
+  margin: 0;
+}
+
+.empty-sub-text {
+  font-size: 0.75rem !important;
+  color: #9ca3af;
+  margin-top: 0.25rem !important;
+}
+
+/* Table */
+.history-table-wrapper {
+  overflow-x: auto;
+  margin-bottom: 1rem;
+}
+
+.history-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.8rem;
+}
+
+.history-table thead {
+  background: #f9fafb;
+}
+
+.history-table th {
+  padding: 0.6rem 0.8rem;
+  text-align: left;
+  font-weight: 600;
+  color: #6b7280;
+  font-size: 0.7rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  border-bottom: 2px solid #e5e7eb;
+}
+
+.history-table td {
+  padding: 0.6rem 0.8rem;
+  border-bottom: 1px solid #f3f4f6;
+  color: #1f2937;
+  vertical-align: middle;
+}
+
+.history-table tbody tr:hover {
+  background: #f9fafb;
+}
+
+.time-text {
+  font-size: 0.65rem;
+  color: #9ca3af;
+}
+
+/* Transaction Badge */
+.transaction-badge {
+  display: inline-block;
+  padding: 0.15rem 0.6rem;
+  border-radius: 4px;
+  font-size: 0.7rem;
+  font-weight: 500;
+  color: white;
+}
+
+.transaction-badge.sale {
+  background: #3b82f6;
+}
+.transaction-badge.restock {
+  background: #16a34a;
+}
+.transaction-badge.adjustment {
+  background: #f59e0b;
+}
+.transaction-badge.return {
+  background: #8b5cf6;
+}
+
+.positive-change {
+  color: #16a34a;
+  font-weight: 600;
+}
+
+.negative-change {
+  color: #dc2626;
+  font-weight: 600;
+}
+
+/* Pagination */
+.history-pagination {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0.5rem 0;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+.history-pagination .page-btn {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.3rem 0.8rem;
+  background: transparent;
+  color: #6b7280;
+  border: 1px solid #e5e7eb;
+  border-radius: 6px;
+  font-size: 0.75rem;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.history-pagination .page-btn:hover:not(:disabled) {
+  background: #f9fafb;
+  border-color: #a31d1d;
+  color: #a31d1d;
+}
+
+.history-pagination .page-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.history-pagination .page-numbers {
+  display: flex;
+  align-items: center;
+  gap: 0.2rem;
+}
+
+.history-pagination .page-number {
+  min-width: 30px;
+  height: 30px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  font-size: 0.75rem;
+  color: #1f2937;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.history-pagination .page-number:hover:not(.active) {
+  background: #f9fafb;
+  border-color: #e5e7eb;
+}
+
+.history-pagination .page-number.active {
+  background: #a31d1d;
+  color: white;
+  border-color: #a31d1d;
+}
+
+.history-pagination .page-dots {
+  color: #6b7280;
+  padding: 0 0.2rem;
+  font-size: 0.75rem;
+}
+
+/* Footer */
+.inventory-history-modal .inventory-history-footer {
+  display: flex;
+  justify-content: flex-end;
+  padding: 0.75rem 1.5rem 1.25rem 1.5rem;
+  border-top: 1px solid #f3f4f6;
+  background: white;
+  flex-shrink: 0;
+}
+
+.inventory-history-modal .btn-close {
+  padding: 0.4rem 1.5rem;
+  background: #a31d1d;
+  color: white;
+  border: none;
+  border-radius: 6px;
+  font-weight: 600;
+  font-size: 0.8rem;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.inventory-history-modal .btn-close:hover {
+  background: #8a1818;
+  transform: translateY(-1px);
+  box-shadow: 0 4px 12px rgba(163, 29, 29, 0.3);
+}
+
+/* Mobile Responsive - Matches RestockModal */
+@media (max-width: 1024px) {
+  .inventory-history-modal .inventory-history-info-cards-inline {
+    flex-wrap: wrap;
+    width: 100%;
+  }
+
+  .inventory-history-modal .info-card-inline {
+    flex: 1;
+    min-width: 130px;
+    padding: 12px 16px;
+  }
+}
+
+@media (max-width: 768px) {
+  .inventory-history-modal .inventory-history-header {
+    padding: 0.75rem 1rem 0.25rem 1rem;
+  }
+
+  .inventory-history-modal .inventory-history-body {
+    padding: 0.25rem 1rem 0.5rem 1rem;
+  }
+
+  .inventory-history-modal .inventory-history-footer {
+    padding: 0.5rem 1rem 0.75rem 1rem;
+  }
+
+  .inventory-history-modal .item-name {
+    font-size: 1.2rem;
+  }
+
+  .inventory-history-modal .inventory-history-item-row {
+    gap: 0.5rem;
+    flex-direction: column;
+    align-items: flex-start;
+  }
+
+  .inventory-history-modal .inventory-history-info-cards-inline {
+    flex-wrap: wrap;
+    width: 100%;
+  }
+
+  .inventory-history-modal .info-card-inline {
+    flex: 1;
+    min-width: 120px;
+    padding: 10px 14px;
+  }
+
+  .history-pagination {
+    justify-content: center;
+  }
+
+  .history-pagination .page-numbers {
+    order: 3;
+    width: 100%;
+    justify-content: center;
+  }
+
+  .history-table {
+    font-size: 0.7rem;
+  }
+
+  .history-table th,
+  .history-table td {
+    padding: 0.4rem 0.5rem;
+  }
+
+  .transaction-legend {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+
+  .legend-items {
+    flex-wrap: wrap;
+  }
+}
+
+@media (max-width: 480px) {
+  .inventory-history-modal .inventory-history-footer {
+    flex-direction: column-reverse;
+  }
+
+  .inventory-history-modal .inventory-history-footer button {
+    width: 100%;
+    justify-content: center;
+  }
+
+  .inventory-history-modal .inventory-history-header-left {
+    width: 100%;
+  }
+
+  .inventory-history-modal .inventory-history-info-cards-inline {
+    flex-direction: column;
+    width: 100%;
+  }
+
+  .inventory-history-modal .info-card-inline {
+    width: 100%;
+    padding: 12px 16px;
+  }
+
+  .history-table-wrapper {
+    overflow-x: auto;
+  }
+
+  .history-table {
+    min-width: 500px;
+  }
+
+  .history-pagination .page-btn {
+    font-size: 0.65rem;
+    padding: 0.2rem 0.6rem;
+  }
+
+  .history-pagination .page-number {
+    min-width: 26px;
+    height: 26px;
+    font-size: 0.65rem;
+  }
+}

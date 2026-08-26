@@ -3,15 +3,16 @@ import { useState } from "react";
 import "./InventoryManagement.css";
 import Navbar from "../../components/Navbar/Navbar";
 import { FaBoxes, FaClipboardList } from 'react-icons/fa';
-import Inventory from "./Inventory";
-import Mapping from "../../datamanagement/components/MappingData";
+import Inventory from "./IngredientManagement";
+import Mapping from "../../datamanagement/components/ProductManagement";
 
 const InventoryManagement = () => {
   const [activeTab, setActiveTab] = useState("inventory");
 
   const tabs = [
-    { id: "inventory", label: "Ingredient Management", icon: FaBoxes },
-    { id: "mapping", label: "Product Management", icon: FaClipboardList },
+  { id: "inventory", label: "Ingredient Management", icon: FaBoxes },
+    { id: "mapping", label: "Product Management", icon: FaClipboardList }
+   
   ];
 
   return (
