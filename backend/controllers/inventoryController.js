@@ -28,8 +28,12 @@ const getInventoryItems = async (req, res) => {
       page = 1,
       limit = 5,
       showArchived = false,
-      date
+      date,
+      archived,
+      status
     } = req.query;
+
+    const includeArchived = archived === 'true' || showArchived === 'true';
 
     console.log('📦 Fetching inventory items...');
 
@@ -38,7 +42,7 @@ const getInventoryItems = async (req, res) => {
       .from('inventory_items')
       .select('quantity, price, min_stock, category, is_archived');
 
-    if (showArchived === 'true') {
+    if (includeArchived) {
       summaryQuery = summaryQuery.eq('is_archived', true);
     } else {
       summaryQuery = summaryQuery.eq('is_archived', false);
@@ -100,7 +104,7 @@ const getInventoryItems = async (req, res) => {
       .from('inventory_items')
       .select('*', { count: 'exact' });
 
-    if (showArchived === 'true') {
+    if (includeArchived) {
       query = query.eq('is_archived', true);
     } else {
       query = query.eq('is_archived', false);
@@ -129,21 +133,44 @@ const getInventoryItems = async (req, res) => {
     const sortField = validSortFields.includes(sortBy) ? sortBy : 'created_at';
     query = query.order(sortField, { ascending: sortOrder === 'asc' });
 
-    const from = (page - 1) * limit;
-    const to = from + limit - 1;
-    query = query.range(from, to);
+    // Status is derived from quantity and min_stock, so filter it after retrieval.
+    if (!status || status === 'All') {
+      const from = (page - 1) * limit;
+      const to = from + limit - 1;
+      query = query.range(from, to);
+    }
 
-    const { data, error, count } = await query;
+    const { data: queriedData, error, count } = await query;
 
     if (error) throw error;
 
+    const filteredData = status && status !== 'All'
+      ? (queriedData || []).filter((item) => {
+          const quantity = Number(item.quantity) || 0;
+          const minStock = Number(item.min_stock) || 0;
+          const itemStatus = quantity === 0 || quantity <= minStock * 0.5
+            ? 'Critical Stock'
+            : quantity <= minStock
+              ? 'Low Stock'
+              : quantity >= minStock * 3
+                ? 'Excess Stock'
+                : 'Normal Stock';
+          return itemStatus === status;
+        })
+      : (queriedData || []);
+    const from = (page - 1) * limit;
+    const paginatedData = status && status !== 'All'
+      ? filteredData.slice(from, from + parseInt(limit))
+      : filteredData;
+    const total = status && status !== 'All' ? filteredData.length : (count || 0);
+
     res.json({
       success: true,
-      data: data || [],
-      total: count || 0,
+      data: paginatedData,
+      total,
       page: parseInt(page),
       limit: parseInt(limit),
-      totalPages: Math.ceil((count || 0) / limit),
+      totalPages: Math.ceil(total / limit),
       summary: {
         totalItems,
         totalStockValue,
@@ -475,18 +502,29 @@ const restockInventoryItem = async (req, res) => {
 const getItemTransactions = async (req, res) => {
   try {
     const { id } = req.params;
-    const { limit = 50 } = req.query;
+    const page = Math.max(parseInt(req.query.page, 10) || 1, 1);
+    const limit = Math.min(Math.max(parseInt(req.query.limit, 10) || 10, 1), 100);
+    const from = (page - 1) * limit;
+    const to = from + limit - 1;
 
-    const { data, error } = await supabase
+    const { data, error, count } = await supabase
       .from('inventory_transactions')
-      .select('*')
+      .select('*', { count: 'exact' })
       .eq('item_id', id)
       .order('created_at', { ascending: false })
-      .limit(parseInt(limit));
+      .range(from, to);
 
     if (error) throw error;
 
-    res.json({ success: true, data });
+    const total = count || 0;
+    res.json({
+      success: true,
+      data: data || [],
+      page,
+      limit,
+      total,
+      totalPages: Math.ceil(total / limit)
+    });
   } catch (error) {
     console.error('Error fetching transactions:', error);
     res.status(500).json({ success: false, error: error.message });
