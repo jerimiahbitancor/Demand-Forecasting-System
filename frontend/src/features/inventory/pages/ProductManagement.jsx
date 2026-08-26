@@ -1,28 +1,26 @@
-// components/MappingData.jsx
+// components/ProductManagement.jsx
 import { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import { 
-  FiPlus, 
-  FiEdit2, 
-  FiTrash2, 
-  FiChevronLeft,
-  FiChevronRight,
-  FiX,
-  FiSave,
-  FiSearch,
-  FiRefreshCw,
-  FiInfo,
-  FiEye,
-  FiArchive,
-  FiRotateCcw,
-  FiClipboard,
-  FiDollarSign,
-  FiAlertTriangle,
-  FiLink
-} from "react-icons/fi";
+  FaPlus, 
+  FaEdit, 
+  FaTrash, 
+  FaChevronLeft,
+  FaChevronRight,
+  FaTimes,
+  FaSave,
+  FaInfoCircle,
+  FaArchive,
+  FaUndo,
+  FaChevronDown,
+  FaSearch,
+} from "react-icons/fa";
 import axios from 'axios';
 import toast from 'react-hot-toast';
-import "./MappingData.css";
+import "./ProductManagement.css";
 import { useAuth } from "../../../context/AuthContext";
+import Tippy from '@tippyjs/react';
+import 'tippy.js/dist/tippy.css';
+import 'tippy.js/animations/scale.css';
 
 const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:5000/api';
 
@@ -38,7 +36,7 @@ const STORAGE_KEYS = {
   LAST_FETCH: 'mapping_last_fetch'
 };
 
-const MappingData = () => {
+const ProductManagement = () => {
   const { getToken } = useAuth();
 
   // Refs
@@ -67,6 +65,7 @@ const MappingData = () => {
   const [isEditMode, setIsEditMode] = useState(false);
   const [isViewMode, setIsViewMode] = useState(false);
   const [isArchiveModalOpen, setIsArchiveModalOpen] = useState(false);
+  const [isLowMarginModalOpen, setIsLowMarginModalOpen] = useState(false);
   const [editingId, setEditingId] = useState(null);
   const [loading, setLoading] = useState(true);
   const [isSaving, setIsSaving] = useState(false);
@@ -175,11 +174,9 @@ const MappingData = () => {
   const updateStats = useCallback((items) => {
     const total = items.length;
     
-    // Calculate average COGS (Cost of Goods Sold) - estimated as 60% of price
     const totalCOGS = items.reduce((sum, item) => sum + ((item.price || 0) * 0.6), 0);
     const avgCOGS = total > 0 ? totalCOGS / total : 0;
     
-    // Low margin products (margin < 30%)
     const lowMarginProducts = items.filter(item => {
       const price = item.price || 0;
       const cogs = price * 0.6;
@@ -187,7 +184,6 @@ const MappingData = () => {
       return margin < 30 && price > 0;
     }).length;
     
-    // Unmapped products (no ingredients mapped)
     const unmappedProducts = items.filter(item => 
       !item.product_ingredients || item.product_ingredients.length === 0
     ).length;
@@ -243,10 +239,8 @@ const MappingData = () => {
       const storedTotal = sessionStorage.getItem(STORAGE_KEYS.TOTAL_PRODUCTS + cacheSuffix);
       const lastFetch = sessionStorage.getItem(STORAGE_KEYS.LAST_FETCH + cacheSuffix);
       
-      // 👇 FIX: Only use cache if NOT forceRefresh
       const cacheValid = lastFetch && (Date.now() - parseInt(lastFetch)) < 5 * 60 * 1000;
       
-      // 👇 FIX: Skip cache entirely when forceRefresh is true
       if (!forceRefresh && storedData && storedCategories && storedTotal && cacheValid) {
         const parsedData = JSON.parse(storedData);
         const parsedCategories = JSON.parse(storedCategories);
@@ -262,13 +256,12 @@ const MappingData = () => {
         return;
       }
 
-      // 👇 FIX: Always fetch fresh when forceRefresh is true
       const productsResponse = await apiClient.get('/mapping/products', {
         params: {
           status: statusFilter,
           category: selectedCategory === 'All' ? null : selectedCategory,
           search: searchTerm || null,
-          forceRefresh: 'true' // Always force refresh on API side
+          forceRefresh: 'true'
         },
         signal: abortControllerRef.current.signal
       });
@@ -288,7 +281,7 @@ const MappingData = () => {
       const categoriesResponse = await apiClient.get('/mapping/categories', {
         params: {
           status: statusFilter,
-          forceRefresh: 'true' // Always force refresh on API side
+          forceRefresh: 'true'
         }
       });
       
@@ -322,11 +315,10 @@ const MappingData = () => {
       clearInterval(autoRefreshIntervalRef.current);
     }
     
-    // 👇 FIX: Set to 5 seconds (5000ms)
     autoRefreshIntervalRef.current = setInterval(() => {
       console.log('🔄 Auto-refreshing mapping data...');
-      fetchData(true); // 👈 Pass true to bypass cache
-    }, 5000); // 5 seconds
+      fetchData(true);
+    }, 5000);
     
     return autoRefreshIntervalRef.current;
   }, [fetchData]);
@@ -737,11 +729,52 @@ const MappingData = () => {
   // ============ GET STATUS DETAILS ============
   const getStatusDetails = (product) => {
     const isActive = product?.is_active === true;
-    const label = isActive ? 'ACTIVE' : 'INACTIVE';
-    const tone = isActive ? 'active' : 'inactive';
-    const reason = product?.inactive_reason || 'Product is inactive';
+    const hasIngredients = product?.product_ingredients && product.product_ingredients.length > 0;
+    
+    const price = product?.price || 0;
+    const cogs = price * 0.6;
+    const margin = price > 0 ? ((price - cogs) / price) * 100 : 0;
+    const isLowMargin = margin < 30 && price > 0;
+    const isUnmapped = !hasIngredients;
+    
+    const createdDate = new Date(product?.created_at);
+    const daysOld = (Date.now() - createdDate.getTime()) / (1000 * 60 * 60 * 24);
+    const isNew = daysOld < 28 && isActive;
+    const isDiscontinued = !isActive && daysOld > 28;
+    
+    let label = 'Active';
+    let className = 'status-active';
+    let dotColor = '#16a34a';
+    let tooltip = 'This product is active and being forecasted.';
+    
+    if (isUnmapped) {
+      label = 'Unmapped';
+      className = 'status-unmapped';
+      dotColor = '#9ca3af';
+      tooltip = 'No ingredient recipe configured. This product cannot be included in ingredient demand estimates or the shopping list. Add a recipe using the Edit button.';
+    } else if (isLowMargin && isActive) {
+      label = 'Low Margin';
+      className = 'status-low-margin';
+      dotColor = '#ec4899';
+      tooltip = 'This product has a profit margin below 30%. Consider adjusting price or reducing ingredient costs.';
+    } else if (!isActive && isDiscontinued) {
+      label = 'Discontinued';
+      className = 'status-discontinued';
+      dotColor = '#dc2626';
+      tooltip = 'No sales recorded in 28 days. Excluded from forecasting until sales resume.';
+    } else if (!isActive && isNew) {
+      label = 'INACTIVE (NEW)';
+      className = 'status-inactive-new';
+      dotColor = '#f59e0b';
+      tooltip = 'New product detected. Forecast will be available after 28 days of sales data.';
+    } else if (!isActive) {
+      label = 'INACTIVE';
+      className = 'status-inactive';
+      dotColor = '#6b7280';
+      tooltip = 'Product is inactive.';
+    }
 
-    return { label, tone, reason, isActive };
+    return { label, className, dotColor, tooltip, isActive, isUnmapped, isLowMargin, isNew, isDiscontinued };
   };
 
   // ============ SORT OPTIONS ============
@@ -799,7 +832,7 @@ const MappingData = () => {
   }, [mappingData, searchTerm, selectedCategory, sortBy]);
 
   // ============ PAGINATION ============
-  const itemsPerPage = 5;
+  const itemsPerPage = 10;
   const totalPages = Math.ceil(getFilteredData.length / itemsPerPage) || 1;
   const startIndex = (currentPage - 1) * itemsPerPage;
   const currentData = getFilteredData.slice(startIndex, startIndex + itemsPerPage);
@@ -825,63 +858,385 @@ const MappingData = () => {
   }, [totalPages, currentPage]);
 
   const [selectedItem, setSelectedItem] = useState(null);
+  const [selectedLowMarginItem, setSelectedLowMarginItem] = useState(null);
+
+  // Format currency
+  const formatCurrency = (amount) => {
+    if (amount === undefined || amount === null) return '₱0.00';
+    return `₱${parseFloat(amount).toFixed(2)}`;
+  };
+
+  // Format date
+  const formatDate = (dateString) => {
+    if (!dateString) return 'N/A';
+    try {
+      const date = new Date(dateString);
+      return date.toLocaleDateString('en-US', { 
+        month: 'short', 
+        day: 'numeric', 
+        year: 'numeric' 
+      });
+    } catch {
+      return 'N/A';
+    }
+  };
+
+  // ============ STOCK LEGEND ============
+  const stockLegend = [
+    { label: 'Unmapped', color: '#9ca3af' },
+    { label: 'Low Margin', color: '#ec4899' },
+    { label: 'Active', color: '#16a34a' },
+    { label: 'Inactive (New)', color: '#f59e0b' },
+    { label: 'Inactive (Discontinued)', color: '#dc2626' }
+  ];
+
+  // Get count for each status
+  const getStatusCounts = () => {
+    let unmapped = 0;
+    let lowMargin = 0;
+    let active = 0;
+    let inactiveNew = 0;
+    let discontinued = 0;
+
+    mappingData.forEach(item => {
+      const status = getStatusDetails(item);
+      if (status.isUnmapped) unmapped++;
+      else if (status.isLowMargin && status.isActive) lowMargin++;
+      else if (status.isActive) active++;
+      else if (status.isNew && !status.isActive) inactiveNew++;
+      else if (status.isDiscontinued) discontinued++;
+    });
+
+    return { unmapped, lowMargin, active, inactiveNew, discontinued };
+  };
+
+  const statusCounts = getStatusCounts();
+
+  // Get sample data for tooltip
+  const getTooltipData = () => {
+    const sampleProducts = mappingData.slice(0, 6);
+    const totalIngredientCost = sampleProducts.reduce((sum, item) => sum + ((item.price || 0) * 0.6), 0);
+    const avgCogs = sampleProducts.length > 0 ? totalIngredientCost / sampleProducts.length : 0;
+    const avgPrice = sampleProducts.length > 0 ? sampleProducts.reduce((sum, item) => sum + (item.price || 0), 0) / sampleProducts.length : 0;
+    
+    return { sampleProducts, totalIngredientCost, avgCogs, avgPrice };
+  };
+
+  const tooltipData = getTooltipData();
+
+  // Static low margin items data for the tooltip
+  const lowMarginTooltipData = [
+    {
+      name: 'Breaded Porkchop',
+      sellingPrice: 79,
+      ingredientCost: 62,
+      profit: 17,
+      margin: 21,
+      description: "Only ₱17 stays with you after ingredients. Below 30% threshold."
+    },
+    {
+      name: 'Adobo',
+      sellingPrice: 110,
+      ingredientCost: 88,
+      profit: 22,
+      margin: 20,
+      description: "Sells for ₱110 but ingredients cost ₱88. Very little profit left. Below 30% threshold."
+    }
+  ];
 
   return (
-    <div className="mapping-container">
-      {/* Stats Cards - 4 Cards */}
-      <div className="mapping-stats-cards">
-        <div className="mapping-stat-card">
-          <div className="mapping-stat-card-content">
-            
-            <p className="mapping-stat-card-label">Total Menu Items</p>
-            <p className="mapping-stat-card-value">{productStats.total_menu_items}</p>
-            <p className="mapping-stat-card-change positive">Active products</p>
+    <div className="product-management-container">
+      {/* Stats Cards - 4 Cards with Tooltips */}
+      <div className="product-stats-cards">
+        <div className="product-stat-card">
+          <div className="product-stat-card-content">
+            <div className="product-stat-card-header">
+              <p className="product-stat-card-label">Total Menu Items</p>
+              <Tippy
+                content="All active menu items currently on your menu. Archived and inactive items are not counted."
+                placement="top"
+                animation="scale"
+                duration={200}
+                theme="dark"
+                arrow
+                trigger="mouseenter focus click"
+                appendTo={() => document.body}
+                zIndex={100000}
+              >
+                <span className="product-card-info" tabIndex={0} aria-label="Total menu items information">
+                  <FaInfoCircle />
+                </span>
+              </Tippy>
+            </div>
+            <p className="product-stat-card-value">{productStats.total_menu_items}</p>
+            <p className="product-stat-card-change positive">Active products</p>
           </div>
         </div>
 
-        <div className="mapping-stat-card">
-          <div className="mapping-stat-card-content">
-    
-            <p className="mapping-stat-card-label">Average COGS</p>
-            <p className="mapping-stat-card-value">₱ {productStats.avg_cogs.toFixed(2)}</p>
-            <p className="mapping-stat-card-change">Cost of Goods Sold</p>
+        <div className="product-stat-card">
+          <div className="product-stat-card-content">
+            <div className="product-stat-card-header">
+              <p className="product-stat-card-label">Average COGS</p>
+              <Tippy
+                content={(
+                  <div className="product-card-tooltip">
+                    <strong>How Average COGS is computed</strong>
+                    <table className="product-tooltip-table">
+                      <thead>
+                        <tr>
+                          <th>Menu Item</th>
+                          <th>Selling price</th>
+                          <th>Ingredient cost</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {tooltipData.sampleProducts.length > 0 ? (
+                          tooltipData.sampleProducts.map((item, idx) => (
+                            <tr key={idx}>
+                              <td>{item.name}</td>
+                              <td>{formatCurrency(item.price)}</td>
+                              <td>{formatCurrency((item.price || 0) * 0.6)}</td>
+                            </tr>
+                          ))
+                        ) : (
+                          <tr>
+                            <td colSpan="3">No products available</td>
+                          </tr>
+                        )}
+                        {tooltipData.sampleProducts.length > 0 && (
+                          <tr className="tooltip-total-row">
+                            <td><strong>Total</strong></td>
+                            <td>—</td>
+                            <td><strong>{formatCurrency(tooltipData.totalIngredientCost)}</strong></td>
+                          </tr>
+                        )}
+                      </tbody>
+                    </table>
+                    <div className="tooltip-calculation">
+                      <span><strong>Calculation:</strong> {formatCurrency(tooltipData.totalIngredientCost)} total ingredient cost ÷ {tooltipData.sampleProducts.length || 1} dishes = <strong>{formatCurrency(tooltipData.avgCogs)}</strong> average per dish</span>
+                    </div>
+                    <span className="tooltip-note">
+                      This means on average, you spend {formatCurrency(tooltipData.avgCogs)} in ingredients for every dish you prepare. If your average selling price is around {formatCurrency(tooltipData.avgPrice)}, then {formatCurrency(tooltipData.avgCogs)} of every dish's revenue goes back to buying ingredients.
+                    </span>
+                  </div>
+                )}
+                placement="top"
+                animation="scale"
+                duration={200}
+                theme="dark"
+                arrow
+                delay={[100, 0]}
+                maxWidth={420}
+                interactive
+                trigger="mouseenter focus click"
+                appendTo={() => document.body}
+                zIndex={100000}
+              >
+                <span className="product-card-info" tabIndex={0} aria-label="Average COGS information">
+                  <FaInfoCircle />
+                </span>
+              </Tippy>
+            </div>
+            <p className="product-stat-card-value">₱ {productStats.avg_cogs.toFixed(2)}</p>
+            <p className="product-stat-card-change">Cost of Goods Sold</p>
           </div>
         </div>
 
-        <div className="mapping-stat-card warning">
-          <div className="mapping-stat-card-content">
-           
-            <p className="mapping-stat-card-label">Low Margin Products</p>
-            <p className="mapping-stat-card-value">{productStats.low_margin_products}</p>
-            <p className="mapping-stat-card-change warning-text">Margin &lt; 30%</p>
+        <div className="product-stat-card warning">
+          <div className="product-stat-card-content">
+            <div className="product-stat-card-header">
+              <p className="product-stat-card-label">Low Margin Items</p>
+              <div className="product-card-header-actions">
+                <Tippy
+                  content={(
+                    <div className="product-card-tooltip">
+                      <strong>Low Margin Items</strong>
+                      <span>These are menu items where most of your selling price goes to ingredients, leaving you with very little profit. For example, if a dish costs ₱80 in ingredients but you sell it for ₱95, only ₱15 stays with you — that's less than 20% of the price. This count shows how many of your items fall into that situation.</span>
+                    </div>
+                  )}
+                  placement="top"
+                  animation="scale"
+                  duration={200}
+                  theme="dark"
+                  arrow
+                  delay={[100, 0]}
+                  maxWidth={380}
+                  interactive
+                  trigger="mouseenter focus click"
+                  appendTo={() => document.body}
+                  zIndex={100000}
+                >
+                  <span className="product-card-info" tabIndex={0} aria-label="Low margin items information">
+                    <FaInfoCircle />
+                  </span>
+                </Tippy>
+                
+                {/* ============ TOOLTIP ON EXPAND ICON WITH STATIC EXAMPLE ============ */}
+                <Tippy
+                  content={(
+                    <div className="product-card-tooltip tooltip-expand-table">
+                      <strong>Low Margin Items — the 2 menu items flagged</strong>
+                      
+                      {/* Breaded Porkchop */}
+                      <div className="tooltip-low-margin-item">
+                        <div className="tooltip-item-name">Breaded Porkchop</div>
+                        <div className="tooltip-item-row">
+                          <span className="tooltip-item-label">Selling price</span>
+                          <span className="tooltip-item-value">₱79</span>
+                        </div>
+                        <div className="tooltip-item-row">
+                          <span className="tooltip-item-label">Ingredient cost</span>
+                          <span className="tooltip-item-value negative">−₱62</span>
+                        </div>
+                        <div className="tooltip-item-divider"></div>
+                        <div className="tooltip-item-row">
+                          <span className="tooltip-item-label">Profit per menu</span>
+                          <span className="tooltip-item-value profit">₱17</span>
+                        </div>
+                        <div className="tooltip-item-row">
+                          <span className="tooltip-item-label">Profit margin</span>
+                          <span className="tooltip-item-value margin-low">21%</span>
+                        </div>
+                        <div className="tooltip-item-description">
+                          Only ₱17 stays with you after ingredients. Below 30% threshold.
+                        </div>
+                      </div>
+
+                      {/* Divider between items */}
+                      <div className="tooltip-item-divider-full"></div>
+
+                      {/* Adobo */}
+                      <div className="tooltip-low-margin-item">
+                        <div className="tooltip-item-name">Adobo</div>
+                        <div className="tooltip-item-row">
+                          <span className="tooltip-item-label">Selling price</span>
+                          <span className="tooltip-item-value">₱110</span>
+                        </div>
+                        <div className="tooltip-item-row">
+                          <span className="tooltip-item-label">Ingredient cost</span>
+                          <span className="tooltip-item-value negative">−₱88</span>
+                        </div>
+                        <div className="tooltip-item-divider"></div>
+                        <div className="tooltip-item-row">
+                          <span className="tooltip-item-label">Profit per menu</span>
+                          <span className="tooltip-item-value profit">₱22</span>
+                        </div>
+                        <div className="tooltip-item-row">
+                          <span className="tooltip-item-label">Profit margin</span>
+                          <span className="tooltip-item-value margin-low">20%</span>
+                        </div>
+                        <div className="tooltip-item-description">
+                          Sells for ₱110 but ingredients cost ₱88. Very little profit left. Below 30% threshold.
+                        </div>
+                      </div>
+
+                      <div className="tooltip-summary">
+                        Most of the selling price is eaten up by ingredient cost. You can either raise the price, swap to cheaper ingredients, or accept the lower profit if these dishes attract more customers.
+                      </div>
+                      
+               
+                    </div>
+                  )}
+                  placement="top"
+                  animation="scale"
+                  duration={200}
+                  theme="dark"
+                  arrow
+                  delay={[100, 0]}
+                  maxWidth={420}
+                  interactive
+                  trigger="mouseenter focus click"
+                  appendTo={() => document.body}
+                  zIndex={100000}
+                >
+                  <span 
+                    className="product-card-expand" 
+                    tabIndex={0} 
+                    aria-label="Expand low margin items"
+                    onClick={() => {
+                      const lowMarginItems = mappingData.filter(item => {
+                        const price = item.price || 0;
+                        const cogs = price * 0.6;
+                        const margin = price > 0 ? ((price - cogs) / price) * 100 : 0;
+                        return margin < 30 && price > 0;
+                      });
+                      if (lowMarginItems.length > 0) {
+                        setSelectedLowMarginItem(lowMarginItems);
+                        setIsLowMarginModalOpen(true);
+                      }
+                    }}
+                    role="button"
+                  >
+                    <FaChevronDown />
+                  </span>
+                </Tippy>
+              </div>
+            </div>
+            <div className="product-stock-alerts-group">
+              <span className="alert-badge alert-unmapped" style={{ backgroundColor: '#9ca3af' }}>
+                {statusCounts.unmapped}
+              </span>
+              <span className="alert-badge alert-low-margin" style={{ backgroundColor: '#ec4899' }}>
+                {statusCounts.lowMargin}
+              </span>
+              <span className="alert-badge alert-active" style={{ backgroundColor: '#16a34a' }}>
+                {statusCounts.active}
+              </span>
+              <span className="alert-badge alert-inactive-new" style={{ backgroundColor: '#f59e0b' }}>
+                {statusCounts.inactiveNew}
+              </span>
+              <span className="alert-badge alert-discontinued" style={{ backgroundColor: '#dc2626' }}>
+                {statusCounts.discontinued}
+              </span>
+            </div>
+            <p className="product-stat-card-change">Product Status Counts</p>
           </div>
         </div>
 
-        <div className="mapping-stat-card info">
-          <div className="mapping-stat-card-content">
-            
-            <p className="mapping-stat-card-label">Unmapped Products</p>
-            <p className="mapping-stat-card-value">{productStats.unmapped_products}</p>
-            <p className="mapping-stat-card-change">Missing ingredients</p>
+        <div className="product-stat-card info">
+          <div className="product-stat-card-content">
+            <div className="product-stat-card-header">
+              <p className="product-stat-card-label">Unmapped Products</p>
+              <Tippy
+                content="These are menu items that don't have an ingredient recipe added yet. Without a recipe, the system doesn't know what ingredients go into each dish, so it can't estimate how much to buy or include these items in the shopping list. Go to each unmapped product and add its ingredients to unlock the full shopping list and demand estimates."
+                placement="top"
+                animation="scale"
+                duration={200}
+                theme="dark"
+                arrow
+                delay={[100, 0]}
+                maxWidth={380}
+                interactive
+                trigger="mouseenter focus click"
+                appendTo={() => document.body}
+                zIndex={100000}
+              >
+                <span className="product-card-info" tabIndex={0} aria-label="Unmapped products information">
+                  <FaInfoCircle />
+                </span>
+              </Tippy>
+            </div>
+            <p className="product-stat-card-value" style={{ color: '#9ca3af' }}>{productStats.unmapped_products}</p>
+            <p className="product-stat-card-change">Missing ingredients</p>
           </div>
         </div>
       </div>
 
-      <div className="mapping-header">
-        <h2 className="mapping-title">
-          Product Mapping 
-          {loading && <span className="loading-spinner">...</span>}
-          {!loading && lastUpdated && (
-            <span className="last-updated">
-              Updated: {lastUpdated.toLocaleTimeString()}
-            </span>
-          )}
-        </h2>
+      {/* ============ STOCK LEGEND ============ */}
+      <div className="inventory-legend-container">
+        {stockLegend.map((legend, index) => (
+          <div key={index} className="inventory-legend-item">
+            <span className="legend-dot" style={{ backgroundColor: legend.color }}></span>
+            <span className="legend-label">{legend.label}</span>
+          </div>
+        ))}
       </div>
 
-      <div className="mapping-controls">
+   
+
+      <div className="product-controls">
         <div className="search-wrapper">
-          <div className="search-icon" />
+          <FaSearch className="search-icon" />
           <input
             type="text"
             placeholder="Search product or ingredient..."
@@ -927,7 +1282,7 @@ const MappingData = () => {
             ))}
           </select>
           <button 
-            className="btn-add-product"
+            className="btn-primary"
             onClick={() => {
               resetForm();
               setIsEditMode(false);
@@ -935,104 +1290,113 @@ const MappingData = () => {
               setIsModalOpen(true);
             }}
           >
-            <FiPlus size={16} /> Add Product
+            <FaPlus /> Add Product
           </button>
         </div>
       </div>
 
-      <div className="mapping-section">
-        <div className="mapping-table-wrapper">
+      <div className="product-section">
+        <div className="product-table-wrapper">
           {loading ? (
             <div className="loading-state">Loading products...</div>
           ) : currentData.length === 0 ? (
             <div className="empty-state">No products found for this view.</div>
           ) : (
-            <table className="mapping-table">
+            <table className="product-table">
               <thead>
                 <tr>
                   <th>No.</th>
-                  <th>Product Name</th>
+                  <th>Item Name</th>
                   <th>Category</th>
+                  <th>Modifier</th>
                   <th>Ingredients</th>
-                  <th>Price</th>
+                  <th>Selling Price</th>
+                  <th>Total Ingredient Cost</th>
                   <th>Status</th>
+                  <th>Date Created</th>
+                  <th>Last Updated</th>
                   <th>Actions</th>
                 </tr>
               </thead>
               <tbody>
                 {currentData.map((item, index) => {
-                  const { label, tone, reason, isActive } = getStatusDetails(item);
+                  const status = getStatusDetails(item);
+                  const totalIngredientCost = item.product_ingredients?.reduce((sum, pi) => {
+                    const price = pi.ingredients?.price || 0;
+                    const qty = pi.quantity_per_serving || 0;
+                    return sum + (price * qty);
+                  }, 0) || 0;
 
                   return (
-                  <tr key={item.id}>
-                    <td>{startIndex + index + 1}</td>
-                    <td className="product-name">{item.name}</td>
-                    <td><span className="category-badge">{item.category || 'Uncategorized'}</span></td>
-                    <td className="ingredients-cell">
-                      {item.product_ingredients && item.product_ingredients.length > 0 ? (
-                        <div className="ingredients-list">
-                          {item.product_ingredients.slice(0, 3).map((pi, i) => (
-                            <span key={i} className="ingredient-tag">
-                              {pi.ingredients?.name || 'Unknown'}
-                              {pi.quantity_per_serving && ` (${pi.quantity_per_serving}${pi.ingredients?.unit || ''})`}
+                    <tr key={item.id}>
+                      <td>{startIndex + index + 1}</td>
+                      <td className="product-item-name">{item.name}</td>
+                      <td><span className="product-category-badge">{item.category || 'Uncategorized'}</span></td>
+                      <td>{item.serving_size_label || '—'}</td>
+                      <td className="ingredients-cell">
+                        {item.product_ingredients && item.product_ingredients.length > 0 ? (
+                          <div className="ingredients-list">
+                            {item.product_ingredients.slice(0, 3).map((pi, i) => (
+                              <span key={i} className="ingredient-tag">
+                                {pi.ingredients?.name || 'Unknown'}
+                                {pi.quantity_per_serving && ` (${pi.quantity_per_serving}${pi.ingredients?.unit || ''})`}
+                              </span>
+                            ))}
+                            {item.product_ingredients.length > 3 && (
+                              <span className="ingredient-more">+{item.product_ingredients.length - 3} more</span>
+                            )}
+                          </div>
+                        ) : (
+                          <span className="no-ingredients">No ingredients</span>
+                        )}
+                      </td>
+                      <td className="price-cell">{formatCurrency(item.price)}</td>
+                      <td>{formatCurrency(totalIngredientCost)}</td>
+                      <td>
+                        <div className="status-pill-group">
+                          <span className={`product-status-badge ${status.className}`}>
+                            <span className="product-status-dot" style={{ backgroundColor: status.dotColor }}></span>
+                            {status.label}
+                          </span>
+                          {status.isUnmapped || status.isLowMargin || !status.isActive ? (
+                            <span className="status-info-wrapper" title={status.tooltip}>
+                              <FaInfoCircle size={12} className="status-info-icon" />
+                              <span className="status-tooltip">{status.tooltip}</span>
                             </span>
-                          ))}
-                          {item.product_ingredients.length > 3 && (
-                            <span className="ingredient-more">+{item.product_ingredients.length - 3} more</span>
+                          ) : null}
+                        </div>
+                      </td>
+                      <td>{formatDate(item.created_at)}</td>
+                      <td>{formatDate(item.updated_at)}</td>
+                      <td>
+                        <div className="product-action-buttons">
+                          <button 
+                            className="product-action-btn edit"
+                            onClick={() => handleEdit(item)}
+                            title="Edit Product"
+                          >
+                            <FaEdit size={14} />
+                          </button>
+                          {status.isActive ? (
+                            <button 
+                              className="product-action-btn archive"
+                              onClick={() => handleArchive(item)}
+                              title="Archive"
+                            >
+                              <FaArchive size={14} />
+                            </button>
+                          ) : (
+                            <button 
+                              className="product-action-btn reactivate"
+                              onClick={() => handleReactivate(item)}
+                              title="Reactivate"
+                            >
+                              <FaUndo size={14} />
+                            </button>
                           )}
                         </div>
-                      ) : (
-                        <span className="no-ingredients">No ingredients</span>
-                      )}
-                    </td>
-                    <td className="price-cell">₱{item.price?.toFixed(2) || '0.00'}</td>
-                    <td className="status-cell">
-                      <div className="status-pill-group">
-                        <span className={`status-badge ${tone}`}>{label}</span>
-                        {!isActive && (
-                          <span className="status-info-wrapper" title={reason}>
-                            <FiInfo size={12} className="status-info-icon" />
-                            <span className="status-tooltip">{reason}</span>
-                          </span>
-                        )}
-                      </div>
-                    </td>
-                    <td>
-                      <div className="mapping-action-buttons">
-                        <button 
-                          className="mapping-action-btn view"
-                          onClick={() => handleView(item)}
-                          title="View Details"
-                        >
-                          <FiEye size={14} />
-                        </button>
-                        <button 
-                          className="mapping-action-btn edit"
-                          onClick={() => handleEdit(item)}
-                          title="Edit"
-                        >
-                          <FiEdit2 size={14} />
-                        </button>
-                        {isActive ? (
-                          <button 
-                            className="mapping-action-btn archive"
-                            onClick={() => handleArchive(item)}
-                            title="Archive"
-                          >
-                            <FiArchive size={14} />
-                          </button>
-                        ) : (
-                          <button 
-                            className="mapping-action-btn reactivate"
-                            onClick={() => handleReactivate(item)}
-                            title="Reactivate"
-                          >
-                            <FiRotateCcw size={14} />
-                          </button>
-                        )}
-                      </div>
-                    </td>
-                  </tr>
+                      </td>
+                    </tr>
                   );
                 })}
               </tbody>
@@ -1048,7 +1412,7 @@ const MappingData = () => {
                 onClick={() => setCurrentPage(Math.max(1, currentPage - 1))}
                 disabled={currentPage === 1}
               >
-                <FiChevronLeft size={16} /> Previous
+                <FaChevronLeft /> Previous
               </button>
             </div>
             <div className="pagination-center">
@@ -1069,12 +1433,78 @@ const MappingData = () => {
                 onClick={() => setCurrentPage(Math.min(totalPages, currentPage + 1))}
                 disabled={currentPage === totalPages}
               >
-                Next <FiChevronRight size={16} />
+                Next <FaChevronRight />
               </button>
             </div>
           </div>
         )}
       </div>
+
+      {/* ============ LOW MARGIN MODAL ============ */}
+      {isLowMarginModalOpen && selectedLowMarginItem && (
+        <div className="modal-overlay" onClick={() => setIsLowMarginModalOpen(false)}>
+          <div className="modal-content modal-lg" onClick={(e) => e.stopPropagation()}>
+            <div className="modal-header">
+              <h3 className="modal-title">Low Margin Items</h3>
+              <button className="modal-close-btn" onClick={() => setIsLowMarginModalOpen(false)}>
+                <FaTimes />
+              </button>
+            </div>
+            <div className="modal-body">
+              <div className="low-margin-content">
+                <p className="low-margin-description">
+                  Low margin items — the {Array.isArray(selectedLowMarginItem) ? selectedLowMarginItem.length : 1} menu item{Array.isArray(selectedLowMarginItem) && selectedLowMarginItem.length > 1 ? 's' : ''} flagged
+                </p>
+                
+                {/* Table View */}
+                <div className="low-margin-table-wrapper">
+                  <table className="low-margin-table">
+                    <thead>
+                      <tr>
+                        <th>Menu Item</th>
+                        <th>Selling Price</th>
+                        <th>Ingredient Cost</th>
+                        <th>Profit per Menu</th>
+                        <th>Profit Margin</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {Array.isArray(selectedLowMarginItem) ? (
+                        selectedLowMarginItem.map((item, idx) => {
+                          const price = item.price || 0;
+                          const cogs = price * 0.6;
+                          const margin = price > 0 ? ((price - cogs) / price) * 100 : 0;
+                          const profit = price - cogs;
+                          return (
+                            <tr key={idx} className={margin < 20 ? 'very-low-margin-row' : 'low-margin-row'}>
+                              <td><strong>{item.name}</strong></td>
+                              <td className="price-amount">{formatCurrency(price)}</td>
+                              <td className="cost-amount">−{formatCurrency(cogs)}</td>
+                              <td className="profit-amount">{formatCurrency(profit)}</td>
+                              <td>
+                                <span className={`margin-badge ${margin < 20 ? 'very-low' : 'low'}`}>
+                                  {margin.toFixed(0)}%
+                                </span>
+                              </td>
+                            </tr>
+                          );
+                        })
+                      ) : null}
+                    </tbody>
+                  </table>
+                </div>
+
+                <div className="low-margin-summary">
+                  <p>Most of the selling price is eaten up by ingredient cost. You can either raise the price, swap to cheaper ingredients, or accept the lower profit if these dishes attract more customers.</p>
+                </div>
+              </div>
+            </div>
+            <div className="modal-footer">
+              <button className="btn-secondary" onClick={() => setIsLowMarginModalOpen(false)}>Close</button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* ============ MODAL (Add/Edit/View) ============ */}
       {isModalOpen && (
@@ -1083,7 +1513,7 @@ const MappingData = () => {
             <div className="modal-header">
               <h3>{isViewMode ? 'Product Details' : (isEditMode ? 'Edit Product' : 'Add New Product')}</h3>
               <button className="modal-close-btn" onClick={closeModal} disabled={isSaving}>
-                <FiX size={24} />
+                <FaTimes />
               </button>
             </div>
 
@@ -1282,7 +1712,7 @@ const MappingData = () => {
                       className="btn-add-ingredient"
                       onClick={handleAddIngredient}
                     >
-                      <FiPlus size={16} /> Add
+                      <FaPlus /> Add
                     </button>
                   </div>
                 )}
@@ -1322,7 +1752,7 @@ const MappingData = () => {
                                   onClick={() => handleRemoveIngredient(index)}
                                   title="Remove ingredient"
                                 >
-                                  <FiTrash2 size={16} />
+                                  <FaTrash size={16} />
                                 </button>
                               </td>
                             )}
@@ -1352,7 +1782,7 @@ const MappingData = () => {
                   onClick={handleSaveMapping}
                   disabled={isSaving}
                 >
-                  <FiSave size={16} /> 
+                  <FaSave /> 
                   {isSaving ? (isEditMode ? 'Updating...' : 'Creating...') : (isEditMode ? 'Update' : 'Create')}
                 </button>
               )}
@@ -1372,14 +1802,14 @@ const MappingData = () => {
               <button className="modal-close-btn" onClick={() => {
                 if (!isArchiving) setIsArchiveModalOpen(false);
               }} disabled={isArchiving}>
-                <FiX size={24} />
+                <FaTimes />
               </button>
             </div>
 
             <div className="modal-body">
               <div className="confirmation-content">
                 <div className="confirmation-icon warning">
-                  <FiArchive size={32} />
+                  <FaArchive size={32} />
                 </div>
                 <h4>Archive this product?</h4>
                 <p>
@@ -1388,7 +1818,7 @@ const MappingData = () => {
                 </p>
                 <div className="item-details">
                   <p><strong>Category:</strong> {selectedItem.category || 'Uncategorized'}</p>
-                  <p><strong>Price:</strong> ₱{selectedItem.price?.toFixed(2) || '0.00'}</p>
+                  <p><strong>Price:</strong> {formatCurrency(selectedItem.price)}</p>
                   <p><strong>Status:</strong> {selectedItem.is_active ? 'Active' : 'Inactive'}</p>
                 </div>
               </div>
@@ -1407,7 +1837,7 @@ const MappingData = () => {
                 onClick={confirmArchive}
                 disabled={isArchiving}
               >
-                {isArchiving ? 'Archiving...' : <><FiArchive /> Archive</>}
+                {isArchiving ? 'Archiving...' : <><FaArchive /> Archive</>}
               </button>
             </div>
           </div>
@@ -1417,4 +1847,4 @@ const MappingData = () => {
   );
 };
 
-export default MappingData;
+export default ProductManagement;

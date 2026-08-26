@@ -192,7 +192,6 @@ display: flex;
 .legend-dot {
   width: 10px;
   height: 10px;
-  border-radius: 50%;
   display: inline-block;
 }
 
