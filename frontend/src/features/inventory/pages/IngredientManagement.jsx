@@ -225,7 +225,11 @@ const IngredientManagement = () => {
       }
 
       if (selectedDate) {
-        params.date = selectedDate;
+        const localStart = new Date(`${selectedDate}T00:00:00`);
+        const localEnd = new Date(localStart);
+        localEnd.setDate(localEnd.getDate() + 1);
+        params.dateStart = localStart.toISOString();
+        params.dateEnd = localEnd.toISOString();
       }
 
       const response = await apiClient.get('/inventory/items', {
