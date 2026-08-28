@@ -35,6 +35,8 @@ const getInventoryItems = async (req, res) => {
       status
     } = req.query;
 
+    const pageNumber = Math.max(parseInt(page, 10) || 1, 1);
+    const pageLimit = Math.max(parseInt(limit, 10) || 10, 1);
     const includeArchived = archived === 'true' || showArchived === 'true';
 
     console.log('📦 Fetching inventory items...');
@@ -137,8 +139,8 @@ const getInventoryItems = async (req, res) => {
 
     // Status is derived from quantity and min_stock, so filter it after retrieval.
     if (!status || status === 'All') {
-      const from = (page - 1) * limit;
-      const to = from + limit - 1;
+      const from = (pageNumber - 1) * pageLimit;
+      const to = from + pageLimit - 1;
       query = query.range(from, to);
     }
 
@@ -160,9 +162,9 @@ const getInventoryItems = async (req, res) => {
           return itemStatus === status;
         })
       : (queriedData || []);
-    const from = (page - 1) * limit;
+    const from = (pageNumber - 1) * pageLimit;
     const paginatedData = status && status !== 'All'
-      ? filteredData.slice(from, from + parseInt(limit))
+      ? filteredData.slice(from, from + pageLimit)
       : filteredData;
     const total = status && status !== 'All' ? filteredData.length : (count || 0);
 
@@ -170,9 +172,9 @@ const getInventoryItems = async (req, res) => {
       success: true,
       data: paginatedData,
       total,
-      page: parseInt(page),
-      limit: parseInt(limit),
-      totalPages: Math.ceil(total / limit),
+      page: pageNumber,
+      limit: pageLimit,
+      totalPages: Math.ceil(total / pageLimit),
       summary: {
         totalItems,
         totalStockValue,
