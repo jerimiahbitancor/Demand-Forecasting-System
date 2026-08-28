@@ -25,6 +25,7 @@ const InventoryConfirmationModal = ({
       ? "Restore Item"
       : "Archive Item";
   const action = isDelete ? "Delete" : isRestore ? "Restore" : "Archive";
+  const submittingAction = isRestore ? "Restoring" : `${action}ing`;
   const close = () => {
     if (!isSubmitting) onClose();
   };
@@ -83,10 +84,10 @@ const InventoryConfirmationModal = ({
           disabled={isSubmitting}
         >
           {isSubmitting ? (
-            `${action}ing...`
+            `${submittingAction}...`
           ) : (
             <>
-              {icon}
+              {!isRestore && icon}
               {action} Item
             </>
           )}

@@ -431,6 +431,43 @@ const archiveInventoryItem = async (req, res) => {
   }
 };
 
+// Restore an archived inventory item
+const restoreInventoryItem = async (req, res) => {
+  try {
+    const { id } = req.params;
+    console.log('📦 Restoring inventory item:', id);
+
+    const userId = getUserIdFromAuth(req);
+    const { data: currentItem, error: fetchError } = await supabase
+      .from('inventory_items')
+      .select('is_archived')
+      .eq('id', id)
+      .single();
+
+    const { data, error } = await supabase
+      .from('inventory_items')
+      .update({
+        is_archived: false,
+        updated_by: userId
+      })
+      .eq('id', id)
+      .select()
+      .single();
+
+    if (error) throw error;
+
+    console.log('✅ Item restored successfully:', id);
+    res.json({
+      success: true,
+      data,
+      message: 'Item restored successfully'
+    });
+  } catch (error) {
+    console.error('Error restoring item:', error);
+    res.status(500).json({ success: false, error: error.message });
+  }
+};
+
 // Restock inventory item
 const restockInventoryItem = async (req, res) => {
   try {
@@ -538,6 +575,7 @@ module.exports = {
   updateInventoryItem,
   deleteInventoryItem,
   archiveInventoryItem,
+  restoreInventoryItem,
   restockInventoryItem,
   getItemTransactions
 };

@@ -9,6 +9,7 @@ const {
   updateInventoryItem,
   deleteInventoryItem,
   archiveInventoryItem,
+  restoreInventoryItem,
   restockInventoryItem,
   getItemTransactions
 } = require('../controllers/inventoryController');
@@ -23,6 +24,7 @@ router.post('/items', createInventoryItem);
 router.put('/items/:id', updateInventoryItem);
 router.delete('/items/:id', deleteInventoryItem);
 router.patch('/items/:id/archive', archiveInventoryItem);
+router.patch('/items/:id/restore', restoreInventoryItem);
 router.post('/items/:id/restock', restockInventoryItem);
 router.get('/items/:id/transactions', getItemTransactions);
 
