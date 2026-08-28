@@ -29,6 +29,8 @@ const getInventoryItems = async (req, res) => {
       limit = 5,
       showArchived = false,
       date,
+      dateStart,
+      dateEnd,
       archived,
       status
     } = req.query;
@@ -56,14 +58,14 @@ const getInventoryItems = async (req, res) => {
       summaryQuery = summaryQuery.eq('category', category);
     }
 
-    if (date) {
-      const startDate = new Date(`${date}T00:00:00.000Z`);
-      const endDate = new Date(startDate);
-      endDate.setUTCDate(endDate.getUTCDate() + 1);
+    if (date || (dateStart && dateEnd)) {
+      const startDate = dateStart ? new Date(dateStart) : new Date(`${date}T00:00:00.000Z`);
+      const endDate = dateEnd ? new Date(dateEnd) : new Date(startDate);
+      if (!dateEnd) endDate.setUTCDate(endDate.getUTCDate() + 1);
       if (!Number.isNaN(startDate.getTime())) {
         summaryQuery = summaryQuery
-          .gte('created_at', startDate.toISOString())
-          .lt('created_at', endDate.toISOString());
+          .gte('updated_at', startDate.toISOString())
+          .lt('updated_at', endDate.toISOString());
       }
     }
 
@@ -118,18 +120,18 @@ const getInventoryItems = async (req, res) => {
       query = query.eq('category', category);
     }
 
-    if (date) {
-      const startDate = new Date(`${date}T00:00:00.000Z`);
-      const endDate = new Date(startDate);
-      endDate.setUTCDate(endDate.getUTCDate() + 1);
+    if (date || (dateStart && dateEnd)) {
+      const startDate = dateStart ? new Date(dateStart) : new Date(`${date}T00:00:00.000Z`);
+      const endDate = dateEnd ? new Date(dateEnd) : new Date(startDate);
+      if (!dateEnd) endDate.setUTCDate(endDate.getUTCDate() + 1);
       if (!Number.isNaN(startDate.getTime())) {
         query = query
-          .gte('created_at', startDate.toISOString())
-          .lt('created_at', endDate.toISOString());
+          .gte('updated_at', startDate.toISOString())
+          .lt('updated_at', endDate.toISOString());
       }
     }
 
-    const validSortFields = ['created_at', 'name', 'category', 'quantity', 'price', 'batch'];
+    const validSortFields = ['created_at', 'updated_at', 'name', 'category', 'quantity', 'price', 'batch'];
     const sortField = validSortFields.includes(sortBy) ? sortBy : 'created_at';
     query = query.order(sortField, { ascending: sortOrder === 'asc' });
 
