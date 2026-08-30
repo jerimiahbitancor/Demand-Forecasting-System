@@ -38,17 +38,15 @@ export function useSetupGuard(mode) {
         const hasUser = result?.success === true && typeof result.hasUser === 'boolean' ? result.hasUser : null;
         console.log('🔍 hasUser:', hasUser);
 
-        // ENTRY PAGE - Landing
+        // ENTRY PAGE
         if (mode === 'entry') {
-          // If authenticated, go to dashboard
           if (isAuthenticated) {
             navigate('/dashboard', { replace: true });
-            return;
+          } else if (hasUser === true) {
+            navigate('/login', { replace: true });
+          } else {
+            navigate('/register', { replace: true });
           }
-          
-          // If user exists but not logged in, show landing page
-          // (they can click "Get Started" to go to login)
-          setChecking(false);
           return;
         }
 
