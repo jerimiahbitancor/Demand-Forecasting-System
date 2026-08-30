@@ -10,39 +10,18 @@ import ctaImage from "../../assets/landing/client.png";
 
 const Landing = () => {
   const navigate = useNavigate();
-  const [hasUser, setHasUser] = useState(null);
   const [showTerms, setShowTerms] = useState(false);
   const [showPrivacy, setShowPrivacy] = useState(false);
 
-  useEffect(() => {
-    const checkUserExists = async () => {
-      try {
-        const response = await fetch(
-          `${import.meta.env.VITE_API_URL || "http://localhost:5000/api"}/auth/setup`,
-          {
-            cache: "no-store",
-          },
-        );
-        const result = await response.json();
+  
+  
 
-        if (result?.success === true && typeof result.hasUser === "boolean") {
-          setHasUser(result.hasUser);
-        }
-      } catch (error) {
-        console.error("Error checking user:", error);
-      }
-    };
-
-    checkUserExists();
-  }, []);
+  
 
   const handleGetStarted = () => {
-    if (hasUser === true) {
-      navigate("/login");
-    } else {
-      navigate("/register");
-    }
+    navigate("/login");
   };
+
 
   const openTerms = (e) => {
     e.preventDefault();
