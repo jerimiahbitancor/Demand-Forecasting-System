@@ -22,7 +22,8 @@ import Analytics from './features/analytics/pages/Analytics';
 import InventoryManagement from './features/inventory/pages/InventoryManagement';
 import IngredientManagement from './features/inventory/pages/IngredientManagement';
 import './App.css';
-import './RouteGuard.css'
+import './RouteGuard.css';
+import Landing from './features/landing/Landing';
 
 function RouteGuard({ children, mode }) {
   const checking = useSetupGuard(mode);
@@ -46,10 +47,27 @@ function RouteGuard({ children, mode }) {
   return children;
 }
 
-
-function RootRedirect() {
-  useSetupGuard('entry');
-  return <p>Loading...</p>;
+// Landing route with entry guard
+function LandingRoute() {
+  const checking = useSetupGuard('entry');
+  
+  if (checking) {
+    return (
+      <div className="route-guard-loading">
+        <div className="route-guard-card">
+          <div className="route-guard-spinner">
+            <div className="route-guard-spinner-ring"></div>
+          </div>
+          <h3 className="route-guard-title">Loading</h3>
+          <p className="route-guard-subtitle route-guard-dots">
+            Please wait
+          </p>
+        </div>
+      </div>
+    );
+  }
+  
+  return <Landing />;
 }
 
 function Gated({ children }) {
@@ -122,8 +140,10 @@ function App() {
       />
 
       <Routes>
-        {/* Auth Routes - WITH GUARDS */}
-        <Route path="/" element={<RootRedirect />} />
+        {/* Landing Page - with entry guard */}
+        <Route path="/" element={<LandingRoute />} />
+
+        {/* Auth Routes */}
         <Route path="/login" element={
           <RouteGuard mode="login">
             <Login />
@@ -147,8 +167,8 @@ function App() {
         <Route path="/forgot-password" element={<ForgotPassword />} />
         <Route path="/forgot-password/reset" element={<ResetPassword />} />
 
-        {/* Landing Page - Protected */}
-        <Route path="/landing" element={<ProtectedRoute><ChefDuoLanding /></ProtectedRoute>} />
+        {/* ChefDuo Landing - Protected */}
+        <Route path="/chefduo" element={<ProtectedRoute><ChefDuoLanding /></ProtectedRoute>} />
 
         {/* Data Management - Protected */}
         <Route path="/data-management" element={<ProtectedRoute><DataManagement /></ProtectedRoute>} />
@@ -158,6 +178,7 @@ function App() {
         <Route path="/analytics" element={<Gated><Analytics /></Gated>} />
         <Route path="/inventory-management" element={<InventoryManagement />} />
         <Route path="/ingredient-management" element={<IngredientManagement />} />
+        
         {/* Analytics sub-routes */}
         <Route path="/forecasting" element={<Gated><Forecasting /></Gated>} />
         <Route path="/product-performance" element={<Gated><ProductPerformance /></Gated>} />
@@ -168,6 +189,9 @@ function App() {
 
         {/* Profile */}
         <Route path="/profile" element={<Navigate to="/settings" replace />} />
+        
+        {/* Catch-all - redirect to landing */}
+        <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>
     </div>
   );
