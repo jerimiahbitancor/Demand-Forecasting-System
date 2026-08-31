@@ -19,7 +19,7 @@ const Landing = () => {
   
 
   const handleGetStarted = () => {
-    navigate("/login");
+    navigate("/register");
   };
 
 

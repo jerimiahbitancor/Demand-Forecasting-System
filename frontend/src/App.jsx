@@ -7,7 +7,6 @@ import CreatePassword from './features/auth/pages/register/CreatePassword';
 import Login from './features/auth/pages/login/Login';
 import { useSetupGuard } from './hooks/useSetupGuard';
 import ProtectedRoute from './features/components/ProtectedRoute';
-import RequireUpload from './features/components/RequireUpload';
 import { TEMPORARY_ACCESS_BYPASS } from './config/accessControl';
 import ForgotPassword from './features/auth/pages/forgotpass/ForgotPassword';
 import ResetPassword from './features/auth/pages/forgotpass/ResetPassword';
@@ -77,7 +76,7 @@ function Gated({ children }) {
 
   return (
     <ProtectedRoute>
-      <RequireUpload>{children}</RequireUpload>
+      {children}
     </ProtectedRoute>
   );
 }

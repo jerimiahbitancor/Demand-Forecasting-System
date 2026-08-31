@@ -45,7 +45,7 @@ export function useSetupGuard(mode) {
           } else if (hasUser === true) {
             navigate('/login', { replace: true });
           } else {
-            navigate('/register', { replace: true });
+            setChecking(false);
           }
           return;
         }
