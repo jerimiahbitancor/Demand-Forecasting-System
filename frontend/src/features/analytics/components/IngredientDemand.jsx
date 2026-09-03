@@ -27,11 +27,24 @@ const demandGrid = [
 ];
 
 const dailyIngredients = [
-  { name: "Pork", usedIn: "Tonkatsu series", forecasted: 4.73, onStock: 1.20, unit: "kg", status: "Critical", toBuy: 3.53, marketPrice: 320, estCost: 1130 },
-  { name: "Rice", usedIn: "All dishes", forecasted: 21.39, onStock: 9.00, unit: "kg", status: "Low", toBuy: 12.39, marketPrice: 52, estCost: 644 },
-  { name: "Chicken", usedIn: "Poppers series", forecasted: 1.75, onStock: 2.50, unit: "kg", status: "Normal", toBuy: null, marketPrice: 210, estCost: null },
-  { name: "Soy Sauce", usedIn: "Adobo, sauces", forecasted: 0.66, onStock: 3.00, unit: "L", status: "Excess", toBuy: null, marketPrice: 85, estCost: null },
-  { name: "Tomatoes", usedIn: "Tinola", forecasted: 0.87, onStock: 0.10, unit: "kg", status: "Critical", toBuy: 0.77, marketPrice: 95, estCost: 73 },
+  { name: "Pork", category: "Meat & Poultry", usedIn: "Tonkatsu series", forecasted: 4.73, onStock: 1.20, unit: "kg", status: "Critical", toBuy: 3.53, marketPrice: 320, estCost: 1130 },
+  { name: "Rice", category: "Grains & Starches", usedIn: "All dishes", forecasted: 21.39, onStock: 9.00, unit: "kg", status: "Low", toBuy: 12.39, marketPrice: 52, estCost: 644 },
+  { name: "Chicken", category: "Meat & Poultry", usedIn: "Poppers series", forecasted: 1.75, onStock: 2.50, unit: "kg", status: "Normal", toBuy: null, marketPrice: 210, estCost: null },
+  { name: "Soy Sauce", category: "Condiments & Sauces", usedIn: "Adobo, sauces", forecasted: 0.66, onStock: 3.00, unit: "L", status: "Excess", toBuy: null, marketPrice: 85, estCost: null },
+  { name: "Tomatoes", category: "Vegetables & Fruits", usedIn: "Tinola", forecasted: 0.87, onStock: 0.10, unit: "kg", status: "Critical", toBuy: 0.77, marketPrice: 95, estCost: 73 },
+];
+
+const GROCERY_CATEGORIES = [
+  "Meat & Poultry",
+  "Seafood",
+  "Vegetables & Fruits",
+  "Grains & Starches",
+  "Dairy & Milk Products",
+  "Condiments & Sauces",
+  "Herbs & Spices",
+  "Beverages & Syrups",
+  "Baking & Dry Goods",
+  "Packaging & Supplies",
 ];
 
 const groceryPreview = dailyIngredients.filter(
@@ -211,6 +224,50 @@ function IngredientDemand() {
     (dailyPage - 1) * ROWS_PER_PAGE, dailyPage * ROWS_PER_PAGE
   );
 
+  const handleDownloadGroceryList = () => {
+    const itemsToDownload = groceryPreview;
+    if (itemsToDownload.length === 0) return;
+
+    // Build a simple print-ready HTML string for the grocery list
+    const dateLabel = groceryMode === "daily"
+      ? "For tomorrow: Thursday, June 25, 2026"
+      : "Next Week: June 29 – July 5, 2026";
+
+    const categoryRows = GROCERY_CATEGORIES.map((cat) => {
+      const catItems = itemsToDownload.filter((i) => i.category === cat);
+      if (!catItems.length) return "";
+      const rows = catItems.map((i) =>
+        `<tr><td>${i.name}</td><td>${i.toBuy?.toFixed(2) ?? "—"}</td><td>${i.unit}</td><td>₱${i.marketPrice}/${i.unit}</td><td>${i.usedIn}</td></tr>`
+      ).join("");
+      return `<h4 style="margin:16px 0 6px;font-size:13px;color:#7A0101">${cat}</h4>
+        <table border="1" cellpadding="6" cellspacing="0" style="width:100%;border-collapse:collapse;font-size:12px;margin-bottom:8px">
+          <thead style="background:#f4f4f2"><tr><th>Item</th><th>Qty</th><th>Unit</th><th>Market Price</th><th>Used In</th></tr></thead>
+          <tbody>${rows}</tbody>
+        </table>`;
+    }).join("");
+
+    const totalCost = itemsToDownload.reduce((sum, i) => sum + (i.estCost || 0), 0);
+
+    const html = `<!DOCTYPE html><html><head><meta charset="utf-8">
+      <title>Grocery List — ChefDuo</title>
+      <style>body{font-family:Arial,sans-serif;padding:24px;max-width:680px;margin:0 auto}h1{color:#7A0101;font-size:20px}h2{font-size:14px;color:#5c403c}p{font-size:12px;color:#6c757d}</style>
+      </head><body>
+      <h1>ChefDuo — Grocery List</h1>
+      <h2>${dateLabel}</h2>
+      <p>Est. Total Cost: ₱${totalCost.toLocaleString()} &nbsp;·&nbsp; Items to Buy: ${itemsToDownload.length}</p>
+      <p style="font-size:11px;color:#999;margin-bottom:16px">Market prices sourced from DA/PSA reference data. Verify quantities before purchase.</p>
+      ${categoryRows}
+      </body></html>`;
+
+    const blob = new Blob([html], { type: "text/html" });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = `grocery-list-chefduo-${groceryMode}.html`;
+    link.click();
+    URL.revokeObjectURL(url);
+  };
+
   const availableTables = [
     { id: "shopping", label: "Weekly Ingredient Demand" },
     { id: "daily", label: "Daily Ingredient Demand" },
@@ -340,7 +397,7 @@ function IngredientDemand() {
                 <tbody>
                   {paginatedWeekly.map((row, i) => (
                     <tr key={row.ingredient}>
-                      <td>{i === 0 ? 1 : i === 1 ? 2 : "…"}</td>
+                      <td>{(weeklyPage - 1) * ROWS_PER_PAGE + i + 1}</td>
                       <td>{i < 2 ? row.ingredient : ""}</td>
                       {row.values.map((v, di) => (
                         <td key={di} className={`heatmap-cell heatmap-cell--${cellLevel(di, row.highDay)}`}>
@@ -464,7 +521,7 @@ function IngredientDemand() {
           </ul>
           <div className="grocery-action-row">
             <button type="button" className="btn-grocery-view" onClick={() => setIsGroceryOpen(true)}><FiExternalLink size={14} /> View Full List</button>
-            <button type="button" className="btn-grocery-download"><FiDownload size={14} /> Download</button>
+            <button type="button" className="btn-grocery-download" onClick={handleDownloadGroceryList}><FiDownload size={14} /> Download</button>
           </div>
         </section>
       </div>
@@ -505,21 +562,38 @@ function IngredientDemand() {
           <div className="grocery-kpi-card"><p className="grocery-kpi-label">Est. Total Cost</p><p className="grocery-kpi-value">₱{groceryPreview.reduce((sum, item) => sum + (item.estCost || 0), 0).toLocaleString()}</p></div>
           <div className="grocery-kpi-card"><p className="grocery-kpi-label">Total Items to Buy</p><p className="grocery-kpi-value">{groceryPreview.length}</p></div>
         </div>
-        {[
-          ["Meat & Poultry", groceryPreview.filter((item) => item.name === "Pork" || item.name === "Chicken")],
-          ["Vegetables & Fruits", groceryPreview.filter((item) => item.name === "Tomatoes")],
-          ["Grains & Starches", groceryPreview.filter((item) => item.name === "Rice")],
-          ["Condiments & Sauces", groceryPreview.filter((item) => item.name === "Soy Sauce")],
-        ].map(([category, items]) => (
-          <div className="grocery-category" key={category}>
-            <p className="status-group-title">{category}</p>
-            <table className="analytics-table analytics-table--compact">
-              <thead><tr><th>Item</th><th>Qty</th><th>Unit</th><th>Market Price</th><th>Notes</th></tr></thead>
-              <tbody>{(items.length ? items : groceryPreview.slice(0, 0)).map((item) => <tr key={item.name}><td>{item.name}</td><td>{item.toBuy?.toFixed(2)}</td><td>{item.unit}</td><td>₱{item.marketPrice}/{item.unit}</td><td>{item.usedIn}</td></tr>)}</tbody>
-            </table>
-          </div>
-        ))}
-        <button type="button" className="btn-grocery-download"><FiDownload size={14} /> Download</button>
+        {GROCERY_CATEGORIES.map((category) => {
+          const items = groceryPreview.filter((item) => item.category === category);
+          if (items.length === 0) return null;
+          return (
+            <div className="grocery-category" key={category}>
+              <p className="status-group-title">{category}</p>
+              <table className="analytics-table analytics-table--compact">
+                <thead>
+                  <tr>
+                    <th>Item</th>
+                    <th>Qty</th>
+                    <th>Unit</th>
+                    <th>Market Price</th>
+                    <th>Notes</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {items.map((item) => (
+                    <tr key={item.name}>
+                      <td>{item.name}</td>
+                      <td>{item.toBuy?.toFixed(2) ?? "—"}</td>
+                      <td>{item.unit}</td>
+                      <td>₱{item.marketPrice}/{item.unit}</td>
+                      <td>{item.usedIn}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          );
+        })}
+        <button type="button" className="btn-grocery-download" onClick={handleDownloadGroceryList}><FiDownload size={14} /> Download</button>
       </ExpandableModal>
     </>
   );

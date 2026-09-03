@@ -32,11 +32,11 @@ const salesPrediction = {
     { label: "Sun", actual: 5300, forecast: 3900, future: true },
   ],
   rows: [
-    { date: "June 23, 2026", product: "Poppers & Rice", actualQty: 48, forecastQty: 45, actualRevenue: "₱2,400", forecastRevenue: "₱2,250" },
-    { date: "June 23, 2026", product: "Breaded Tonkatsu", actualQty: 32, forecastQty: 35, actualRevenue: "₱1,920", forecastRevenue: "₱2,100" },
-    { date: "June 23, 2026", product: "Chick & Fries", actualQty: 27, forecastQty: 28, actualRevenue: "₱1,350", forecastRevenue: "₱1,400" },
-    { date: "June 24, 2026", product: "Cheesy Tapa", actualQty: 22, forecastQty: 23, actualRevenue: "₱2,550", forecastRevenue: "₱2,800" },
-    { date: "June 24, 2026", product: "Poppers & Rice", actualQty: 52, forecastQty: 52, actualRevenue: "₱3,120", forecastRevenue: "₱3,000" },
+    { date: "June 23, 2026", product: "Poppers & Rice", actualQty: 48, forecastQty: 45, actualRevenue: "₱2,400", forecastRevenue: "₱2,250", estCost: "₱2,025", estGrossProfit: "₱225" },
+    { date: "June 23, 2026", product: "Breaded Tonkatsu", actualQty: 32, forecastQty: 35, actualRevenue: "₱1,920", forecastRevenue: "₱2,100", estCost: "₱1,890", estGrossProfit: "₱210" },
+    { date: "June 23, 2026", product: "Chick & Fries", actualQty: 27, forecastQty: 28, actualRevenue: "₱1,350", forecastRevenue: "₱1,400", estCost: "₱1,260", estGrossProfit: "₱140" },
+    { date: "June 24, 2026", product: "Cheesy Tapa", actualQty: 22, forecastQty: 23, actualRevenue: "₱2,550", forecastRevenue: "₱2,800", estCost: "₱2,520", estGrossProfit: "₱280" },
+    { date: "June 24, 2026", product: "Poppers & Rice", actualQty: 52, forecastQty: 52, actualRevenue: "₱3,120", forecastRevenue: "₱3,000", estCost: "₱2,700", estGrossProfit: "₱300" },
   ],
 };
 
@@ -57,7 +57,6 @@ const demandPrediction = {
     { date: "June 23, 2026", product: "Chick & Fries", actualQty: 27, forecastQty: 28, unit: "servings" },
     { date: "June 24, 2026", product: "Cheesy Tapa", actualQty: 22, forecastQty: 23, unit: "servings" },
   ],
-  rows: [],
 };
 
 const featureImportance = [
@@ -71,8 +70,11 @@ const featureImportance = [
 const trainingInfo = {
   modelStatus: "Trained",
   lastTrained: "June 24, 2026 • 6:00 AM",
+  latestForecast: "June 29, 2026 • 8:00 AM",
   trainingRecords: "1,248 rows (≈5 months)",
   activeProducts: "14 menu items",
+  nextTraining: "—",
+  nextForecast: "Tomorrow, Aug 27, 2026 • 8:00 AM",
 };
 
 // ---------------------------------------------------------------------
@@ -248,6 +250,7 @@ function AccuracyChart({ data }) {
   const linePath = buildLinePath(data, width, height, min, max);
   const areaPath = `${linePath} L${width},${height} L0,${height} Z`;
   const thresholdY = height - ((80 - min) / (max - min)) * height;
+  const excellentY = height - ((90 - min) / (max - min)) * height;
 
   return (
     <Tippy
@@ -270,6 +273,13 @@ function AccuracyChart({ data }) {
             x2={width}
             y2={thresholdY}
             className="accuracy-chart-threshold"
+          />
+          <line
+            x1="0"
+            y1={excellentY}
+            x2={width}
+            y2={excellentY}
+            className="accuracy-chart-excellent"
           />
         </svg>
       </div>
@@ -438,6 +448,21 @@ function Forecasting() {
             </div>
           </div>
 
+          {latestAccuracy < 80 && (
+            <div className="accuracy-warning-banner">
+              <span className="accuracy-warning-icon">⚠️</span>
+              <div>
+                <p className="accuracy-warning-title">Accuracy is below the reliable threshold.</p>
+                <p className="accuracy-warning-body">
+                  Possible reasons: fewer than 28 days of sales history (new product), sales data not uploaded recently, or an unusual event (holiday, closure, weather) affected recent sales.
+                </p>
+                <p className="accuracy-warning-body">
+                  <strong>What to do:</strong> Upload your most recent sales data to retrain the model.
+                </p>
+              </div>
+            </div>
+          )}
+
           <InfoBanner variant="info">
             <strong>What is this metric?</strong> This percentage tells you how close your
             forecasts are to real-world results on average. Your current error score of 7.4% means your
@@ -455,6 +480,9 @@ function Forecasting() {
               </span>
               <span className="legend-item">
                 <span className="legend-swatch legend-swatch--warning" /> Good threshold (80%)
+              </span>
+              <span className="legend-item">
+                <span className="legend-swatch legend-swatch--excellent" /> Excellent threshold (90%)
               </span>
             </div>
           </div>
@@ -521,6 +549,8 @@ function Forecasting() {
                 <th>Forecast Qty.</th>
                 <th>Actual Revenue</th>
                 <th>Forecast Revenue</th>
+                <th>Est. Total Cost</th>
+                <th>Est. Gross Profit</th>
               </tr>
             </thead>
             <tbody>
@@ -540,6 +570,8 @@ function Forecasting() {
                     <td>{row.forecastQty}</td>
                     <td>{row.actualRevenue}</td>
                     <td>{row.forecastRevenue}</td>
+                    <td>{row.estCost}</td>
+                    <td>{row.estGrossProfit}</td>
                   </tr>
                 ))
               )}
@@ -651,6 +683,18 @@ function Forecasting() {
                 <dt>Active products</dt>
                 <dd>{trainingInfo.activeProducts}</dd>
               </div>
+              <div className="training-info-row">
+                <dt>Latest forecast</dt>
+                <dd>{trainingInfo.latestForecast}</dd>
+              </div>
+              <div className="training-info-row">
+                <dt>Next training</dt>
+                <dd>{trainingInfo.nextTraining}</dd>
+              </div>
+              <div className="training-info-row">
+                <dt>Next forecast</dt>
+                <dd className="value--success">{trainingInfo.nextForecast}</dd>
+              </div>
             </dl>
           </div>
         </section>
@@ -705,6 +749,9 @@ function Forecasting() {
             <span className="legend-item">
               <span className="legend-swatch legend-swatch--warning" /> Good threshold (80%)
             </span>
+              <span className="legend-item">
+                <span className="legend-swatch legend-swatch--excellent" /> Excellent threshold (90%)
+              </span>
           </div>
         </div>
         <p className="chart-block-subtitle">Accuracy improves as more sales data is uploaded.</p>
@@ -747,12 +794,14 @@ function Forecasting() {
               <th>Forecast Qty.</th>
               <th>Actual Revenue</th>
               <th>Forecast Revenue</th>
+              <th>Est. Total Cost</th>
+              <th>Est. Gross Profit</th>
             </tr>
           </thead>
           <tbody>
             {salesPrediction.rows.length === 0 ? (
               <tr>
-                <td colSpan={7} className="empty-row">
+                <td colSpan={9} className="empty-row">
                   Upload sales data to populate this table.
                 </td>
               </tr>
@@ -766,6 +815,8 @@ function Forecasting() {
                   <td>{row.forecastQty}</td>
                   <td>{row.actualRevenue}</td>
                   <td>{row.forecastRevenue}</td>
+                  <td>{row.estCost}</td>
+                  <td>{row.estGrossProfit}</td>
                 </tr>
               ))
             )}
@@ -845,6 +896,18 @@ function Forecasting() {
               <dt>Active products</dt>
               <dd>{trainingInfo.activeProducts}</dd>
             </div>
+              <div className="training-info-row">
+                <dt>Latest forecast</dt>
+                <dd>{trainingInfo.latestForecast}</dd>
+              </div>
+              <div className="training-info-row">
+                <dt>Next training</dt>
+                <dd>{trainingInfo.nextTraining}</dd>
+              </div>
+              <div className="training-info-row">
+                <dt>Next forecast</dt>
+                <dd className="value--success">{trainingInfo.nextForecast}</dd>
+              </div>
           </dl>
         </div>
       </ExpandableModal>

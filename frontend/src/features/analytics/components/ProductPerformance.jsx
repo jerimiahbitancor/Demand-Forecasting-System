@@ -17,10 +17,10 @@ import "./ProductPerformance.css";
 // Mock data
 // ---------------------------------------------------------------------
 const demandRows = [
-  { product: "Poppers & Rice", forecastQty: 52, zone: "high", demandLevel: "High Demand", actionSignal: "Prepare Extra Stock" },
-  { product: "Breaded Tonkatsu", forecastQty: 38, zone: "high", demandLevel: "Medium Demand", actionSignal: "Standard Preparation" },
-  { product: "Chick & Fries", forecastQty: 44, zone: "medium", demandLevel: "High Demand", actionSignal: "Prepare Extra Stock" },
-  { product: "Cheesy Tapa", forecastQty: 18, zone: "low", demandLevel: "Low Demand", actionSignal: "Prepare Less" },
+  { product: "Poppers & Rice", date: "25-06-2026", forecastQty: 52, zone: "high", demandLevel: "High Demand", actionSignal: "Prepare Extra Stock" },
+  { product: "Breaded Tonkatsu", date: "25-06-2026", forecastQty: 38, zone: "high", demandLevel: "Medium Demand", actionSignal: "Standard Preparation" },
+  { product: "Chick & Fries", date: "25-06-2026", forecastQty: 44, zone: "medium", demandLevel: "High Demand", actionSignal: "Prepare Extra Stock" },
+  { product: "Cheesy Tapa", date: "25-06-2026", forecastQty: 18, zone: "low", demandLevel: "Low Demand", actionSignal: "Prepare Less" },
 ];
 
 const performanceRows = [
@@ -221,6 +221,7 @@ function ProductPerformance() {
   const [activeStatusPage, setActiveStatusPage] = useState(1);
   const [newStatusPage, setNewStatusPage] = useState(1);
   const [inactiveStatusPage, setInactiveStatusPage] = useState(1);
+  const [archivedStatusPage, setArchivedStatusPage] = useState(1);
 
   const [modalDemandPage, setModalDemandPage] = useState(1);
   const [modalRatioPage, setModalRatioPage] = useState(1);
@@ -298,6 +299,9 @@ function ProductPerformance() {
   const paginatedInactiveProducts = inactiveProducts.slice(
     (inactiveStatusPage - 1) * ROWS_PER_PAGE, inactiveStatusPage * ROWS_PER_PAGE
   );
+  const paginatedArchivedProducts = archivedProducts.slice(
+    (archivedStatusPage - 1) * ROWS_PER_PAGE, archivedStatusPage * ROWS_PER_PAGE
+  );
 
   const modalDemandRows = demandRows.slice((modalDemandPage - 1) * 10, modalDemandPage * 10);
   const modalRatioRows = performanceRows.slice((modalRatioPage - 1) * 10, modalRatioPage * 10);
@@ -368,6 +372,7 @@ function ProductPerformance() {
             <thead>
               <tr>
                 <th>No.</th>
+                <th>Date</th>
                 <th>Product</th>
                 <th>Forecast Qty. (Tomorrow)</th>
                 <th>Demand Level</th>
@@ -378,6 +383,7 @@ function ProductPerformance() {
               {paginatedDemandRows.map((row, i) => (
                 <tr key={row.product}>
                   <td>{i + 1}</td>
+                  <td>{row.date}</td>
                   <td>{row.product}</td>
                   <td>{row.forecastQty} servings</td>
                   <td>
@@ -611,9 +617,9 @@ function ProductPerformance() {
                 </tr>
               </thead>
               <tbody>
-                {archivedProducts.map((row, i) => (
+                {paginatedArchivedProducts.map((row, i) => (
                   <tr key={row.product}>
-                    <td>{i + 1}</td>
+                    <td>{(archivedStatusPage - 1) * ROWS_PER_PAGE + i + 1}</td>
                     <td>{row.product}</td>
                     <td>{row.lastSale}</td>
                     <td className="value--error">{row.forecastStatus}</td>
@@ -621,6 +627,11 @@ function ProductPerformance() {
                 ))}
               </tbody>
             </table>
+            <Pagination
+              currentPage={archivedStatusPage}
+              totalPages={Math.max(1, Math.ceil(archivedProducts.length / ROWS_PER_PAGE))}
+              onPageChange={setArchivedStatusPage}
+            />
           </div>
         </section>
       </div>
@@ -651,13 +662,14 @@ function ProductPerformance() {
         <table className="analytics-table">
           <thead>
             <tr>
-              <th>No.</th><th>Product</th><th>Forecast Qty. (Tomorrow)</th><th>Demand Level</th><th>Action Signal</th>
+              <th>No.</th><th>Date</th><th>Product</th><th>Forecast Qty. (Tomorrow)</th><th>Demand Level</th><th>Action Signal</th>
             </tr>
           </thead>
           <tbody>
             {modalDemandRows.map((row, i) => (
               <tr key={row.product}>
                 <td>{(modalDemandPage - 1) * 10 + i + 1}</td>
+                <td>{row.date}</td>
                 <td>{row.product}</td>
                 <td>{row.forecastQty} servings</td>
                 <td><span className={`pill ${pillClass[row.demandLevel]}`}>{row.demandLevel}</span></td>
