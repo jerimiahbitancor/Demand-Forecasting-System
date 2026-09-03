@@ -1,9 +1,11 @@
 // components/IngredientDemand.jsx
 import { useState } from "react";
-import { FiSearch, FiInfo, FiDownload } from "react-icons/fi";
+import { FiSearch, FiInfo, FiDownload, FiExternalLink, FiShoppingCart } from "react-icons/fi";
 import GenerateReportModal from "../../components/Reports/GenerateReportModal.jsx";
 import { buildIngredientDemandPDF, generateExcel } from "./../../../services/reportService.js";
 import DatePicker from "./shared/DatePicker.jsx";
+import ExpandableModal from "./shared/ExpandableModal.jsx";
+import Pagination from "./shared/Pagination.jsx";
 import Tippy from '@tippyjs/react';
 import 'tippy.js/dist/tippy.css';
 import 'tippy.js/animations/scale.css';
@@ -17,24 +19,24 @@ import "./IngredientDemand.css";
 const weekDays = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
 
 const demandGrid = [
-  { ingredient: "Breaded Tonkatsu", values: [18.2, 18.2, 18.2, 18.2, 18.2, 18.2, 18.2], highDay: 4 },
-  { ingredient: "Poppers & Rice", values: [3.9, 3.9, 3.9, 3.9, 3.9, 3.9, 3.9], highDay: 4 },
-  { ingredient: "Rice", values: [1.4, 1.4, 1.4, 1.4, 1.4, 1.4, 1.4], highDay: 4 },
-  { ingredient: "Chicken", values: [0.7, 0.7, 0.7, 0.7, 0.7, 0.7, 0.7], highDay: 4 },
+  { ingredient: "Pork", values: [18.2, 18.2, 18.2, 18.2, 18.2, 18.2, 18.2], highDay: 4 },
+  { ingredient: "Rice", values: [3.9, 3.9, 3.9, 3.9, 3.9, 3.9, 3.9], highDay: 4 },
+  { ingredient: "Chicken", values: [1.4, 1.4, 1.4, 1.4, 1.4, 1.4, 1.4], highDay: 4 },
+  { ingredient: "Tomatoes", values: [0.7, 0.7, 0.7, 0.7, 0.7, 0.7, 0.7], highDay: 4 },
   { ingredient: "Soy Sauce", values: [0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5], highDay: 4 },
 ];
 
-const buyList = [
-  { ingredient: "Pork", linkedDishes: "Breaded Tonkatsu, Coated Tonkatsu, ...", baseQty: 3.68, buffer: 0.55, total: 4, unit: "kg" },
+const dailyIngredients = [
+  { name: "Pork", usedIn: "Tonkatsu series", forecasted: 4.73, onStock: 1.20, unit: "kg", status: "Critical", toBuy: 3.53, marketPrice: 320, estCost: 1130 },
+  { name: "Rice", usedIn: "All dishes", forecasted: 21.39, onStock: 9.00, unit: "kg", status: "Low", toBuy: 12.39, marketPrice: 52, estCost: 644 },
+  { name: "Chicken", usedIn: "Poppers series", forecasted: 1.75, onStock: 2.50, unit: "kg", status: "Normal", toBuy: null, marketPrice: 210, estCost: null },
+  { name: "Soy Sauce", usedIn: "Adobo, sauces", forecasted: 0.66, onStock: 3.00, unit: "L", status: "Excess", toBuy: null, marketPrice: 85, estCost: null },
+  { name: "Tomatoes", usedIn: "Tinola", forecasted: 0.87, onStock: 0.10, unit: "kg", status: "Critical", toBuy: 0.77, marketPrice: 95, estCost: 73 },
 ];
 
-const ingredientList = [
-  { name: "Rice", usedIn: "All dishes", qty: "21.4", unit: "kg", isHigh: true },
-  { name: "Pork", usedIn: "Tonkatsu Series", qty: "4.73", unit: "kg", isHigh: true },
-  { name: "Chicken", usedIn: "Poppers Series", qty: "1.75", unit: "kg", isHigh: false },
-  { name: "Tomatoes", usedIn: "Tinola", qty: "0.87", unit: "kg", isHigh: false },
-  { name: "Soy Sauce", usedIn: "Adobo, Sauces", qty: "0.66", unit: "L", isHigh: false },
-];
+const groceryPreview = dailyIngredients.filter(
+  (item) => item.status === "Critical" || item.status === "Low"
+);
 
 // ---------------------------------------------------------------------
 // Tooltips
@@ -122,6 +124,59 @@ const tooltips = {
       </span>
     </div>
   ),
+
+  dailyIngredientDemand: (
+    <div style={{ padding: '4px 0', fontSize: '13px', lineHeight: '1.6' }}>
+      <strong style={{ color: '#FEB161', display: 'block', marginBottom: '6px' }}>
+        Daily Ingredient Demand
+      </strong>
+      This shows what the system estimates you'll need to buy based on tomorrow's predicted sales.
+      <br/><br/>
+      <div style={{ margin: '8px 0' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '4px' }}>
+          <span style={{ color: '#e05555', fontWeight: 'bold' }}>●</span>
+          <span><strong>Critical</strong> — Stock is very low. Order immediately.</span>
+        </div>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '4px' }}>
+          <span style={{ color: '#FFB800', fontWeight: 'bold' }}>●</span>
+          <span><strong>Low</strong> — Stock is below forecasted need. Order soon.</span>
+        </div>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '4px' }}>
+          <span style={{ color: '#0F9918', fontWeight: 'bold' }}>●</span>
+          <span><strong>Normal</strong> — Stock is sufficient. No action needed.</span>
+        </div>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+          <span style={{ color: '#3354BA', fontWeight: 'bold' }}>●</span>
+          <span><strong>Excess</strong> — More than enough on hand. Delay restocking.</span>
+        </div>
+      </div>
+      <br/>
+      <span style={{ color: '#94a3b8', fontSize: '12px' }}>
+        Market prices sourced from DA/PSA, Puregold, or other local reference data.
+        Stock thresholds are configured in Settings.
+      </span>
+    </div>
+  ),
+
+  groceryList: (
+    <div style={{ padding: '4px 0', fontSize: '13px', lineHeight: '1.6' }}>
+      <strong style={{ color: '#FEB161', display: 'block', marginBottom: '6px' }}>
+        Grocery List
+      </strong>
+      This is your ready-to-buy ingredient list based on tomorrow's forecast (Daily)
+      or the full week's forecast (Weekly).
+      <br/><br/>
+      Quantities shown are what the system estimates you need to purchase after
+      accounting for your current stock.
+      <br/><br/>
+      Tap "View Full List" to see the complete categorized list, or "Download"
+      to print it and bring it to the market.
+      <br/><br/>
+      <span style={{ color: '#94a3b8', fontSize: '12px' }}>
+        Categories follow the palengke and grocery store layout so you can shop in order.
+      </span>
+    </div>
+  ),
 };
 
 // ---------------------------------------------------------------------
@@ -137,18 +192,36 @@ function cellLevel(dayIndex, highDay) {
 function IngredientDemand() {
   const [selectedRange, setSelectedRange] = useState([new Date(), new Date()]);
   const [isReportModalOpen, setIsReportModalOpen] = useState(false);
+  const [weeklyPage, setWeeklyPage] = useState(1);
+  const [dailyPage, setDailyPage] = useState(1);
+  const [groceryMode, setGroceryMode] = useState("daily");
+  const [isWeeklyOpen, setIsWeeklyOpen] = useState(false);
+  const [isDailyOpen, setIsDailyOpen] = useState(false);
+  const [isGroceryOpen, setIsGroceryOpen] = useState(false);
+  const [modalWeeklyPage, setModalWeeklyPage] = useState(1);
+  const [modalDailyPage, setModalDailyPage] = useState(1);
+  const ROWS_PER_PAGE = 5;
+
+  const totalWeeklyPages = Math.max(1, Math.ceil(demandGrid.length / ROWS_PER_PAGE));
+  const paginatedWeekly = demandGrid.slice(
+    (weeklyPage - 1) * ROWS_PER_PAGE, weeklyPage * ROWS_PER_PAGE
+  );
+  const totalDailyPages = Math.max(1, Math.ceil(dailyIngredients.length / ROWS_PER_PAGE));
+  const paginatedDaily = dailyIngredients.slice(
+    (dailyPage - 1) * ROWS_PER_PAGE, dailyPage * ROWS_PER_PAGE
+  );
 
   const availableTables = [
-    { id: "shopping", label: "Shopping List" },
-    { id: "heatmap", label: "Weekly Ingredient Planner" },
-    { id: "ingredients", label: "Ingredient List" },
+    { id: "shopping", label: "Weekly Ingredient Demand" },
+    { id: "daily", label: "Daily Ingredient Demand" },
+    { id: "grocery", label: "Grocery List" },
   ];
 
   const handleGenerateReport = async ({ format, dateRange, selectedTableIds }) => {
     const metrics = [
-      { label: "Tracked Items", value: ingredientList.length, caption: "ingredients" },
-      { label: "High Demand", value: ingredientList.filter((item) => item.isHigh).length, caption: "items above usual" },
-      { label: "Main Buy Item", value: buyList[0]?.ingredient || "—", caption: "for tomorrow" },
+      { label: "Tracked Items", value: dailyIngredients.length, caption: "ingredients" },
+      { label: "High Demand", value: groceryPreview.length, caption: "items above usual" },
+      { label: "Main Buy Item", value: groceryPreview[0]?.name || "—", caption: "for tomorrow" },
       { label: "High-Day Alerts", value: demandGrid.filter((row) => row.highDay === 4).length, caption: "ingredients flagged" },
     ];
 
@@ -157,8 +230,8 @@ function IngredientDemand() {
         dateRange,
         business: null,
         metrics,
-        insightText: `This report summarizes the ingredient demand outlook for the selected period. ${buyList[0]?.ingredient || "Pork"} is the main item to prepare for tomorrow's shopping list.`,
-        shoppingListRows: buyList,
+        insightText: `This report summarizes the ingredient demand outlook for the selected period. ${groceryPreview[0]?.name || "Pork"} is the main item to prepare for tomorrow's shopping list.`,
+        shoppingListRows: groceryPreview,
         highDemandRows: demandGrid.slice(0, 3).map((row) => ({
           day: weekDays[row.highDay] || "—",
           reason: "High demand day",
@@ -169,7 +242,19 @@ function IngredientDemand() {
       doc.save("ingredient-demand-report.pdf");
     } else {
       const sheetMap = {
-        shopping: { sheetName: "Shopping List", rows: buyList.map((row) => ({ ...row })) },
+        shopping: { sheetName: "Shopping List", rows: groceryPreview.map((row) => ({ ...row })) },
+        grocery: {
+          sheetName: "Grocery List",
+          rows: groceryPreview.map((item) => ({
+            ingredient: item.name,
+            usedIn: item.usedIn,
+            toBuy: item.toBuy ?? 0,
+            unit: item.unit,
+            marketPrice: `₱${item.marketPrice}/${item.unit}`,
+            estCost: item.estCost ? `₱${item.estCost.toLocaleString()}` : "—",
+            status: item.status,
+          })),
+        },
         heatmap: {
           sheetName: "Weekly Planner",
           rows: demandGrid.map((row) => ({
@@ -178,7 +263,7 @@ function IngredientDemand() {
             highDay: weekDays[row.highDay] || "—",
           })),
         },
-        ingredients: { sheetName: "Ingredient List", rows: ingredientList.map((row) => ({ ...row })) },
+        ingredients: { sheetName: "Daily Ingredient Demand", rows: dailyIngredients.map((row) => ({ ...row })) },
       };
 
       generateExcel(
@@ -196,8 +281,9 @@ function IngredientDemand() {
     <>
       <div className="analytics-col-main">
         <section className="analytics-card">
-          <h2 className="analytics-card-title">
-            Estimated Ingredients to Prepare
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '16px' }}>
+          <h2 className="analytics-card-title" style={{ marginBottom: 0 }}>
+            Weekly Ingredient Demand
             <Tippy
               content={tooltips.weeklyPlanner}
               placement="right"
@@ -213,6 +299,10 @@ function IngredientDemand() {
               </span>
             </Tippy>
           </h2>
+          <button type="button" className="btn-expand-panel" onClick={() => setIsWeeklyOpen(true)} aria-label="Expand Weekly Ingredient Demand">
+            <FiExternalLink size={16} />
+          </button>
+          </div>
 
           <div className="analytics-filter-row">
             <DatePicker value={selectedRange} onChange={setSelectedRange} mode="range" />
@@ -248,7 +338,7 @@ function IngredientDemand() {
                   </tr>
                 </thead>
                 <tbody>
-                  {demandGrid.map((row, i) => (
+                  {paginatedWeekly.map((row, i) => (
                     <tr key={row.ingredient}>
                       <td>{i === 0 ? 1 : i === 1 ? 2 : "…"}</td>
                       <td>{i < 2 ? row.ingredient : ""}</td>
@@ -276,64 +366,56 @@ function IngredientDemand() {
             </span>
           </div>
 
-          <InfoBanner variant="info">
-            This shows what the system estimates you'll need based on tomorrow's predicted
-            sales. Always check your actual fridge and stock before buying — the system
-            does not know what you currently have on hand.
-          </InfoBanner>
+          <Pagination currentPage={weeklyPage} totalPages={totalWeeklyPages} onPageChange={setWeeklyPage} />
+
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '16px' }}>
+            <h2 className="analytics-card-title" style={{ marginBottom: 0 }}>
+              Daily Ingredient Demand
+              <Tippy content={tooltips.dailyIngredientDemand} placement="right" animation="scale" duration={200} theme="dark" arrow maxWidth={380} interactive>
+                <span className="info-icon-wrapper"><FiInfo className="info-icon" /></span>
+              </Tippy>
+            </h2>
+            <button type="button" className="btn-expand-panel" onClick={() => setIsDailyOpen(true)} aria-label="Expand Daily Ingredient Demand">
+              <FiExternalLink size={16} />
+            </button>
+          </div>
+
+          <div className="analytics-filter-row">
+            <DatePicker value={selectedRange} onChange={setSelectedRange} mode="range" />
+            <span className="filter-search"><FiSearch size={14} /> Search Product</span>
+          </div>
+
+          <p className="section-note">
+            Ingredient demand — today. This shows what the system estimates you'll need based on predicted sales and your current stock.
+            <a href="/inventory-management" style={{color:'var(--color-red-primary)', fontWeight:600}}> View Inventory Management</a>
+          </p>
+
+          <div className="stock-legend">
+            <span className="stock-legend-pill stock-legend--excess">● Excess — delay restock</span>
+            <span className="stock-legend-pill stock-legend--normal">● Normal — no action needed</span>
+            <span className="stock-legend-pill stock-legend--low">● Low — order soon</span>
+            <span className="stock-legend-pill stock-legend--critical">● Critical — order now</span>
+          </div>
 
           <table className="analytics-table">
-            <thead>
-              <tr>
-                <th>No.</th>
-                <th>Ingredient</th>
-                <th>Linked Dishes</th>
-                <th>Basic Qty. Needed</th>
-                <th>+ Buffer</th>
-                <th>Total to Buy</th>
-                <th>Unit</th>
-              </tr>
-            </thead>
+            <thead><tr><th>No.</th><th>Ingredient</th><th>Used in</th><th>Forecasted Need</th><th>On Stock</th><th>Status</th><th>To Buy</th><th>Market Price</th><th>Est. Cost</th></tr></thead>
             <tbody>
-              {buyList.map((row, i) => (
-                <tr key={row.ingredient}>
+              {paginatedDaily.map((row, i) => (
+                <tr key={row.name}>
                   <td>{i + 1}</td>
-                  <td>{row.ingredient}</td>
-                  <td>{row.linkedDishes}</td>
-                  <td>{row.baseQty}</td>
-                  <td>+ {row.buffer}</td>
-                  <td className="value--success">{row.total}</td>
-                  <td>{row.unit}</td>
+                  <td>{row.name}</td>
+                  <td>{row.usedIn}</td>
+                  <td>{row.forecasted.toFixed(2)} {row.unit}</td>
+                  <td>{row.onStock.toFixed(2)} {row.unit}</td>
+                  <td><span className={`status-badge status-badge--${row.status.toLowerCase()}`}>{row.status}</span></td>
+                  <td>{row.toBuy === null ? <span className="value--muted">{row.status === "Normal" ? "— no order" : "— delay restock"}</span> : `${row.toBuy.toFixed(2)} ${row.unit}`}</td>
+                  <td>₱{row.marketPrice}/{row.unit}</td>
+                  <td>{row.estCost === null ? "—" : `₱${row.estCost.toLocaleString()}`}</td>
                 </tr>
               ))}
             </tbody>
           </table>
-
-          <div className="calc-note">
-            <p className="calc-note-title">
-              How is this calculated?
-              <Tippy
-                content={tooltips.calculationNote}
-                placement="top"
-                animation="scale"
-                duration={200}
-                theme="dark"
-                arrow={true}
-                maxWidth={380}
-                interactive={true}
-              >
-                <span className="info-icon-wrapper">
-                  <FiInfo className="info-icon-small" />
-                </span>
-              </Tippy>
-            </p>
-            <p className="calc-note-body">
-              For each dish: forecast quantity × ingredient amount per serving. All results
-              are added up across dishes that share an ingredient (like pork in both Adobo
-              and Menudo), then a safety buffer is added. You can change the buffer
-              percentage in Settings.
-            </p>
-          </div>
+          <Pagination currentPage={dailyPage} totalPages={totalDailyPages} onPageChange={setDailyPage} />
         </section>
       </div>
 
@@ -343,70 +425,47 @@ function IngredientDemand() {
         </button>
 
         <section className="analytics-card">
-          <div className="ingredient-list-header">
-            <h2 className="analytics-card-title">
-              Ingredient List
-              <Tippy
-                content={tooltips.dailyShoppingList}
-                placement="right"
-                animation="scale"
-                duration={200}
-                theme="dark"
-                arrow={true}
-                maxWidth={380}
-                interactive={true}
-              >
-                <span className="info-icon-wrapper">
-                  <FiInfo className="info-icon" />
-                </span>
+          <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', marginBottom:'12px' }}>
+            <h2 className="analytics-card-title" style={{ marginBottom:0 }}>
+              <FiShoppingCart size={16} style={{ marginRight:6, verticalAlign:-2 }} />
+              Grocery List
+              <Tippy content={tooltips.groceryList} placement="right" animation="scale" duration={200} theme="dark" arrow maxWidth={380} interactive>
+                <span className="info-icon-wrapper"><FiInfo className="info-icon" /></span>
               </Tippy>
             </h2>
-            <button type="button" className="btn-export">
-              <FiDownload size={14} /> Export List
+            <button type="button" className="btn-expand-panel" onClick={() => setIsGroceryOpen(true)} aria-label="View full grocery list">
+              <FiExternalLink size={16} />
             </button>
           </div>
 
-          <p className="ingredient-list-caption">
-            Estimated ingredients to prepare for
-            <br />
-            <strong>Tomorrow, June 25 (Wednesday)</strong>
+          <div className="grocery-toggle">
+            <button type="button" className={`grocery-toggle-btn ${groceryMode === 'weekly' ? 'active' : ''}`} onClick={() => setGroceryMode('weekly')}>Weekly</button>
+            <button type="button" className={`grocery-toggle-btn ${groceryMode === 'daily' ? 'active' : ''}`} onClick={() => setGroceryMode('daily')}>Daily</button>
+          </div>
+          <p className="grocery-date-label">
+            {groceryMode === 'daily' ? 'For tomorrow: Thursday, June 25, 2026' : 'Next Week: June 29 – July 5, 2026'}
           </p>
-
           <InfoBanner variant="info">
-            Check your actual stock before buying — the system estimates what you'll need,
-            not what you currently have.
+            Order quantities are based on forecasted demand minus current stock.{" "}
+            <a href="/inventory-management" style={{color:'inherit', fontWeight:600, textDecoration:'underline'}}>See Inventory Management.</a>
           </InfoBanner>
-
-          <Tippy
-            content={tooltips.dailyShoppingList}
-            placement="top"
-            animation="scale"
-            duration={200}
-            theme="dark"
-            arrow={true}
-            maxWidth={380}
-            interactive={true}
-          >
-            <ul className="ingredient-list">
-              {ingredientList.map((item) => (
-                <li key={item.name} className="ingredient-list-row">
-                  <div>
-                    <p className="ingredient-list-name">
-                      {item.name}
-                      {item.isHigh && (
-                        <span className="badge-high">More than usual</span>
-                      )}
-                    </p>
-                    <p className="ingredient-list-used">Used in: {item.usedIn}</p>
-                  </div>
-                  <div className="ingredient-list-qty">
-                    <span>{item.qty}</span>
-                    <span className="ingredient-list-unit">{item.unit}</span>
-                  </div>
-                </li>
-              ))}
-            </ul>
-          </Tippy>
+          <div className="grocery-kpi-row">
+            <div className="grocery-kpi-card"><p className="grocery-kpi-label">Est. Total Cost</p><p className="grocery-kpi-value">₱{groceryPreview.reduce((sum, i) => sum + (i.estCost || 0), 0).toLocaleString()}</p></div>
+            <div className="grocery-kpi-card"><p className="grocery-kpi-label">Total Items to Buy</p><p className="grocery-kpi-value">{groceryPreview.length}</p></div>
+          </div>
+          <ul className="grocery-preview-list">
+            {groceryPreview.slice(0, 5).map((item) => (
+              <li key={item.name} className="grocery-preview-row">
+                <div><p className="grocery-preview-name">{item.name}</p><p className="grocery-preview-sub">Used in: {item.usedIn}</p></div>
+                <div style={{ display:'flex', alignItems:'center', gap:8 }}><span className={`status-badge status-badge--${item.status.toLowerCase()}`}>{item.status}</span><span className="grocery-preview-qty">{item.toBuy?.toFixed(2)} {item.unit}</span></div>
+              </li>
+            ))}
+            {groceryPreview.length > 5 && <li className="grocery-preview-more">… and {groceryPreview.length - 5} more items</li>}
+          </ul>
+          <div className="grocery-action-row">
+            <button type="button" className="btn-grocery-view" onClick={() => setIsGroceryOpen(true)}><FiExternalLink size={14} /> View Full List</button>
+            <button type="button" className="btn-grocery-download"><FiDownload size={14} /> Download</button>
+          </div>
         </section>
       </div>
       {isReportModalOpen && (
@@ -417,6 +476,51 @@ function IngredientDemand() {
           onGenerate={handleGenerateReport}
         />
       )}
+      <ExpandableModal isOpen={isWeeklyOpen} onClose={() => setIsWeeklyOpen(false)} title="Weekly Ingredient Demand — Full View">
+        <table className="analytics-table heatmap-table">
+          <thead><tr><th>No.</th><th>Ingredient</th>{weekDays.map((day) => <th key={day}>{day}</th>)}</tr></thead>
+          <tbody>{demandGrid.slice((modalWeeklyPage - 1) * 10, modalWeeklyPage * 10).map((row, i) => (
+            <tr key={row.ingredient}><td>{(modalWeeklyPage - 1) * 10 + i + 1}</td><td>{row.ingredient}</td>{row.values.map((value, dayIndex) => <td key={dayIndex} className={`heatmap-cell heatmap-cell--${cellLevel(dayIndex, row.highDay)}`}>{value}</td>)}</tr>
+          ))}</tbody>
+        </table>
+        <Pagination currentPage={modalWeeklyPage} totalPages={Math.max(1, Math.ceil(demandGrid.length / 10))} onPageChange={setModalWeeklyPage} />
+      </ExpandableModal>
+
+      <ExpandableModal isOpen={isDailyOpen} onClose={() => setIsDailyOpen(false)} title="Daily Ingredient Demand — Full View">
+        <table className="analytics-table">
+          <thead><tr><th>No.</th><th>Ingredient</th><th>Used in</th><th>Forecasted Need</th><th>On Stock</th><th>Status</th><th>To Buy</th><th>Market Price</th><th>Est. Cost</th></tr></thead>
+          <tbody>{dailyIngredients.slice((modalDailyPage - 1) * 10, modalDailyPage * 10).map((row, i) => (
+            <tr key={row.name}><td>{i + 1}</td><td>{row.name}</td><td>{row.usedIn}</td><td>{row.forecasted.toFixed(2)} {row.unit}</td><td>{row.onStock.toFixed(2)} {row.unit}</td><td><span className={`status-badge status-badge--${row.status.toLowerCase()}`}>{row.status}</span></td><td>{row.toBuy === null ? <span className="value--muted">{row.status === "Normal" ? "— no order" : "— delay restock"}</span> : `${row.toBuy.toFixed(2)} ${row.unit}`}</td><td>₱{row.marketPrice}/{row.unit}</td><td>{row.estCost === null ? "—" : `₱${row.estCost.toLocaleString()}`}</td></tr>
+          ))}</tbody>
+        </table>
+        <Pagination currentPage={modalDailyPage} totalPages={Math.max(1, Math.ceil(dailyIngredients.length / 10))} onPageChange={setModalDailyPage} />
+      </ExpandableModal>
+
+      <ExpandableModal isOpen={isGroceryOpen} onClose={() => setIsGroceryOpen(false)} title="Grocery List — Full View">
+        <div className="grocery-toggle">
+          <button type="button" className={`grocery-toggle-btn ${groceryMode === 'weekly' ? 'active' : ''}`} onClick={() => setGroceryMode('weekly')}>Weekly</button>
+          <button type="button" className={`grocery-toggle-btn ${groceryMode === 'daily' ? 'active' : ''}`} onClick={() => setGroceryMode('daily')}>Daily</button>
+        </div>
+        <div className="grocery-kpi-row">
+          <div className="grocery-kpi-card"><p className="grocery-kpi-label">Est. Total Cost</p><p className="grocery-kpi-value">₱{groceryPreview.reduce((sum, item) => sum + (item.estCost || 0), 0).toLocaleString()}</p></div>
+          <div className="grocery-kpi-card"><p className="grocery-kpi-label">Total Items to Buy</p><p className="grocery-kpi-value">{groceryPreview.length}</p></div>
+        </div>
+        {[
+          ["Meat & Poultry", groceryPreview.filter((item) => item.name === "Pork" || item.name === "Chicken")],
+          ["Vegetables & Fruits", groceryPreview.filter((item) => item.name === "Tomatoes")],
+          ["Grains & Starches", groceryPreview.filter((item) => item.name === "Rice")],
+          ["Condiments & Sauces", groceryPreview.filter((item) => item.name === "Soy Sauce")],
+        ].map(([category, items]) => (
+          <div className="grocery-category" key={category}>
+            <p className="status-group-title">{category}</p>
+            <table className="analytics-table analytics-table--compact">
+              <thead><tr><th>Item</th><th>Qty</th><th>Unit</th><th>Market Price</th><th>Notes</th></tr></thead>
+              <tbody>{(items.length ? items : groceryPreview.slice(0, 0)).map((item) => <tr key={item.name}><td>{item.name}</td><td>{item.toBuy?.toFixed(2)}</td><td>{item.unit}</td><td>₱{item.marketPrice}/{item.unit}</td><td>{item.usedIn}</td></tr>)}</tbody>
+            </table>
+          </div>
+        ))}
+        <button type="button" className="btn-grocery-download"><FiDownload size={14} /> Download</button>
+      </ExpandableModal>
     </>
   );
 }

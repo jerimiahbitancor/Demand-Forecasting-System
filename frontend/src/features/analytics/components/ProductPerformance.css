@@ -238,3 +238,21 @@
 .tippy-box[data-theme~='dark'] .tippy-content {
   padding: 12px 16px;
 }
+
+.btn-expand-panel {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 4px;
+  background: none;
+  border: none;
+  color: var(--color-text-light);
+  cursor: pointer;
+  border-radius: 4px;
+  flex-shrink: 0;
+}
+
+.btn-expand-panel:hover {
+  color: var(--color-red-primary);
+  background-color: var(--color-bg-light);
+}

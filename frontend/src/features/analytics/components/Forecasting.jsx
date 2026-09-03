@@ -1,9 +1,11 @@
 // components/Forecasting.jsx
 import { useState } from "react";
-import { FiChevronDown, FiSearch, FiCalendar, FiInfo, FiZap } from "react-icons/fi";
+import { FiChevronDown, FiSearch, FiCalendar, FiInfo, FiZap, FiExternalLink } from "react-icons/fi";
 import GenerateReportModal from "../../components/Reports/GenerateReportModal.jsx";
 import { buildSalesForecastPDF, generateExcel } from "./../../../services/reportService.js";
 import DatePicker from "./shared/DatePicker.jsx";
+import ExpandableModal from "./shared/ExpandableModal.jsx";
+import Pagination from "./shared/Pagination.jsx";
 import Tippy from '@tippyjs/react';
 import 'tippy.js/dist/tippy.css';
 import 'tippy.js/animations/scale.css';
@@ -321,6 +323,12 @@ function Forecasting() {
   const [mode, setMode] = useState("Sales");
   const [selectedRange, setSelectedRange] = useState([new Date(), new Date()]);
   const [isReportModalOpen, setIsReportModalOpen] = useState(false);
+  const [isForecastAccuracyOpen, setIsForecastAccuracyOpen] = useState(false);
+  const [isSalesPredictionOpen, setIsSalesPredictionOpen] = useState(false);
+  const [isModelInsightsOpen, setIsModelInsightsOpen] = useState(false);
+  const [modalSalesPage, setModalSalesPage] = useState(1);
+  const [salesPage, setSalesPage] = useState(1);
+  const ROWS_PER_PAGE = 5;
 
   const availableTables = [
     { id: "sales", label: "Sales Forecast Table" },
@@ -372,29 +380,46 @@ function Forecasting() {
   };
 
   const chartPoints = mode === "Sales" ? salesPrediction.points : demandPrediction.points;
+  const totalSalesPages = Math.max(1, Math.ceil(salesPrediction.rows.length / ROWS_PER_PAGE));
+  const paginatedSalesRows = salesPrediction.rows.slice(
+    (salesPage - 1) * ROWS_PER_PAGE,
+    salesPage * ROWS_PER_PAGE
+  );
+  const modalSalesRows = salesPrediction.rows.slice((modalSalesPage - 1) * 10, modalSalesPage * 10);
+  const modalSalesTotalPages = Math.ceil(salesPrediction.rows.length / 10);
 
   return (
     <>
       <div className="analytics-col-main">
         {/* Forecast Accuracy */}
         <section className="analytics-card">
-          <h2 className="analytics-card-title">
-            Forecast Accuracy
-            <Tippy
-              content={tooltips.forecastAccuracy}
-              placement="right"
-              animation="scale"
-              duration={200}
-              theme="dark"
-              arrow={true}
-              maxWidth={380}
-              interactive={true}
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '16px' }}>
+            <h2 className="analytics-card-title" style={{ marginBottom: 0 }}>
+              Forecast Accuracy
+              <Tippy
+                content={tooltips.forecastAccuracy}
+                placement="right"
+                animation="scale"
+                duration={200}
+                theme="dark"
+                arrow={true}
+                maxWidth={380}
+                interactive={true}
+              >
+                <span className="info-icon-wrapper">
+                  <FiInfo className="info-icon" />
+                </span>
+              </Tippy>
+            </h2>
+            <button
+              type="button"
+              className="btn-expand-panel"
+              onClick={() => setIsForecastAccuracyOpen(true)}
+              aria-label="Expand Forecast Accuracy"
             >
-              <span className="info-icon-wrapper">
-                <FiInfo className="info-icon" />
-              </span>
-            </Tippy>
-          </h2>
+              <FiExternalLink size={16} />
+            </button>
+          </div>
 
           <div className="metric-pair">
             <div className="metric-box">
@@ -437,23 +462,33 @@ function Forecasting() {
 
         {/* Sales and Demand Prediction */}
         <section className="analytics-card">
-          <h2 className="analytics-card-title">
-            Sales and Demand Prediction
-            <Tippy
-              content={tooltips.salesPrediction}
-              placement="right"
-              animation="scale"
-              duration={200}
-              theme="dark"
-              arrow={true}
-              maxWidth={350}
-              interactive={true}
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '16px' }}>
+            <h2 className="analytics-card-title" style={{ marginBottom: 0 }}>
+              Sales and Demand Prediction
+              <Tippy
+                content={tooltips.salesPrediction}
+                placement="right"
+                animation="scale"
+                duration={200}
+                theme="dark"
+                arrow={true}
+                maxWidth={350}
+                interactive={true}
+              >
+                <span className="info-icon-wrapper">
+                  <FiInfo className="info-icon" />
+                </span>
+              </Tippy>
+            </h2>
+            <button
+              type="button"
+              className="btn-expand-panel"
+              onClick={() => setIsSalesPredictionOpen(true)}
+              aria-label="Expand Sales and Demand Prediction"
             >
-              <span className="info-icon-wrapper">
-                <FiInfo className="info-icon" />
-              </span>
-            </Tippy>
-          </h2>
+              <FiExternalLink size={16} />
+            </button>
+          </div>
 
           <div className="analytics-filter-row">
             <DatePicker value={selectedRange} onChange={setSelectedRange} mode="range" />
@@ -496,7 +531,7 @@ function Forecasting() {
                   </td>
                 </tr>
               ) : (
-                salesPrediction.rows.map((row, i) => (
+                paginatedSalesRows.map((row, i) => (
                   <tr key={i}>
                     <td>{i + 1}</td>
                     <td>{row.date}</td>
@@ -510,6 +545,14 @@ function Forecasting() {
               )}
             </tbody>
           </table>
+          <Pagination
+            currentPage={salesPage}
+            totalPages={totalSalesPages}
+            onPageChange={setSalesPage}
+          />
+          <p className="table-footnote">
+            Total Cost = Cost of Goods &nbsp;·&nbsp; Est. = Estimated
+          </p>
         </section>
       </div>
 
@@ -519,23 +562,33 @@ function Forecasting() {
         </button>
 
         <section className="analytics-card">
-          <h2 className="analytics-card-title">
-            Model Insights
-            <Tippy
-              content={tooltips.modelInsights}
-              placement="right"
-              animation="scale"
-              duration={200}
-              theme="dark"
-              arrow={true}
-              maxWidth={350}
-              interactive={true}
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '16px' }}>
+            <h2 className="analytics-card-title" style={{ marginBottom: 0 }}>
+              Model Insights
+              <Tippy
+                content={tooltips.modelInsights}
+                placement="right"
+                animation="scale"
+                duration={200}
+                theme="dark"
+                arrow={true}
+                maxWidth={350}
+                interactive={true}
+              >
+                <span className="info-icon-wrapper">
+                  <FiInfo className="info-icon" />
+                </span>
+              </Tippy>
+            </h2>
+            <button
+              type="button"
+              className="btn-expand-panel"
+              onClick={() => setIsModelInsightsOpen(true)}
+              aria-label="Expand Model Insights"
             >
-              <span className="info-icon-wrapper">
-                <FiInfo className="info-icon" />
-              </span>
-            </Tippy>
-          </h2>
+              <FiExternalLink size={16} />
+            </button>
+          </div>
 
           <InfoBanner variant="info">
             Forecasts are automatically updated each time you upload new sales data. No
@@ -610,6 +663,191 @@ function Forecasting() {
           onGenerate={handleGenerateReport}
         />
       )}
+
+      {/* Expand: Forecast Accuracy */}
+      <ExpandableModal
+        isOpen={isForecastAccuracyOpen}
+        onClose={() => setIsForecastAccuracyOpen(false)}
+        title="Forecast Accuracy — Full View"
+      >
+        <div className="metric-pair">
+          <div className="metric-box">
+            <p className="metric-label">Forecast Accuracy</p>
+            <p className="metric-value metric-value--success">{latestAccuracy}%</p>
+            <p className="metric-caption metric-caption--success">
+              Excellent — reliable for planning
+            </p>
+          </div>
+          <div className="metric-box">
+            <p className="metric-label">Forecast error rate</p>
+            <p className="metric-value metric-value--success">{errorRate}%</p>
+            <p className="metric-caption metric-caption--success">
+              Excellent — below 10% threshold
+            </p>
+          </div>
+        </div>
+
+        <InfoBanner variant="info">
+          <strong>What is this metric?</strong> This percentage tells you how close your
+          forecasts are to real-world results on average. Your current error score of 7.4% means your
+          predictions are typically accurate to within {latestAccuracy}% of the actual
+          totals, whether the guess was slightly too high or too low.
+        </InfoBanner>
+
+        <div className="chart-block">
+          <p className="chart-block-title">Accuracy over time</p>
+          <p className="chart-block-subtitle">Accuracy improves as more data is uploaded</p>
+          <AccuracyChart data={accuracyHistory} />
+          <div className="chart-legend">
+            <span className="legend-item">
+              <span className="legend-swatch legend-swatch--success" /> Accuracy %
+            </span>
+            <span className="legend-item">
+              <span className="legend-swatch legend-swatch--warning" /> Good threshold (80%)
+            </span>
+          </div>
+        </div>
+        <p className="chart-block-subtitle">Accuracy improves as more sales data is uploaded.</p>
+      </ExpandableModal>
+
+      {/* Expand: Sales and Demand Prediction */}
+      <ExpandableModal
+        isOpen={isSalesPredictionOpen}
+        onClose={() => setIsSalesPredictionOpen(false)}
+        title="Sales and Demand Prediction — Full View"
+      >
+        <div className="analytics-filter-row">
+          <DatePicker value={selectedRange} onChange={setSelectedRange} mode="range" />
+          <span className="filter-search">
+            <FiSearch size={14} /> Search Product
+          </span>
+          <select className="filter-pill" style={{ width: '120px' }} value={mode} onChange={(e) => setMode(e.target.value)}>
+            <option value="Sales">Sales</option>
+            <option value="Demand">Demand</option>
+          </select>
+        </div>
+
+        <LineChart points={chartPoints} />
+        <div className="chart-legend">
+          <span className="legend-item">
+            <span className="legend-swatch legend-swatch--actual" /> {mode === "Sales" ? "Actual Sales" : "Actual Demand"}
+          </span>
+          <span className="legend-item">
+            <span className="legend-swatch legend-swatch--forecast" /> {mode === "Sales" ? "Forecasted Sales" : "Forecasted Demand"}
+          </span>
+        </div>
+
+        <table className="analytics-table">
+          <thead>
+            <tr>
+              <th>No.</th>
+              <th>Date</th>
+              <th>Product</th>
+              <th>Actual Qty.</th>
+              <th>Forecast Qty.</th>
+              <th>Actual Revenue</th>
+              <th>Forecast Revenue</th>
+            </tr>
+          </thead>
+          <tbody>
+            {salesPrediction.rows.length === 0 ? (
+              <tr>
+                <td colSpan={7} className="empty-row">
+                  Upload sales data to populate this table.
+                </td>
+              </tr>
+            ) : (
+              modalSalesRows.map((row, i) => (
+                <tr key={i}>
+                  <td>{(modalSalesPage - 1) * 10 + i + 1}</td>
+                  <td>{row.date}</td>
+                  <td>{row.product}</td>
+                  <td>{row.actualQty}</td>
+                  <td>{row.forecastQty}</td>
+                  <td>{row.actualRevenue}</td>
+                  <td>{row.forecastRevenue}</td>
+                </tr>
+              ))
+            )}
+          </tbody>
+        </table>
+        <Pagination
+          currentPage={modalSalesPage}
+          totalPages={modalSalesTotalPages}
+          onPageChange={setModalSalesPage}
+        />
+      </ExpandableModal>
+
+      {/* Expand: Model Insights */}
+      <ExpandableModal
+        isOpen={isModelInsightsOpen}
+        onClose={() => setIsModelInsightsOpen(false)}
+        title="Model Insights — Full View"
+      >
+        <InfoBanner variant="info">
+          Forecasts are automatically updated each time you upload new sales data. No
+          manual reforecast needed.
+        </InfoBanner>
+
+        <div className="feature-importance">
+          <p className="feature-importance-title">
+            Feature Importance
+            <Tippy
+              content={tooltips.featureImportance}
+              placement="top"
+              animation="scale"
+              duration={200}
+              theme="dark"
+              arrow={true}
+              maxWidth={350}
+              interactive={true}
+            >
+              <span className="info-icon-wrapper">
+                <FiInfo className="info-icon-small" />
+              </span>
+            </Tippy>
+          </p>
+          <p className="feature-importance-subtitle">
+            What factors influence your forecasts the most?
+          </p>
+          <ul className="feature-list">
+            {featureImportance.map((f) => (
+              <li key={f.label} className="feature-row">
+                <span>{f.label}</span>
+                <span className="feature-value">{f.value}%</span>
+              </li>
+            ))}
+          </ul>
+        </div>
+
+        <InfoBanner variant="tip" icon={<FiZap size={14} />}>
+          Day of Week has the strongest influence on sales. Paydays (15th and 30th) also
+          significantly boost demand.
+        </InfoBanner>
+
+        <div className="training-info">
+          <p className="training-info-title">Training Information</p>
+          <p className="training-info-subtitle">Current model status</p>
+          <dl className="training-info-list">
+            <div className="training-info-row">
+              <dt>Model status</dt>
+              <dd className="value--success">{trainingInfo.modelStatus}</dd>
+            </div>
+            <div className="training-info-row">
+              <dt>Last trained</dt>
+              <dd>{trainingInfo.lastTrained}</dd>
+            </div>
+            <div className="training-info-row">
+              <dt>Training records</dt>
+              <dd>{trainingInfo.trainingRecords}</dd>
+            </div>
+            <div className="training-info-row">
+              <dt>Active products</dt>
+              <dd>{trainingInfo.activeProducts}</dd>
+            </div>
+          </dl>
+        </div>
+      </ExpandableModal>
     </>
   );
 }
