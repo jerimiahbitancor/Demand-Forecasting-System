@@ -85,8 +85,11 @@ function ForecastConfig() {
   const handleManagementSubmit = (event) => {
     event.preventDefault();
     const nextValue = managementValue.trim();
-    if (!nextValue) return;
     const isCategory = managementDialog.type === 'category';
+    if (!nextValue) {
+      toast.error(isCategory ? 'Category name is required' : 'Unit is required');
+      return;
+    }
     const activeTab = managementDialog.activeTab;
     const endpoint = isCategory
       ? (activeTab === 'product' ? '/product-categories' : '/categories')
