@@ -47,6 +47,7 @@ const IngredientManagement = () => {
   const [itemsPerPage] = useState(10);
   const [totalItems, setTotalItems] = useState(0);
   const [categories, setCategories] = useState([]);
+  const [units, setUnits] = useState([]);
   const [selectedCategory, setSelectedCategory] = useState("All");
   const [statusFilter, setStatusFilter] = useState("All");
   const [selectedDate, setSelectedDate] = useState("");
@@ -275,10 +276,20 @@ const IngredientManagement = () => {
     try {
       const response = await apiClient.get('/categories');
       if (response.data.success) {
-        setCategories(['All', ...(response.data.data || [])]);
+        const categoryData = response.data.data || [];
+        setCategories(categoryData.includes('All') ? categoryData : ['All', ...categoryData]);
       }
     } catch (error) {
       console.error('Error fetching categories:', error);
+    }
+  }, [apiClient]);
+
+  const fetchUnits = useCallback(async () => {
+    try {
+      const response = await apiClient.get('/units');
+      if (response.data.success) setUnits(response.data.data || []);
+    } catch (error) {
+      console.error('Error fetching units:', error);
     }
   }, [apiClient]);
 
@@ -298,6 +309,7 @@ const IngredientManagement = () => {
       setTimeout(() => {
         fetchInventory();
         fetchCategories();
+        fetchUnits();
       }, 100);
     } else {
       debouncedFetch();
@@ -311,7 +323,7 @@ const IngredientManagement = () => {
         abortControllerRef.current.abort();
       }
     };
-  }, [fetchInventory, fetchCategories, debouncedFetch, searchTerm, sortField, sortDirection, currentPage, selectedCategory, statusFilter, selectedDate]);
+  }, [fetchInventory, fetchCategories, fetchUnits, debouncedFetch, searchTerm, sortField, sortDirection, currentPage, selectedCategory, statusFilter, selectedDate]);
 
   // ============ CRUD OPERATIONS ============
   const handleAddItem = async () => {
@@ -1002,6 +1014,7 @@ const IngredientManagement = () => {
         formData={formData}
         formErrors={formErrors}
         categories={categories}
+        units={units}
         onChange={setFormData}
         onSubmit={handleAddItem}
         onClose={() => {
@@ -1015,6 +1028,7 @@ const IngredientManagement = () => {
         formData={formData}
         formErrors={formErrors}
         categories={categories}
+        units={units}
         onChange={setFormData}
         onSubmit={handleUpdateItem}
         onClose={() => {

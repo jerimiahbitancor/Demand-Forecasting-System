@@ -15,6 +15,8 @@ const settingsRoutes = require('./routes/settings');
 const notificationRoutes = require('./routes/notifications');
 const inventoryRoutes = require('./routes/inventory');
 const categoriesRoutes = require('./routes/categories');
+const unitsRoutes = require('./routes/units');
+const productCategoriesRoutes = require('./routes/productCategories');
 
 // Load environment variables
 dotenv.config({ path: path.join(__dirname, '.env') });
@@ -67,6 +69,8 @@ app.use('/api/settings', settingsRoutes);
 app.use('/api/notifications', notificationRoutes);
 app.use('/api/inventory', inventoryRoutes);
 app.use('/api/categories', categoriesRoutes);
+app.use('/api/units', unitsRoutes);
+app.use('/api/product-categories', productCategoriesRoutes);
 
 // ============= HEALTH CHECK =============
 app.get('/health', (req, res) => {

@@ -8,6 +8,7 @@ const EditIngredientModal = ({
 	formData,
 	formErrors,
 	categories,
+	units,
 	onChange,
 	onSubmit,
 	onClose,
@@ -45,13 +46,9 @@ const EditIngredientModal = ({
                     	<div className="form-group">
 						<label className="form-label">Unit</label>
 						<select className="form-input" value={formData.unit} onChange={(event) => update("unit", event.target.value)}>
-							<option value="kg">Kilogram (kg)</option>
-							<option value="g">Gram (g)</option>
-							<option value="L">Liter (L)</option>
-							<option value="mL">Milliliter (mL)</option>
-							<option value="pcs">Pieces (pcs)</option>
-							<option value="box">Box</option>
-							<option value="pack">Pack</option>
+							{(units || []).map((unit) => (
+								<option key={unit.id || unit.name} value={unit.name}>{unit.name}</option>
+							))}
 						</select>
 					</div>
 

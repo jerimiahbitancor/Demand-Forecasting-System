@@ -6,25 +6,21 @@ import Tippy from '@tippyjs/react';
 import 'tippy.js/dist/tippy.css';
 import 'tippy.js/animations/scale.css';
 import { FiEdit2, FiInfo, FiPlus } from 'react-icons/fi';
+import { useAuth } from '../../../context/AuthContext';
 import './ForecastConfig.css';
 
 const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:5000/api';
 
 function ForecastConfig() {
+  const { getToken } = useAuth();
   const [value, setValue] = useState(15);
   const [thresholds, setThresholds] = useState({ critical: 50, low: 100, excess: 200 });
   const [categoryTab, setCategoryTab] = useState('ingredient');
   const [unitTab, setUnitTab] = useState('ingredient');
-  const [categoryData, setCategoryData] = useState({ ingredient: ['Meat', 'Fruits'], product: ['Silog', 'Pancit', 'Drinks'] });
-  const [unitData, setUnitData] = useState({ ingredient: ['kg', 'g', 'ml'], product: ['servings', 'g', 'ml'] });
+  const [categoryData, setCategoryData] = useState({ ingredient: [], product: [] });
+  const [unitData, setUnitData] = useState({ ingredient: [] });
   const [managementDialog, setManagementDialog] = useState(null);
   const [managementValue, setManagementValue] = useState('');
-  const [loading, setLoading] = useState(false);
-
-  // Get auth token
-  const getAuthToken = () => {
-    return localStorage.getItem('token');
-  };
 
   // Axios instance
   const apiClient = axios.create({
@@ -35,8 +31,8 @@ function ForecastConfig() {
   });
 
   apiClient.interceptors.request.use(
-    (config) => {
-      const token = getAuthToken();
+    async (config) => {
+      const token = await getToken();
       if (token) {
         config.headers.Authorization = `Bearer ${token}`;
       }
@@ -45,24 +41,30 @@ function ForecastConfig() {
     (error) => Promise.reject(error)
   );
 
-  // Fetch configuration
-  const fetchConfig = async () => {
+  const fetchManagementData = async () => {
     try {
-      setLoading(true);
-      const response = await apiClient.get('/settings/forecast-config');
-      if (response.data.success) {
-        setValue(response.data.data.safety_buffer || 15);
+      const [categoryResponse, unitResponse, productCategoryResponse] = await Promise.all([
+        apiClient.get('/categories?includeMeta=true'),
+        apiClient.get('/units'),
+        apiClient.get('/product-categories')
+      ]);
+      if (categoryResponse.data.success) {
+        setCategoryData((currentData) => ({ ...currentData, ingredient: categoryResponse.data.data || [] }));
+      }
+      if (unitResponse.data.success) {
+        setUnitData({ ingredient: unitResponse.data.data || [] });
+      }
+      if (productCategoryResponse.data.success) {
+        setCategoryData((currentData) => ({ ...currentData, product: productCategoryResponse.data.data || [] }));
       }
     } catch (error) {
-      console.error('Error fetching config:', error);
-      // Use default if API fails
-    } finally {
-      setLoading(false);
+      console.error('Error fetching management data:', error);
+      toast.error('Failed to load categories and units.');
     }
   };
 
   useEffect(() => {
-    Promise.resolve().then(fetchConfig);
+    Promise.resolve().then(fetchManagementData);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -77,7 +79,7 @@ function ForecastConfig() {
   const openManagementDialog = (type, mode, item = '') => {
     const activeTab = type === 'category' ? categoryTab : unitTab;
     setManagementDialog({ type, mode, activeTab, originalValue: item });
-    setManagementValue(item);
+    setManagementValue(item.name || item);
   };
 
   const handleManagementSubmit = (event) => {
@@ -86,18 +88,20 @@ function ForecastConfig() {
     if (!nextValue) return;
     const isCategory = managementDialog.type === 'category';
     const activeTab = managementDialog.activeTab;
-    const setData = isCategory ? setCategoryData : setUnitData;
-    setData((currentData) => ({
-      ...currentData,
-      [activeTab]: managementDialog.mode === 'new'
-        ? [...currentData[activeTab], nextValue]
-        : currentData[activeTab].map((item) => item === managementDialog.originalValue ? nextValue : item)
-    }));
-    setManagementDialog(null);
-    toast.success(`${managementDialog.mode === 'new' ? 'Added' : 'Updated'} ${isCategory ? 'category' : 'unit'}.`);
+    const endpoint = isCategory
+      ? (activeTab === 'product' ? '/product-categories' : '/categories')
+      : '/units';
+    const request = managementDialog.mode === 'new'
+      ? apiClient.post(endpoint, { name: nextValue })
+      : apiClient.put(`${endpoint}/${managementDialog.originalValue.id}`, { name: nextValue });
+    request.then(() => {
+      setManagementDialog(null);
+      return fetchManagementData();
+    }).then(() => toast.success(`${managementDialog.mode === 'new' ? 'Added' : 'Updated'} ${isCategory ? 'category' : 'unit'}.`))
+      .catch((error) => toast.error(error.response?.data?.error || `Failed to save ${isCategory ? 'category' : 'unit'}.`));
   };
 
-  const renderManagementCard = (type, title, subtitle, activeTab, setActiveTab, data, columnLabel) => (
+  const renderManagementCard = (type, title, subtitle, activeTab, setActiveTab, data, columnLabel, tabs = [['ingredient', 'Ingredient Management'], ['product', 'Product Management']]) => (
     <article className="fc-card fc-management-card">
       <div className="fc-management-header">
         <div>
@@ -108,11 +112,8 @@ function ForecastConfig() {
           <FiPlus aria-hidden="true" /> New
         </button>
       </div>
-      <div className="fc-management-tabs" role="tablist">
-        {[
-          ['ingredient', 'Ingredient Management'],
-          ['product', 'Product Management']
-        ].map(([tab, label]) => (
+      <div className={`fc-management-tabs ${tabs.length === 1 ? 'single' : ''}`} role="tablist">
+        {tabs.map(([tab, label]) => (
           <button key={tab} type="button" role="tab" aria-selected={activeTab === tab} className={activeTab === tab ? 'active' : ''} onClick={() => setActiveTab(tab)}>
             {label}
           </button>
@@ -123,9 +124,9 @@ function ForecastConfig() {
           <thead><tr><th>{columnLabel}</th><th>Actions</th></tr></thead>
           <tbody>
             {data[activeTab].map((item) => (
-              <tr key={item}>
-                <td>{item}</td>
-                <td><button type="button" className="fc-edit-button" aria-label={`Edit ${item}`} onClick={() => openManagementDialog(type, 'edit', item)}><FiEdit2 aria-hidden="true" /></button></td>
+              <tr key={item.id || item.name}>
+                <td>{item.name || item}</td>
+                <td><button type="button" className="fc-edit-button" aria-label={`Edit ${item.name || item}`} onClick={() => openManagementDialog(type, 'edit', item)}><FiEdit2 aria-hidden="true" /></button></td>
               </tr>
             ))}
             {Array.from({ length: Math.max(0, 4 - data[activeTab].length) }).map((_, index) => <tr className="fc-empty-row" key={`empty-${index}`}><td></td><td></td></tr>)}
@@ -177,7 +178,7 @@ function ForecastConfig() {
             <div className="fc-slider-row">
               <div className="fc-slider-value-row">
                 <div className="fc-percent">[{value}%]</div>
-                <input className="fc-slider" type="range" min="0" max="50" value={value} onChange={(e) => setValue(Number(e.target.value))} disabled={loading} />
+                <input className="fc-slider" type="range" min="0" max="50" value={value} onChange={(e) => setValue(Number(e.target.value))} />
                 <div className="fc-adjust-controls">
                   <button type="button" onClick={() => setValue(Math.min(50, value + 1))} aria-label="Increase safety buffer">+</button>
                   <button type="button" onClick={() => setValue(Math.max(0, value - 1))} aria-label="Decrease safety buffer">-</button>
@@ -194,7 +195,6 @@ function ForecastConfig() {
           <button 
             className="fc-save" 
             onClick={handleSaveConfig}
-            disabled={loading}
           >
             SAVE CONFIGURATION
           </button>
@@ -259,13 +259,13 @@ function ForecastConfig() {
           <button type="button" className="fc-save" onClick={handleSaveThresholds}>SAVE CONFIGURATION</button>
         </div>
 
-        {renderManagementCard('category', 'Category', 'Used for Product Management', categoryTab, setCategoryTab, categoryData, 'Category')}
-        {renderManagementCard('unit', 'Units', 'Use in inventory Management', unitTab, setUnitTab, unitData, 'Unit')}
+        {renderManagementCard('category', 'Category', 'Used for Product Management and  inventory Management ', categoryTab, setCategoryTab, categoryData, 'Category')}
+        {renderManagementCard('unit', 'Units', 'Use in inventory Management', unitTab, setUnitTab, unitData, 'Unit', [['ingredient', 'Ingredient Management']])}
       </div>
       {managementDialog && (
         <div className="fc-dialog-backdrop" role="presentation" onMouseDown={() => setManagementDialog(null)}>
           <form className="fc-dialog" onSubmit={handleManagementSubmit} onMouseDown={(event) => event.stopPropagation()}>
-            <h2>{managementDialog.mode === 'new' ? `Add ${managementDialog.type === 'category' ? 'Category' : 'Unit'} – ${managementDialog.activeTab === 'ingredient' ? 'Ingredient Management' : 'Product Management'}` : `Edit ${managementDialog.type === 'category' ? 'Category' : 'Unit'} – ${managementDialog.activeTab === 'ingredient' ? 'Ingredient Management' : 'Product Management'}`}</h2>
+            <h2>{managementDialog.mode === 'new' ? `Add ${managementDialog.type === 'category' ? 'Category' : 'Unit'} – ${managementDialog.type === 'unit' || managementDialog.activeTab === 'ingredient' ? 'Ingredient Management' : 'Product Management'}` : `Edit ${managementDialog.type === 'category' ? 'Category' : 'Unit'} – ${managementDialog.type === 'unit' || managementDialog.activeTab === 'ingredient' ? 'Ingredient Management' : 'Product Management'}`}</h2>
             <label>{managementDialog.type === 'category' ? 'Category name' : 'Unit name'}<input autoFocus value={managementValue} onChange={(event) => setManagementValue(event.target.value)} /></label>
             <div className="fc-dialog-actions"><button type="button" onClick={() => setManagementDialog(null)}>Cancel</button><button type="submit" className="fc-dialog-submit">Save</button></div>
           </form>
