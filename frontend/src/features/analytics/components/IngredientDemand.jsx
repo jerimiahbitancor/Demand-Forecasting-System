@@ -10,8 +10,11 @@ import Tippy from '@tippyjs/react';
 import 'tippy.js/dist/tippy.css';
 import 'tippy.js/animations/scale.css';
 import InfoBanner from "./shared/InfoBanner.jsx";
+import { authService } from "../../../services/authService.js";
 import "./shared/InfoBanner.css";
 import "./IngredientDemand.css";
+
+const API_URL = import.meta.env.VITE_API_URL || "http://localhost:5000/api";
 
 // ---------------------------------------------------------------------
 // Mock data — replace with real API responses
@@ -224,39 +227,127 @@ function IngredientDemand() {
     (dailyPage - 1) * ROWS_PER_PAGE, dailyPage * ROWS_PER_PAGE
   );
 
-  const handleDownloadGroceryList = () => {
+  const handleDownloadGroceryList = async () => {
     const itemsToDownload = groceryPreview;
     if (itemsToDownload.length === 0) return;
+
+    let biz = {
+      business_name: "ChefDuo",
+      address: "",
+      business_email: "",
+      business_contact_number: "",
+    };
+
+    try {
+      const token = await authService.getToken();
+      const profileRes = await fetch(`${API_URL}/settings/business-profile`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      if (!profileRes.ok) throw new Error("Unable to fetch business profile");
+      const profileData = await profileRes.json();
+      biz = profileData?.data || biz;
+    } catch {
+      // Keep the printout usable when the profile endpoint is unavailable.
+    }
 
     // Build a simple print-ready HTML string for the grocery list
     const dateLabel = groceryMode === "daily"
       ? "For tomorrow: Thursday, June 25, 2026"
       : "Next Week: June 29 – July 5, 2026";
 
-    const categoryRows = GROCERY_CATEGORIES.map((cat) => {
-      const catItems = itemsToDownload.filter((i) => i.category === cat);
-      if (!catItems.length) return "";
-      const rows = catItems.map((i) =>
-        `<tr><td>${i.name}</td><td>${i.toBuy?.toFixed(2) ?? "—"}</td><td>${i.unit}</td><td>₱${i.marketPrice}/${i.unit}</td><td>${i.usedIn}</td></tr>`
-      ).join("");
-      return `<h4 style="margin:16px 0 6px;font-size:13px;color:#7A0101">${cat}</h4>
-        <table border="1" cellpadding="6" cellspacing="0" style="width:100%;border-collapse:collapse;font-size:12px;margin-bottom:8px">
-          <thead style="background:#f4f4f2"><tr><th>Item</th><th>Qty</th><th>Unit</th><th>Market Price</th><th>Used In</th></tr></thead>
-          <tbody>${rows}</tbody>
-        </table>`;
-    }).join("");
+    const categoryBlocks = GROCERY_CATEGORIES
+      .map((cat) => itemsToDownload.filter((i) => i.category === cat))
+      .filter((items) => items.length > 0)
+      .map((items) => {
+        const catName = items[0].category;
+        const rows = items.map((i) => `
+        <tr>
+          <td class="chk"><span class="box"></span></td>
+          <td>${i.name}</td>
+          <td>${i.toBuy?.toFixed(2) ?? "—"}</td>
+          <td>${i.unit}</td>
+          <td>₱${i.marketPrice}</td>
+          <td></td>
+        </tr>`).join("");
+        return `
+        <div class="category-block">
+          <div class="category-header">${catName} <span class="count">${items.length} item${items.length !== 1 ? "s" : ""}</span></div>
+          <table>
+            <thead><tr><th></th><th>Item</th><th>Qty.</th><th>Unit</th><th>Market Price</th><th>Notes</th></tr></thead>
+            <tbody>${rows}</tbody>
+          </table>
+        </div>`;
+      });
+
+    let categoryGridHtml = "";
+    for (let i = 0; i < categoryBlocks.length; i += 2) {
+      categoryGridHtml += `<div class="category-row">${categoryBlocks[i]}${categoryBlocks[i + 1] || ""}</div>`;
+    }
 
     const totalCost = itemsToDownload.reduce((sum, i) => sum + (i.estCost || 0), 0);
+    const generatedTimestamp = new Date().toLocaleString("en-PH", {
+      dateStyle: "medium",
+      timeStyle: "short",
+    });
 
     const html = `<!DOCTYPE html><html><head><meta charset="utf-8">
-      <title>Grocery List — ChefDuo</title>
-      <style>body{font-family:Arial,sans-serif;padding:24px;max-width:680px;margin:0 auto}h1{color:#7A0101;font-size:20px}h2{font-size:14px;color:#5c403c}p{font-size:12px;color:#6c757d}</style>
+  <title>Grocery List — ${biz.business_name || "ChefDuo"}</title>
+      <style>
+        @page { size: A5; margin: 14mm; }
+        body { font-family: Arial, sans-serif; color: #1C2632; margin: 0; }
+        .letterhead { display: flex; justify-content: space-between; align-items: flex-start; border-bottom: 2px solid #7A0101; padding-bottom: 10px; margin-bottom: 14px; }
+        .letterhead h1 { color: #7A0101; font-size: 18px; margin: 0 0 2px; }
+        .letterhead p { font-size: 10px; color: #6c757d; margin: 0; }
+        .letterhead-right { text-align: right; }
+        .letterhead-right h2 { font-size: 16px; margin: 0 0 2px; }
+        .letterhead-right p { font-size: 9px; color: #6c757d; margin: 0; }
+        .summary-strip { display: flex; gap: 10px; margin-bottom: 14px; }
+        .summary-card { flex: 1; background: #f8f9fa; border-radius: 6px; padding: 8px; text-align: center; }
+        .summary-card .label { font-size: 9px; color: #6c757d; }
+        .summary-card .value { font-size: 16px; font-weight: 700; }
+        .category-row { display: flex; gap: 12px; margin-bottom: 10px; }
+        .category-block { flex: 1; }
+        .category-header { font-size: 11px; font-weight: 700; color: #7A0101; background: #fbeaea; padding: 4px 8px; border-radius: 4px 4px 0 0; display: flex; justify-content: space-between; }
+        .category-header .count { font-weight: 400; color: #6c757d; }
+        table { width: 100%; border-collapse: collapse; font-size: 9px; }
+        th, td { border: 1px solid #e2e2e2; padding: 3px 4px; text-align: left; }
+        th { background: #f4f4f2; }
+        .chk { width: 14px; text-align: center; }
+        .box { display: inline-block; width: 8px; height: 8px; border: 1px solid #999; }
+        .footer { font-size: 8px; color: #999; margin-top: 10px; display: flex; justify-content: space-between; }
+        .page-break { page-break-before: always; }
+        .blank-page-title { font-size: 12px; font-weight: 700; color: #7A0101; margin-bottom: 10px; }
+      </style>
       </head><body>
-      <h1>ChefDuo — Grocery List</h1>
-      <h2>${dateLabel}</h2>
-      <p>Est. Total Cost: ₱${totalCost.toLocaleString()} &nbsp;·&nbsp; Items to Buy: ${itemsToDownload.length}</p>
-      <p style="font-size:11px;color:#999;margin-bottom:16px">Market prices sourced from DA/PSA reference data. Verify quantities before purchase.</p>
-      ${categoryRows}
+      <div class="letterhead">
+        <div>
+          <h1>${biz.business_name || "ChefDuo"}</h1>
+          <p>${biz.address || biz.business_address || ""}</p>
+          <p>${biz.business_email || ""} ${biz.business_contact_number ? "· " + biz.business_contact_number : ""}</p>
+        </div>
+        <div class="letterhead-right">
+          <h2>Grocery List</h2>
+          <p>${dateLabel}</p>
+          <p>Generated ${generatedTimestamp}</p>
+          <p>Market Price Source: Department of Agriculture, Puregold, etc.</p>
+        </div>
+      </div>
+      <div class="summary-strip">
+        <div class="summary-card"><div class="label">Est. Total Cost</div><div class="value">₱${totalCost.toLocaleString()}</div></div>
+        <div class="summary-card"><div class="label">Items to Buy</div><div class="value">${itemsToDownload.length}</div></div>
+      </div>
+      ${categoryGridHtml}
+      <div class="footer"><span>${biz.business_name || "ChefDuo"} Forecast System</span><span>Page 1 of 2</span></div>
+      <div class="page-break">
+        <div class="blank-page-title">Additional Items</div>
+        <div class="category-row">
+          <div class="category-block"><table><thead><tr><th></th><th>Item</th><th>Qty.</th><th>Unit</th><th>Market Price</th><th>Notes</th></tr></thead>
+            <tbody>${Array(15).fill('<tr><td class="chk"><span class="box"></span></td><td></td><td></td><td></td><td></td><td></td></tr>').join("")}</tbody></table></div>
+          <div class="category-block"><table><thead><tr><th></th><th>Item</th><th>Qty.</th><th>Unit</th><th>Market Price</th><th>Notes</th></tr></thead>
+            <tbody>${Array(15).fill('<tr><td class="chk"><span class="box"></span></td><td></td><td></td><td></td><td></td><td></td></tr>').join("")}</tbody></table></div>
+        </div>
+        <div class="footer"><span>${biz.business_name || "ChefDuo"} Forecast System</span><span>Page 2 of 2</span></div>
+      </div>
       </body></html>`;
 
     const blob = new Blob([html], { type: "text/html" });
@@ -455,18 +546,19 @@ function IngredientDemand() {
           </div>
 
           <table className="analytics-table">
-            <thead><tr><th>No.</th><th>Ingredient</th><th>Used in</th><th>Forecasted Need</th><th>On Stock</th><th>Status</th><th>To Buy</th><th>Market Price</th><th>Est. Cost</th></tr></thead>
+            <thead><tr><th>No.</th><th>Ingredient</th><th>Used in</th><th>Forecasted Need</th><th>On Stock</th><th>Status</th><th>To Buy</th><th>Unit</th><th>Market Price</th><th>Est. Cost</th></tr></thead>
             <tbody>
               {paginatedDaily.map((row, i) => (
                 <tr key={row.name}>
                   <td>{i + 1}</td>
                   <td>{row.name}</td>
                   <td>{row.usedIn}</td>
-                  <td>{row.forecasted.toFixed(2)} {row.unit}</td>
-                  <td>{row.onStock.toFixed(2)} {row.unit}</td>
+                  <td>{row.forecasted.toFixed(2)}</td>
+                  <td>{row.onStock.toFixed(2)}</td>
                   <td><span className={`status-badge status-badge--${row.status.toLowerCase()}`}>{row.status}</span></td>
-                  <td>{row.toBuy === null ? <span className="value--muted">{row.status === "Normal" ? "— no order" : "— delay restock"}</span> : `${row.toBuy.toFixed(2)} ${row.unit}`}</td>
-                  <td>₱{row.marketPrice}/{row.unit}</td>
+                  <td>{row.toBuy === null ? <span className="value--muted">{row.status === "Normal" ? "— no order" : "— delay restock"}</span> : row.toBuy.toFixed(2)}</td>
+                  <td>{row.unit}</td>
+                  <td>₱{row.marketPrice}</td>
                   <td>{row.estCost === null ? "—" : `₱${row.estCost.toLocaleString()}`}</td>
                 </tr>
               ))}
@@ -545,9 +637,9 @@ function IngredientDemand() {
 
       <ExpandableModal isOpen={isDailyOpen} onClose={() => setIsDailyOpen(false)} title="Daily Ingredient Demand — Full View">
         <table className="analytics-table">
-          <thead><tr><th>No.</th><th>Ingredient</th><th>Used in</th><th>Forecasted Need</th><th>On Stock</th><th>Status</th><th>To Buy</th><th>Market Price</th><th>Est. Cost</th></tr></thead>
+          <thead><tr><th>No.</th><th>Ingredient</th><th>Used in</th><th>Forecasted Need</th><th>On Stock</th><th>Status</th><th>To Buy</th><th>Unit</th><th>Market Price</th><th>Est. Cost</th></tr></thead>
           <tbody>{dailyIngredients.slice((modalDailyPage - 1) * 10, modalDailyPage * 10).map((row, i) => (
-            <tr key={row.name}><td>{i + 1}</td><td>{row.name}</td><td>{row.usedIn}</td><td>{row.forecasted.toFixed(2)} {row.unit}</td><td>{row.onStock.toFixed(2)} {row.unit}</td><td><span className={`status-badge status-badge--${row.status.toLowerCase()}`}>{row.status}</span></td><td>{row.toBuy === null ? <span className="value--muted">{row.status === "Normal" ? "— no order" : "— delay restock"}</span> : `${row.toBuy.toFixed(2)} ${row.unit}`}</td><td>₱{row.marketPrice}/{row.unit}</td><td>{row.estCost === null ? "—" : `₱${row.estCost.toLocaleString()}`}</td></tr>
+            <tr key={row.name}><td>{i + 1}</td><td>{row.name}</td><td>{row.usedIn}</td><td>{row.forecasted.toFixed(2)}</td><td>{row.onStock.toFixed(2)}</td><td><span className={`status-badge status-badge--${row.status.toLowerCase()}`}>{row.status}</span></td><td>{row.toBuy === null ? <span className="value--muted">{row.status === "Normal" ? "— no order" : "— delay restock"}</span> : row.toBuy.toFixed(2)}</td><td>{row.unit}</td><td>₱{row.marketPrice}</td><td>{row.estCost === null ? "—" : `₱${row.estCost.toLocaleString()}`}</td></tr>
           ))}</tbody>
         </table>
         <Pagination currentPage={modalDailyPage} totalPages={Math.max(1, Math.ceil(dailyIngredients.length / 10))} onPageChange={setModalDailyPage} />

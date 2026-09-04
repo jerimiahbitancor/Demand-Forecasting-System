@@ -627,6 +627,11 @@ function Forecasting() {
             manual reforecast needed.
           </InfoBanner>
 
+          <InfoBanner variant="info">
+            Daily forecasts run every morning at 8:00 AM. A full 7-day weekly forecast is
+            generated every Monday at 8:00 AM.
+          </InfoBanner>
+
           <div className="feature-importance">
             <p className="feature-importance-title">
               Feature Importance
@@ -838,6 +843,11 @@ function Forecasting() {
         <InfoBanner variant="info">
           Forecasts are automatically updated each time you upload new sales data. No
           manual reforecast needed.
+        </InfoBanner>
+
+        <InfoBanner variant="info">
+          Daily forecasts run every morning at 8:00 AM. A full 7-day weekly forecast is
+          generated every Monday at 8:00 AM.
         </InfoBanner>
 
         <div className="feature-importance">

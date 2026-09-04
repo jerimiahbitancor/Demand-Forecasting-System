@@ -17,10 +17,10 @@ import "./ProductPerformance.css";
 // Mock data
 // ---------------------------------------------------------------------
 const demandRows = [
-  { product: "Poppers & Rice", date: "25-06-2026", forecastQty: 52, zone: "high", demandLevel: "High Demand", actionSignal: "Prepare Extra Stock" },
-  { product: "Breaded Tonkatsu", date: "25-06-2026", forecastQty: 38, zone: "high", demandLevel: "Medium Demand", actionSignal: "Standard Preparation" },
-  { product: "Chick & Fries", date: "25-06-2026", forecastQty: 44, zone: "medium", demandLevel: "High Demand", actionSignal: "Prepare Extra Stock" },
-  { product: "Cheesy Tapa", date: "25-06-2026", forecastQty: 18, zone: "low", demandLevel: "Low Demand", actionSignal: "Prepare Less" },
+  { product: "Poppers & Rice", date: "25-06-2026", forecastQty: 52, zone: "high", demandLevel: "High Demand", bottleneckIngredient: "Rice", bottleneckStatus: "Critical" },
+  { product: "Breaded Tonkatsu", date: "25-06-2026", forecastQty: 38, zone: "high", demandLevel: "Medium Demand", bottleneckIngredient: "Pork", bottleneckStatus: "Low" },
+  { product: "Chick & Fries", date: "25-06-2026", forecastQty: 44, zone: "medium", demandLevel: "High Demand", bottleneckIngredient: "Chicken", bottleneckStatus: "Normal" },
+  { product: "Cheesy Tapa", date: "25-06-2026", forecastQty: 18, zone: "low", demandLevel: "Low Demand", bottleneckIngredient: "Soy Sauce", bottleneckStatus: "Excess" },
 ];
 
 const performanceRows = [
@@ -78,6 +78,8 @@ const tooltips = {
       <span style={{ color: '#94a3b8', fontSize: '12px' }}>
         High if Forecast &gt; P80 • Medium if P40 ≤ Forecast ≤ P80 • Low if Forecast &lt; P40
       </span>
+      <br/>
+      Action signals also consider current ingredient stock levels, so you know exactly which ingredient is the most important.
     </div>
   ),
   
@@ -200,6 +202,33 @@ function RatioBar({ label, ratio }) {
       </div>
     </div>
   );
+}
+
+const ACTION_SIGNAL_MATRIX = {
+  "High Demand": {
+    Critical: "Urgent: high demand but {ing} stock critical — order immediately",
+    Low: "Prepare extra — {ing} stock low, order soon",
+    Normal: "Prepare extra stock — ingredients sufficient",
+    Excess: "Prepare extra — good time to use excess stock",
+  },
+  "Medium Demand": {
+    Critical: "Order soon — {ing} stock critical, monitor closely",
+    Low: "Order soon — {ing} stock below forecasted need",
+    Normal: "No action needed — ingredients sufficient",
+    Excess: "Delay restock",
+  },
+  "Low Demand": {
+    Critical: "Order small amount — minimal demand but critically low {ing}",
+    Low: "Monitor — low demand, restock if needed",
+    Normal: "No action needed — ingredients sufficient",
+    Excess: "Reduce prep — delay restocking {ing} (overstock)",
+  },
+};
+
+function getActionSignal(demandLevel, bottleneckIngredient, bottleneckStatus) {
+  const template = ACTION_SIGNAL_MATRIX[demandLevel]?.[bottleneckStatus];
+  if (!template) return "No action needed";
+  return template.replace("{ing}", bottleneckIngredient);
 }
 
 
@@ -389,7 +418,7 @@ function ProductPerformance() {
                   <td>
                     <span className={`pill ${pillClass[row.demandLevel]}`}>{row.demandLevel}</span>
                   </td>
-                  <td className="action-signal">{row.actionSignal}</td>
+                  <td className="action-signal">{getActionSignal(row.demandLevel, row.bottleneckIngredient, row.bottleneckStatus)}</td>
                 </tr>
               ))}
             </tbody>
@@ -673,7 +702,7 @@ function ProductPerformance() {
                 <td>{row.product}</td>
                 <td>{row.forecastQty} servings</td>
                 <td><span className={`pill ${pillClass[row.demandLevel]}`}>{row.demandLevel}</span></td>
-                <td className="action-signal">{row.actionSignal}</td>
+                <td className="action-signal">{getActionSignal(row.demandLevel, row.bottleneckIngredient, row.bottleneckStatus)}</td>
               </tr>
             ))}
           </tbody>
