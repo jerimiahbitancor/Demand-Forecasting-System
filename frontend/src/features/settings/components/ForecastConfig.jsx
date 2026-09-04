@@ -5,7 +5,7 @@ import toast from 'react-hot-toast';
 import Tippy from '@tippyjs/react';
 import 'tippy.js/dist/tippy.css';
 import 'tippy.js/animations/scale.css';
-import { FiInfo } from 'react-icons/fi';
+import { FiEdit2, FiInfo, FiPlus } from 'react-icons/fi';
 import './ForecastConfig.css';
 
 const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:5000/api';
@@ -13,6 +13,12 @@ const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:5000/api';
 function ForecastConfig() {
   const [value, setValue] = useState(15);
   const [thresholds, setThresholds] = useState({ critical: 50, low: 100, excess: 200 });
+  const [categoryTab, setCategoryTab] = useState('ingredient');
+  const [unitTab, setUnitTab] = useState('ingredient');
+  const [categoryData, setCategoryData] = useState({ ingredient: ['Meat', 'Fruits'], product: ['Silog', 'Pancit', 'Drinks'] });
+  const [unitData, setUnitData] = useState({ ingredient: ['kg', 'g', 'ml'], product: ['servings', 'g', 'ml'] });
+  const [managementDialog, setManagementDialog] = useState(null);
+  const [managementValue, setManagementValue] = useState('');
   const [loading, setLoading] = useState(false);
 
   // Get auth token
@@ -67,6 +73,67 @@ function ForecastConfig() {
   const handleSaveThresholds = () => {
     toast('This feature is not yet implemented.');
   };
+
+  const openManagementDialog = (type, mode, item = '') => {
+    const activeTab = type === 'category' ? categoryTab : unitTab;
+    setManagementDialog({ type, mode, activeTab, originalValue: item });
+    setManagementValue(item);
+  };
+
+  const handleManagementSubmit = (event) => {
+    event.preventDefault();
+    const nextValue = managementValue.trim();
+    if (!nextValue) return;
+    const isCategory = managementDialog.type === 'category';
+    const activeTab = managementDialog.activeTab;
+    const setData = isCategory ? setCategoryData : setUnitData;
+    setData((currentData) => ({
+      ...currentData,
+      [activeTab]: managementDialog.mode === 'new'
+        ? [...currentData[activeTab], nextValue]
+        : currentData[activeTab].map((item) => item === managementDialog.originalValue ? nextValue : item)
+    }));
+    setManagementDialog(null);
+    toast.success(`${managementDialog.mode === 'new' ? 'Added' : 'Updated'} ${isCategory ? 'category' : 'unit'}.`);
+  };
+
+  const renderManagementCard = (type, title, subtitle, activeTab, setActiveTab, data, columnLabel) => (
+    <article className="fc-card fc-management-card">
+      <div className="fc-management-header">
+        <div>
+          <h2 className="fc-title">{title}</h2>
+          <p className="fc-subtitle">{subtitle}</p>
+        </div>
+        <button type="button" className="fc-new-button" onClick={() => openManagementDialog(type, 'new')}>
+          <FiPlus aria-hidden="true" /> New
+        </button>
+      </div>
+      <div className="fc-management-tabs" role="tablist">
+        {[
+          ['ingredient', 'Ingredient Management'],
+          ['product', 'Product Management']
+        ].map(([tab, label]) => (
+          <button key={tab} type="button" role="tab" aria-selected={activeTab === tab} className={activeTab === tab ? 'active' : ''} onClick={() => setActiveTab(tab)}>
+            {label}
+          </button>
+        ))}
+      </div>
+      <div className="fc-management-table-wrap">
+        <table className="fc-management-table">
+          <thead><tr><th>{columnLabel}</th><th>Actions</th></tr></thead>
+          <tbody>
+            {data[activeTab].map((item) => (
+              <tr key={item}>
+                <td>{item}</td>
+                <td><button type="button" className="fc-edit-button" aria-label={`Edit ${item}`} onClick={() => openManagementDialog(type, 'edit', item)}><FiEdit2 aria-hidden="true" /></button></td>
+              </tr>
+            ))}
+            {Array.from({ length: Math.max(0, 4 - data[activeTab].length) }).map((_, index) => <tr className="fc-empty-row" key={`empty-${index}`}><td></td><td></td></tr>)}
+          </tbody>
+        </table>
+      </div>
+    </article>
+  );
 
   return (
     <section className="fc-root">
@@ -191,7 +258,19 @@ function ForecastConfig() {
           </div>
           <button type="button" className="fc-save" onClick={handleSaveThresholds}>SAVE CONFIGURATION</button>
         </div>
+
+        {renderManagementCard('category', 'Category', 'Used for Product Management', categoryTab, setCategoryTab, categoryData, 'Category')}
+        {renderManagementCard('unit', 'Units', 'Use in inventory Management', unitTab, setUnitTab, unitData, 'Unit')}
       </div>
+      {managementDialog && (
+        <div className="fc-dialog-backdrop" role="presentation" onMouseDown={() => setManagementDialog(null)}>
+          <form className="fc-dialog" onSubmit={handleManagementSubmit} onMouseDown={(event) => event.stopPropagation()}>
+            <h2>{managementDialog.mode === 'new' ? `Add ${managementDialog.type === 'category' ? 'Category' : 'Unit'} – ${managementDialog.activeTab === 'ingredient' ? 'Ingredient Management' : 'Product Management'}` : `Edit ${managementDialog.type === 'category' ? 'Category' : 'Unit'} – ${managementDialog.activeTab === 'ingredient' ? 'Ingredient Management' : 'Product Management'}`}</h2>
+            <label>{managementDialog.type === 'category' ? 'Category name' : 'Unit name'}<input autoFocus value={managementValue} onChange={(event) => setManagementValue(event.target.value)} /></label>
+            <div className="fc-dialog-actions"><button type="button" onClick={() => setManagementDialog(null)}>Cancel</button><button type="submit" className="fc-dialog-submit">Save</button></div>
+          </form>
+        </div>
+      )}
     </section>
   );
 }
