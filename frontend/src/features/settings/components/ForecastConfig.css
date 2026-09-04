@@ -153,6 +153,7 @@
 .fc-management-tabs { display: grid; grid-template-columns: 1fr 1fr; }
 .fc-management-tabs button { border: 0; border-radius: 4px 4px 0 0; padding: 9px 7px; background: var(--color-border-hover); color: var(--color-black); font-size: 11px; font-weight: 700; cursor: pointer; }
 .fc-management-tabs button.active { background: var(--color-red-primary); color: var(--color-white); }
+.fc-management-tabs.single { grid-template-columns: minmax(0, 1fr); }
 .fc-management-table-wrap { flex: 1; overflow: hidden; background: var(--color-bg-white); border-radius: 0 0 5px 5px; }
 .fc-management-table { width: 100%; height: 100%; border-collapse: collapse; table-layout: fixed; font-size: 14px; }
 .fc-management-table th, .fc-management-table td { height: 28px; border-right: 1px solid var(--color-border); border-bottom: 1px solid var(--color-border); text-align: center; }

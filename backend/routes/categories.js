@@ -4,7 +4,8 @@ const router = express.Router();
 const authenticateToken = require('../middleware/auth');
 const {
   getCategories,
-  createCategory
+  createCategory,
+  updateCategory
 } = require('../controllers/categoriesController');
 
 // All routes require authentication
@@ -12,5 +13,6 @@ router.use(authenticateToken);
 
 router.get('/', getCategories);
 router.post('/', createCategory);
+router.put('/:id', updateCategory);
 
 module.exports = router;

@@ -90,6 +90,7 @@ const ProductManagement = () => {
 
   // ============ INVENTORY ITEMS FOR INGREDIENTS ============
   const [inventoryItems, setInventoryItems] = useState([]);
+  const [ingredientUnits, setIngredientUnits] = useState([]);
   const [searchIngredient, setSearchIngredient] = useState("");
   const [showIngredientDropdown, setShowIngredientDropdown] = useState(false);
   const [loadingIngredients, setLoadingIngredients] = useState(false);
@@ -105,7 +106,7 @@ const ProductManagement = () => {
   const [newIngredient, setNewIngredient] = useState({
     name: "",
     quantity: "",
-    unit: "kg",
+    unit: "",
     inventory_item_id: null
   });
 
@@ -223,6 +224,27 @@ const ProductManagement = () => {
     }
   }, [apiClient]);
 
+  const fetchIngredientUnits = useCallback(async () => {
+    try {
+      const response = await apiClient.get('/units');
+      if (response.data.success) {
+        const units = response.data.data || [];
+        setIngredientUnits(units);
+        setNewIngredient((current) => ({
+          ...current,
+          unit: current.unit || units[0]?.name || ''
+        }));
+      }
+    } catch (error) {
+      console.error('Error fetching ingredient units:', error);
+      setIngredientUnits([]);
+    }
+  }, [apiClient]);
+
+  useEffect(() => {
+    Promise.resolve().then(fetchIngredientUnits);
+  }, [fetchIngredientUnits]);
+
   // ============ FETCH DATA ============
   const fetchData = useCallback(async (forceRefresh = false) => {
     if (abortControllerRef.current) {
@@ -290,6 +312,19 @@ const ProductManagement = () => {
         setCategories(cats);
         const cacheSuffix = statusFilter === 'inactive' ? '_inactive' : '';
         sessionStorage.setItem(STORAGE_KEYS.CATEGORIES + cacheSuffix, JSON.stringify(cats));
+      }
+
+      try {
+        const productCategoriesResponse = await apiClient.get('/product-categories');
+        if (productCategoriesResponse.data.success) {
+          const productCategories = productCategoriesResponse.data.data || [];
+          const productCategoryNames = ['All', ...productCategories.map((category) => category.name)];
+          setCategories(productCategoryNames);
+          const cacheSuffix = statusFilter === 'inactive' ? '_inactive' : '';
+          sessionStorage.setItem(STORAGE_KEYS.CATEGORIES + cacheSuffix, JSON.stringify(productCategoryNames));
+        }
+      } catch (error) {
+        console.warn('Product category catalog unavailable; keeping product-derived categories.', error);
       }
 
       await fetchInventoryItems();
@@ -637,7 +672,7 @@ const ProductManagement = () => {
     setNewIngredient({ 
       name: "", 
       quantity: "", 
-      unit: "kg",
+      unit: ingredientUnits[0]?.name || '',
       inventory_item_id: null 
     });
     setSearchIngredient("");
@@ -660,7 +695,7 @@ const ProductManagement = () => {
     setNewIngredient({
       name: item.name,
       quantity: "",
-      unit: item.unit || 'kg',
+      unit: item.unit || ingredientUnits[0]?.name || '',
       inventory_item_id: item.id
     });
     setSearchIngredient(item.name);
@@ -705,7 +740,7 @@ const ProductManagement = () => {
     setNewIngredient({ 
       name: "", 
       quantity: "", 
-      unit: "kg",
+      unit: ingredientUnits[0]?.name || '',
       inventory_item_id: null 
     });
     setSearchIngredient("");
@@ -1632,7 +1667,7 @@ const ProductManagement = () => {
                             setNewIngredient({ 
                               name: "", 
                               quantity: "", 
-                              unit: "kg",
+                              unit: ingredientUnits[0]?.name || '',
                               inventory_item_id: null 
                             });
                           }
@@ -1697,16 +1732,9 @@ const ProductManagement = () => {
                       value={newIngredient.unit}
                       onChange={(e) => setNewIngredient({...newIngredient, unit: e.target.value})}
                     >
-                      <option value="kg">kg</option>
-                      <option value="g">g</option>
-                      <option value="L">L</option>
-                      <option value="mL">mL</option>
-                      <option value="pcs">pcs</option>
-                      <option value="tbsp">tbsp</option>
-                      <option value="tsp">tsp</option>
-                      <option value="cup">cup</option>
-                      <option value="oz">oz</option>
-                      <option value="lb">lb</option>
+                      {ingredientUnits.map((unit) => (
+                        <option key={unit.id || unit.name} value={unit.name}>{unit.name}</option>
+                      ))}
                     </select>
                     <button 
                       className="btn-add-ingredient"
