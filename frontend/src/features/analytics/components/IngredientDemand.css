@@ -154,3 +154,170 @@
     font-size: 11px;
   }
 }
+
+/* Daily ingredient demand table */
+.stock-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin-bottom: 14px;
+  font-size: 12px;
+}
+.stock-legend-pill { font-size: 12px; }
+.stock-legend--critical { color: #b42318; }
+.stock-legend--low      { color: #9a6b0a; }
+.stock-legend--normal   { color: #0f7a16; }
+.stock-legend--excess   { color: #3354BA; }
+
+/* Status badges */
+.status-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 8px;
+  border-radius: 20px;
+  font-size: 11px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+.status-badge--critical { background: #fde2e2; color: #b42318; }
+.status-badge--low { background: #fdf0d5; color: #9a6b0a; }
+.status-badge--normal { background: #dcf5df; color: #0f7a16; }
+.status-badge--excess { background: #e8edf8; color: #3354BA; }
+
+.value--muted { color: var(--color-text-light); font-style: italic; }
+
+/* Grocery List panel */
+.grocery-toggle {
+  display: flex;
+  background: var(--color-bg-light);
+  border-radius: 8px;
+  padding: 3px;
+  width: fit-content;
+  margin-bottom: 10px;
+}
+.grocery-toggle-btn {
+  padding: 5px 16px;
+  font-size: 12px;
+  font-family: inherit;
+  border: none;
+  background: transparent;
+  color: var(--color-text-light);
+  border-radius: 6px;
+  cursor: pointer;
+  font-weight: 500;
+}
+.grocery-toggle-btn.active {
+  background: var(--color-bg-white);
+  color: var(--color-red-primary);
+  border: 1px solid var(--color-border-light);
+  font-weight: 600;
+}
+.grocery-date-label {
+  font-size: 12px;
+  color: var(--color-text-light);
+  margin-bottom: 10px;
+}
+.grocery-kpi-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+  margin: 12px 0;
+}
+.grocery-kpi-card {
+  background: var(--color-bg-light);
+  border-radius: 8px;
+  padding: 12px;
+  text-align: center;
+}
+.grocery-kpi-label {
+  font-size: 11px;
+  color: var(--color-text-light);
+  margin-bottom: 4px;
+}
+.grocery-kpi-value {
+  font-size: 20px;
+  font-weight: 700;
+  color: var(--color-text-primary);
+}
+.grocery-preview-list { list-style: none; margin-top: 10px; }
+.grocery-preview-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  padding: 10px 0;
+  border-bottom: 1px solid var(--color-border-light);
+}
+.grocery-preview-row:last-child { border-bottom: none; }
+.grocery-preview-name { font-size: 13px; font-weight: 600; color: var(--color-text-primary); }
+.grocery-preview-sub { font-size: 11px; color: var(--color-text-light); margin-top: 2px; }
+.grocery-preview-qty { font-size: 13px; font-weight: 700; color: var(--color-red-primary); white-space: nowrap; }
+.grocery-preview-more { font-size: 12px; color: var(--color-text-light); text-align: center; padding: 8px 0; }
+.grocery-action-row {
+  display: flex;
+  gap: 8px;
+  margin-top: 14px;
+}
+.btn-grocery-view {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 9px;
+  font-size: 12px;
+  font-family: inherit;
+  font-weight: 600;
+  border: 1.5px solid var(--color-red-primary);
+  background: var(--color-bg-white);
+  color: var(--color-red-primary);
+  border-radius: 8px;
+  cursor: pointer;
+}
+.btn-grocery-view:hover { background: var(--color-red-primary); color: #fff; }
+.btn-grocery-download {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 9px;
+  font-size: 12px;
+  font-family: inherit;
+  font-weight: 600;
+  background: var(--color-red-primary);
+  color: #fff;
+  border: none;
+  border-radius: 8px;
+  cursor: pointer;
+}
+.btn-grocery-download:hover { background: #5a0101; }
+.btn-expand-panel {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 4px;
+  background: none;
+  border: none;
+  color: var(--color-text-light);
+  cursor: pointer;
+  border-radius: 4px;
+  flex-shrink: 0;
+}
+.btn-expand-panel:hover {
+  color: var(--color-red-primary);
+  background-color: var(--color-bg-light);
+}
+
+.grocery-category {
+  margin-bottom: 20px;
+}
+
+.grocery-category:last-of-type {
+  margin-bottom: 0;
+}
+
+.heatmap-wrapper {
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+  margin-bottom: 8px;
+}

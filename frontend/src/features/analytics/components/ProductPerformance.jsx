@@ -1,9 +1,11 @@
 // components/ProductPerformance.jsx
 import { useState } from "react";
-import { FiChevronDown, FiSearch, FiCalendar, FiInfo } from "react-icons/fi";
+import { FiChevronDown, FiSearch, FiCalendar, FiInfo, FiExternalLink } from "react-icons/fi";
 import GenerateReportModal from "../../components/Reports/GenerateReportModal.jsx";
 import { buildProductPerformancePDF, generateExcel } from "./../../../services/reportService.js";
 import DatePicker from "./shared/DatePicker.jsx";
+import ExpandableModal from "./shared/ExpandableModal.jsx";
+import Pagination from "./shared/Pagination.jsx";
 import Tippy from '@tippyjs/react';
 import 'tippy.js/dist/tippy.css';
 import 'tippy.js/animations/scale.css';
@@ -15,10 +17,10 @@ import "./ProductPerformance.css";
 // Mock data
 // ---------------------------------------------------------------------
 const demandRows = [
-  { product: "Poppers & Rice", forecastQty: 52, zone: "high", demandLevel: "High Demand", actionSignal: "Prepare Extra Stock" },
-  { product: "Breaded Tonkatsu", forecastQty: 38, zone: "high", demandLevel: "Medium Demand", actionSignal: "Standard Preparation" },
-  { product: "Chick & Fries", forecastQty: 44, zone: "medium", demandLevel: "High Demand", actionSignal: "Prepare Extra Stock" },
-  { product: "Cheesy Tapa", forecastQty: 18, zone: "low", demandLevel: "Low Demand", actionSignal: "Prepare Less" },
+  { product: "Poppers & Rice", date: "25-06-2026", forecastQty: 52, zone: "high", demandLevel: "High Demand", bottleneckIngredient: "Rice", bottleneckStatus: "Critical" },
+  { product: "Breaded Tonkatsu", date: "25-06-2026", forecastQty: 38, zone: "high", demandLevel: "Medium Demand", bottleneckIngredient: "Pork", bottleneckStatus: "Low" },
+  { product: "Chick & Fries", date: "25-06-2026", forecastQty: 44, zone: "medium", demandLevel: "High Demand", bottleneckIngredient: "Chicken", bottleneckStatus: "Normal" },
+  { product: "Cheesy Tapa", date: "25-06-2026", forecastQty: 18, zone: "low", demandLevel: "Low Demand", bottleneckIngredient: "Soy Sauce", bottleneckStatus: "Excess" },
 ];
 
 const performanceRows = [
@@ -41,6 +43,10 @@ const newProducts = [
 const inactiveProducts = [
   { product: "Bicol Express", lastSale: "25 days ago", forecastStatus: "Auto flagged in 3 days" },
   { product: "Kaldereta", lastSale: "20 days ago", forecastStatus: "Auto flagged in 8 days" },
+];
+
+const archivedProducts = [
+  { product: "Halo Halo", lastSale: "3 months ago", forecastStatus: "Seasonal" },
 ];
 
 // ---------------------------------------------------------------------
@@ -72,6 +78,8 @@ const tooltips = {
       <span style={{ color: '#94a3b8', fontSize: '12px' }}>
         High if Forecast &gt; P80 • Medium if P40 ≤ Forecast ≤ P80 • Low if Forecast &lt; P40
       </span>
+      <br/>
+      Action signals also consider current ingredient stock levels, so you know exactly which ingredient is the most important.
     </div>
   ),
   
@@ -116,14 +124,28 @@ const tooltips = {
           <strong style={{ color: '#fbbf24' }}>New Products</strong>
           <br/>
           <span style={{ fontSize: '12px', color: '#94a3b8' }}>
-            This product was recently added. The system needs at least 4 weeks of sales data before it can generate a reliable forecast.
+            Recently added. The system needs at least 4 weeks of sales data before a reliable forecast is possible.
           </span>
         </div>
-        <div>
+        <div style={{ marginBottom: '10px' }}>
           <strong style={{ color: '#ef4444' }}>Inactive Products</strong>
           <br/>
           <span style={{ fontSize: '12px', color: '#94a3b8' }}>
-            This product hasn't sold in 28 days and has been automatically excluded from forecasting. Its sales history is still kept for your records.
+            Auto-flagged after 0 sales for 28 consecutive days. Excluded from forecast until sales resume.
+          </span>
+        </div>
+        <div style={{ marginBottom: '10px' }}>
+          <strong style={{ color: '#94a3b8' }}>Archived Products</strong>
+          <br/>
+          <span style={{ fontSize: '12px', color: '#94a3b8' }}>
+            Permanently removed from the menu, or temporarily off the menu and will return (Seasonal).
+          </span>
+        </div>
+        <div>
+          <strong style={{ color: '#94a3b8' }}>Unmapped Products</strong>
+          <br/>
+          <span style={{ fontSize: '12px', color: '#94a3b8' }}>
+            No ingredient recipe configured. Forecasting works, but ingredient demand estimation is unavailable until a recipe is added.
           </span>
         </div>
       </div>
@@ -182,6 +204,33 @@ function RatioBar({ label, ratio }) {
   );
 }
 
+const ACTION_SIGNAL_MATRIX = {
+  "High Demand": {
+    Critical: "Urgent: high demand but {ing} stock critical — order immediately",
+    Low: "Prepare extra — {ing} stock low, order soon",
+    Normal: "Prepare extra stock — ingredients sufficient",
+    Excess: "Prepare extra — good time to use excess stock",
+  },
+  "Medium Demand": {
+    Critical: "Order soon — {ing} stock critical, monitor closely",
+    Low: "Order soon — {ing} stock below forecasted need",
+    Normal: "No action needed — ingredients sufficient",
+    Excess: "Delay restock",
+  },
+  "Low Demand": {
+    Critical: "Order small amount — minimal demand but critically low {ing}",
+    Low: "Monitor — low demand, restock if needed",
+    Normal: "No action needed — ingredients sufficient",
+    Excess: "Reduce prep — delay restocking {ing} (overstock)",
+  },
+};
+
+function getActionSignal(demandLevel, bottleneckIngredient, bottleneckStatus) {
+  const template = ACTION_SIGNAL_MATRIX[demandLevel]?.[bottleneckStatus];
+  if (!template) return "No action needed";
+  return template.replace("{ing}", bottleneckIngredient);
+}
+
 
 // ---------------------------------------------------------------------
 // Main Component
@@ -190,6 +239,27 @@ function ProductPerformance() {
   const maxQty = Math.max(...demandRows.map((r) => r.forecastQty));
   const [selectedRange, setSelectedRange] = useState([new Date(), new Date()]);
   const [isReportModalOpen, setIsReportModalOpen] = useState(false);
+  // Modal open states
+  const [isDemandClassOpen, setIsDemandClassOpen] = useState(false);
+  const [isRatioOpen, setIsRatioOpen] = useState(false);
+  const [isStatusOpen, setIsStatusOpen] = useState(false);
+
+  // Pagination — panel (5 rows each)
+  const [demandPage, setDemandPage] = useState(1);
+  const [ratioPage, setRatioPage] = useState(1);
+  const [activeStatusPage, setActiveStatusPage] = useState(1);
+  const [newStatusPage, setNewStatusPage] = useState(1);
+  const [inactiveStatusPage, setInactiveStatusPage] = useState(1);
+  const [archivedStatusPage, setArchivedStatusPage] = useState(1);
+
+  const [modalDemandPage, setModalDemandPage] = useState(1);
+  const [modalRatioPage, setModalRatioPage] = useState(1);
+  const [modalActiveStatusPage, setModalActiveStatusPage] = useState(1);
+  const [modalNewStatusPage, setModalNewStatusPage] = useState(1);
+  const [modalInactiveStatusPage, setModalInactiveStatusPage] = useState(1);
+  const [modalArchivedStatusPage, setModalArchivedStatusPage] = useState(1);
+
+  const ROWS_PER_PAGE = 5;
 
   const availableTables = [
     { id: "demand", label: "Demand Classification" },
@@ -239,28 +309,63 @@ function ProductPerformance() {
 
 
 
+  const totalDemandPages = Math.max(1, Math.ceil(demandRows.length / ROWS_PER_PAGE));
+  const paginatedDemandRows = demandRows.slice(
+    (demandPage - 1) * ROWS_PER_PAGE, demandPage * ROWS_PER_PAGE
+  );
+
+  const totalRatioPages = Math.max(1, Math.ceil(performanceRows.length / ROWS_PER_PAGE));
+  const paginatedRatioRows = performanceRows.slice(
+    (ratioPage - 1) * ROWS_PER_PAGE, ratioPage * ROWS_PER_PAGE
+  );
+
+  const paginatedActiveProducts = activeProducts.slice(
+    (activeStatusPage - 1) * ROWS_PER_PAGE, activeStatusPage * ROWS_PER_PAGE
+  );
+  const paginatedNewProducts = newProducts.slice(
+    (newStatusPage - 1) * ROWS_PER_PAGE, newStatusPage * ROWS_PER_PAGE
+  );
+  const paginatedInactiveProducts = inactiveProducts.slice(
+    (inactiveStatusPage - 1) * ROWS_PER_PAGE, inactiveStatusPage * ROWS_PER_PAGE
+  );
+  const paginatedArchivedProducts = archivedProducts.slice(
+    (archivedStatusPage - 1) * ROWS_PER_PAGE, archivedStatusPage * ROWS_PER_PAGE
+  );
+
+  const modalDemandRows = demandRows.slice((modalDemandPage - 1) * 10, modalDemandPage * 10);
+  const modalRatioRows = performanceRows.slice((modalRatioPage - 1) * 10, modalRatioPage * 10);
+  const modalActiveProducts = activeProducts.slice((modalActiveStatusPage - 1) * 10, modalActiveStatusPage * 10);
+  const modalNewProducts = newProducts.slice((modalNewStatusPage - 1) * 10, modalNewStatusPage * 10);
+  const modalInactiveProducts = inactiveProducts.slice((modalInactiveStatusPage - 1) * 10, modalInactiveStatusPage * 10);
+  const modalArchivedProducts = archivedProducts.slice((modalArchivedStatusPage - 1) * 10, modalArchivedStatusPage * 10);
+
   return (
     <>
       <div className="analytics-col-main">
         {/* Demand Classification */}
         <section className="analytics-card">
-          <h2 className="analytics-card-title">
-            Demand Classification
-            <Tippy
-              content={tooltips.demandClassification}
-              placement="right"
-              animation="scale"
-              duration={200}
-              theme="dark"
-              arrow={true}
-              maxWidth={380}
-              interactive={true}
-            >
-              <span className="info-icon-wrapper">
-                <FiInfo className="info-icon" />
-              </span>
-            </Tippy>
-          </h2>
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '16px' }}>
+            <h2 className="analytics-card-title" style={{ marginBottom: 0 }}>
+              Demand Classification
+              <Tippy
+                content={tooltips.demandClassification}
+                placement="right"
+                animation="scale"
+                duration={200}
+                theme="dark"
+                arrow={true}
+                maxWidth={380}
+                interactive={true}
+              >
+                <span className="info-icon-wrapper">
+                  <FiInfo className="info-icon" />
+                </span>
+              </Tippy>
+            </h2>
+            <button type="button" className="btn-expand-panel" onClick={() => setIsDemandClassOpen(true)} aria-label="Expand Demand Classification">
+              <FiExternalLink size={16} />
+            </button>
+          </div>
 
           <div className="analytics-filter-row">
             <DatePicker value={selectedRange} onChange={setSelectedRange} mode="range" />
@@ -296,6 +401,7 @@ function ProductPerformance() {
             <thead>
               <tr>
                 <th>No.</th>
+                <th>Date</th>
                 <th>Product</th>
                 <th>Forecast Qty. (Tomorrow)</th>
                 <th>Demand Level</th>
@@ -303,40 +409,47 @@ function ProductPerformance() {
               </tr>
             </thead>
             <tbody>
-              {demandRows.map((row, i) => (
+              {paginatedDemandRows.map((row, i) => (
                 <tr key={row.product}>
                   <td>{i + 1}</td>
+                  <td>{row.date}</td>
                   <td>{row.product}</td>
                   <td>{row.forecastQty} servings</td>
                   <td>
                     <span className={`pill ${pillClass[row.demandLevel]}`}>{row.demandLevel}</span>
                   </td>
-                  <td className="action-signal">{row.actionSignal}</td>
+                  <td className="action-signal">{getActionSignal(row.demandLevel, row.bottleneckIngredient, row.bottleneckStatus)}</td>
                 </tr>
               ))}
             </tbody>
           </table>
+          <Pagination currentPage={demandPage} totalPages={totalDemandPages} onPageChange={setDemandPage} />
         </section>
 
         {/* Product Performance Ratio Analysis */}
         <section className="analytics-card">
-          <h2 className="analytics-card-title">
-            Product Performance Ratio Analysis
-            <Tippy
-              content={tooltips.performanceRatio}
-              placement="right"
-              animation="scale"
-              duration={200}
-              theme="dark"
-              arrow={true}
-              maxWidth={380}
-              interactive={true}
-            >
-              <span className="info-icon-wrapper">
-                <FiInfo className="info-icon" />
-              </span>
-            </Tippy>
-          </h2>
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '16px' }}>
+            <h2 className="analytics-card-title" style={{ marginBottom: 0 }}>
+              Product Performance Ratio Analysis
+              <Tippy
+                content={tooltips.performanceRatio}
+                placement="right"
+                animation="scale"
+                duration={200}
+                theme="dark"
+                arrow={true}
+                maxWidth={380}
+                interactive={true}
+              >
+                <span className="info-icon-wrapper">
+                  <FiInfo className="info-icon" />
+                </span>
+              </Tippy>
+            </h2>
+            <button type="button" className="btn-expand-panel" onClick={() => setIsRatioOpen(true)} aria-label="Expand Product Performance Ratio Analysis">
+              <FiExternalLink size={16} />
+            </button>
+          </div>
 
           <div className="analytics-filter-row">
             <DatePicker value={selectedRange} onChange={setSelectedRange} mode="range" />
@@ -382,7 +495,7 @@ function ProductPerformance() {
               </tr>
             </thead>
             <tbody>
-              {performanceRows.map((row) => (
+              {paginatedRatioRows.map((row) => (
                 <tr key={row.product}>
                   <td>{row.rank}</td>
                   <td>{row.product}</td>
@@ -397,6 +510,8 @@ function ProductPerformance() {
             </tbody>
           </table>
 
+          <Pagination currentPage={ratioPage} totalPages={totalRatioPages} onPageChange={setRatioPage} />
+
           <p className="table-footnote">
             Ratio above 1.0 = outperforming store average · Ratio below 1.0 = underperforming
           </p>
@@ -409,23 +524,28 @@ function ProductPerformance() {
         </button>
 
         <section className="analytics-card">
-          <h2 className="analytics-card-title">
-            Product Status
-            <Tippy
-              content={tooltips.productStatus}
-              placement="right"
-              animation="scale"
-              duration={200}
-              theme="dark"
-              arrow={true}
-              maxWidth={380}
-              interactive={true}
-            >
-              <span className="info-icon-wrapper">
-                <FiInfo className="info-icon" />
-              </span>
-            </Tippy>
-          </h2>
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '16px' }}>
+            <h2 className="analytics-card-title" style={{ marginBottom: 0 }}>
+              Product Status
+              <Tippy
+                content={tooltips.productStatus}
+                placement="right"
+                animation="scale"
+                duration={200}
+                theme="dark"
+                arrow={true}
+                maxWidth={380}
+                interactive={true}
+              >
+                <span className="info-icon-wrapper">
+                  <FiInfo className="info-icon" />
+                </span>
+              </Tippy>
+            </h2>
+            <button type="button" className="btn-expand-panel" onClick={() => setIsStatusOpen(true)} aria-label="Expand Product Status">
+              <FiExternalLink size={16} />
+            </button>
+          </div>
 
           <InfoBanner variant="info">
             System auto-flags products with 0 sales for 28 consecutive days for Inactive
@@ -445,7 +565,7 @@ function ProductPerformance() {
                 </tr>
               </thead>
               <tbody>
-                {activeProducts.map((row, i) => (
+                {paginatedActiveProducts.map((row, i) => (
                   <tr key={row.product}>
                     <td>{i + 1}</td>
                     <td>{row.product}</td>
@@ -455,6 +575,7 @@ function ProductPerformance() {
                 ))}
               </tbody>
             </table>
+            <Pagination currentPage={activeStatusPage} totalPages={Math.max(1, Math.ceil(activeProducts.length / ROWS_PER_PAGE))} onPageChange={setActiveStatusPage} />
           </div>
 
           <div className="status-group">
@@ -472,7 +593,7 @@ function ProductPerformance() {
                 </tr>
               </thead>
               <tbody>
-                {newProducts.map((row, i) => (
+                {paginatedNewProducts.map((row, i) => (
                   <tr key={row.product}>
                     <td>{i + 1}</td>
                     <td>{row.product}</td>
@@ -482,6 +603,7 @@ function ProductPerformance() {
                 ))}
               </tbody>
             </table>
+            <Pagination currentPage={newStatusPage} totalPages={Math.max(1, Math.ceil(newProducts.length / ROWS_PER_PAGE))} onPageChange={setNewStatusPage} />
           </div>
 
           <div className="status-group">
@@ -499,7 +621,7 @@ function ProductPerformance() {
                 </tr>
               </thead>
               <tbody>
-                {inactiveProducts.map((row, i) => (
+                {paginatedInactiveProducts.map((row, i) => (
                   <tr key={row.product}>
                     <td>{i + 1}</td>
                     <td>{row.product}</td>
@@ -509,6 +631,36 @@ function ProductPerformance() {
                 ))}
               </tbody>
             </table>
+            <Pagination currentPage={inactiveStatusPage} totalPages={Math.max(1, Math.ceil(inactiveProducts.length / ROWS_PER_PAGE))} onPageChange={setInactiveStatusPage} />
+          </div>
+
+          <div className="status-group">
+            <p className="status-group-title">Archived Product</p>
+            <p className="status-group-subtitle">
+              Permanently removed from the menu, or temporarily off the menu and will return.
+            </p>
+            <table className="analytics-table analytics-table--compact">
+              <thead>
+                <tr>
+                  <th>No.</th><th>Product</th><th>Last Sale</th><th>Forecast Status</th>
+                </tr>
+              </thead>
+              <tbody>
+                {paginatedArchivedProducts.map((row, i) => (
+                  <tr key={row.product}>
+                    <td>{(archivedStatusPage - 1) * ROWS_PER_PAGE + i + 1}</td>
+                    <td>{row.product}</td>
+                    <td>{row.lastSale}</td>
+                    <td className="value--error">{row.forecastStatus}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+            <Pagination
+              currentPage={archivedStatusPage}
+              totalPages={Math.max(1, Math.ceil(archivedProducts.length / ROWS_PER_PAGE))}
+              onPageChange={setArchivedStatusPage}
+            />
           </div>
         </section>
       </div>
@@ -520,6 +672,151 @@ function ProductPerformance() {
           onGenerate={handleGenerateReport}
         />
       )}
+
+      <ExpandableModal
+        isOpen={isDemandClassOpen}
+        onClose={() => setIsDemandClassOpen(false)}
+        title="Demand Classification — Full View"
+      >
+        <div className="demand-bar-chart">
+          {demandRows.map((row) => (
+            <DemandBar key={row.product} label={row.product} qty={row.forecastQty} maxQty={maxQty} zone={row.zone} />
+          ))}
+        </div>
+        <div className="chart-legend">
+          <span className="legend-item"><span className="legend-swatch legend-swatch--low" /> Low Zone</span>
+          <span className="legend-item"><span className="legend-swatch legend-swatch--medium" /> Medium Zone</span>
+          <span className="legend-item"><span className="legend-swatch legend-swatch--high" /> High Zone</span>
+        </div>
+        <table className="analytics-table">
+          <thead>
+            <tr>
+              <th>No.</th><th>Date</th><th>Product</th><th>Forecast Qty. (Tomorrow)</th><th>Demand Level</th><th>Action Signal</th>
+            </tr>
+          </thead>
+          <tbody>
+            {modalDemandRows.map((row, i) => (
+              <tr key={row.product}>
+                <td>{(modalDemandPage - 1) * 10 + i + 1}</td>
+                <td>{row.date}</td>
+                <td>{row.product}</td>
+                <td>{row.forecastQty} servings</td>
+                <td><span className={`pill ${pillClass[row.demandLevel]}`}>{row.demandLevel}</span></td>
+                <td className="action-signal">{getActionSignal(row.demandLevel, row.bottleneckIngredient, row.bottleneckStatus)}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+        <Pagination
+          currentPage={modalDemandPage}
+          totalPages={Math.max(1, Math.ceil(demandRows.length / 10))}
+          onPageChange={setModalDemandPage}
+        />
+      </ExpandableModal>
+
+      <ExpandableModal
+        isOpen={isRatioOpen}
+        onClose={() => setIsRatioOpen(false)}
+        title="Product Performance Ratio Analysis — Full View"
+      >
+        <div className="ratio-bar-chart">
+          {performanceRows.map((row) => (
+            <RatioBar key={row.product} label={row.product} ratio={row.ratio} />
+          ))}
+          <div className="ratio-bar-axis">
+            <span>← Below Average</span>
+            <span>Store Average (1.0)</span>
+            <span>Above Average →</span>
+          </div>
+        </div>
+        <div className="chart-legend">
+          <span className="legend-item"><span className="legend-swatch legend-swatch--above" /> Above Average (ratio &gt; 1.0)</span>
+          <span className="legend-item"><span className="legend-swatch legend-swatch--below" /> Below Average (ratio &lt; 1.0)</span>
+        </div>
+        <table className="analytics-table">
+          <thead>
+            <tr>
+              <th>Rank</th><th>Product</th><th>Quantity Sold</th><th>Revenue</th><th>Performance Ratio</th><th>Action Signal</th>
+            </tr>
+          </thead>
+          <tbody>
+            {modalRatioRows.map((row) => (
+              <tr key={row.product}>
+                <td>{row.rank}</td>
+                <td>{row.product}</td>
+                <td>{row.qtySold}</td>
+                <td>{row.revenue}</td>
+                <td className={row.ratio >= 1 ? "value--success" : "value--error"}>{row.ratio.toFixed(2)} {row.ratio >= 1 ? "▲" : "▼"}</td>
+                <td className="action-signal">{row.actionSignal}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+        <Pagination
+          currentPage={modalRatioPage}
+          totalPages={Math.max(1, Math.ceil(performanceRows.length / 10))}
+          onPageChange={setModalRatioPage}
+        />
+      </ExpandableModal>
+
+      <ExpandableModal
+        isOpen={isStatusOpen}
+        onClose={() => setIsStatusOpen(false)}
+        title="Product Status — Full View"
+      >
+        <InfoBanner variant="info">
+          System auto-flags products with 0 sales for 28 consecutive days for Inactive
+          products. New products need 4 weeks of data before forecast activates.
+        </InfoBanner>
+
+        <div className="status-group">
+          <p className="status-group-title">Active Product</p>
+          <p className="status-group-subtitle">There are 50 menu items active</p>
+          <table className="analytics-table analytics-table--compact">
+            <thead><tr><th>No.</th><th>Product</th><th>Days on Menu</th><th>Forecast Status</th></tr></thead>
+            <tbody>{modalActiveProducts.map((row, i) => (
+              <tr key={row.product}><td>{(modalActiveStatusPage - 1) * 10 + i + 1}</td><td>{row.product}</td><td>{row.daysOnMenu}</td><td className="value--success">{row.forecastStatus}</td></tr>
+            ))}</tbody>
+          </table>
+          <Pagination currentPage={modalActiveStatusPage} totalPages={Math.max(1, Math.ceil(activeProducts.length / 10))} onPageChange={setModalActiveStatusPage} />
+        </div>
+
+        <div className="status-group">
+          <p className="status-group-title">New Product</p>
+          <p className="status-group-subtitle">New product needs 4 weeks of data before forecast activates</p>
+          <table className="analytics-table analytics-table--compact">
+            <thead><tr><th>No.</th><th>Product</th><th>Days on Menu</th><th>Forecast Status</th></tr></thead>
+            <tbody>{modalNewProducts.map((row, i) => (
+              <tr key={row.product}><td>{(modalNewStatusPage - 1) * 10 + i + 1}</td><td>{row.product}</td><td>{row.daysOnMenu}</td><td className="value--warning">{row.forecastStatus}</td></tr>
+            ))}</tbody>
+          </table>
+          <Pagination currentPage={modalNewStatusPage} totalPages={Math.max(1, Math.ceil(newProducts.length / 10))} onPageChange={setModalNewStatusPage} />
+        </div>
+
+        <div className="status-group">
+          <p className="status-group-title">Inactive Product</p>
+          <p className="status-group-subtitle">System auto-flags product inactive with 0 sales for 28 consecutive days</p>
+          <table className="analytics-table analytics-table--compact">
+            <thead><tr><th>No.</th><th>Product</th><th>Last Sale</th><th>Forecast Status</th></tr></thead>
+            <tbody>{modalInactiveProducts.map((row, i) => (
+              <tr key={row.product}><td>{(modalInactiveStatusPage - 1) * 10 + i + 1}</td><td>{row.product}</td><td>{row.lastSale}</td><td className="value--error">{row.forecastStatus}</td></tr>
+            ))}</tbody>
+          </table>
+          <Pagination currentPage={modalInactiveStatusPage} totalPages={Math.max(1, Math.ceil(inactiveProducts.length / 10))} onPageChange={setModalInactiveStatusPage} />
+        </div>
+
+        <div className="status-group">
+          <p className="status-group-title">Archived Product</p>
+          <p className="status-group-subtitle">Permanently removed from the menu, or temporarily off the menu and will return.</p>
+          <table className="analytics-table analytics-table--compact">
+            <thead><tr><th>No.</th><th>Product</th><th>Last Sale</th><th>Forecast Status</th></tr></thead>
+            <tbody>{modalArchivedProducts.map((row, i) => (
+              <tr key={row.product}><td>{(modalArchivedStatusPage - 1) * 10 + i + 1}</td><td>{row.product}</td><td>{row.lastSale}</td><td className="value--error">{row.forecastStatus}</td></tr>
+            ))}</tbody>
+          </table>
+          <Pagination currentPage={modalArchivedStatusPage} totalPages={Math.max(1, Math.ceil(archivedProducts.length / 10))} onPageChange={setModalArchivedStatusPage} />
+        </div>
+      </ExpandableModal>
     </> 
   );
 }
