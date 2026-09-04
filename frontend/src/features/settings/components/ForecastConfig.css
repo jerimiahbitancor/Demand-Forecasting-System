@@ -136,8 +136,9 @@
 }
 
 .fc-threshold-list { display: grid; gap: 14px; margin-top: 3px; }
-.fc-threshold-row { display: grid; grid-template-columns: 40px 1fr; gap: 12px; align-items: center; font-size: 10px; }
-.fc-threshold-row input { width: 40px; padding: 7px 3px; text-align: center; font-size: 11px; }
+.fc-threshold-row { display: grid; grid-template-columns: 76px 1fr; gap: 12px; align-items: center; font-size: 10px; }
+.fc-threshold-row input { width: 76px; height: 38px; padding: 6px 6px; text-align: center; color: var(--color-text-primary); background: var(--color-bg-white); border: 1px solid var(--color-border); border-radius: 6px; font-size: 14px; font-weight: 600; appearance: auto; }
+.fc-threshold-row input::-webkit-inner-spin-button, .fc-threshold-row input::-webkit-outer-spin-button { opacity: 1; height: 28px; }
 .fc-threshold-row span { display: grid; gap: 3px; }
 .fc-threshold-row small { color: var(--color-text-secondary); font-size: 10px; }
 .fc-status-dot { display: inline-block; width: 9px; height: 9px; border-radius: 50%; margin: 0 3px; }

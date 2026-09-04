@@ -251,7 +251,14 @@ function ForecastConfig() {
               ['excess', 'Excess Threshold:', 'Stock > 200% of demand', 'Excess (Delay restocking)']
             ].map(([key, label, description, status]) => (
               <label className="fc-threshold-row" key={key}>
-                <input type="number" value={thresholds[key]} onChange={(e) => setThresholds({ ...thresholds, [key]: Number(e.target.value) })} />
+                <input
+                  type="number"
+                  min="0"
+                  step="1"
+                  value={thresholds[key]}
+                  onChange={(e) => setThresholds({ ...thresholds, [key]: Number(e.target.value) })}
+                  aria-label={label}
+                />
                 <span><strong>{label}</strong><small>{description} <i className={`fc-status-dot ${key}`}></i>{status}</small></span>
               </label>
             ))}
