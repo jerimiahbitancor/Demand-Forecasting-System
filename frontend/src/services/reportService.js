@@ -375,3 +375,221 @@ export function generateExcel(sheets, filename) {
   });
   XLSX.writeFile(workbook, filename);
 }
+
+// ---------------------------------------------------------------------
+// Report 4: Grocery List — A5, two-sided
+// Front: system-generated categorized list
+// Back:  blank write-in table for additional items
+// ---------------------------------------------------------------------
+export async function buildGroceryListPDF({
+  dateLabel,
+  business,
+  groceryMode,
+  itemsToDownload,
+  GROCERY_CATEGORIES,
+}) {
+  const doc = new jsPDF({ unit: 'mm', format: 'a5', orientation: 'portrait' });
+  const logoDataUrl = await loadLogoBase64();
+
+  const PAGE_W = 148;
+  const PAGE_H = 210;
+  const MARGIN = 12;
+  const CONTENT_W = PAGE_W - MARGIN * 2;
+
+  const headY = MARGIN;
+  if (logoDataUrl) {
+    doc.addImage(logoDataUrl, 'PNG', MARGIN, headY, 12, 12, undefined, 'FAST');
+  } else {
+    doc.setFillColor(122, 1, 1);
+    doc.circle(MARGIN + 6, headY + 6, 6, 'F');
+    doc.setTextColor(255, 255, 255);
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(7);
+    doc.text('CD', MARGIN + 6, headY + 7.5, { align: 'center' });
+  }
+
+  const bizNameX = MARGIN + 16;
+  doc.setTextColor(122, 1, 1);
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(13);
+  doc.text(business?.name || 'ChefDuo', bizNameX, headY + 5);
+  doc.setTextColor(108, 117, 125);
+  doc.setFont('helvetica', 'normal');
+  doc.setFontSize(7);
+  doc.text(business?.address || '', bizNameX, headY + 9.5);
+  doc.text([business?.email, business?.contact].filter(Boolean).join(' · ') || '', bizNameX, headY + 13.5);
+
+  const rightX = MARGIN + CONTENT_W;
+  doc.setTextColor(28, 38, 50);
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(14);
+  doc.text('Grocery List', rightX, headY + 5, { align: 'right' });
+  doc.setTextColor(108, 117, 125);
+  doc.setFont('helvetica', 'normal');
+  doc.setFontSize(7);
+  doc.text(dateLabel, rightX, headY + 9.5, { align: 'right' });
+  const now = new Date();
+  const generatedLabel = `Generated ${now.toLocaleDateString('en-PH', { month: 'short', day: 'numeric', year: 'numeric' })}, ${now.toLocaleTimeString('en-PH', { hour: 'numeric', minute: '2-digit' })}`;
+  doc.text(generatedLabel, rightX, headY + 13.5, { align: 'right' });
+  doc.text('Market Price Source: Department of Agriculture, Puregold, etc.', rightX, headY + 17, { align: 'right' });
+  doc.setDrawColor(122, 1, 1);
+  doc.setLineWidth(0.6);
+  doc.line(MARGIN, headY + 20, MARGIN + CONTENT_W, headY + 20);
+
+  let y = headY + 26;
+  const totalCost = itemsToDownload.reduce((sum, i) => sum + (i.estCost || 0), 0);
+  const cardW = (CONTENT_W - 6) / 2;
+  const cardH = 18;
+
+  doc.setFillColor(237, 233, 222);
+  doc.setDrawColor(232, 224, 221);
+  doc.setLineWidth(0.2);
+  doc.roundedRect(MARGIN, y, cardW, cardH, 2, 2, 'FD');
+  doc.setTextColor(108, 117, 125);
+  doc.setFont('helvetica', 'normal');
+  doc.setFontSize(7);
+  doc.text('Est. Total Cost', MARGIN + cardW / 2, y + 5, { align: 'center' });
+  doc.setTextColor(28, 38, 50);
+  doc.setFont('courier', 'bold');
+  doc.setFontSize(13);
+  doc.text(`₱ ${totalCost.toLocaleString()}`, MARGIN + cardW / 2, y + 13, { align: 'center' });
+
+  const card2X = MARGIN + cardW + 6;
+  doc.setFillColor(237, 233, 222);
+  doc.roundedRect(card2X, y, cardW, cardH, 2, 2, 'FD');
+  doc.setTextColor(108, 117, 125);
+  doc.setFont('helvetica', 'normal');
+  doc.setFontSize(7);
+  doc.text('Items to buy', card2X + cardW / 2, y + 5, { align: 'center' });
+  doc.setTextColor(28, 38, 50);
+  doc.setFont('courier', 'bold');
+  doc.setFontSize(13);
+  doc.text(String(itemsToDownload.length), card2X + cardW / 2, y + 13, { align: 'center' });
+  y += cardH + 8;
+
+  const CAT_COLORS = {
+    'Meat & Poultry': { bg: [251, 234, 234], text: [122, 1, 1] },
+    Seafood: { bg: [234, 242, 250], text: [20, 70, 140] },
+    'Vegetables & Fruits': { bg: [234, 245, 238], text: [15, 90, 34] },
+    'Grains & Starches': { bg: [253, 240, 213], text: [154, 107, 10] },
+    'Dairy & Milk Products': { bg: [234, 245, 238], text: [15, 90, 34] },
+    'Condiments & Sauces': { bg: [242, 238, 250], text: [75, 30, 110] },
+    'Herbs & Spices': { bg: [234, 245, 238], text: [15, 90, 34] },
+    'Beverages & Syrups': { bg: [234, 242, 250], text: [20, 70, 140] },
+    'Baking & Dry Goods': { bg: [253, 240, 213], text: [154, 107, 10] },
+    'Packaging & Supplies': { bg: [240, 240, 240], text: [80, 80, 80] },
+  };
+  const filledCats = GROCERY_CATEGORIES
+    .map((cat) => ({ cat, items: itemsToDownload.filter((i) => i.category === cat) }))
+    .filter(({ items }) => items.length > 0);
+  const colW = (CONTENT_W - 5) / 2;
+
+  for (let ci = 0; ci < filledCats.length; ci += 2) {
+    const left = filledCats[ci];
+    const right = filledCats[ci + 1] || null;
+    const renderCatTable = (startX, catObj) => {
+      const { cat, items } = catObj;
+      const colors = CAT_COLORS[cat] || { bg: [240, 240, 240], text: [28, 38, 50] };
+      const itemCount = `${items.length} item${items.length !== 1 ? 's' : ''}`;
+      const headerH = 7;
+      doc.setFillColor(...colors.bg);
+      doc.setDrawColor(232, 224, 221);
+      doc.setLineWidth(0.2);
+      doc.roundedRect(startX, y, colW, headerH, 1, 1, 'FD');
+      doc.setTextColor(...colors.text);
+      doc.setFont('helvetica', 'bold');
+      doc.setFontSize(8);
+      doc.text(cat, startX + 3, y + 5);
+      doc.setFont('helvetica', 'normal');
+      doc.setFontSize(7);
+      doc.setTextColor(108, 117, 125);
+      doc.text(itemCount, startX + colW - 3, y + 5, { align: 'right' });
+
+      autoTable(doc, {
+        startY: y + headerH,
+        head: [['', 'Item', 'Qty.', 'Unit', 'Market Price', 'Notes']],
+        body: items.map((item) => ['', item.name, item.toBuy?.toFixed(2) ?? '—', item.unit, `₱${item.marketPrice}/${item.unit}`, '']),
+        margin: { left: startX, right: PAGE_W - startX - colW },
+        tableWidth: colW,
+        styles: { fontSize: 7, textColor: [28, 38, 50], lineColor: [232, 224, 221], lineWidth: 0.15, cellPadding: 1.5 },
+        headStyles: { fillColor: [244, 244, 242], textColor: [28, 38, 50], fontStyle: 'bold', fontSize: 6.5 },
+        columnStyles: { 0: { cellWidth: 5, halign: 'center' }, 1: { cellWidth: 'auto' }, 2: { cellWidth: 12, halign: 'right' }, 3: { cellWidth: 10 }, 4: { cellWidth: 22, halign: 'right' }, 5: { cellWidth: 14 } },
+        didDrawCell: (data) => {
+          if (data.section === 'body' && data.column.index === 0) {
+            const cx = data.cell.x + (data.cell.width - 3) / 2;
+            const cy = data.cell.y + (data.cell.height - 3) / 2;
+            doc.setDrawColor(153, 153, 153);
+            doc.setLineWidth(0.3);
+            doc.rect(cx, cy, 3, 3);
+          }
+        },
+      });
+      return doc.lastAutoTable.finalY;
+    };
+    const leftFinalY = renderCatTable(MARGIN, left);
+    const rightFinalY = right ? renderCatTable(MARGIN + colW + 5, right) : leftFinalY;
+    y = Math.max(leftFinalY, rightFinalY) + 6;
+    if (y > PAGE_H - 30 && ci + 2 < filledCats.length) {
+      doc.addPage('a5', 'portrait');
+      y = MARGIN;
+    }
+  }
+
+  const frontFooterY = PAGE_H - 10;
+  doc.setDrawColor(232, 224, 221);
+  doc.setLineWidth(0.2);
+  doc.line(MARGIN, frontFooterY - 2, MARGIN + CONTENT_W, frontFooterY - 2);
+  doc.setTextColor(108, 117, 125);
+  doc.setFont('helvetica', 'normal');
+  doc.setFontSize(7);
+  doc.text(`${business?.name || 'ChefDuo'} Forecast System`, MARGIN, frontFooterY + 2);
+  doc.text('Page 1 of 2', MARGIN + CONTENT_W, frontFooterY + 2, { align: 'right' });
+
+  doc.addPage('a5', 'portrait');
+  let by = MARGIN;
+  doc.setTextColor(122, 1, 1);
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(11);
+  doc.text('Additional Items', MARGIN, by + 6);
+  doc.setDrawColor(122, 1, 1);
+  doc.setLineWidth(0.4);
+  doc.line(MARGIN, by + 8, MARGIN + CONTENT_W, by + 8);
+  by += 14;
+  const blankRows = Array(15).fill(['', '', '', '', '', '']);
+  const blankHead = [['', 'Item', 'Qty.', 'Unit', 'Market Price', 'Notes']];
+  const renderBlankTable = (startX) => {
+    autoTable(doc, {
+      startY: by,
+      head: blankHead,
+      body: blankRows,
+      margin: { left: startX, right: PAGE_W - startX - colW },
+      tableWidth: colW,
+      styles: { fontSize: 7, textColor: [28, 38, 50], lineColor: [200, 200, 200], lineWidth: 0.15, cellPadding: 1.5, minCellHeight: 7 },
+      headStyles: { fillColor: [244, 244, 242], textColor: [28, 38, 50], fontStyle: 'bold', fontSize: 6.5 },
+      columnStyles: { 0: { cellWidth: 5, halign: 'center' }, 1: { cellWidth: 'auto' }, 2: { cellWidth: 12 }, 3: { cellWidth: 10 }, 4: { cellWidth: 22 }, 5: { cellWidth: 14 } },
+      didDrawCell: (data) => {
+        if (data.section === 'body' && data.column.index === 0) {
+          const cx = data.cell.x + (data.cell.width - 3) / 2;
+          const cy = data.cell.y + (data.cell.height - 3) / 2;
+          doc.setDrawColor(153, 153, 153);
+          doc.setLineWidth(0.3);
+          doc.rect(cx, cy, 3, 3);
+        }
+      },
+    });
+  };
+  renderBlankTable(MARGIN);
+  renderBlankTable(MARGIN + colW + 5);
+
+  const backFooterY = PAGE_H - 10;
+  doc.setDrawColor(232, 224, 221);
+  doc.setLineWidth(0.2);
+  doc.line(MARGIN, backFooterY - 2, MARGIN + CONTENT_W, backFooterY - 2);
+  doc.setTextColor(108, 117, 125);
+  doc.setFont('helvetica', 'normal');
+  doc.setFontSize(7);
+  doc.text(`${business?.name || 'ChefDuo'} Forecast System`, MARGIN, backFooterY + 2);
+  doc.text('Page 2 of 2', MARGIN + CONTENT_W, backFooterY + 2, { align: 'right' });
+
+  return doc;
+}
