@@ -14,8 +14,9 @@ const sendCode = async (req, res) => {
   try {
     const { data: user, error: userError } = await supabaseAdmin
       .from('user')
-      .select('id, email')
+      .select('id, email, auth_id')
       .ilike('email', normalizedEmail)
+      .not('auth_id', 'is', null)
       .single();
 
     if (userError || !user) {
@@ -70,8 +71,9 @@ const verifyCode = async (req, res) => {
   try {
     const { data: user, error: userError } = await supabaseAdmin
       .from('user')
-      .select('id')
+      .select('id, auth_id')
       .ilike('email', normalizedEmail)
+      .not('auth_id', 'is', null)
       .single();
 
     if (userError || !user) {
@@ -106,7 +108,6 @@ const verifyCode = async (req, res) => {
       isExpired: timeDiff <= 0,
     });
 
-    // ✅ Check expiration ONLY HERE in verification step
     if (timeDiff <= 0) {
       return res.status(401).json({ error: 'Verification code has expired' });
     }
@@ -118,9 +119,6 @@ const verifyCode = async (req, res) => {
       console.log('Code mismatch:', { expected: dbCode, received: userCode });
       return res.status(401).json({ error: 'Invalid code' });
     }
-
-    // ✅ Don't mark as used here
-    // Just verify and let the user proceed to reset page
 
     res.status(200).json({
       success: true,
@@ -151,6 +149,7 @@ const resetPassword = async (req, res) => {
       .from('user')
       .select('id, auth_id')
       .ilike('email', normalizedEmail)
+      .not('auth_id', 'is', null)
       .single();
 
     if (userError || !user) {

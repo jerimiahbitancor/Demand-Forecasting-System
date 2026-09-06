@@ -7,7 +7,7 @@ const timezone = require('dayjs/plugin/timezone');
 dayjs.extend(utc);
 dayjs.extend(timezone);
 const PH_TZ = 'Asia/Manila';
-const OTP_EXPIRATION_MINUTES = 3;
+const OTP_EXPIRATION_MINUTES = 1;
 
 const nowPH = () => dayjs().tz(PH_TZ);
 const toPH = (dbTimestamp) => {
@@ -119,7 +119,7 @@ const sendOTPEmail = async (email, otp, type) => {
               <h2>${template.title}</h2>
               <p>${template.message}</p>
               <div class="otp-box">${otp}</div>
-              <p><strong>This code will expire in ${OTP_EXPIRATION_MINUTES} minutes.</strong></p>
+              <p><strong>This code will expire in 1 minute.</strong></p>
               <p>${template.footer}</p>
             </div>
             <div class="footer">
