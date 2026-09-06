@@ -141,6 +141,21 @@ router.post(
             numericId
           );
 
+          const uniqueProductNames = uploadService.extractUniqueProductNames(processedData.data || []);
+
+          console.log('[PRODUCT DISCOVERY] Parsed rows:', JSON.stringify(processedData.data || [], null, 2));
+          console.log('[PRODUCT DISCOVERY] Extracted Item names:', JSON.stringify(
+            (processedData.data || []).map((row) => uploadService.getColumnValueByNames(row, ['Item name'])),
+            null,
+            2
+          ));
+          console.log('[PRODUCT DISCOVERY] Unique Item names:', JSON.stringify(uniqueProductNames, null, 2));
+
+          if (uniqueProductNames.length > 0) {
+            const discoveredProducts = await uploadService.syncProductsFromSales(uniqueProductNames, numericId);
+            console.log('[PRODUCT DISCOVERY] Sync result:', JSON.stringify(discoveredProducts, null, 2));
+          }
+
           const salesProcessingResult = await uploadService.processSalesData(
             processedData.data,
             numericId,

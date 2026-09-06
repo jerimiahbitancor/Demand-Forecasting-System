@@ -3,6 +3,7 @@ const express = require('express');
 const router = express.Router();
 const authenticate = require('../middleware/auth');
 const mappingService = require('../services/mappingService');
+const uploadService = require('../services/uploadService');
 
 // ============== PRODUCT ENDPOINTS ==============
 
@@ -35,6 +36,41 @@ router.get('/products', authenticate, async (req, res) => {
     res.status(500).json({
       success: false,
       error: 'Failed to fetch products',
+      details: process.env.NODE_ENV === 'development' ? error.message : undefined
+    });
+  }
+});
+
+router.post('/products/sync-from-sales', authenticate, async (req, res) => {
+  try {
+    if (!req.user) {
+      return res.status(401).json({
+        success: false,
+        error: 'User not authenticated'
+      });
+    }
+
+    const userId = req.user?.user_id || req.user?.id;
+    const productNames = Array.isArray(req.body?.products) ? req.body.products : [];
+
+    if (!productNames.length) {
+      return res.status(400).json({
+        success: false,
+        error: 'Product names are required'
+      });
+    }
+
+    const result = await uploadService.syncProductsFromSales(productNames, userId);
+
+    return res.json({
+      success: true,
+      ...result
+    });
+  } catch (error) {
+    console.error('Error syncing discovered sales products:', error);
+    return res.status(500).json({
+      success: false,
+      error: 'Failed to sync sales products',
       details: process.env.NODE_ENV === 'development' ? error.message : undefined
     });
   }
