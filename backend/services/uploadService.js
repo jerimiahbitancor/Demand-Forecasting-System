@@ -404,6 +404,7 @@ class UploadService {
       const fallbackDate = this.extractDateFromFilename(filename) || new Date().toISOString().slice(0, 10);
       const productIds = new Set();
       const productIdByName = new Map();
+      const categoryByProductId = new Map();
       const warnings = [];
       let productsDetected = 0;
 
@@ -415,6 +416,19 @@ class UploadService {
         }
       }
 
+      const { data: products, error: productsError } = await supabaseAdmin
+        .from('products')
+        .select('id, name, created_at, first_sold_date, is_active, inactive_reason, inactive_since, category');
+
+      if (productsError) {
+        throw productsError;
+      }
+
+      for (const product of products || []) {
+        productIdByName.set(String(product.name).trim().toLowerCase(), product.id);
+      }
+
+      const dailySalesRows = [];
       for (const row of rows) {
         const rawProductName = this.getColumnValueByNames(row, ['Item name', 'Item Name', 'Product', 'Product name']);
         const productName = this.normalizeProductName(rawProductName);
@@ -423,46 +437,6 @@ class UploadService {
         }
 
         const productNameKey = productName.toLowerCase();
-        if (!productIdByName.has(productNameKey)) {
-          let { data: existingProduct, error: productLookupError } = await supabaseAdmin.from('products')
-            .select('id, created_at, first_sold_date, is_active, inactive_reason')
-            .ilike('name', productName)
-            .maybeSingle();
-
-          if (productLookupError && productLookupError.code !== 'PGRST116') {
-            throw productLookupError;
-          }
-
-          let productId = existingProduct?.id;
-          if (!productId) {
-            try {
-              const insertedProduct = await mappingService.createProduct({
-                name: productName,
-                price: 0,
-                category: 'Uncategorized',
-                serving_size_label: 'serving',
-                ingredients: [],
-                user_id: numericId
-              });
-
-              productId = insertedProduct?.id;
-              productsDetected += 1;
-            } catch (insertError) {
-              if (insertError?.code === '23505' || /already exists/i.test(insertError?.message || '')) {
-                const { data: retryProduct } = await supabaseAdmin.from('products')
-                  .select('id, created_at, first_sold_date, is_active, inactive_reason')
-                  .ilike('name', productName)
-                  .maybeSingle();
-                productId = retryProduct?.id;
-              } else {
-                throw insertError;
-              }
-            }
-          }
-
-          productIdByName.set(productNameKey, productId);
-        }
-
         const productId = productIdByName.get(productNameKey);
         if (!productId) {
           continue;
@@ -472,59 +446,75 @@ class UploadService {
         const category = this.getColumnValueByNames(row, ['Category', 'Category Name'])?.toString()?.trim() || 'Uncategorized';
         const saleDate = this.getSaleDateValue(row, fallbackDate);
 
-        const { error: saleInsertError } = await supabaseAdmin.from('daily_sales')
-          .insert({
-            product_id: productId,
-            sale_date: saleDate,
-            quantity_sold: Number.isFinite(quantity) && quantity > 0 ? Math.round(quantity) : 1,
-            upload_id: uploadId || null
-          });
-
-        if (saleInsertError && saleInsertError.code !== '23505') {
-          throw saleInsertError;
+        dailySalesRows.push({
+          product_id: productId,
+          sale_date: saleDate,
+          quantity_sold: Number.isFinite(quantity) && quantity > 0 ? Math.round(quantity) : 1,
+          upload_id: uploadId || null
+        });
+        if (!categoryByProductId.has(productId)) {
+          categoryByProductId.set(productId, category);
         }
-
-        const { data: productRecord } = await supabaseAdmin.from('products')
-          .select('id, category, price')
-          .eq('id', productId)
-          .maybeSingle();
-
-        if (productRecord && (productRecord.category === 'Uncategorized' || !productRecord.category)) {
-          await supabaseAdmin.from('products')
-            .update({ category: category || 'Uncategorized' })
-            .eq('id', productId);
-        }
-
         productIds.add(productId);
       }
 
-      let productsUpdated = 0;
-      for (const productId of productIds) {
-        const { data: product, error: productFetchError } = await supabaseAdmin.from('products')
-          .select('id, created_at, first_sold_date, is_active, inactive_reason')
+      if (dailySalesRows.length > 0) {
+        const { error: saleInsertError } = await supabaseAdmin
+          .from('daily_sales')
+          .insert(dailySalesRows);
+
+        if (saleInsertError) {
+          throw saleInsertError;
+        }
+      }
+
+      for (const [productId, category] of categoryByProductId) {
+        const { error: categoryUpdateError } = await supabaseAdmin
+          .from('products')
+          .update({ category: category || 'Uncategorized' })
           .eq('id', productId)
-          .maybeSingle();
+          .eq('category', 'Uncategorized');
 
-        if (productFetchError) {
-          continue;
+        if (categoryUpdateError) {
+          throw categoryUpdateError;
         }
+      }
 
-        const { data: salesRows, error: salesFetchError } = await supabaseAdmin.from('daily_sales')
-          .select('sale_date')
-          .eq('product_id', productId)
-          .order('sale_date', { ascending: true });
+      let productsUpdated = 0;
+      const selectedProductIds = [...productIds];
+      if (selectedProductIds.length === 0) {
+        return { productsDetected, productsUpdated: 0, warnings };
+      }
 
-        if (salesFetchError) {
-          continue;
-        }
+      const { data: productRows, error: productFetchError } = await supabaseAdmin.from('products')
+        .select('id, created_at, first_sold_date, is_active, inactive_reason, inactive_since')
+        .in('id', selectedProductIds);
+      const { data: salesRows, error: salesFetchError } = await supabaseAdmin.from('daily_sales')
+        .select('product_id, sale_date')
+        .in('product_id', selectedProductIds)
+        .order('sale_date', { ascending: true });
 
-        const firstSoldDate = salesRows?.[0]?.sale_date || product?.first_sold_date || null;
-        const lastSoldDate = salesRows?.[salesRows.length - 1]?.sale_date || salesRows?.[0]?.sale_date || null;
+      if (productFetchError || salesFetchError) {
+        throw productFetchError || salesFetchError;
+      }
+
+      const salesByProductId = new Map();
+      for (const sale of salesRows || []) {
+        const dates = salesByProductId.get(sale.product_id) || [];
+        dates.push(sale.sale_date);
+        salesByProductId.set(sale.product_id, dates);
+      }
+
+      for (const product of productRows || []) {
+        const productSales = salesByProductId.get(product.id) || [];
+
+        const firstSoldDate = productSales[0] || product.first_sold_date || null;
+        const lastSoldDate = productSales[productSales.length - 1] || firstSoldDate || null;
         const status = deriveProductStatus({
           firstSoldDate: firstSoldDate || null,
           lastSoldDate: lastSoldDate || null,
-          createdAt: product?.created_at || null,
-          isActive: Boolean(product?.is_active)
+          createdAt: product.created_at || null,
+          isActive: Boolean(product.is_active)
         });
 
         const { error: updateError } = await supabaseAdmin.from('products')
@@ -532,9 +522,9 @@ class UploadService {
             first_sold_date: firstSoldDate ? firstSoldDate.slice(0, 10) : null,
             is_active: status.isActive,
             inactive_reason: status.note || null,
-            inactive_since: status.isActive ? null : (product?.inactive_since || new Date().toISOString().slice(0, 10))
+            inactive_since: status.isActive ? null : (product.inactive_since || new Date().toISOString().slice(0, 10))
           })
-          .eq('id', productId);
+          .eq('id', product.id);
 
         if (!updateError) {
           productsUpdated += 1;
@@ -739,7 +729,7 @@ class UploadService {
       const uploadDate = this.getCurrentDatePhilippines();
       const philippinesDisplayTime = this.getCurrentDatePhilippinesDisplay();
       
-      const validation = await this.validateSalesData(processedData.data || [], filename);
+      const validation = processedData.validation || await this.validateSalesData(processedData.data || [], filename);
       
       console.log('Validation Results:');
       console.log(`  Filename: ${filename}`);
