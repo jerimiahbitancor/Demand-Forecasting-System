@@ -10,7 +10,6 @@ import {
   FaSave,
   FaInfoCircle,
   FaArchive,
-  FaUndo,
   FaChevronDown,
   FaSearch,
 } from "react-icons/fa";
@@ -529,8 +528,6 @@ const ProductManagement = () => {
         resetForm();
         setIsModalOpen(false);
         await fetchData(true);
-        stopAutoRefresh();
-        startAutoRefresh();
       }
     } catch (error) {
       toast.dismiss(savingToast);
@@ -588,16 +585,16 @@ const ProductManagement = () => {
     setIsModalOpen(true);
   };
 
-  // ============ HANDLE ARCHIVE ============
+  // ============ HANDLE ARCHIVE ==========
   const handleArchive = (product) => {
     setSelectedItem(product);
     setIsArchiveModalOpen(true);
   };
 
-  // ============ CONFIRM ARCHIVE ============
+  // ============ CONFIRM ARCHIVE ==========
   const confirmArchive = async () => {
     if (!selectedItem) return;
-    
+
     setIsArchiving(true);
     const archiveToast = toast.loading('Archiving product...');
 
@@ -613,8 +610,6 @@ const ProductManagement = () => {
         setIsArchiveModalOpen(false);
         setSelectedItem(null);
         await fetchData(true);
-        stopAutoRefresh();
-        startAutoRefresh();
       }
     } catch (error) {
       toast.dismiss(archiveToast);
@@ -622,30 +617,6 @@ const ProductManagement = () => {
       toast.error(error.response?.data?.error || 'Failed to archive product');
     } finally {
       setIsArchiving(false);
-    }
-  };
-
-  // ============ HANDLE REACTIVATE ============
-  const handleReactivate = async (product) => {
-    const reactivateToast = toast.loading('Reactivating product...');
-
-    try {
-      const response = await apiClient.post(`/mapping/products/${product.id}/reactivate`, {
-        forceReactivate: true
-      });
-
-      toast.dismiss(reactivateToast);
-
-      if (response.data.success) {
-        toast.success('Product reactivated successfully!');
-        await fetchData(true);
-        stopAutoRefresh();
-        startAutoRefresh();
-      }
-    } catch (error) {
-      toast.dismiss(reactivateToast);
-      console.error('Error reactivating product:', error);
-      toast.error(error.response?.data?.error || 'Failed to reactivate product');
     }
   };
 
@@ -756,14 +727,21 @@ const ProductManagement = () => {
     const hasIngredients = product?.product_ingredients && product.product_ingredients.length > 0;
     
     const price = product?.price || 0;
-    const cogs = price * 0.6;
-    const margin = price > 0 ? ((price - cogs) / price) * 100 : 0;
-    const isLowMargin = margin < 30 && price > 0;
+    const cogs = hasIngredients
+      ? product.product_ingredients.reduce((sum, ingredient) => {
+          const ingredientPrice = ingredient.ingredients?.price || 0;
+          const quantity = ingredient.quantity_per_serving || 0;
+          return sum + ingredientPrice * quantity;
+        }, 0)
+      : null;
+    const foodCostPercentage = cogs !== null && price > 0 ? (cogs / price) * 100 : null;
+    const warningThreshold = 30;
+    const isLowMargin = foodCostPercentage !== null && foodCostPercentage > warningThreshold;
     const isUnmapped = !hasIngredients;
     
     const createdDate = new Date(product?.created_at);
     const daysOld = (Date.now() - createdDate.getTime()) / (1000 * 60 * 60 * 24);
-    const isNew = daysOld < 28 && isActive;
+    const isNew = daysOld < 28;
     const isDiscontinued = !isActive && daysOld > 28;
     
     let label = 'Active';
@@ -776,7 +754,7 @@ const ProductManagement = () => {
       className = 'status-unmapped';
       dotColor = '#9ca3af';
       tooltip = 'No ingredient recipe configured. This product cannot be included in ingredient demand estimates or the shopping list. Add a recipe using the Edit button.';
-    } else if (isLowMargin && isActive) {
+    } else if (isLowMargin && hasIngredients) {
       label = 'High Food Cost';
       className = 'status-low-margin';
       dotColor = '#ec4899';
@@ -1391,15 +1369,7 @@ const ProductManagement = () => {
                             >
                               <FaArchive size={14} />
                             </button>
-                          ) : (
-                            <button 
-                              className="product-action-btn reactivate"
-                              onClick={() => handleReactivate(item)}
-                              title="Reactivate"
-                            >
-                              <FaUndo size={14} />
-                            </button>
-                          )}
+                          ) : null}
                         </div>
                       </td>
                     </tr>

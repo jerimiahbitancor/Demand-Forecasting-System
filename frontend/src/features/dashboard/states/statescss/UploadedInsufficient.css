@@ -248,6 +248,120 @@
   margin-bottom: 16px;
 }
 
+/* Products Detected Section */
+.insufficient-products-detected {
+  width: 100%;
+  background: #f8f9fa;
+  padding: 16px 20px;
+  border-radius: 8px;
+  margin-bottom: 16px;
+  border: 1px solid #e5e7eb;
+}
+
+.insufficient-products-header {
+  margin-bottom: 12px;
+}
+
+.insufficient-products-title {
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--color-text-primary);
+  margin: 0 0 8px;
+}
+
+.insufficient-products-summary {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin-bottom: 6px;
+}
+
+.insufficient-products-total,
+.insufficient-products-missing,
+.insufficient-products-note {
+  margin: 0;
+}
+
+.insufficient-products-total,
+.insufficient-products-missing {
+  font-size: 13px;
+}
+
+.insufficient-products-total {
+  color: var(--color-text-secondary);
+}
+
+.insufficient-products-missing {
+  color: var(--color-red-primary);
+  font-weight: 600;
+}
+
+.insufficient-products-note {
+  font-size: 12px;
+  color: var(--color-text-light);
+  font-style: italic;
+}
+
+.insufficient-products-table {
+  width: 100%;
+  border: 1px solid #e5e7eb;
+  border-radius: 6px;
+  overflow: hidden;
+}
+
+.insufficient-products-table-header,
+.insufficient-products-table-row {
+  display: grid;
+  grid-template-columns: 1fr 120px;
+  align-items: center;
+  padding: 8px 12px;
+}
+
+.insufficient-products-table-header {
+  background: #f3f4f6;
+  color: var(--color-text-secondary);
+  border-bottom: 1px solid #e5e7eb;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.insufficient-products-table-row {
+  color: var(--color-text-primary);
+  border-bottom: 1px solid #f3f4f6;
+  font-size: 13px;
+}
+
+.insufficient-products-table-row:last-child {
+  border-bottom: none;
+}
+
+.insufficient-products-add-btn {
+  padding: 4px 12px;
+  background: transparent;
+  color: var(--color-red-primary);
+  border: 1px solid var(--color-red-primary);
+  border-radius: 4px;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.insufficient-products-add-btn:hover {
+  background: var(--color-red-primary);
+  color: var(--color-white);
+}
+
+.insufficient-products-complete {
+  color: #0f9918;
+  font-weight: 600;
+}
+
+.insufficient-products-more {
+  color: #6b7280;
+  font-style: italic;
+}
+
 .insufficient-step-btn {
   padding: 10px 24px;
   border: none;

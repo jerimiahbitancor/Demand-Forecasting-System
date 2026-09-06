@@ -17,6 +17,7 @@ const UploadedInsufficient = () => {
   const [totalMonthsNeeded] = useState(12);
   const [isLoading, setIsLoading] = useState(true);
   const [hasData, setHasData] = useState(false);
+  const [products, setProducts] = useState([]);
 
   // Navigation handlers
   const handleUploadData = () => {
@@ -25,6 +26,10 @@ const UploadedInsufficient = () => {
 
   const handleInventoryManagement = () => {
     navigate("/inventory-management");
+  };
+
+  const handleAddRecipe = (productName) => {
+    navigate("/inventory-management", { state: { product: productName } });
   };
 
   const formatDate = (date) => {
@@ -156,11 +161,27 @@ const UploadedInsufficient = () => {
     }
   };
 
+  const fetchProducts = async () => {
+    try {
+      const [activeResponse, inactiveResponse] = await Promise.all([
+        apiClient.get("/mapping/products", { params: { status: "active", forceRefresh: "true" } }),
+        apiClient.get("/mapping/products", { params: { status: "inactive", forceRefresh: "true" } }),
+      ]);
+
+      const activeProducts = activeResponse.data.success ? activeResponse.data.data || [] : [];
+      const inactiveProducts = inactiveResponse.data.success ? inactiveResponse.data.data || [] : [];
+      setProducts([...activeProducts, ...inactiveProducts]);
+    } catch (error) {
+      console.error("Error fetching products:", error);
+    }
+  };
+
   // Initial fetch and polling
   useEffect(() => {
     const loadData = async () => {
       await fetchDataStatus();
       await fetchUploadProgress();
+      await fetchProducts();
     };
     
     loadData();
@@ -168,8 +189,12 @@ const UploadedInsufficient = () => {
     const interval = setInterval(() => {
       fetchUploadProgress();
     }, 5000);
+    const productsInterval = setInterval(fetchProducts, 10000);
 
-    return () => clearInterval(interval);
+    return () => {
+      clearInterval(interval);
+      clearInterval(productsInterval);
+    };
   }, []);
 
   // Calculate months to display
@@ -179,6 +204,10 @@ const UploadedInsufficient = () => {
 
   // Determine if data is sufficient
   const isDataSufficient = uploadedMonths >= totalMonthsNeeded;
+  const productsNeedingRecipes = products.filter(
+    (product) => !product.product_ingredients?.length
+  );
+  const visibleProductsNeedingRecipes = productsNeedingRecipes.slice(0, 3);
 
   return (
     <div className="insufficient-container">
@@ -340,6 +369,53 @@ const UploadedInsufficient = () => {
                   recipe for each product so the system can estimate how much of
                   each ingredient you'll need to prepare.
                 </p>
+                <div className="insufficient-products-detected">
+                  <div className="insufficient-products-header">
+                    <h5 className="insufficient-products-title">Products Detected from Your Sales Data</h5>
+                    <div className="insufficient-products-summary">
+                      <p className="insufficient-products-total">
+                        {products.length} products were found in your sales data.
+                      </p>
+                      <p className="insufficient-products-missing">
+                        {productsNeedingRecipes.length} still need ingredient recipes added.
+                      </p>
+                    </div>
+                    <p className="insufficient-products-note">
+                      Products without recipes will still be forecasted, but will not appear in the ingredient demand shopping list.
+                    </p>
+                  </div>
+
+                  <div className="insufficient-products-table">
+                    <div className="insufficient-products-table-header">
+                      <span>Product Name</span>
+                      <span>Action</span>
+                    </div>
+                    {visibleProductsNeedingRecipes.length > 0 ? (
+                      visibleProductsNeedingRecipes.map((product, index) => (
+                        <div className="insufficient-products-table-row" key={product.id || `${product.name}-${index}`}>
+                          <span>{product.name}</span>
+                          <button
+                            className="insufficient-products-add-btn"
+                            onClick={() => handleAddRecipe(product.name)}
+                          >
+                            Add Recipe
+                          </button>
+                        </div>
+                      ))
+                    ) : (
+                      <div className="insufficient-products-table-row">
+                        <span className="insufficient-products-complete">All products have recipes added</span>
+                        <span className="insufficient-products-complete">Complete</span>
+                      </div>
+                    )}
+                    {productsNeedingRecipes.length > 3 && (
+                      <div className="insufficient-products-table-row insufficient-products-more">
+                        <span>+ {productsNeedingRecipes.length - 3} more products needing recipes</span>
+                        <span></span>
+                      </div>
+                    )}
+                  </div>
+                </div>
                 <button
                   className="insufficient-step-btn insufficient-step-btn-secondary"
                   onClick={handleInventoryManagement}
