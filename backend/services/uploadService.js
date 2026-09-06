@@ -1,5 +1,6 @@
 // services/uploadService.js
 const { supabase, isConfigured, supabaseAdmin } = require('../config/supabase');
+const mappingService = require('./mappingService');
 const { deriveProductStatus } = require('./productStatusService');
 const { PRODUCT_STATUS_NOTES } = require('./productStatusConstants');
 
@@ -217,6 +218,163 @@ class UploadService {
     return parsedDate.toISOString().slice(0, 10);
   }
 
+  normalizeProductName(value) {
+    if (value === null || value === undefined) {
+      return '';
+    }
+
+    return String(value)
+      .trim()
+      .replace(/\s+/g, ' ')
+      .replace(/\s*[-–—]\s*/g, ' ');
+  }
+
+  extractUniqueProductNames(rows = []) {
+    if (!Array.isArray(rows) || rows.length === 0) {
+      return [];
+    }
+
+    const productNames = [];
+    const seen = new Set();
+
+    for (const row of rows) {
+      const productName = this.normalizeProductName(
+        this.getColumnValueByNames(row, ['Item name', 'Item Name', 'Product', 'Product name'])
+      );
+
+      if (!productName) {
+        continue;
+      }
+
+      const key = productName.toLowerCase();
+      if (seen.has(key)) {
+        continue;
+      }
+
+      seen.add(key);
+      productNames.push(productName);
+    }
+
+    return productNames;
+  }
+
+  async syncProductsFromSales(productNames = [], userId = null) {
+    try {
+      const normalizedProducts = Array.isArray(productNames)
+        ? productNames
+            .map((name) => this.normalizeProductName(name))
+            .filter((name) => name && name.length > 0)
+        : [];
+
+      const uniqueProducts = [...new Map(
+        normalizedProducts.map((name) => [name.toLowerCase(), name])
+      ).values()];
+
+      if (uniqueProducts.length === 0) {
+        return {
+          success: true,
+          created: [],
+          existing: [],
+          createdCount: 0,
+          existingCount: 0,
+          warnings: []
+        };
+      }
+
+      const numericId = userId ? await this.getNumericUserId(userId) : null;
+      if (!numericId || !this.isSupabaseReady()) {
+        return {
+          success: true,
+          created: [],
+          existing: uniqueProducts,
+          createdCount: 0,
+          existingCount: uniqueProducts.length,
+          warnings: ['Product sync deferred because Supabase is unavailable.']
+        };
+      }
+
+      const { data: existingProducts, error: fetchError } = await supabaseAdmin
+        .from('products')
+        .select('id, name');
+
+      if (fetchError) {
+        throw fetchError;
+      }
+
+      const existingByName = new Map(
+        (existingProducts || []).map((product) => [String(product.name).trim().toLowerCase(), product])
+      );
+
+      const created = [];
+      const existing = [];
+
+      for (const productName of uniqueProducts) {
+        const key = productName.trim().toLowerCase();
+        console.log('[PRODUCT DISCOVERY] Checking product:', JSON.stringify(productName));
+        if (existingByName.has(key)) {
+          console.log('[PRODUCT DISCOVERY] Existing:', true, JSON.stringify(existingByName.get(key)));
+          existing.push(productName);
+          continue;
+        }
+
+        console.log('[PRODUCT DISCOVERY] Existing:', false);
+        console.log('[PRODUCT DISCOVERY] Creating product:', JSON.stringify(productName));
+
+        try {
+          const insertedProduct = await mappingService.createProduct({
+            name: productName,
+            price: 0,
+            category: 'Uncategorized',
+            serving_size_label: 'serving',
+            ingredients: [],
+            user_id: numericId
+          });
+
+          console.log('[PRODUCT DISCOVERY] Created product:', JSON.stringify(insertedProduct, null, 2));
+
+          const { data: persistedProduct, error: persistedProductError } = await supabaseAdmin
+            .from('products')
+            .select('id, name, price, category, is_active, created_at')
+            .eq('id', insertedProduct?.id)
+            .maybeSingle();
+
+          if (persistedProductError) {
+            throw persistedProductError;
+          }
+
+          if (!persistedProduct) {
+            throw new Error(`Product insert returned no persisted row for "${productName}"`);
+          }
+
+          console.log('[PRODUCT DISCOVERY] Verified public.products row:', JSON.stringify(persistedProduct, null, 2));
+
+          if (insertedProduct) {
+            created.push(productName);
+            existingByName.set(productName.trim().toLowerCase(), insertedProduct);
+          }
+        } catch (insertError) {
+          if (insertError?.code === '23505' || /already exists/i.test(insertError?.message || '')) {
+            existing.push(productName);
+            continue;
+          }
+          throw insertError;
+        }
+      }
+
+      return {
+        success: true,
+        created,
+        existing,
+        createdCount: created.length,
+        existingCount: existing.length,
+        warnings: []
+      };
+    } catch (error) {
+      console.error('Error syncing products from sales data:', error);
+      throw error;
+    }
+  }
+
   async processSalesData(rows = [], userId = null, uploadId = null, filename = null) {
     try {
       if (!Array.isArray(rows) || rows.length === 0) {
@@ -230,63 +388,74 @@ class UploadService {
 
       const fallbackDate = this.extractDateFromFilename(filename) || new Date().toISOString().slice(0, 10);
       const productIds = new Set();
+      const productIdByName = new Map();
       const warnings = [];
       let productsDetected = 0;
 
+      const uniqueSalesProductNames = this.extractUniqueProductNames(rows);
+      if (uniqueSalesProductNames.length > 0) {
+        const syncSummary = await this.syncProductsFromSales(uniqueSalesProductNames, numericId);
+        if (Array.isArray(syncSummary.created) && syncSummary.created.length > 0) {
+          productsDetected += syncSummary.created.length;
+        }
+      }
+
       for (const row of rows) {
-        const productName = this.getColumnValueByNames(row, ['Item name', 'Item Name', 'Product', 'Product name'])?.toString()?.trim();
+        const rawProductName = this.getColumnValueByNames(row, ['Item name', 'Item Name', 'Product', 'Product name']);
+        const productName = this.normalizeProductName(rawProductName);
         if (!productName) {
+          continue;
+        }
+
+        const productNameKey = productName.toLowerCase();
+        if (!productIdByName.has(productNameKey)) {
+          let { data: existingProduct, error: productLookupError } = await supabaseAdmin.from('products')
+            .select('id, created_at, first_sold_date, is_active, inactive_reason')
+            .ilike('name', productName)
+            .maybeSingle();
+
+          if (productLookupError && productLookupError.code !== 'PGRST116') {
+            throw productLookupError;
+          }
+
+          let productId = existingProduct?.id;
+          if (!productId) {
+            try {
+              const insertedProduct = await mappingService.createProduct({
+                name: productName,
+                price: 0,
+                category: 'Uncategorized',
+                serving_size_label: 'serving',
+                ingredients: [],
+                user_id: numericId
+              });
+
+              productId = insertedProduct?.id;
+              productsDetected += 1;
+            } catch (insertError) {
+              if (insertError?.code === '23505' || /already exists/i.test(insertError?.message || '')) {
+                const { data: retryProduct } = await supabaseAdmin.from('products')
+                  .select('id, created_at, first_sold_date, is_active, inactive_reason')
+                  .ilike('name', productName)
+                  .maybeSingle();
+                productId = retryProduct?.id;
+              } else {
+                throw insertError;
+              }
+            }
+          }
+
+          productIdByName.set(productNameKey, productId);
+        }
+
+        const productId = productIdByName.get(productNameKey);
+        if (!productId) {
           continue;
         }
 
         const quantity = parseFloat(this.getColumnValueByNames(row, ['Items sold', 'Items Sold', 'Quantity', 'Units sold']) || 0);
         const category = this.getColumnValueByNames(row, ['Category', 'Category Name'])?.toString()?.trim() || 'Uncategorized';
-        const price = parseFloat(this.getColumnValueByNames(row, ['Net sales', 'Gross sales', 'Price']) || 0);
         const saleDate = this.getSaleDateValue(row, fallbackDate);
-
-        let { data: existingProduct, error: productLookupError } = await supabaseAdmin.from('products')
-          .select('id, created_at, first_sold_date, is_active, inactive_reason')
-          .ilike('name', productName)
-          .maybeSingle();
-
-        if (productLookupError && productLookupError.code !== 'PGRST116') {
-          throw productLookupError;
-        }
-
-        let productId = existingProduct?.id;
-        if (!productId) {
-          const { data: insertedProduct, error: insertError } = await supabaseAdmin.from('products')
-            .insert({
-              name: productName,
-              price: price > 0 ? price : 0,
-              category,
-              is_active: false,
-              inactive_reason: PRODUCT_STATUS_NOTES.NEW_PRODUCT,
-              inactive_since: new Date().toISOString().slice(0, 10),
-              first_sold_date: saleDate
-            })
-            .select()
-            .single();
-
-          if (insertError) {
-            if (insertError.code === '23505') {
-              const { data: retryProduct } = await supabaseAdmin.from('products')
-                .select('id, created_at, first_sold_date, is_active, inactive_reason')
-                .ilike('name', productName)
-                .maybeSingle();
-              productId = retryProduct?.id;
-            } else {
-              throw insertError;
-            }
-          } else {
-            productId = insertedProduct?.id;
-            productsDetected += 1;
-          }
-        }
-
-        if (!productId) {
-          continue;
-        }
 
         const { error: saleInsertError } = await supabaseAdmin.from('daily_sales')
           .insert({
@@ -298,6 +467,17 @@ class UploadService {
 
         if (saleInsertError && saleInsertError.code !== '23505') {
           throw saleInsertError;
+        }
+
+        const { data: productRecord } = await supabaseAdmin.from('products')
+          .select('id, category, price')
+          .eq('id', productId)
+          .maybeSingle();
+
+        if (productRecord && (productRecord.category === 'Uncategorized' || !productRecord.category)) {
+          await supabaseAdmin.from('products')
+            .update({ category: category || 'Uncategorized' })
+            .eq('id', productId);
         }
 
         productIds.add(productId);

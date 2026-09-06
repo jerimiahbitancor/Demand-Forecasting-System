@@ -170,11 +170,13 @@ class MappingService {
         product_ingredients: []
       }));
 
-      // Fetch ingredients for each product
-      for (let product of transformedData) {
+      // Fetch all product ingredients in one query instead of one query per product.
+      if (transformedData.length > 0) {
+        const productIds = transformedData.map(product => product.id);
         const { data: ingredientsData, error: ingredientsError } = await supabaseAdmin
           .from('product_ingredients')
           .select(`
+            product_id,
             quantity_per_serving,
             inventory_items!inner (
               id,
@@ -182,18 +184,28 @@ class MappingService {
               unit
             )
           `)
-          .eq('product_id', product.id);
+          .in('product_id', productIds);
 
         if (!ingredientsError && ingredientsData) {
-          product.product_ingredients = ingredientsData.map(pi => ({
-            id: pi.inventory_items?.id,
-            quantity_per_serving: pi.quantity_per_serving,
-            ingredients: {
+          const ingredientsByProduct = new Map();
+
+          for (const pi of ingredientsData) {
+            const productIngredients = ingredientsByProduct.get(pi.product_id) || [];
+            productIngredients.push({
               id: pi.inventory_items?.id,
-              name: pi.inventory_items?.name,
-              unit: pi.inventory_items?.unit
-            }
-          }));
+              quantity_per_serving: pi.quantity_per_serving,
+              ingredients: {
+                id: pi.inventory_items?.id,
+                name: pi.inventory_items?.name,
+                unit: pi.inventory_items?.unit
+              }
+            });
+            ingredientsByProduct.set(pi.product_id, productIngredients);
+          }
+
+          for (const product of transformedData) {
+            product.product_ingredients = ingredientsByProduct.get(product.id) || [];
+          }
         }
       }
 
@@ -327,7 +339,7 @@ class MappingService {
       // Insert into products table
       const insertData = {
         name: productData.name.trim(),
-        price: parseFloat(productData.price),
+        price: Number.isFinite(parseFloat(productData.price)) ? parseFloat(productData.price) : 0,
         category: productData.category || 'Uncategorized',
         serving_size_label: productData.serving_size_label || 'serving',
         is_active: true

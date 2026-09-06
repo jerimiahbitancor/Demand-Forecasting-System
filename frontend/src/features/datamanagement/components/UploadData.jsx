@@ -570,6 +570,13 @@ const UploadData = ({
       setSalesToastId(id);
       
       await checkUploadStatus();
+
+      Object.keys(sessionStorage).forEach((key) => {
+        if (key.startsWith('mapping_')) {
+          sessionStorage.removeItem(key);
+        }
+      });
+      window.dispatchEvent(new CustomEvent('products:updated'));
       
       if (onUploadSuccess) {
         onUploadSuccess({ filesUploaded: uploaded, totalFiles });
@@ -873,6 +880,13 @@ const UploadData = ({
       if (onUploadSuccess) {
         onUploadSuccess({ filesUploaded: uploaded, totalFiles });
       }
+
+      Object.keys(sessionStorage).forEach((key) => {
+        if (key.startsWith('mapping_')) {
+          sessionStorage.removeItem(key);
+        }
+      });
+      window.dispatchEvent(new CustomEvent('products:updated'));
       
       setTimeout(() => {
         setMenuUploadStatus(null);

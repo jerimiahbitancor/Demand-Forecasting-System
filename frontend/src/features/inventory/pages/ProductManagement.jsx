@@ -43,7 +43,6 @@ const ProductManagement = () => {
   const isInitialMount = useRef(true);
   const fetchTimeoutRef = useRef(null);
   const abortControllerRef = useRef(null);
-  const autoRefreshIntervalRef = useRef(null);
 
   const [searchTerm, setSearchTerm] = useState(() => {
     return sessionStorage.getItem(STORAGE_KEYS.SEARCH_TERM) || "";
@@ -85,7 +84,7 @@ const ProductManagement = () => {
   });
 
   const [statusFilter, setStatusFilter] = useState(() => {
-    return sessionStorage.getItem(STORAGE_KEYS.STATUS_FILTER) || 'active';
+    return 'all';
   });
 
   // ============ INVENTORY ITEMS FOR INGREDIENTS ============
@@ -344,37 +343,6 @@ const ProductManagement = () => {
     }
   }, [apiClient, selectedCategory, searchTerm, statusFilter, fetchInventoryItems, updateStats]);
 
-  // ============ AUTO REFRESH ============
-  const startAutoRefresh = useCallback(() => {
-    if (autoRefreshIntervalRef.current) {
-      clearInterval(autoRefreshIntervalRef.current);
-    }
-    
-    autoRefreshIntervalRef.current = setInterval(() => {
-      console.log('🔄 Auto-refreshing mapping data...');
-      fetchData(true);
-    }, 5000);
-    
-    return autoRefreshIntervalRef.current;
-  }, [fetchData]);
-
-  const stopAutoRefresh = useCallback(() => {
-    if (autoRefreshIntervalRef.current) {
-      clearInterval(autoRefreshIntervalRef.current);
-      autoRefreshIntervalRef.current = null;
-    }
-  }, []);
-
-  // ============ DEBOUNCED FETCH ============
-  const debouncedFetch = useCallback(() => {
-    if (fetchTimeoutRef.current) {
-      clearTimeout(fetchTimeoutRef.current);
-    }
-    fetchTimeoutRef.current = setTimeout(() => {
-      fetchData(false);
-    }, 300);
-  }, [fetchData]);
-
   // ============ EFFECTS ============
   useEffect(() => {
     const cacheSuffix = statusFilter === 'inactive' ? '_inactive' : '';
@@ -415,13 +383,15 @@ const ProductManagement = () => {
     if (isInitialMount.current) {
       isInitialMount.current = false;
       setTimeout(() => {
-        fetchData(false);
-        startAutoRefresh();
+        fetchData(true);
       }, 100);
     } else {
-      debouncedFetch();
-      stopAutoRefresh();
-      startAutoRefresh();
+      if (fetchTimeoutRef.current) {
+        clearTimeout(fetchTimeoutRef.current);
+      }
+      fetchTimeoutRef.current = setTimeout(() => {
+        fetchData(true);
+      }, 300);
     }
 
     return () => {
@@ -431,9 +401,28 @@ const ProductManagement = () => {
       if (abortControllerRef.current) {
         abortControllerRef.current.abort();
       }
-      stopAutoRefresh();
     };
-  }, [fetchData, debouncedFetch, startAutoRefresh, stopAutoRefresh, searchTerm, selectedCategory, sortBy, statusFilter, currentPage]);
+  }, [fetchData, searchTerm, selectedCategory, sortBy, statusFilter, currentPage]);
+
+  useEffect(() => {
+    const handleProductsUpdated = () => {
+      console.log('Product catalog changed from upload; force-refreshing Product Management');
+
+      Object.keys(sessionStorage).forEach((key) => {
+        if (key.startsWith('mapping_')) {
+          sessionStorage.removeItem(key);
+        }
+      });
+
+      fetchData(true);
+    };
+
+    window.addEventListener('products:updated', handleProductsUpdated);
+
+    return () => {
+      window.removeEventListener('products:updated', handleProductsUpdated);
+    };
+  }, [fetchData]);
 
   // ============ FILTERED INVENTORY ITEMS FOR DROPDOWN ============
   const filteredInventoryItems = useMemo(() => {
@@ -1293,6 +1282,7 @@ const ProductManagement = () => {
               setCurrentPage(1);
             }}
           >
+            <option value="all">All products</option>
             <option value="active">Active products</option>
             <option value="inactive">Inactive products</option>
           </select>
@@ -1332,7 +1322,7 @@ const ProductManagement = () => {
 
       <div className="product-section">
         <div className="product-table-wrapper">
-          {loading ? (
+          {loading && mappingData.length === 0 ? (
             <div className="loading-state">Loading products...</div>
           ) : currentData.length === 0 ? (
             <div className="empty-state">No products found for this view.</div>
@@ -1439,7 +1429,7 @@ const ProductManagement = () => {
           )}
         </div>
 
-        {totalPages > 1 && !loading && (
+        {totalPages > 1 && mappingData.length > 0 && (
           <div className="pagination">
             <div className="pagination-left">
               <button 
