@@ -1,0 +1,940 @@
+/* states/statescss/TrainingInProgress.css */
+
+.training-container {
+  min-height: 100vh;
+  background-color: var(--color-bg-white);
+  background-image: url("../../../assets/images/Dashboard.png");
+  background-size: cover;
+  background-position: center;
+  background-repeat: no-repeat;
+  background-attachment: fixed;
+}
+
+/* Main Content */
+.training-main {
+  padding: 32px;
+  max-width: 1440px;
+  margin: 0 auto;
+}
+
+/* Header Section */
+.training-header {
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  align-items: flex-end;
+  margin-bottom: 32px;
+  gap: 12px;
+}
+
+@media (min-width: 768px) {
+  .training-header {
+    flex-direction: row;
+    align-items: center;
+  }
+}
+
+.training-date-info {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--color-text-secondary);
+  letter-spacing: 0.05em;
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  background: rgba(255, 255, 255, 0.85);
+  padding: 10px 20px;
+  border-radius: 8px;
+  backdrop-filter: blur(4px);
+}
+
+.training-date-separator {
+  color: var(--color-border);
+  font-weight: 300;
+}
+
+/* Progress Bar */
+.training-progress-container {
+  background: rgba(255, 255, 255, 0.85);
+  padding: 10px 20px;
+  border-radius: 8px;
+  backdrop-filter: blur(4px);
+  min-width: 260px;
+}
+
+.training-progress-bar-wrapper {
+  position: relative;
+  width: 100%;
+  height: 40px;
+  background: var(--color-bg-light);
+  border-radius: 10px;
+  overflow: hidden;
+}
+
+.training-progress-fill {
+  height: 100%;
+  border-radius: 10px;
+  transition: width 0.8s ease;
+  background-color: rgba(122, 1, 1, 0.5);
+}
+
+.training-progress-text {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 0 20px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--color-text-primary);
+  letter-spacing: 0.05em;
+  pointer-events: none;
+}
+
+.training-progress-text span:first-child {
+  color: var(--color-text-secondary);
+}
+
+.training-progress-text span:last-child {
+  color: var(--color-red-primary);
+  font-weight: 700;
+}
+
+/* Main Content */
+.training-content {
+  padding: 40px 32px;
+  background: rgba(255, 255, 255, 0.85);
+  border-radius: 16px;
+  backdrop-filter: blur(4px);
+  margin-top: 40px;
+}
+
+/* Welcome Wrapper */
+.training-welcome-wrapper {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  justify-content: space-between;
+  gap: 40px;
+  margin-bottom: 48px;
+}
+
+/* Left Side - Text Content */
+.training-welcome-section {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  text-align: left;
+}
+
+.training-welcome-title {
+  font-size: 36px;
+  font-weight: 700;
+  color: var(--color-red-primary);
+  margin-bottom: 36px;
+}
+
+.training-welcome-description {
+  font-size: 16px;
+  color: #262626;
+  line-height: 1.8;
+  margin-bottom: 20px;
+}
+
+.training-welcome-note {
+  font-size: 15px;
+  color: #262626;
+  margin-bottom: 40px;
+}
+
+.training-welcome-link {
+  display: inline-block;
+  color: var(--color-red-primary);
+  font-weight: 600;
+  font-size: 14px;
+  text-decoration: none;
+  transition: all 0.3s ease;
+  padding: 10px 20px;
+  border: 2px solid var(--color-red-primary);
+  border-radius: 8px;
+}
+
+.training-welcome-link:hover {
+  background: var(--color-red-primary);
+  color: var(--color-white);
+  transform: translateY(-2px);
+  box-shadow: 0 4px 12px rgba(122, 1, 1, 0.2);
+}
+
+/* Right Side - Image */
+.training-welcome-image {
+  flex: 1;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  max-width: 400px;
+}
+
+.training-welcome-img {
+  width: 100%;
+  height: auto;
+  max-height: 300px;
+  object-fit: contain;
+}
+
+/* Step Cards Section */
+.training-step-cards {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 24px;
+  margin-top: 20px;
+  border-top: 2px solid rgba(122, 1, 1, 0.08);
+  padding-top: 32px;
+}
+
+.training-step-card {
+  display: flex;
+  gap: 20px;
+  padding: 24px;
+  background: rgba(255, 255, 255, 0.9);
+  border-radius: 12px;
+  border: 1px solid rgba(122, 1, 1, 0.08);
+  transition: all 0.3s ease;
+}
+
+.training-step-card:hover {
+  transform: translateY(-4px);
+  box-shadow: 0 8px 24px rgba(122, 1, 1, 0.1);
+  border-color: var(--color-red-primary);
+}
+
+.training-step-number {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 48px;
+  height: 48px;
+  background: var(--color-red-primary);
+  color: var(--color-white);
+  border-radius: 50%;
+  font-size: 20px;
+  font-weight: 700;
+  flex-shrink: 0;
+}
+
+.training-step-content {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+}
+
+.training-step-title {
+  font-size: 18px;
+  font-weight: 700;
+  color: var(--color-text-primary);
+  margin-bottom: 8px;
+}
+
+.training-step-description {
+  font-size: 14px;
+  color: var(--color-text-secondary);
+  line-height: 1.6;
+  margin-bottom: 16px;
+}
+
+.training-step-btn {
+  padding: 10px 24px;
+  border: none;
+  border-radius: 8px;
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.3s ease;
+}
+
+.training-step-btn-primary {
+  background: var(--color-red-primary);
+  color: var(--color-white);
+}
+
+.training-step-btn-primary:hover {
+  background: #5a0101;
+  transform: translateY(-2px);
+  box-shadow: 0 4px 12px rgba(122, 1, 1, 0.3);
+}
+
+.training-step-btn-secondary {
+  background: transparent;
+  color: var(--color-red-primary);
+  border: 2px solid var(--color-red-primary);
+}
+
+.training-step-btn-secondary:hover {
+  background: var(--color-red-primary);
+  color: var(--color-white);
+  transform: translateY(-2px);
+  box-shadow: 0 4px 12px rgba(122, 1, 1, 0.2);
+}
+
+/* Responsive */
+@media (max-width: 992px) {
+  .training-welcome-wrapper {
+    flex-direction: column;
+    gap: 30px;
+  }
+
+  .training-welcome-section {
+    align-items: center;
+    text-align: center;
+  }
+
+  .training-welcome-image {
+    max-width: 300px;
+  }
+
+  .training-welcome-img {
+    max-height: 250px;
+  }
+
+  .training-step-cards {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 768px) {
+  .training-main {
+    padding: 16px;
+  }
+
+  .training-header {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .training-date-info {
+    font-size: 11px;
+    padding: 8px 14px;
+    gap: 8px;
+    flex-wrap: wrap;
+    justify-content: center;
+  }
+
+  .training-progress-container {
+    min-width: unset;
+    width: 100%;
+  }
+
+  .training-progress-bar-wrapper {
+    height: 36px;
+  }
+
+  .training-progress-text {
+    font-size: 10px;
+    padding: 0 14px;
+  }
+
+  .training-content {
+    padding: 24px 16px;
+  }
+
+  .training-welcome-wrapper {
+    gap: 20px;
+  }
+
+  .training-welcome-title {
+    font-size: 20px;
+  }
+
+  .training-welcome-description {
+    font-size: 14px;
+  }
+
+  .training-welcome-link {
+    font-size: 13px;
+    padding: 8px 16px;
+  }
+
+  .training-welcome-image {
+    max-width: 250px;
+  }
+
+  .training-welcome-img {
+    max-height: 200px;
+  }
+
+  .training-step-cards {
+    gap: 16px;
+    padding-top: 24px;
+  }
+
+  .training-step-card {
+    padding: 20px;
+    flex-direction: column;
+    align-items: center;
+    text-align: center;
+  }
+
+  .training-step-content {
+    align-items: center;
+  }
+
+  .training-step-number {
+    min-width: 40px;
+    height: 40px;
+    font-size: 18px;
+  }
+
+  .training-step-title {
+    font-size: 16px;
+  }
+
+  .training-step-description {
+    font-size: 13px;
+    text-align: center;
+  }
+}
+
+@media (max-width: 480px) {
+  .training-main {
+    padding: 12px;
+  }
+
+  .training-date-info {
+    font-size: 9px;
+    padding: 6px 10px;
+    gap: 6px;
+  }
+
+  .training-progress-container {
+    padding: 8px 12px;
+  }
+
+  .training-progress-bar-wrapper {
+    height: 30px;
+  }
+
+  .training-progress-text {
+    font-size: 9px;
+    padding: 0 10px;
+  }
+
+  .training-content {
+    padding: 16px 12px;
+  }
+
+  .training-welcome-title {
+    font-size: 18px;
+  }
+
+  .training-welcome-description {
+    font-size: 13px;
+  }
+
+  .training-welcome-link {
+    font-size: 12px;
+    padding: 6px 12px;
+  }
+
+  .training-welcome-image {
+    max-width: 200px;
+  }
+
+  .training-welcome-img {
+    max-height: 150px;
+  }
+
+  .training-step-cards {
+    gap: 12px;
+    padding-top: 16px;
+  }
+
+  .training-step-card {
+    padding: 16px;
+  }
+
+  .training-step-number {
+    min-width: 32px;
+    height: 32px;
+    font-size: 14px;
+  }
+
+  .training-step-title {
+    font-size: 14px;
+  }
+
+  .training-step-description {
+    font-size: 12px;
+  }
+
+  .training-step-btn {
+    padding: 8px 16px;
+    font-size: 12px;
+  }
+}
+
+.training-data-progress-wrapper1 {
+  width: 100%;
+  background: #ffffff;
+  padding: 10px 20px;
+  border-radius: 8px;
+  border: 1px solid rgba(122, 1, 1, 0.08);
+  margin-bottom: 20px;
+}
+
+.training-step-description1 {
+  font-size: 14px;
+  color: var(--color-text-secondary);
+  line-height: 1.6;
+}
+
+.training-data-progress-wrapper2 {
+  width: 100%;
+  background: #e79696b1;
+  padding: 10px 20px;
+  border-radius: 8px;
+  border: 1px solid rgb(122, 1, 1);
+}
+
+.training-data-progress-wrapper {
+  width: 100%;
+  margin: 12px 0 16px 0;
+}
+
+.training-data-progress-label {
+  display: flex;
+  justify-content: space-between;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--color-text-secondary);
+  margin-bottom: 6px;
+}
+
+.training-data-progress-text {
+  color: var(--color-red-primary);
+  font-weight: 700;
+}
+
+.training-data-progress-bar {
+  width: 100%;
+  height: 18px;
+  background: var(--color-bg-light);
+  border-radius: 4px;
+  overflow: hidden;
+}
+
+.training-data-progress-fill {
+  height: 100%;
+  border-radius: 50px;
+  transition: width 0.8s ease;
+  background-color: #0f9918ae;
+}
+
+/* Complete/Green Card Styles */
+.training-step-card-complete {
+  border-color: #0F9918 !important;
+  background: rgba(34, 197, 94, 0.05) !important;
+}
+
+.training-step-card-complete:hover {
+  border-color: #0F9918 !important;
+  box-shadow: 0 8px 24px rgba(34, 197, 94, 0.15) !important;
+}
+
+.training-step-number-complete {
+  background: #0F9918 !important;
+  color: white !important;
+}
+
+.training-step-title-complete {
+  color: #0F9918 !important;
+}
+
+.training-data-progress-wrapper2-complete {
+  width: 100%;
+  background: rgba(34, 197, 94, 0.1);
+  padding: 10px 20px;
+  border-radius: 8px;
+  border: 1px solid #0F9918;
+}
+
+.training-data-progress-text-complete {
+  color: #0F9918 !important;
+  font-weight: 700;
+}
+
+.training-data-progress-fill-complete {
+  height: 100%;
+  border-radius: 50px;
+  transition: width 0.8s ease;
+  background-color: #0F9918 !important;
+}
+
+.training-step-btn-complete {
+  background: #0F9918 !important;
+  color: white !important;
+  border: none !important;
+  cursor: default !important;
+  opacity: 0.8;
+}
+
+.training-step-btn-complete:hover {
+  background: #0F9918 !important;
+  transform: none !important;
+  box-shadow: none !important;
+}
+
+/* Products Detected Section */
+.training-products-detected {
+  width: 100%;
+  background: #f8f9fa;
+  padding: 16px 20px;
+  border-radius: 8px;
+  margin-bottom: 16px;
+  border: 1px solid #e5e7eb;
+}
+
+.training-products-header {
+  margin-bottom: 12px;
+}
+
+.training-products-title {
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--color-text-primary);
+  margin-bottom: 8px;
+}
+
+.training-products-summary {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin-bottom: 6px;
+}
+
+.training-products-total {
+  font-size: 13px;
+  color: var(--color-text-secondary);
+  margin: 0;
+}
+
+.training-products-missing {
+  font-size: 13px;
+  color: var(--color-red-primary);
+  margin: 0;
+  font-weight: 600;
+}
+
+.training-products-note {
+  font-size: 12px;
+  color: var(--color-text-light);
+  margin: 6px 0 0 0;
+  font-style: italic;
+}
+
+/* Product Table */
+.training-products-table {
+  width: 100%;
+  border: 1px solid #e5e7eb;
+  border-radius: 6px;
+  overflow: hidden;
+}
+
+.training-products-table-header {
+  display: grid;
+  grid-template-columns: 1fr 120px;
+  padding: 8px 12px;
+  background: #f3f4f6;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--color-text-secondary);
+  border-bottom: 1px solid #e5e7eb;
+}
+
+.training-products-table-row {
+  display: grid;
+  grid-template-columns: 1fr 120px;
+  padding: 8px 12px;
+  font-size: 13px;
+  color: var(--color-text-primary);
+  border-bottom: 1px solid #f3f4f6;
+  align-items: center;
+}
+
+.training-products-table-row:last-child {
+  border-bottom: none;
+}
+
+.training-products-add-btn {
+  padding: 4px 12px;
+  background: transparent;
+  color: var(--color-red-primary);
+  border: 1px solid var(--color-red-primary);
+  border-radius: 4px;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  white-space: nowrap;
+}
+
+.training-products-add-btn:hover {
+  background: var(--color-red-primary);
+  color: var(--color-white);
+}
+
+/* Responsive for Products Table */
+@media (max-width: 768px) {
+  .training-products-table-header,
+  .training-products-table-row {
+    grid-template-columns: 1fr 100px;
+    font-size: 12px;
+    padding: 6px 10px;
+  }
+
+  .training-products-add-btn {
+    font-size: 11px;
+    padding: 3px 10px;
+  }
+
+  .training-products-detected {
+    padding: 12px 14px;
+  }
+
+  .training-products-title {
+    font-size: 13px;
+  }
+
+  .training-products-total,
+  .training-products-missing {
+    font-size: 12px;
+  }
+}
+
+@media (max-width: 480px) {
+  .training-products-table-header,
+  .training-products-table-row {
+    grid-template-columns: 1fr 80px;
+    font-size: 11px;
+    padding: 4px 8px;
+  }
+
+  .training-products-add-btn {
+    font-size: 10px;
+    padding: 2px 8px;
+  }
+
+  .training-products-detected {
+    padding: 10px 12px;
+  }
+
+  .training-products-title {
+    font-size: 12px;
+  }
+
+  .training-products-total,
+  .training-products-missing {
+    font-size: 11px;
+  }
+
+  .training-products-note {
+    font-size: 10px;
+  }
+}
+
+/* Model Training Section */
+.training-model-section {
+  width: 100%;
+  background: linear-gradient(135deg, #e8edf5 0%, #d1dcec 100%);
+  border: 2px solid #33548A;
+  border-radius: 12px;
+  padding: 24px 28px;
+  margin-bottom: 32px;
+}
+
+.training-model-left {
+  display: flex;
+  align-items: center;
+  gap: 24px;
+}
+
+/* Model Image */
+.training-model-image {
+  flex-shrink: 0;
+  width: 120px;
+  height: 120px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.training-model-img {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+}
+
+.training-model-content {
+  flex: 1;
+}
+
+.training-model-title {
+  font-size: 20px;
+  font-weight: 700;
+  color: #33548A;
+  margin-bottom: 8px;
+}
+
+.training-model-description {
+  font-size: 14px;
+  color: #1a2a4a;
+  line-height: 1.6;
+  margin-bottom: 16px;
+}
+
+.training-model-status {
+  margin-bottom: 16px;
+}
+
+.training-model-status-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.training-model-status-dot {
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+  background: #33548A;
+  border-radius: 50%;
+  animation: pulse 1.5s ease-in-out infinite;
+}
+
+@keyframes pulse {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50% { opacity: 0.5; transform: scale(1.2); }
+}
+
+.training-model-status-text {
+  font-size: 14px;
+  font-weight: 600;
+  color: #33548A;
+}
+
+.training-model-status-sub {
+  font-size: 13px;
+  color: #1a2a4a;
+  font-weight: 400;
+}
+
+.training-model-progress {
+  margin-top: 12px;
+}
+
+.training-model-progress-bar {
+  width: 100%;
+  height: 8px;
+  background: #d1dcec;
+  border-radius: 4px;
+  overflow: hidden;
+}
+
+.training-model-progress-fill {
+  height: 100%;
+  background: #33548A;
+  border-radius: 4px;
+  transition: width 0.8s ease;
+}
+
+.training-model-progress-info {
+  display: flex;
+  justify-content: space-between;
+  margin-top: 6px;
+  font-size: 13px;
+  color: #1a2a4a;
+}
+
+.training-model-progress-percent {
+  font-weight: 700;
+  color: #33548A;
+}
+
+.training-model-progress-time {
+  font-weight: 500;
+  color: #33548A;
+}
+
+/* Responsive */
+@media (max-width: 768px) {
+  .training-model-section {
+    padding: 18px 16px;
+  }
+
+  .training-model-left {
+    flex-direction: column;
+    align-items: center;
+    text-align: center;
+    gap: 16px;
+  }
+
+  .training-model-image {
+    width: 100px;
+    height: 100px;
+  }
+
+  .training-model-title {
+    font-size: 18px;
+  }
+
+  .training-model-description {
+    font-size: 13px;
+  }
+
+  .training-model-status-item {
+    justify-content: center;
+  }
+
+  .training-model-progress-info {
+    flex-direction: column;
+    align-items: center;
+    gap: 4px;
+  }
+}
+
+@media (max-width: 480px) {
+  .training-model-section {
+    padding: 14px 12px;
+  }
+
+  .training-model-image {
+    width: 80px;
+    height: 80px;
+  }
+
+  .training-model-title {
+    font-size: 16px;
+  }
+
+  .training-model-description {
+    font-size: 12px;
+  }
+
+  .training-model-status-text {
+    font-size: 13px;
+  }
+
+  .training-model-status-sub {
+    font-size: 12px;
+  }
+
+  .training-model-progress-info {
+    font-size: 12px;
+  }
+}

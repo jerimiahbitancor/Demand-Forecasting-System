@@ -1,0 +1,535 @@
+/* states/statescss/UploadedInsufficient.css */
+
+.insufficient-container {
+  min-height: 100vh;
+  background-color: var(--color-bg-white);
+  background-image: url("../../../assets/images/Dashboard.png");
+  background-size: cover;
+  background-position: center;
+  background-repeat: no-repeat;
+  background-attachment: fixed;
+}
+
+/* Main Content */
+.insufficient-main {
+  padding: 32px;
+  max-width: 1440px;
+  margin: 0 auto;
+}
+
+/* Header Section */
+.insufficient-header {
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  align-items: flex-end;
+  margin-bottom: 32px;
+  gap: 12px;
+}
+
+@media (min-width: 768px) {
+  .insufficient-header {
+    flex-direction: row;
+    align-items: center;
+  }
+}
+
+.insufficient-date-info {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--color-text-secondary);
+  letter-spacing: 0.05em;
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  background: rgba(255, 255, 255, 0.85);
+  padding: 10px 20px;
+  border-radius: 8px;
+  backdrop-filter: blur(4px);
+}
+
+.insufficient-date-separator {
+  color: var(--color-border);
+  font-weight: 300;
+}
+
+/* Progress Bar */
+.insufficient-progress-container {
+  background: rgba(255, 255, 255, 0.85);
+  padding: 10px 20px;
+  border-radius: 8px;
+  backdrop-filter: blur(4px);
+  min-width: 260px;
+}
+
+.insufficient-progress-bar-wrapper {
+  position: relative;
+  width: 100%;
+  height: 40px;
+  background: var(--color-bg-light);
+  border-radius: 10px;
+  overflow: hidden;
+}
+
+.insufficient-progress-fill {
+  height: 100%;
+  border-radius: 10px;
+  transition: width 0.8s ease;
+  background-color: rgba(122, 1, 1, 0.5);
+}
+
+.insufficient-progress-text {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 0 20px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--color-text-primary);
+  letter-spacing: 0.05em;
+  pointer-events: none;
+}
+
+.insufficient-progress-text span:first-child {
+  color: var(--color-text-secondary);
+}
+
+.insufficient-progress-text span:last-child {
+  color: var(--color-red-primary);
+  font-weight: 700;
+}
+
+/* Main Content */
+.insufficient-content {
+  padding: 40px 32px;
+  background: rgba(255, 255, 255, 0.85);
+  border-radius: 16px;
+  backdrop-filter: blur(4px);
+  margin-top: 40px;
+}
+
+/* Welcome Wrapper */
+.insufficient-welcome-wrapper {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  justify-content: space-between;
+  gap: 40px;
+  margin-bottom: 48px;
+}
+
+/* Left Side - Text Content */
+.insufficient-welcome-section {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  text-align: left;
+}
+
+.insufficient-welcome-title {
+  font-size: 36px;
+  font-weight: 700;
+  color: var(--color-red-primary);
+  margin-bottom: 36px;
+}
+
+.insufficient-welcome-description {
+  font-size: 16px;
+  color: #262626;
+  line-height: 1.8;
+  margin-bottom: 20px;
+}
+
+.insufficient-welcome-note {
+  font-size: 15px;
+  color: #262626;
+  margin-bottom: 40px;
+}
+
+.insufficient-welcome-link {
+  display: inline-block;
+  color: var(--color-red-primary);
+  font-weight: 600;
+  font-size: 14px;
+  text-decoration: none;
+  transition: all 0.3s ease;
+  padding: 10px 20px;
+  border: 2px solid var(--color-red-primary);
+  border-radius: 8px;
+}
+
+.insufficient-welcome-link:hover {
+  background: var(--color-red-primary);
+  color: var(--color-white);
+  transform: translateY(-2px);
+  box-shadow: 0 4px 12px rgba(122, 1, 1, 0.2);
+}
+
+/* Right Side - Image */
+.insufficient-welcome-image {
+  flex: 1;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  max-width: 400px;
+}
+
+.insufficient-welcome-img {
+  width: 100%;
+  height: auto;
+  max-height: 300px;
+  object-fit: contain;
+}
+
+/* Step Cards Section */
+.insufficient-step-cards {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 24px;
+  margin-top: 20px;
+  border-top: 2px solid rgba(122, 1, 1, 0.08);
+  padding-top: 32px;
+}
+
+.insufficient-step-card {
+  display: flex;
+  gap: 20px;
+  padding: 24px;
+  background: rgba(255, 255, 255, 0.9);
+  border-radius: 12px;
+  border: 1px solid rgba(122, 1, 1, 0.08);
+  transition: all 0.3s ease;
+}
+
+.insufficient-step-card:hover {
+  transform: translateY(-4px);
+  box-shadow: 0 8px 24px rgba(122, 1, 1, 0.1);
+  border-color: var(--color-red-primary);
+}
+
+.insufficient-step-number {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 48px;
+  height: 48px;
+  background: var(--color-red-primary);
+  color: var(--color-white);
+  border-radius: 50%;
+  font-size: 20px;
+  font-weight: 700;
+  flex-shrink: 0;
+}
+
+.insufficient-step-content {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+}
+
+.insufficient-step-title {
+  font-size: 18px;
+  font-weight: 700;
+  color: var(--color-text-primary);
+  margin-bottom: 8px;
+}
+
+.insufficient-step-description {
+  font-size: 14px;
+  color: var(--color-text-secondary);
+  line-height: 1.6;
+  margin-bottom: 16px;
+}
+
+.insufficient-step-btn {
+  padding: 10px 24px;
+  border: none;
+  border-radius: 8px;
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.3s ease;
+}
+
+.insufficient-step-btn-primary {
+  background: var(--color-red-primary);
+  color: var(--color-white);
+}
+
+.insufficient-step-btn-primary:hover {
+  background: #5a0101;
+  transform: translateY(-2px);
+  box-shadow: 0 4px 12px rgba(122, 1, 1, 0.3);
+}
+
+.insufficient-step-btn-secondary {
+  background: transparent;
+  color: var(--color-red-primary);
+  border: 2px solid var(--color-red-primary);
+}
+
+.insufficient-step-btn-secondary:hover {
+  background: var(--color-red-primary);
+  color: var(--color-white);
+  transform: translateY(-2px);
+  box-shadow: 0 4px 12px rgba(122, 1, 1, 0.2);
+}
+
+/* Responsive */
+@media (max-width: 992px) {
+  .insufficient-welcome-wrapper {
+    flex-direction: column;
+    gap: 30px;
+  }
+
+  .insufficient-welcome-section {
+    align-items: center;
+    text-align: center;
+  }
+
+  .insufficient-welcome-image {
+    max-width: 300px;
+  }
+
+  .insufficient-welcome-img {
+    max-height: 250px;
+  }
+
+  .insufficient-step-cards {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 768px) {
+  .insufficient-main {
+    padding: 16px;
+  }
+
+  .insufficient-header {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .insufficient-date-info {
+    font-size: 11px;
+    padding: 8px 14px;
+    gap: 8px;
+    flex-wrap: wrap;
+    justify-content: center;
+  }
+
+  .insufficient-progress-container {
+    min-width: unset;
+    width: 100%;
+  }
+
+  .insufficient-progress-bar-wrapper {
+    height: 36px;
+  }
+
+  .insufficient-progress-text {
+    font-size: 10px;
+    padding: 0 14px;
+  }
+
+  .insufficient-content {
+    padding: 24px 16px;
+  }
+
+  .insufficient-welcome-wrapper {
+    gap: 20px;
+  }
+
+  .insufficient-welcome-title {
+    font-size: 20px;
+  }
+
+  .insufficient-welcome-description {
+    font-size: 14px;
+  }
+
+  .insufficient-welcome-link {
+    font-size: 13px;
+    padding: 8px 16px;
+  }
+
+  .insufficient-welcome-image {
+    max-width: 250px;
+  }
+
+  .insufficient-welcome-img {
+    max-height: 200px;
+  }
+
+  .insufficient-step-cards {
+    gap: 16px;
+    padding-top: 24px;
+  }
+
+  .insufficient-step-card {
+    padding: 20px;
+    flex-direction: column;
+    align-items: center;
+    text-align: center;
+  }
+
+  .insufficient-step-content {
+    align-items: center;
+  }
+
+  .insufficient-step-number {
+    min-width: 40px;
+    height: 40px;
+    font-size: 18px;
+  }
+
+  .insufficient-step-title {
+    font-size: 16px;
+  }
+
+  .insufficient-step-description {
+    font-size: 13px;
+    text-align: center;
+  }
+}
+
+@media (max-width: 480px) {
+  .insufficient-main {
+    padding: 12px;
+  }
+
+  .insufficient-date-info {
+    font-size: 9px;
+    padding: 6px 10px;
+    gap: 6px;
+  }
+
+  .insufficient-progress-container {
+    padding: 8px 12px;
+  }
+
+  .insufficient-progress-bar-wrapper {
+    height: 30px;
+  }
+
+  .insufficient-progress-text {
+    font-size: 9px;
+    padding: 0 10px;
+  }
+
+  .insufficient-content {
+    padding: 16px 12px;
+  }
+
+  .insufficient-welcome-title {
+    font-size: 18px;
+  }
+
+  .insufficient-welcome-description {
+    font-size: 13px;
+  }
+
+  .insufficient-welcome-link {
+    font-size: 12px;
+    padding: 6px 12px;
+  }
+
+  .insufficient-welcome-image {
+    max-width: 200px;
+  }
+
+  .insufficient-welcome-img {
+    max-height: 150px;
+  }
+
+  .insufficient-step-cards {
+    gap: 12px;
+    padding-top: 16px;
+  }
+
+  .insufficient-step-card {
+    padding: 16px;
+  }
+
+  .insufficient-step-number {
+    min-width: 32px;
+    height: 32px;
+    font-size: 14px;
+  }
+
+  .insufficient-step-title {
+    font-size: 14px;
+  }
+
+  .insufficient-step-description {
+    font-size: 12px;
+  }
+
+  .insufficient-step-btn {
+    padding: 8px 16px;
+    font-size: 12px;
+  }
+}
+
+.insufficient-data-progress-wrapper1 {
+  width: 100%;
+  background: #ffffff;
+  padding: 10px 20px;
+  border-radius: 8px;
+  border: 1px solid rgba(122, 1, 1, 0.08);
+  margin-bottom: 20px;
+}
+
+.insufficient-step-description1 {
+  font-size: 14px;
+  color: var(--color-text-secondary);
+  line-height: 1.6;
+}
+.insufficient-data-progress-wrapper2 {
+  width: 100%;
+  background: #e79696b1;
+  padding: 10px 20px;
+  border-radius: 8px;
+  border: 1px solid rgb(122, 1, 1);
+}
+.insufficient-data-progress-wrapper {
+  width: 100%;
+  margin: 12px 0 16px 0;
+}
+
+.insufficient-data-progress-label {
+  display: flex;
+  justify-content: space-between;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--color-text-secondary);
+  margin-bottom: 6px;
+}
+
+.insufficient-data-progress-text {
+  color: var(--color-red-primary);
+  font-weight: 700;
+}
+
+.insufficient-data-progress-bar {
+  width: 100%;
+  height: 18px;
+  background: var(--color-bg-light);
+  border-radius: 4px;
+  overflow: hidden;
+}
+
+.insufficient-data-progress-fill {
+  height: 100%;
+  border-radius: 50px;
+  transition: width 0.8s ease;
+  background-color: rgb(86, 255, 60);
+}
+

@@ -130,6 +130,21 @@ class UploadService {
           return date.toISOString();
         }
       }
+
+      const yearMonthMatch = nameWithoutExt.match(/(?:^|[^0-9])(\d{4})[-_](0?[1-9]|1[0-2])(?:[^0-9]|$)/);
+      if (yearMonthMatch) {
+        return new Date(`${yearMonthMatch[1]}-${yearMonthMatch[2].padStart(2, '0')}-01`).toISOString();
+      }
+
+      const monthNames = 'january|february|march|april|may|june|july|august|september|october|november|december';
+      const monthYearMatch = nameWithoutExt.match(new RegExp(`(${monthNames})[^0-9]*(\\d{4})`, 'i'))
+        || nameWithoutExt.match(new RegExp(`(\\d{4})[^a-zA-Z]+(${monthNames})`, 'i'));
+      if (monthYearMatch) {
+        const year = /^\d{4}$/.test(monthYearMatch[1]) ? monthYearMatch[1] : monthYearMatch[2];
+        const monthName = /^\d{4}$/.test(monthYearMatch[1]) ? monthYearMatch[2] : monthYearMatch[1];
+        const month = monthNames.split('|').indexOf(monthName.toLowerCase()) + 1;
+        return new Date(`${year}-${String(month).padStart(2, '0')}-01`).toISOString();
+      }
       
       return null;
     } catch (error) {
@@ -991,6 +1006,7 @@ class UploadService {
           pending: filtered.filter((upload) => upload.status === 'pending').length,
           failed: filtered.filter((upload) => upload.status === 'failed').length,
           sales_records: filtered.reduce((sum, upload) => sum + (upload.row_count || 0), 0),
+          months_uploaded: Math.min(filtered.length, 12),
           menu_items: this.memoryStore.products.length,
           last_sync: filtered[filtered.length - 1]?.upload_date || null
         };
@@ -998,7 +1014,7 @@ class UploadService {
       }
 
       let query = supabaseAdmin.from('uploads')
-        .select('status, row_count, upload_date');
+        .select('id, filename, status, row_count, upload_date');
 
       if (numericId) {
         query = query.eq('user_id', numericId);
@@ -1008,6 +1024,34 @@ class UploadService {
       const { data: uploads = [], error: uploadError } = await query;
 
       if (uploadError) throw uploadError;
+
+      const uploadedMonths = new Set(
+        uploads
+          .map((upload) => this.extractDateFromFilename(upload.filename || ''))
+          .filter(Boolean)
+          .map((date) => date.slice(0, 7))
+      );
+      const uploadIds = uploads.map((upload) => upload.id).filter(Boolean);
+
+      if (uploadIds.length > 0) {
+        try {
+          const { data: salesDates = [], error: salesDatesError } = await supabaseAdmin
+            .from('daily_sales')
+            .select('sale_date, upload_id')
+            .in('upload_id', uploadIds);
+
+          if (salesDatesError) throw salesDatesError;
+
+          const months = new Set(
+            salesDates
+              .map((sale) => String(sale.sale_date || '').slice(0, 7))
+              .filter(Boolean)
+          );
+          months.forEach((month) => uploadedMonths.add(month));
+        } catch (salesDatesError) {
+          console.warn('Could not calculate uploaded months:', salesDatesError.message);
+        }
+      }
 
       let menuQuery = supabaseAdmin.from('products')
         .select('*', { count: 'exact', head: true });
@@ -1029,6 +1073,7 @@ class UploadService {
         pending: uploads.filter((upload) => upload.status === 'pending').length,
         failed: uploads.filter((upload) => upload.status === 'failed').length,
         sales_records: uploads.reduce((sum, upload) => sum + (upload.row_count || 0), 0),
+        months_uploaded: Math.min(uploadedMonths.size || uploads.length, 12),
         menu_items: menuItemsCount || 0,
         last_sync: uploads[uploads.length - 1]?.upload_date || new Date().toISOString()
       };
@@ -1039,6 +1084,67 @@ class UploadService {
       console.error('Error fetching stats:', error);
       throw error;
     }
+  }
+
+  async getUploadProgress(userId = null) {
+    const numericId = await this.getNumericUserId(userId);
+    const userPrefix = numericId ? `${numericId}-` : null;
+    const isProcessing = userPrefix
+      ? [...this.processingUploads].some((key) => key.startsWith(userPrefix))
+      : false;
+
+    if (!this.isSupabaseReady()) {
+      const uploads = this.memoryStore.uploads
+        .filter((upload) => !numericId || upload.user_id === numericId)
+        .sort((a, b) => new Date(b.upload_date || 0) - new Date(a.upload_date || 0));
+      const latest = uploads[0];
+
+      return {
+        progress: isProcessing ? 50 : latest?.status === 'processed' ? 100 : 0,
+        status: isProcessing ? 'processing' : latest?.status || 'idle'
+      };
+    }
+
+    let query = supabaseAdmin
+      .from('uploads')
+      .select('status, upload_date')
+      .order('upload_date', { ascending: false })
+      .limit(1);
+
+    if (numericId) {
+      query = query.eq('user_id', numericId);
+    }
+
+    const { data: uploads = [], error } = await query;
+    if (error) throw error;
+
+    const latest = uploads[0];
+    return {
+      progress: isProcessing ? 50 : latest?.status === 'processed' ? 100 : 0,
+      status: isProcessing ? 'processing' : latest?.status || 'idle'
+    };
+  }
+
+  async getDashboardState(userId = null) {
+    const stats = await this.getUploadStats(userId);
+    const progress = await this.getUploadProgress(userId);
+
+    let state = 'fully-operational';
+    if (stats.total_uploads === 0 && stats.sales_records === 0) {
+      state = 'no-data';
+    } else if (stats.failed > 0) {
+      state = 'data-needs-attention';
+    } else if (progress.status === 'processing' || stats.pending > 0) {
+      state = 'training';
+    } else if ((stats.months_uploaded || 0) < 12) {
+      state = 'uploaded-insufficient';
+    }
+
+    return {
+      state,
+      stats,
+      progress
+    };
   }
 }
 

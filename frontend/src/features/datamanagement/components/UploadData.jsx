@@ -1,5 +1,5 @@
 // components/UploadData.jsx
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import {
   FiUploadCloud,
   FiAlertCircle,
@@ -17,6 +17,47 @@ import * as XLSX from 'xlsx';
 import toast from 'react-hot-toast';
 import { useAuth } from "../../../context/AuthContext";
 
+const BULK_UPLOAD_STATUS_KEY = 'bulk_upload_status';
+
+const getStoredUploadStatus = (type) => {
+  try {
+    const stored = JSON.parse(sessionStorage.getItem(BULK_UPLOAD_STATUS_KEY) || '{}');
+    return stored[type] || null;
+  } catch {
+    return null;
+  }
+};
+
+const saveUploadStatus = (type, status) => {
+  try {
+    const stored = JSON.parse(sessionStorage.getItem(BULK_UPLOAD_STATUS_KEY) || '{}');
+    sessionStorage.setItem(BULK_UPLOAD_STATUS_KEY, JSON.stringify({
+      ...stored,
+      [type]: {
+        ...(stored[type] || {}),
+        ...status
+      }
+    }));
+  } catch {
+    // Storage is optional; the upload itself should continue.
+  }
+};
+
+const getStoredFiles = (type) => {
+  const status = getStoredUploadStatus(type);
+  return (status?.files || []).map((file) => ({ ...file, isRestored: true }));
+};
+
+const clearUploadStatus = (type) => {
+  try {
+    const stored = JSON.parse(sessionStorage.getItem(BULK_UPLOAD_STATUS_KEY) || '{}');
+    delete stored[type];
+    sessionStorage.setItem(BULK_UPLOAD_STATUS_KEY, JSON.stringify(stored));
+  } catch {
+    // Storage is optional.
+  }
+};
+
 const UploadData = ({
   activeTab,
   setActiveTab,
@@ -28,27 +69,61 @@ const UploadData = ({
   const { getToken, checkUploadStatus } = useAuth();
 
   // Sales upload state - MULTIPLE FILES
-  const [salesFiles, setSalesFiles] = useState([]);
+  const [salesFiles, setSalesFiles] = useState(() => getStoredFiles('sales'));
   const [isSalesDragging, setIsSalesDragging] = useState(false);
-  const [salesUploadStatus, setSalesUploadStatus] = useState(null);
-  const [salesProgress, setSalesProgress] = useState(0);
+  const [salesUploadStatus, setSalesUploadStatus] = useState(
+    () => getStoredUploadStatus('sales')?.status || null
+  );
+  const [salesProgress, setSalesProgress] = useState(
+    () => getStoredUploadStatus('sales')?.progress || 0
+  );
   const [salesValidated, setSalesValidated] = useState(false);
   const [salesValidationErrors, setSalesValidationErrors] = useState([]);
   const [salesIsValid, setIsSalesValid] = useState(false);
   const [salesProcessingIndex, setSalesProcessingIndex] = useState(-1);
-  const [salesUploadedCount, setSalesUploadedCount] = useState(0);
+  const [salesUploadedCount, setSalesUploadedCount] = useState(
+    () => getStoredUploadStatus('sales')?.uploadedCount || 0
+  );
 
   // Menu upload state - MULTIPLE FILES
-  const [menuFiles, setMenuFiles] = useState([]);
+  const [menuFiles, setMenuFiles] = useState(() => getStoredFiles('menu'));
   const [isMenuDragging, setIsMenuDragging] = useState(false);
-  const [menuUploadStatus, setMenuUploadStatus] = useState(null);
-  const [menuProgress, setMenuProgress] = useState(0);
+  const [menuUploadStatus, setMenuUploadStatus] = useState(
+    () => getStoredUploadStatus('menu')?.status || null
+  );
+  const [menuProgress, setMenuProgress] = useState(
+    () => getStoredUploadStatus('menu')?.progress || 0
+  );
   const [menuValidated, setMenuValidated] = useState(false);
   const [menuValidationErrors, setMenuValidationErrors] = useState([]);
   const [menuDbDuplicates, setMenuDbDuplicates] = useState([]);
   const [menuIsValid, setMenuIsValid] = useState(false);
   const [menuProcessingIndex, setMenuProcessingIndex] = useState(-1);
-  const [menuUploadedCount, setMenuUploadedCount] = useState(0);
+  const [menuUploadedCount, setMenuUploadedCount] = useState(
+    () => getStoredUploadStatus('menu')?.uploadedCount || 0
+  );
+
+  useEffect(() => {
+    const syncUploadStatus = () => {
+      const salesStatus = getStoredUploadStatus('sales');
+      const menuStatus = getStoredUploadStatus('menu');
+
+      if (salesStatus) {
+        setSalesUploadStatus(salesStatus.status || null);
+        setSalesProgress(salesStatus.progress || 0);
+        setSalesUploadedCount(salesStatus.uploadedCount || 0);
+      }
+
+      if (menuStatus) {
+        setMenuUploadStatus(menuStatus.status || null);
+        setMenuProgress(menuStatus.progress || 0);
+        setMenuUploadedCount(menuStatus.uploadedCount || 0);
+      }
+    };
+
+    const statusInterval = setInterval(syncUploadStatus, 500);
+    return () => clearInterval(statusInterval);
+  }, []);
 
   // Dynamic preview data from API
   const [salesPreviewData, setSalesPreviewData] = useState({
@@ -391,7 +466,8 @@ const UploadData = ({
 
     if (validFiles.length === 0) return;
 
-    setSalesFiles(prev => [...prev, ...validFiles]);
+    clearUploadStatus('sales');
+    setSalesFiles(prev => [...prev.filter(file => !file.isRestored), ...validFiles]);
     setSalesUploadStatus(null);
     setSalesProgress(0);
     setSalesValidated(false);
@@ -511,44 +587,68 @@ const UploadData = ({
       setSalesProgress(0);
       setSalesProcessingIndex(0);
       setSalesUploadedCount(0);
+      saveUploadStatus('sales', {
+        status: 'loading',
+        progress: 0,
+        uploadedCount: 0,
+        files: salesFiles.map(({ name, size, type }) => ({ name, size, type }))
+      });
       
       const totalFiles = salesFiles.length;
       let uploaded = 0;
-      
-      for (let i = 0; i < totalFiles; i++) {
+      const failedFiles = [];
+      let completed = 0;
+
+      const salesResults = await Promise.allSettled(salesFiles.map(async (_, i) => {
         setSalesProcessingIndex(i);
-        
         const formData = new FormData();
         formData.append('file', salesFiles[i]);
         formData.append('fileType', 'sales');
 
-        console.log(`Uploading sales file ${i + 1}/${totalFiles}: ${salesFiles[i].name}`);
+          console.log(`Uploading sales file ${i + 1}/${totalFiles}: ${salesFiles[i].name}`);
 
-        const response = await apiClient.post('/upload', formData, {
-          headers: {
-            'Content-Type': 'multipart/form-data'
-          },
-          onUploadProgress: (progressEvent) => {
-            const percentCompleted = Math.round((progressEvent.loaded * 100) / progressEvent.total);
-            const overallProgress = Math.round(((i + (percentCompleted / 100)) / totalFiles) * 100);
-            setSalesProgress(overallProgress);
+          const response = await apiClient.post('/upload', formData, {
+            headers: {
+              'Content-Type': 'multipart/form-data'
+            },
+            onUploadProgress: (progressEvent) => {
+              const percentCompleted = Math.round((progressEvent.loaded * 100) / progressEvent.total);
+              const overallProgress = Math.round(((completed + (percentCompleted / 100)) / totalFiles) * 100);
+              setSalesProgress(overallProgress);
+              saveUploadStatus('sales', { status: 'loading', progress: overallProgress, uploadedCount: uploaded });
+            }
+          });
+
+          if (!response?.data?.success) {
+            throw new Error(response?.data?.error || `Failed to upload ${salesFiles[i].name}`);
           }
-        });
 
-        if (response?.data?.success) {
+        return response;
+      }).finally(() => {
+        completed++;
+        const progress = Math.round((completed / totalFiles) * 100);
+        setSalesProgress(progress);
+        saveUploadStatus('sales', { status: 'loading', progress, uploadedCount: uploaded });
+      }));
+
+      salesResults.forEach((result, i) => {
+        if (result.status === 'fulfilled' && result.value?.data?.success) {
           uploaded++;
           setSalesUploadedCount(uploaded);
-          
-          if (salesToastId) toast.dismiss(salesToastId);
-          const id = toast.success(`Uploaded ${uploaded}/${totalFiles}: ${salesFiles[i].name}`);
-          setSalesToastId(id);
         } else {
-          throw new Error(response?.data?.error || `Failed to upload ${salesFiles[i].name}`);
+          const error = result.reason || new Error('Upload failed');
+          failedFiles.push({ name: salesFiles[i].name, error });
+          console.error(`Sales file failed: ${salesFiles[i].name}`, error);
         }
+      });
+
+      if (uploaded === 0) {
+        throw new Error('No sales files were uploaded successfully.');
       }
 
       setSalesProgress(100);
       setSalesUploadStatus('success');
+      saveUploadStatus('sales', { status: 'success', progress: 100, uploadedCount: uploaded });
       
       const summary = {
         totalRows: salesPreviewData.totalRecords,
@@ -566,7 +666,10 @@ const UploadData = ({
       });
       
       if (salesToastId) toast.dismiss(salesToastId);
-      const id = toast.success(`Successfully uploaded ${uploaded}/${totalFiles} files! ${salesPreviewData.validRecords || 0} records processed.`);
+      const failedMessage = failedFiles.length > 0
+        ? ` ${failedFiles.length} file(s) skipped.`
+        : '';
+      const id = toast.success(`Uploaded ${uploaded}/${totalFiles} sales files.${failedMessage}`);
       setSalesToastId(id);
       
       await checkUploadStatus();
@@ -605,7 +708,8 @@ const UploadData = ({
       console.error('Error response:', error.response?.data);
       
       setSalesUploadStatus('error');
-      setSalesProgress(0);
+      setSalesProgress(salesUploadedCount > 0 ? 100 : 0);
+      saveUploadStatus('sales', { status: 'error', progress: salesUploadedCount > 0 ? 100 : 0, uploadedCount: salesUploadedCount });
       
       const errorMsg = error.response?.data?.error || error.message || 'Upload failed';
       const details = error.response?.data?.details || '';
@@ -634,6 +738,7 @@ const UploadData = ({
   };
 
   const handleSalesDiscard = () => {
+    clearUploadStatus('sales');
     setSalesFiles([]);
     setSalesUploadStatus(null);
     setSalesProgress(0);
@@ -707,7 +812,8 @@ const UploadData = ({
 
     if (validFiles.length === 0) return;
 
-    setMenuFiles(prev => [...prev, ...validFiles]);
+    clearUploadStatus('menu');
+    setMenuFiles(prev => [...prev.filter(file => !file.isRestored), ...validFiles]);
     setMenuUploadStatus(null);
     setMenuProgress(0);
     setMenuValidated(false);
@@ -822,59 +928,78 @@ const UploadData = ({
       setMenuProgress(0);
       setMenuProcessingIndex(0);
       setMenuUploadedCount(0);
+      saveUploadStatus('menu', {
+        status: 'loading',
+        progress: 0,
+        uploadedCount: 0,
+        files: menuFiles.map(({ name, size, type }) => ({ name, size, type }))
+      });
       
       const totalFiles = menuFiles.length;
       let uploaded = 0;
-      
-      for (let i = 0; i < totalFiles; i++) {
+      const failedFiles = [];
+      let completed = 0;
+
+      const menuResults = await Promise.allSettled(menuFiles.map(async (_, i) => {
         setMenuProcessingIndex(i);
-        
         const formData = new FormData();
         formData.append('file', menuFiles[i]);
         formData.append('fileType', 'menu');
 
-        console.log(`Uploading menu file ${i + 1}/${totalFiles}: ${menuFiles[i].name}`);
+          console.log(`Uploading menu file ${i + 1}/${totalFiles}: ${menuFiles[i].name}`);
 
-        const response = await apiClient.post('/upload', formData, {
-          headers: {
-            'Content-Type': 'multipart/form-data'
-          },
-          onUploadProgress: (progressEvent) => {
-            const percentCompleted = Math.round((progressEvent.loaded * 100) / progressEvent.total);
-            const overallProgress = Math.round(((i + (percentCompleted / 100)) / totalFiles) * 100);
-            setMenuProgress(overallProgress);
+          const response = await apiClient.post('/upload', formData, {
+            headers: {
+              'Content-Type': 'multipart/form-data'
+            },
+            onUploadProgress: (progressEvent) => {
+              const percentCompleted = Math.round((progressEvent.loaded * 100) / progressEvent.total);
+              const overallProgress = Math.round(((completed + (percentCompleted / 100)) / totalFiles) * 100);
+              setMenuProgress(overallProgress);
+              saveUploadStatus('menu', { status: 'loading', progress: overallProgress, uploadedCount: uploaded });
+            }
+          });
+
+          if (!response?.data?.success) {
+            throw new Error(response?.data?.error || `Failed to upload ${menuFiles[i].name}`);
           }
-        });
 
-        if (response?.data?.success) {
+        return response;
+      }).finally(() => {
+        completed++;
+        const progress = Math.round((completed / totalFiles) * 100);
+        setMenuProgress(progress);
+        saveUploadStatus('menu', { status: 'loading', progress, uploadedCount: uploaded });
+      }));
+
+      menuResults.forEach((result, i) => {
+        const summary = result.status === 'fulfilled' ? result.value?.data?.summary || {} : {};
+        const hasDuplicate = summary.dbDuplicates && summary.dbDuplicates.length > 0;
+        if (result.status === 'fulfilled' && result.value?.data?.success && !hasDuplicate) {
           uploaded++;
           setMenuUploadedCount(uploaded);
-          
-          const summary = response?.data?.summary || {};
-          
-          if (summary.dbDuplicates && summary.dbDuplicates.length > 0) {
-            if (menuToastId) toast.dismiss(menuToastId);
-            const id = toast.error(`Found ${summary.dbDuplicates.length} duplicate product(s) in ${menuFiles[i].name}. Please remove them.`);
-            setMenuToastId(id);
-            // Continue with other files
-            continue;
-          }
-          
-          if (menuToastId) toast.dismiss(menuToastId);
-          const id = toast.success(`Uploaded ${uploaded}/${totalFiles}: ${menuFiles[i].name}`);
-          setMenuToastId(id);
         } else {
-          throw new Error(response?.data?.error || `Failed to upload ${menuFiles[i].name}`);
+          const error = result.reason || new Error(hasDuplicate ? 'Duplicate products' : 'Upload failed');
+          failedFiles.push({ name: menuFiles[i].name, error });
+          console.error(`Menu file failed: ${menuFiles[i].name}`, error);
         }
+      });
+
+      if (uploaded === 0) {
+        throw new Error('No menu files were uploaded successfully.');
       }
 
       setMenuProgress(100);
       setMenuUploadStatus('success');
+      saveUploadStatus('menu', { status: 'success', progress: 100, uploadedCount: uploaded });
       
       const productMsg = ` ${menuPreviewData.mappedItems || 0} items mapped.`;
       
       if (menuToastId) toast.dismiss(menuToastId);
-      const id = toast.success(`Successfully uploaded ${uploaded}/${totalFiles} menu files!${productMsg}`);
+      const failedMessage = failedFiles.length > 0
+        ? ` ${failedFiles.length} file(s) skipped.`
+        : '';
+      const id = toast.success(`Uploaded ${uploaded}/${totalFiles} menu files!${failedMessage}${productMsg}`);
       setMenuToastId(id);
       
       if (onUploadSuccess) {
@@ -911,7 +1036,8 @@ const UploadData = ({
       console.error('Error response:', error.response?.data);
       
       setMenuUploadStatus('error');
-      setMenuProgress(0);
+      setMenuProgress(menuUploadedCount > 0 ? 100 : 0);
+      saveUploadStatus('menu', { status: 'error', progress: menuUploadedCount > 0 ? 100 : 0, uploadedCount: menuUploadedCount });
       
       const errorMsg = error.response?.data?.error || error.message || 'Upload failed';
       if (menuToastId) toast.dismiss(menuToastId);
@@ -926,6 +1052,7 @@ const UploadData = ({
   };
 
   const handleMenuDiscard = () => {
+    clearUploadStatus('menu');
     setMenuFiles([]);
     setMenuUploadStatus(null);
     setMenuProgress(0);
@@ -1159,7 +1286,7 @@ const UploadData = ({
               {salesUploadStatus === 'success' && (
                 <div className="upload-status success">
                   <FiCheckCircle size={20} />
-                  Upload successful!
+                  Upload successful! {salesUploadedCount} file(s) uploaded.
                   <ProgressBar progress={100} status="success" />
                 </div>
               )}
@@ -1253,7 +1380,7 @@ const UploadData = ({
                     <button
                       className={`btn-primary ${salesUploadStatus === 'loading' ? 'loading' : ''}`}
                       onClick={handleSalesConfirm}
-                      disabled={salesFiles.length === 0 || salesUploadStatus === 'loading' || !salesValidated || !salesIsValid}
+                      disabled={salesFiles.length === 0 || salesFiles.some(file => file.isRestored) || salesUploadStatus === 'loading' || !salesValidated || !salesIsValid}
                     >
                       {salesUploadStatus === 'loading' ? 'Uploading...' : `Upload ${salesFiles.length} File(s)`}
                     </button>

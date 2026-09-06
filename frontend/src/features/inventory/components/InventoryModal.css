@@ -16,7 +16,7 @@
   display: flex;
   flex-direction: column;
   width: 100%;
-  max-width: 520px;
+  max-width: 620px;
   max-height: 90vh;
   overflow: hidden;
   background: #ffffff;
@@ -26,12 +26,12 @@
 }
 
 .inventory-modal-content.modal-md {
-  max-width: 520px;
+  max-width: 620px;
   max-height: 85vh;
 }
 
 .inventory-modal-content.modal-lg {
-  max-width: 650px;
+  max-width: 900px;
 }
 
 .inventory-modal-header {
