@@ -1,5 +1,5 @@
 // frontend/src/App.jsx
-import { Routes, Route, Navigate } from 'react-router-dom';
+import { Routes, Route, Navigate, useSearchParams } from 'react-router-dom';
 import { Toaster } from 'react-hot-toast';
 import Register from './features/auth/pages/register/Register';
 import VerifyEmail from './features/auth/pages/register/VerifyEmail';
@@ -24,6 +24,14 @@ import './App.css';
 import './RouteGuard.css';
 import Landing from './features/landing/Landing';
 
+// Import individual state components
+import FullyOperational from './features/dashboard/states/FullyOperational';
+import NoData from './features/dashboard/states/NoData';
+import UploadedInsufficient from './features/dashboard/states/UploadedInsufficient';
+import TrainingInProgress from './features/dashboard/states/TrainingInProgress';
+import ForecastsReady from './features/dashboard/states/ForecastsReady';
+import DataNeedsAttention from './features/dashboard/states/DataNeedsAttention';
+
 function RouteGuard({ children, mode }) {
   const checking = useSetupGuard(mode);
   
@@ -46,7 +54,6 @@ function RouteGuard({ children, mode }) {
   return children;
 }
 
-// Landing route with entry guard
 function LandingRoute() {
   const checking = useSetupGuard('entry');
   
@@ -78,6 +85,41 @@ function Gated({ children }) {
     <ProtectedRoute>
       {children}
     </ProtectedRoute>
+  );
+}
+
+// Wrapper component to handle state parameter for dashboard
+function DashboardWrapper() {
+  const [searchParams] = useSearchParams();
+  const stateParam = searchParams.get('state');
+  
+  // State mapping for URL parameters
+  const stateMap = {
+    'fully-operational': FullyOperational,
+    'no-data': NoData,
+    'uploaded-insufficient': UploadedInsufficient,
+    'training': TrainingInProgress,
+    'forecasts-ready': ForecastsReady,
+    'data-needs-attention': DataNeedsAttention,
+  };
+  
+  // If state parameter is provided, show specific state
+  if (stateParam) {
+    const SpecificState = stateMap[stateParam];
+    if (SpecificState) {
+      return (
+        <Gated>
+          <SpecificState />
+        </Gated>
+      );
+    }
+  }
+  
+  // Default: Show the main Dashboard with state switcher
+  return (
+    <Gated>
+      <Dashboard />
+    </Gated>
   );
 }
 
@@ -173,7 +215,7 @@ function App() {
         <Route path="/data-management" element={<ProtectedRoute><DataManagement /></ProtectedRoute>} />
 
         {/* Main App Routes - Protected + Gated */}
-        <Route path="/dashboard" element={<Gated><Dashboard /></Gated>} />
+        <Route path="/dashboard" element={<DashboardWrapper />} />
         <Route path="/analytics" element={<Gated><Analytics /></Gated>} />
         <Route path="/inventory-management" element={<InventoryManagement />} />
         <Route path="/ingredient-management" element={<IngredientManagement />} />
@@ -188,6 +230,29 @@ function App() {
 
         {/* Profile */}
         <Route path="/profile" element={<Navigate to="/settings" replace />} />
+        
+        {/* ============================================================ */}
+        {/* DIRECT ROUTES - Access individual dashboard states */}
+        {/* These work in all environments */}
+        {/* ============================================================ */}
+        <Route path="/dashboard/fully-operational" element={
+          <Gated><FullyOperational /></Gated>
+        } />
+        <Route path="/dashboard/no-data" element={
+          <Gated><NoData /></Gated>
+        } />
+        <Route path="/dashboard/uploaded-insufficient" element={
+          <Gated><UploadedInsufficient /></Gated>
+        } />
+        <Route path="/dashboard/training" element={
+          <Gated><TrainingInProgress /></Gated>
+        } />
+        <Route path="/dashboard/forecasts-ready" element={
+          <Gated><ForecastsReady /></Gated>
+        } />
+        <Route path="/dashboard/data-needs-attention" element={
+          <Gated><DataNeedsAttention /></Gated>
+        } />
         
         {/* Catch-all - redirect to landing */}
         <Route path="*" element={<Navigate to="/" replace />} />

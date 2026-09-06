@@ -69,13 +69,14 @@
 
 .date-info {
   font-size: 10px;
-  font-weight: 600;
-  color: var(--color-text-secondary);
-  letter-spacing: 0.1em;
-  text-transform: uppercase;
-  display: flex;
-  gap: 16px;
-  margin-top: 8px;
+    font-weight: 600;
+    color: var(--color-text-secondary);
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    display: flex;
+    gap: 16px;
+    margin-top: 8px;
+    align-items: center;
 }
 
 @media (min-width: 768px) {

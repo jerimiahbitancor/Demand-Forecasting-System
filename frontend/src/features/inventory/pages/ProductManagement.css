@@ -1938,6 +1938,47 @@
   border-top: 1px solid rgba(255, 255, 255, 0.1);
 }
 
+.tooltip-review-note {
+  color: #f9fafb !important;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.product-card-tooltip.tooltip-expand-table .tooltip-low-margin-item {
+  padding: 12px;
+  background: #fff7f8;
+  border-radius: 6px;
+}
+
+.product-card-tooltip.tooltip-expand-table .tooltip-item-name {
+  color: #111827;
+  font-size: 14px;
+}
+
+.product-card-tooltip.tooltip-expand-table .tooltip-item-label {
+  color: #4b5563;
+}
+
+.product-card-tooltip.tooltip-expand-table .tooltip-item-value {
+  color: #111827;
+}
+
+.product-card-tooltip.tooltip-expand-table .tooltip-item-value.negative {
+  color: #b91c1c;
+}
+
+.product-card-tooltip.tooltip-expand-table .tooltip-item-value.profit {
+  color: #15803d;
+}
+
+.product-card-tooltip.tooltip-expand-table .tooltip-item-divider {
+  border-color: #d1d5db;
+}
+
+.product-card-tooltip.tooltip-expand-table .tooltip-item-description {
+  color: #4b5563;
+}
+
 /* Expand icon hover effect */
 .product-card-expand {
   display: inline-flex;

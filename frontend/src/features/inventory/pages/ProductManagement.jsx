@@ -777,7 +777,7 @@ const ProductManagement = () => {
       dotColor = '#9ca3af';
       tooltip = 'No ingredient recipe configured. This product cannot be included in ingredient demand estimates or the shopping list. Add a recipe using the Edit button.';
     } else if (isLowMargin && isActive) {
-      label = 'Low Margin';
+      label = 'High Food Cost';
       className = 'status-low-margin';
       dotColor = '#ec4899';
       tooltip = 'This product has a profit margin below 30%. Consider adjusting price or reducing ingredient costs.';
@@ -908,33 +908,18 @@ const ProductManagement = () => {
   // ============ STOCK LEGEND ============
   const stockLegend = [
     { label: 'Unmapped', color: '#9ca3af' },
-    { label: 'Low Margin', color: '#ec4899' },
+    { label: 'High Food Cost', color: '#ec4899' },
     { label: 'Active', color: '#16a34a' },
     { label: 'Inactive (New)', color: '#f59e0b' },
     { label: 'Inactive (Discontinued)', color: '#dc2626' }
   ];
 
-  // Get count for each status
-  const getStatusCounts = () => {
-    let unmapped = 0;
-    let lowMargin = 0;
-    let active = 0;
-    let inactiveNew = 0;
-    let discontinued = 0;
-
-    mappingData.forEach(item => {
-      const status = getStatusDetails(item);
-      if (status.isUnmapped) unmapped++;
-      else if (status.isLowMargin && status.isActive) lowMargin++;
-      else if (status.isActive) active++;
-      else if (status.isNew && !status.isActive) inactiveNew++;
-      else if (status.isDiscontinued) discontinued++;
-    });
-
-    return { unmapped, lowMargin, active, inactiveNew, discontinued };
-  };
-
-  const statusCounts = getStatusCounts();
+  const highFoodCostItems = mappingData.filter(item => {
+    const price = item.price || 0;
+    const cogs = price * 0.6;
+    const margin = price > 0 ? ((price - cogs) / price) * 100 : 0;
+    return margin < 30 && price > 0;
+  });
 
   // Get sample data for tooltip
   const getTooltipData = () => {
@@ -948,7 +933,7 @@ const ProductManagement = () => {
 
   const tooltipData = getTooltipData();
 
-  // Static low margin items data for the tooltip
+  // Static high food cost examples for the tooltip
   const lowMarginTooltipData = [
     {
       name: 'Breaded Porkchop',
@@ -977,8 +962,8 @@ const ProductManagement = () => {
             <div className="product-stat-card-header">
               <p className="product-stat-card-label">Total Menu Items</p>
               <Tippy
-                content="All active menu items currently on your menu. Archived and inactive items are not counted."
-                placement="top"
+                content="Shows the total number of active menu items currently available in your product list. Archived and inactive products are not included."
+                placement="bottom"
                 animation="scale"
                 duration={200}
                 theme="dark"
@@ -1004,7 +989,9 @@ const ProductManagement = () => {
               <Tippy
                 content={(
                   <div className="product-card-tooltip">
-                    <strong>How Average COGS is computed</strong>
+                    <strong>Average COGS</strong>
+                    <span>Shows the average estimated ingredient cost per mapped menu item. COGS is calculated using the ingredient quantities in each recipe and their current recorded unit costs.</span>
+                    <span>Products without a recipe are not included because their ingredient cost cannot be calculated.</span>
                     <table className="product-tooltip-table">
                       <thead>
                         <tr>
@@ -1037,14 +1024,14 @@ const ProductManagement = () => {
                       </tbody>
                     </table>
                     <div className="tooltip-calculation">
-                      <span><strong>Calculation:</strong> {formatCurrency(tooltipData.totalIngredientCost)} total ingredient cost ÷ {tooltipData.sampleProducts.length || 1} dishes = <strong>{formatCurrency(tooltipData.avgCogs)}</strong> average per dish</span>
+                      <span><strong>Calculation:</strong> {formatCurrency(tooltipData.totalIngredientCost)} total estimated ingredient cost ÷ {tooltipData.sampleProducts.length || 1} mapped menu items = <strong>{formatCurrency(tooltipData.avgCogs)}</strong> average per item</span>
                     </div>
                     <span className="tooltip-note">
-                      This means on average, you spend {formatCurrency(tooltipData.avgCogs)} in ingredients for every dish you prepare. If your average selling price is around {formatCurrency(tooltipData.avgPrice)}, then {formatCurrency(tooltipData.avgCogs)} of every dish's revenue goes back to buying ingredients.
+                      Average COGS is a general cost overview. Interpret it together with selling prices: {formatCurrency(tooltipData.avgCogs)} may be high for a ₱60 product but low for a ₱200 product.
                     </span>
                   </div>
                 )}
-                placement="top"
+                placement="bottom"
                 animation="scale"
                 duration={200}
                 theme="dark"
@@ -1069,16 +1056,16 @@ const ProductManagement = () => {
         <div className="product-stat-card warning">
           <div className="product-stat-card-content">
             <div className="product-stat-card-header">
-              <p className="product-stat-card-label">Low Margin Items</p>
+              <p className="product-stat-card-label">High Food Cost Items</p>
               <div className="product-card-header-actions">
                 <Tippy
                   content={(
                     <div className="product-card-tooltip">
-                      <strong>Low Margin Items</strong>
-                      <span>These are menu items where most of your selling price goes to ingredients, leaving you with very little profit. For example, if a dish costs ₱80 in ingredients but you sell it for ₱95, only ₱15 stays with you — that's less than 20% of the price. This count shows how many of your items fall into that situation.</span>
+                      <strong>High Food Cost Items</strong>
+                      <span>These are menu items where ingredient costs take up a high percentage of the selling price. They may need a review of the selling price, recipe, portion size, or ingredient costs. This is a warning indicator only and does not represent the product's actual net profit.</span>
                     </div>
                   )}
-                  placement="top"
+                  placement="bottom"
                   animation="scale"
                   duration={200}
                   theme="dark"
@@ -1090,7 +1077,7 @@ const ProductManagement = () => {
                   appendTo={() => document.body}
                   zIndex={100000}
                 >
-                  <span className="product-card-info" tabIndex={0} aria-label="Low margin items information">
+                  <span className="product-card-info" tabIndex={0} aria-label="High food cost items information">
                     <FaInfoCircle />
                   </span>
                 </Tippy>
@@ -1099,7 +1086,8 @@ const ProductManagement = () => {
                 <Tippy
                   content={(
                     <div className="product-card-tooltip tooltip-expand-table">
-                      <strong>Low Margin Items — the 2 menu items flagged</strong>
+                      <strong>High Food Cost Items — {highFoodCostItems.length} products detected</strong>
+                      <span className="tooltip-review-note">Consider reviewing the selling price, recipe, portion size, or current ingredient costs.</span>
                       
                       {/* Breaded Porkchop */}
                       <div className="tooltip-low-margin-item">
@@ -1113,6 +1101,10 @@ const ProductManagement = () => {
                           <span className="tooltip-item-value negative">−₱62</span>
                         </div>
                         <div className="tooltip-item-divider"></div>
+                        <div className="tooltip-item-row">
+                          <span className="tooltip-item-label">Food cost percentage</span>
+                          <span className="tooltip-item-value margin-low">78.5%</span>
+                        </div>
                         <div className="tooltip-item-row">
                           <span className="tooltip-item-label">Profit per menu</span>
                           <span className="tooltip-item-value profit">₱17</span>
@@ -1142,6 +1134,10 @@ const ProductManagement = () => {
                         </div>
                         <div className="tooltip-item-divider"></div>
                         <div className="tooltip-item-row">
+                          <span className="tooltip-item-label">Food cost percentage</span>
+                          <span className="tooltip-item-value margin-low">80%</span>
+                        </div>
+                        <div className="tooltip-item-row">
                           <span className="tooltip-item-label">Profit per menu</span>
                           <span className="tooltip-item-value profit">₱22</span>
                         </div>
@@ -1157,11 +1153,14 @@ const ProductManagement = () => {
                       <div className="tooltip-summary">
                         Most of the selling price is eaten up by ingredient cost. You can either raise the price, swap to cheaper ingredients, or accept the lower profit if these dishes attract more customers.
                       </div>
+                      <div className="tooltip-summary">
+                        Important: a High Food Cost indicator does not automatically mean the product is unprofitable. The system compares estimated ingredient cost with selling price and does not include labor, rent, utilities, or other operating expenses. Some high-demand or premium products may intentionally have higher food costs.
+                      </div>
                       
                
                     </div>
                   )}
-                  placement="top"
+                  placement="bottom"
                   animation="scale"
                   duration={200}
                   theme="dark"
@@ -1176,16 +1175,10 @@ const ProductManagement = () => {
                   <span 
                     className="product-card-expand" 
                     tabIndex={0} 
-                    aria-label="Expand low margin items"
+                    aria-label="Expand high food cost items"
                     onClick={() => {
-                      const lowMarginItems = mappingData.filter(item => {
-                        const price = item.price || 0;
-                        const cogs = price * 0.6;
-                        const margin = price > 0 ? ((price - cogs) / price) * 100 : 0;
-                        return margin < 30 && price > 0;
-                      });
-                      if (lowMarginItems.length > 0) {
-                        setSelectedLowMarginItem(lowMarginItems);
+                      if (highFoodCostItems.length > 0) {
+                        setSelectedLowMarginItem(highFoodCostItems);
                         setIsLowMarginModalOpen(true);
                       }
                     }}
@@ -1197,23 +1190,11 @@ const ProductManagement = () => {
               </div>
             </div>
             <div className="product-stock-alerts-group">
-              <span className="alert-badge alert-unmapped" style={{ backgroundColor: '#9ca3af' }}>
-                {statusCounts.unmapped}
-              </span>
               <span className="alert-badge alert-low-margin" style={{ backgroundColor: '#ec4899' }}>
-                {statusCounts.lowMargin}
-              </span>
-              <span className="alert-badge alert-active" style={{ backgroundColor: '#16a34a' }}>
-                {statusCounts.active}
-              </span>
-              <span className="alert-badge alert-inactive-new" style={{ backgroundColor: '#f59e0b' }}>
-                {statusCounts.inactiveNew}
-              </span>
-              <span className="alert-badge alert-discontinued" style={{ backgroundColor: '#dc2626' }}>
-                {statusCounts.discontinued}
+                {highFoodCostItems.length}
               </span>
             </div>
-            <p className="product-stat-card-change">Product Status Counts</p>
+            <p className="product-stat-card-change">Below 30% profit margin</p>
           </div>
         </div>
 
@@ -1223,7 +1204,7 @@ const ProductManagement = () => {
               <p className="product-stat-card-label">Unmapped Products</p>
               <Tippy
                 content="These are menu items that don't have an ingredient recipe added yet. Without a recipe, the system doesn't know what ingredients go into each dish, so it can't estimate how much to buy or include these items in the shopping list. Go to each unmapped product and add its ingredients to unlock the full shopping list and demand estimates."
-                placement="top"
+                placement="bottom"
                 animation="scale"
                 duration={200}
                 theme="dark"
@@ -1465,12 +1446,12 @@ const ProductManagement = () => {
         )}
       </div>
 
-      {/* ============ LOW MARGIN MODAL ============ */}
+      {/* ============ HIGH FOOD COST MODAL ============ */}
       {isLowMarginModalOpen && selectedLowMarginItem && (
         <div className="modal-overlay" onClick={() => setIsLowMarginModalOpen(false)}>
           <div className="modal-content modal-lg" onClick={(e) => e.stopPropagation()}>
             <div className="modal-header">
-              <h3 className="modal-title">Low Margin Items</h3>
+              <h3 className="modal-title">High Food Cost Items</h3>
               <button className="modal-close-btn" onClick={() => setIsLowMarginModalOpen(false)}>
                 <FaTimes />
               </button>
@@ -1478,7 +1459,7 @@ const ProductManagement = () => {
             <div className="modal-body">
               <div className="low-margin-content">
                 <p className="low-margin-description">
-                  Low margin items — the {Array.isArray(selectedLowMarginItem) ? selectedLowMarginItem.length : 1} menu item{Array.isArray(selectedLowMarginItem) && selectedLowMarginItem.length > 1 ? 's' : ''} flagged
+                  High food cost items — the {Array.isArray(selectedLowMarginItem) ? selectedLowMarginItem.length : 1} menu item{Array.isArray(selectedLowMarginItem) && selectedLowMarginItem.length > 1 ? 's' : ''} flagged
                 </p>
                 
                 {/* Table View */}
@@ -1489,6 +1470,7 @@ const ProductManagement = () => {
                         <th>Menu Item</th>
                         <th>Selling Price</th>
                         <th>Ingredient Cost</th>
+                        <th>Food Cost %</th>
                         <th>Profit per Menu</th>
                         <th>Profit Margin</th>
                       </tr>
@@ -1499,12 +1481,14 @@ const ProductManagement = () => {
                           const price = item.price || 0;
                           const cogs = price * 0.6;
                           const margin = price > 0 ? ((price - cogs) / price) * 100 : 0;
+                          const foodCostPercentage = price > 0 ? (cogs / price) * 100 : 0;
                           const profit = price - cogs;
                           return (
                             <tr key={idx} className={margin < 20 ? 'very-low-margin-row' : 'low-margin-row'}>
                               <td><strong>{item.name}</strong></td>
                               <td className="price-amount">{formatCurrency(price)}</td>
                               <td className="cost-amount">−{formatCurrency(cogs)}</td>
+                              <td><span className="margin-badge low">{foodCostPercentage.toFixed(1)}%</span></td>
                               <td className="profit-amount">{formatCurrency(profit)}</td>
                               <td>
                                 <span className={`margin-badge ${margin < 20 ? 'very-low' : 'low'}`}>
@@ -1521,6 +1505,8 @@ const ProductManagement = () => {
 
                 <div className="low-margin-summary">
                   <p>Most of the selling price is eaten up by ingredient cost. You can either raise the price, swap to cheaper ingredients, or accept the lower profit if these dishes attract more customers.</p>
+                  <p><strong>Important:</strong> A High Food Cost indicator does not automatically mean that the product is unprofitable. The system only compares estimated ingredient cost with selling price and does not include labor, rent, utilities, or other operating expenses.</p>
+                  <p>Some products may intentionally have a higher food cost because they are high-demand items, premium products, or strategically important menu items. Use this indicator to support review rather than automatically changing prices.</p>
                 </div>
               </div>
             </div>

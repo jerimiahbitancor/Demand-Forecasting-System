@@ -289,6 +289,69 @@ router.get('/', authenticate, async (req, res) => {
   }
 });
 
+// GET /api/upload/stats/summary - Get upload statistics
+router.get('/stats/summary', authenticate, async (req, res) => {
+  try {
+    const userId = req.user?.user_id || req.user?.id || null;
+    
+    console.log('Fetching stats for user:', userId);
+    
+    const stats = await uploadService.getUploadStats(userId);
+    
+    res.json({
+      success: true,
+      data: stats
+    });
+  } catch (error) {
+    console.error('Error fetching stats:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Failed to fetch statistics',
+      details: error.message
+    });
+  }
+});
+
+// GET /api/upload/progress - Get the current upload progress
+router.get('/progress', authenticate, async (req, res) => {
+  try {
+    const userId = req.user?.user_id || req.user?.id || null;
+    const progress = await uploadService.getUploadProgress(userId);
+
+    res.json({
+      success: true,
+      data: progress
+    });
+  } catch (error) {
+    console.error('Error fetching upload progress:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Failed to fetch upload progress',
+      details: error.message
+    });
+  }
+});
+
+// GET /api/upload/dashboard-state - Get the authenticated user's dashboard state
+router.get('/dashboard-state', authenticate, async (req, res) => {
+  try {
+    const userId = req.user?.user_id || req.user?.id || null;
+    const dashboardState = await uploadService.getDashboardState(userId);
+
+    res.json({
+      success: true,
+      data: dashboardState
+    });
+  } catch (error) {
+    console.error('Error fetching dashboard state:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Failed to fetch dashboard state',
+      details: error.message
+    });
+  }
+});
+
 // GET /api/upload/:id - Get specific upload
 router.get('/:id', authenticate, async (req, res) => {
   try {
@@ -406,29 +469,6 @@ router.delete('/:id', authenticate, async (req, res) => {
     res.status(500).json({
       success: false,
       error: 'Failed to delete upload',
-      details: error.message
-    });
-  }
-});
-
-// GET /api/upload/stats/summary - Get upload statistics
-router.get('/stats/summary', authenticate, async (req, res) => {
-  try {
-    const userId = req.user?.user_id || req.user?.id || null;
-    
-    console.log('Fetching stats for user:', userId);
-    
-    const stats = await uploadService.getUploadStats(userId);
-    
-    res.json({
-      success: true,
-      data: stats
-    });
-  } catch (error) {
-    console.error('Error fetching stats:', error);
-    res.status(500).json({
-      success: false,
-      error: 'Failed to fetch statistics',
       details: error.message
     });
   }

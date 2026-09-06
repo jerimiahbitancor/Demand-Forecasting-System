@@ -584,7 +584,7 @@ const IngredientManagement = () => {
                 content={(
                   <div className="inventory-card-tooltip">
                     <strong>How Total Stock Value is computed</strong>
-                    <span>Each ingredient's current quantity is multiplied by its unit price.</span>
+                    <span>Shows the total value of all your active ingredients currently in stock. Each ingredient's current quantity is multiplied by its unit price.</span>
                     <table className="inventory-card-tooltip-table">
                       <thead>
                         <tr>
@@ -609,10 +609,10 @@ const IngredientManagement = () => {
                         <tr><th>Change</th><td>+₱740 (+12%)</td></tr>
                       </tbody>
                     </table>
-                    <span>Your stock value went up ₱740 (+12%) from last month. This is fine if sales went up too, but if sales stayed the same, you may have bought more ingredients than needed.</span>
+                    <span>Your stock value went up ₱740 (+12%) from last month. This is fine if sales went up too — it means you're prepared for more orders. But if sales stayed the same, it may mean you bought more ingredients than you needed this month.</span>
                   </div>
                 )}
-                placement="top"
+                placement="bottom"
                 animation="scale"
                 duration={200}
                 theme="dark"
@@ -640,7 +640,7 @@ const IngredientManagement = () => {
               <p className="inventory-stat-card-label">Total Items</p>
               <Tippy
                 content="Total number of active ingredients. Archived ingredients are not counted."
-                placement="top"
+                placement="bottom"
                 animation="scale"
                 duration={200}
                 theme="dark"
@@ -662,10 +662,18 @@ const IngredientManagement = () => {
         <div className="inventory-stat-card warning">
           <div className="inventory-stat-card-content">
             <div className="inventory-stat-card-header">
-              <p className="inventory-stat-card-label">Low Stock Alerts</p>
+              <p className="inventory-stat-card-label">Stock Alerts</p>
               <Tippy
-                content="This counts ingredients that are running low or almost out, where current stock may not cover tomorrow's expected usage. Only ingredients linked to a product recipe are counted. Click to filter the table and see which ingredients need restocking right away."
-                placement="top"
+                content={(
+                  <div className="inventory-card-tooltip">
+                    <strong>Low Stock Alerts</strong>
+                    <span>This counts the ingredients that are running low or almost out — specifically those where your current stock won't be enough to cover tomorrow's expected usage.</span>
+                    <span>Only ingredients linked to a product recipe are counted here, since the system needs the recipe to know how much of each ingredient tomorrow's sales will use.</span>
+                    <span>Click to view the Shopping List to see which ingredients need restocking right away.</span>
+                    <span>The 50% / 100% / 200% thresholds are global settings configured in Settings → Stock Level Thresholds and apply to all ingredients.</span>
+                  </div>
+                )}
+                placement="bottom"
                 animation="scale"
                 duration={200}
                 theme="dark"
@@ -705,8 +713,15 @@ const IngredientManagement = () => {
             <div className="inventory-stat-card-header">
               <p className="inventory-stat-card-label">Unmapped Ingredients</p>
               <Tippy
-                content="These are ingredients in your inventory that are not connected to a product recipe yet. Because the system does not know which dish uses them, it cannot calculate usage or give them a stock status, so they appear as No Forecast in the table. Go to Product Management and add these ingredients to the recipes of the dishes that use them."
-                placement="top"
+                content={(
+                  <div className="inventory-card-tooltip">
+                    <strong>Unmapped Ingredients</strong>
+                    <span>These are ingredients that exist in your inventory but aren't connected to any product recipe yet.</span>
+                    <span>Because the system doesn't know which dish uses them, it can't calculate how much you'll need or give them a stock status, so they appear as “No Forecast” in the table.</span>
+                    <span>Go to the Product Management tab and add these ingredients to the recipes of the dishes that use them.</span>
+                  </div>
+                )}
+                placement="bottom"
                 animation="scale"
                 duration={200}
                 theme="dark"
