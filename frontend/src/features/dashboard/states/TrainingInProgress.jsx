@@ -166,15 +166,18 @@ const TrainingInProgress = () => {
   // Fetch products data
   const fetchProducts = async () => {
     try {
-      const response = await apiClient.get("/mapping/products");
-      if (response.data.success) {
-        const productsData = response.data.data || [];
-        setProducts(productsData);
-        setTotalProducts(productsData.length);
-        
-        const withRecipes = productsData.filter(p => p.hasRecipe).length;
-        setProductsWithRecipes(withRecipes);
-      }
+      const [activeResponse, inactiveResponse] = await Promise.all([
+        apiClient.get("/mapping/products", { params: { status: "active", forceRefresh: "true" } }),
+        apiClient.get("/mapping/products", { params: { status: "inactive", forceRefresh: "true" } }),
+      ]);
+      const activeProducts = activeResponse.data.success ? activeResponse.data.data || [] : [];
+      const inactiveProducts = inactiveResponse.data.success ? inactiveResponse.data.data || [] : [];
+      const productsData = [...activeProducts, ...inactiveProducts];
+      setProducts(productsData);
+      setTotalProducts(productsData.length);
+
+      const withRecipes = productsData.filter(p => p.product_ingredients?.length).length;
+      setProductsWithRecipes(withRecipes);
     } catch (error) {
       console.error("Error fetching products:", error);
       // Use fallback data
@@ -225,12 +228,14 @@ const TrainingInProgress = () => {
   const isDataSufficient = uploadedMonths >= totalMonthsNeeded;
 
   const getProductsNeedingRecipes = () => {
-    const needsRecipe = products.filter(p => !p.hasRecipe);
+    const needsRecipe = products.filter(p => !p.product_ingredients?.length && !p.hasRecipe);
     return needsRecipe.slice(0, 3);
   };
 
   const productsNeedingRecipes = getProductsNeedingRecipes();
-  const productsWithoutRecipes = products.filter(p => !p.hasRecipe).length;
+  const productsWithoutRecipes = products.filter(
+    p => !p.product_ingredients?.length && !p.hasRecipe
+  ).length;
 
   return (
     <div className="training-container">

@@ -610,11 +610,6 @@
   background: #fef3c7;
 }
 
-.product-action-btn.reactivate:hover {
-  color: #16a34a;
-  background: #dcfce7;
-}
-
 /* ============ PAGINATION ============ */
 .pagination {
   display: flex;
