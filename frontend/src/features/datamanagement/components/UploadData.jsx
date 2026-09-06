@@ -600,10 +600,11 @@ const UploadData = ({
       let completed = 0;
 
       const salesResults = await Promise.allSettled(salesFiles.map(async (_, i) => {
-        setSalesProcessingIndex(i);
-        const formData = new FormData();
-        formData.append('file', salesFiles[i]);
-        formData.append('fileType', 'sales');
+        try {
+          setSalesProcessingIndex(i);
+          const formData = new FormData();
+          formData.append('file', salesFiles[i]);
+          formData.append('fileType', 'sales');
 
           console.log(`Uploading sales file ${i + 1}/${totalFiles}: ${salesFiles[i].name}`);
 
@@ -623,12 +624,13 @@ const UploadData = ({
             throw new Error(response?.data?.error || `Failed to upload ${salesFiles[i].name}`);
           }
 
-        return response;
-      }).finally(() => {
-        completed++;
-        const progress = Math.round((completed / totalFiles) * 100);
-        setSalesProgress(progress);
-        saveUploadStatus('sales', { status: 'loading', progress, uploadedCount: uploaded });
+          return response;
+        } finally {
+          completed++;
+          const progress = Math.round((completed / totalFiles) * 100);
+          setSalesProgress(progress);
+          saveUploadStatus('sales', { status: 'loading', progress, uploadedCount: uploaded });
+        }
       }));
 
       salesResults.forEach((result, i) => {
@@ -941,10 +943,11 @@ const UploadData = ({
       let completed = 0;
 
       const menuResults = await Promise.allSettled(menuFiles.map(async (_, i) => {
-        setMenuProcessingIndex(i);
-        const formData = new FormData();
-        formData.append('file', menuFiles[i]);
-        formData.append('fileType', 'menu');
+        try {
+          setMenuProcessingIndex(i);
+          const formData = new FormData();
+          formData.append('file', menuFiles[i]);
+          formData.append('fileType', 'menu');
 
           console.log(`Uploading menu file ${i + 1}/${totalFiles}: ${menuFiles[i].name}`);
 
@@ -964,12 +967,13 @@ const UploadData = ({
             throw new Error(response?.data?.error || `Failed to upload ${menuFiles[i].name}`);
           }
 
-        return response;
-      }).finally(() => {
-        completed++;
-        const progress = Math.round((completed / totalFiles) * 100);
-        setMenuProgress(progress);
-        saveUploadStatus('menu', { status: 'loading', progress, uploadedCount: uploaded });
+          return response;
+        } finally {
+          completed++;
+          const progress = Math.round((completed / totalFiles) * 100);
+          setMenuProgress(progress);
+          saveUploadStatus('menu', { status: 'loading', progress, uploadedCount: uploaded });
+        }
       }));
 
       menuResults.forEach((result, i) => {
