@@ -1,5 +1,5 @@
 import { FaArchive, FaTimes, FaTrash, FaUndo } from "react-icons/fa";
-import InventoryModal from "./InventoryModal";
+import InventoryModal from "../InventoryModal";
 import "./InventoryConfirmationModal.css";
 
 const InventoryConfirmationModal = ({

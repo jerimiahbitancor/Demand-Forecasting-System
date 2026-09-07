@@ -1,5 +1,5 @@
 import { FaSave, FaTimes } from "react-icons/fa";
-import InventoryModal from "./InventoryModal";
+import InventoryModal from "../InventoryModal";
 import "./EditIngredientModal.css";
 
 const EditIngredientModal = ({

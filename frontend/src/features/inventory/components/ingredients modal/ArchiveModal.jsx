@@ -1,5 +1,5 @@
 import { FaArchive, FaTimes, FaBoxes } from "react-icons/fa";
-import InventoryModal from "./InventoryModal";
+import InventoryModal from "../InventoryModal";
 import "./ArchiveModal.css";
 
 const ArchiveModal = ({ item, isSubmitting, onConfirm, onClose }) => {

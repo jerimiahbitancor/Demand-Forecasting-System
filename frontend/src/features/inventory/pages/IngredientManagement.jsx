@@ -25,12 +25,12 @@ import { useAuth } from "../../../context/AuthContext";
 import Tippy from '@tippyjs/react';
 import 'tippy.js/dist/tippy.css';
 import 'tippy.js/animations/scale.css';
-import AddIngredientModal from '../components/AddIngredientModal';
-import EditIngredientModal from '../components/EditIngredientModal';
-import InventoryConfirmationModal from '../components/InventoryConfirmationModal';
-import RestockModal from '../components/RestockModal';
-import HistoryModal from '../components/HistoryModal';
-import ArchiveModal from '../components/ArchiveModal';
+import AddIngredientModal from '../components/ingredients modal/AddIngredientModal';
+import EditIngredientModal from '../components/ingredients modal/EditIngredientModal';
+import InventoryConfirmationModal from '../components/ingredients modal/InventoryConfirmationModal';
+import RestockModal from '../components/ingredients modal/RestockModal';
+import HistoryModal from '../components/ingredients modal/HistoryModal';
+import ArchiveModal from '../components/ingredients modal/ArchiveModal';
 
 const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:5000/api';
 

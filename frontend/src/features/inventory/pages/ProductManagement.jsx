@@ -12,6 +12,8 @@ import {
   FaArchive,
   FaChevronDown,
   FaSearch,
+  FaEye,
+  FaUndo,
 } from "react-icons/fa";
 import axios from 'axios';
 import toast from 'react-hot-toast';
@@ -20,6 +22,8 @@ import { useAuth } from "../../../context/AuthContext";
 import Tippy from '@tippyjs/react';
 import 'tippy.js/dist/tippy.css';
 import 'tippy.js/animations/scale.css';
+import ProductDetailsModal from '../product modals/ProductDetailsModal';
+import ProductRestoreModal from '../product modals/ProductRestoreModal';
 
 const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:5000/api';
 
@@ -63,6 +67,8 @@ const ProductManagement = () => {
   const [isEditMode, setIsEditMode] = useState(false);
   const [isViewMode, setIsViewMode] = useState(false);
   const [isArchiveModalOpen, setIsArchiveModalOpen] = useState(false);
+  const [isRestoreModalOpen, setIsRestoreModalOpen] = useState(false);
+  const [isProductDetailsModalOpen, setIsProductDetailsModalOpen] = useState(false);
   const [isLowMarginModalOpen, setIsLowMarginModalOpen] = useState(false);
   const [editingId, setEditingId] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -589,6 +595,44 @@ const ProductManagement = () => {
   const handleArchive = (product) => {
     setSelectedItem(product);
     setIsArchiveModalOpen(true);
+  };
+
+  const handleViewDetails = (product) => {
+    setSelectedItem(product);
+    setIsProductDetailsModalOpen(true);
+  };
+
+  const openRestoreModal = (product) => {
+    setSelectedItem(product);
+    setIsRestoreModalOpen(true);
+  };
+
+  const confirmRestore = async () => {
+    if (!selectedItem) return;
+
+    setIsArchiving(true);
+    const restoreToast = toast.loading('Restoring product...');
+
+    try {
+      const response = await apiClient.post(`/mapping/products/${selectedItem.id}/reactivate`, {
+        forceReactivate: true
+      });
+
+      toast.dismiss(restoreToast);
+
+      if (response.data.success) {
+        toast.success('Product restored successfully!');
+        setIsRestoreModalOpen(false);
+        setIsProductDetailsModalOpen(false);
+        setSelectedItem(null);
+        await fetchData(true);
+      }
+    } catch (error) {
+      toast.dismiss(restoreToast);
+      toast.error(error.response?.data?.error || 'Failed to restore product');
+    } finally {
+      setIsArchiving(false);
+    }
   };
 
   // ============ CONFIRM ARCHIVE ==========
@@ -1355,6 +1399,13 @@ const ProductManagement = () => {
                       <td>
                         <div className="product-action-buttons">
                           <button 
+                            className="product-action-btn view"
+                            onClick={() => handleViewDetails(item)}
+                            title="View Product Details"
+                          >
+                            <FaEye size={14} />
+                          </button>
+                          <button 
                             className="product-action-btn edit"
                             onClick={() => handleEdit(item)}
                             title="Edit Product"
@@ -1369,7 +1420,15 @@ const ProductManagement = () => {
                             >
                               <FaArchive size={14} />
                             </button>
-                          ) : null}
+                          ) : (
+                            <button 
+                              className="product-action-btn restore"
+                              onClick={() => openRestoreModal(item)}
+                              title="Restore Product"
+                            >
+                              <FaUndo size={14} />
+                            </button>
+                          )}
                         </div>
                       </td>
                     </tr>
@@ -1763,6 +1822,28 @@ const ProductManagement = () => {
             </div>
           </div>
         </div>
+      )}
+
+      {isProductDetailsModalOpen && selectedItem && (
+        <ProductDetailsModal
+          product={selectedItem}
+          isArchiving={isArchiving}
+          onArchive={() => {
+            setIsProductDetailsModalOpen(false);
+            handleArchive(selectedItem);
+          }}
+          onRestore={() => openRestoreModal(selectedItem)}
+          onClose={() => setIsProductDetailsModalOpen(false)}
+        />
+      )}
+
+      {isRestoreModalOpen && selectedItem && (
+        <ProductRestoreModal
+          product={selectedItem}
+          isSubmitting={isArchiving}
+          onConfirm={confirmRestore}
+          onClose={() => setIsRestoreModalOpen(false)}
+        />
       )}
 
       {/* ============ ARCHIVE CONFIRMATION MODAL ============ */}
