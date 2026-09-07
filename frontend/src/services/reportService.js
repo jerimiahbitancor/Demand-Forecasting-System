@@ -7,6 +7,7 @@
 import jsPDF from 'jspdf';
 import autoTable from 'jspdf-autotable';
 import * as XLSX from 'xlsx';
+import { getStoredBusinessLogo } from '../context/BusinessProfileContext';
 
 // ---------------------------------------------------------------------
 // Palette — pulled directly from the app's CSS variables so the PDF
@@ -33,7 +34,7 @@ const CONTENT_WIDTH = PAGE_WIDTH - PAGE_MARGIN * 2;
 // one; otherwise a plain initials circle is drawn so the report still
 // looks intentional with zero setup.
 // ---------------------------------------------------------------------
-export async function loadLogoBase64(url = '/logo.png') {
+export async function loadLogoBase64(url = getStoredBusinessLogo()) {
   try {
     const res = await fetch(url);
     if (!res.ok) return null;

@@ -12,12 +12,14 @@ import {
   FaArrowLeft
 } from 'react-icons/fa';
 import { useAuth } from '../../../../context/AuthContext';
+import { useBusinessLogo } from '../../../../context/BusinessProfileContext';
 import { supabase } from '../../../../config/supabase';
 import './CreatePassword.css';
 
 const CreatePassword = () => {
   const navigate = useNavigate();
   const { createPassword, clearRegistrationData, registrationData, loading, user } = useAuth();
+  const businessLogo = useBusinessLogo();
   
   // Get data from AuthContext
   const email = registrationData?.email;
@@ -205,7 +207,7 @@ const CreatePassword = () => {
             <img
               alt="Chef Duo Logo"
               className="logo"
-              src="/public/logo.png"
+              src={businessLogo}
             />
             <h1 className="brand-title">Create Your Password</h1>
             <p className="brand-subtitle">

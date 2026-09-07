@@ -13,6 +13,13 @@ const ProductDetailsModal = ({
 
   const isArchived = product.is_active === false;
   const ingredients = product.product_ingredients || [];
+  const totalCogs = ingredients.reduce((total, ingredient) => {
+    const unitPrice = Number(ingredient.ingredients?.price ?? ingredient.price) || 0;
+    const quantity = Number(ingredient.quantity_per_serving ?? ingredient.quantity) || 0;
+    return total + unitPrice * quantity;
+  }, 0);
+
+  const formatCurrency = (amount) => `₱${amount.toFixed(2)}`;
 
   return (
     <InventoryModal className="product-details-modal" onClose={onClose}>
@@ -40,6 +47,10 @@ const ProductDetailsModal = ({
           <div>
             <span>Ingredients</span>
             <strong>{ingredients.length}</strong>
+          </div>
+          <div>
+            <span>Total COGS</span>
+            <strong>{formatCurrency(totalCogs)}</strong>
           </div>
         </div>
 
@@ -76,20 +87,10 @@ const ProductDetailsModal = ({
             </tbody>
           </table>
         </div>
+
       </div>
 
-      <div className="product-details-footer">
-        <button className="btn-secondary" onClick={onClose}>Close</button>
-        {isArchived ? (
-          <button className="btn-restore" onClick={onRestore} disabled={isArchiving}>
-            <FaUndo /> {isArchiving ? 'Restoring...' : 'Restore'}
-          </button>
-        ) : (
-          <button className="btn-warning" onClick={onArchive} disabled={isArchiving}>
-            <FaArchive /> {isArchiving ? 'Archiving...' : 'Archive'}
-          </button>
-        )}
-      </div>
+      
     </InventoryModal>
   );
 };

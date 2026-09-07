@@ -10,11 +10,13 @@ import {
   FaRedo,
 } from 'react-icons/fa';
 import './ForgotPassword.css';
+import { useBusinessLogo } from '../../../../context/BusinessProfileContext';
 
 const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:5000/api';
 
 const ForgotPassword = () => {
   const navigate = useNavigate();
+  const businessLogo = useBusinessLogo();
   const [formData, setFormData] = useState({ email: '' });
   const [code, setCode] = useState('');
   const [focusedInput, setFocusedInput] = useState(null);
@@ -259,7 +261,7 @@ const ForgotPassword = () => {
             <img
               alt="Chef Duo Logo"
               className="logo"
-              src="/public/logo.png"
+              src={businessLogo}
             />
             <h1 className="brand-title">Forgot Password</h1>
             <p className="brand-subtitle">
