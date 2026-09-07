@@ -1,5 +1,5 @@
 // controllers/inventoryController.js
-const { supabase } = require('../config/supabase');
+const { supabaseAdmin } = require('../config/supabase');
 
 // Helper function to get user ID - SIMPLIFIED
 // Use req.user.id directly since it already contains the numeric user ID
@@ -42,8 +42,8 @@ const getInventoryItems = async (req, res) => {
     console.log('📦 Fetching inventory items...');
 
     // Get all items for summary stats (without pagination)
-    let summaryQuery = supabase
-      .from('inventory_items')
+    let summaryQuery = supabaseAdmin
+      .from('ingredients')
       .select('quantity, price, min_stock, category, is_archived');
 
     if (includeArchived) {
@@ -53,7 +53,7 @@ const getInventoryItems = async (req, res) => {
     }
 
     if (search) {
-      summaryQuery = summaryQuery.or(`name.ilike.%${search}%,category.ilike.%${search}%,batch.ilike.%${search}%`);
+      summaryQuery = summaryQuery.or(`name.ilike.%${search}%,category.ilike.%${search}%`);
     }
 
     if (category && category !== 'All') {
@@ -104,8 +104,8 @@ const getInventoryItems = async (req, res) => {
     }, { excessStock: 0, normalStock: 0, lowStock: 0, criticalStock: 0 });
 
     // Main query with pagination
-    let query = supabase
-      .from('inventory_items')
+    let query = supabaseAdmin
+      .from('ingredients')
       .select('*', { count: 'exact' });
 
     if (includeArchived) {
@@ -115,7 +115,7 @@ const getInventoryItems = async (req, res) => {
     }
 
     if (search) {
-      query = query.or(`name.ilike.%${search}%,category.ilike.%${search}%,batch.ilike.%${search}%`);
+      query = query.or(`name.ilike.%${search}%,category.ilike.%${search}%`);
     }
 
     if (category && category !== 'All') {
@@ -133,7 +133,7 @@ const getInventoryItems = async (req, res) => {
       }
     }
 
-    const validSortFields = ['created_at', 'updated_at', 'name', 'category', 'quantity', 'price', 'batch'];
+    const validSortFields = ['created_at', 'updated_at', 'name', 'category', 'quantity', 'price'];
     const sortField = validSortFields.includes(sortBy) ? sortBy : 'created_at';
     query = query.order(sortField, { ascending: sortOrder === 'asc' });
 
@@ -195,8 +195,8 @@ const getInventoryItems = async (req, res) => {
 const getInventoryItem = async (req, res) => {
   try {
     const { id } = req.params;
-    const { data, error } = await supabase
-      .from('inventory_items')
+    const { data, error } = await supabaseAdmin
+      .from('ingredients')
       .select('*')
       .eq('id', id)
       .single();
@@ -223,7 +223,6 @@ const createInventoryItem = async (req, res) => {
       quantity,
       price,
       min_stock,
-      batch
     } = req.body;
 
     console.log('📝 Creating inventory item:', { name, category, quantity, price });
@@ -246,15 +245,14 @@ const createInventoryItem = async (req, res) => {
       quantity: parseFloat(quantity),
       price: parseFloat(price),
       min_stock: min_stock ? parseFloat(min_stock) : 0,
-      batch: batch || null,
       created_by: userId,
       updated_by: userId
     };
 
     console.log('📦 Insert data:', insertData);
 
-    const { data, error } = await supabase
-      .from('inventory_items')
+    const { data, error } = await supabaseAdmin
+      .from('ingredients')
       .insert([insertData])
       .select()
       .single();
@@ -264,10 +262,10 @@ const createInventoryItem = async (req, res) => {
       throw error;
     }
 
-    await supabase
+    await supabaseAdmin
       .from('inventory_transactions')
       .insert([{
-        item_id: data.id,
+        ingredient_id: data.id,
         transaction_type: 'restock',
         quantity: parseFloat(quantity),
         previous_quantity: 0,
@@ -297,14 +295,13 @@ const updateInventoryItem = async (req, res) => {
       quantity,
       price,
       min_stock,
-      batch
     } = req.body;
 
     console.log('📝 Updating inventory item:', { id, name, category, quantity, price });
 
     // Get current item
-    const { data: currentItem, error: fetchError } = await supabase
-      .from('inventory_items')
+    const { data: currentItem, error: fetchError } = await supabaseAdmin
+      .from('ingredients')
       .select('*')
       .eq('id', id)
       .single();
@@ -329,13 +326,12 @@ const updateInventoryItem = async (req, res) => {
     if (quantity !== undefined && quantity !== null) updateData.quantity = parseFloat(quantity);
     if (price !== undefined && price !== null) updateData.price = parseFloat(price);
     if (min_stock !== undefined && min_stock !== null) updateData.min_stock = parseFloat(min_stock) || 0;
-    if (batch !== undefined && batch !== null) updateData.batch = batch || null;
 
     console.log('📦 Update data:', updateData);
 
     // Update item
-    const { data, error } = await supabase
-      .from('inventory_items')
+    const { data, error } = await supabaseAdmin
+      .from('ingredients')
       .update(updateData)
       .eq('id', id)
       .select()
@@ -348,10 +344,10 @@ const updateInventoryItem = async (req, res) => {
 
     // Log transaction if quantity changed
     if (quantity !== undefined && parseFloat(quantity) !== currentItem.quantity) {
-      await supabase
+      await supabaseAdmin
         .from('inventory_transactions')
         .insert([{
-          item_id: id,
+          ingredient_id: id,
           transaction_type: 'adjustment',
           quantity: parseFloat(quantity) - currentItem.quantity,
           previous_quantity: currentItem.quantity,
@@ -377,8 +373,8 @@ const deleteInventoryItem = async (req, res) => {
     const { id } = req.params;
     console.log('🗑️ Deleting inventory item:', id);
 
-    const { error } = await supabase
-      .from('inventory_items')
+    const { error } = await supabaseAdmin
+      .from('ingredients')
       .delete()
       .eq('id', id);
 
@@ -401,8 +397,8 @@ const archiveInventoryItem = async (req, res) => {
     const userId = getUserIdFromAuth(req);
     console.log('👤 User ID:', userId);
 
-    const { data: currentItem, error: fetchError } = await supabase
-      .from('inventory_items')
+    const { data: currentItem, error: fetchError } = await supabaseAdmin
+      .from('ingredients')
       .select('is_archived')
       .eq('id', id)
       .single();
@@ -411,8 +407,8 @@ const archiveInventoryItem = async (req, res) => {
       return res.status(404).json({ success: false, error: 'Item not found' });
     }
 
-    const { data, error } = await supabase
-      .from('inventory_items')
+    const { data, error } = await supabaseAdmin
+      .from('ingredients')
       .update({
         is_archived: !currentItem.is_archived,
         updated_by: userId
@@ -442,14 +438,14 @@ const restoreInventoryItem = async (req, res) => {
     console.log('📦 Restoring inventory item:', id);
 
     const userId = getUserIdFromAuth(req);
-    const { data: currentItem, error: fetchError } = await supabase
-      .from('inventory_items')
+    const { data: currentItem, error: fetchError } = await supabaseAdmin
+      .from('ingredients')
       .select('is_archived')
       .eq('id', id)
       .single();
 
-    const { data, error } = await supabase
-      .from('inventory_items')
+    const { data, error } = await supabaseAdmin
+      .from('ingredients')
       .update({
         is_archived: false,
         updated_by: userId
@@ -487,8 +483,8 @@ const restockInventoryItem = async (req, res) => {
       });
     }
 
-    const { data: currentItem, error: fetchError } = await supabase
-      .from('inventory_items')
+    const { data: currentItem, error: fetchError } = await supabaseAdmin
+      .from('ingredients')
       .select('*')
       .eq('id', id)
       .single();
@@ -502,8 +498,8 @@ const restockInventoryItem = async (req, res) => {
     
     const newQuantity = currentItem.quantity + parseFloat(quantity);
 
-    const { data, error } = await supabase
-      .from('inventory_items')
+    const { data, error } = await supabaseAdmin
+      .from('ingredients')
       .update({
         quantity: newQuantity,
         updated_by: userId
@@ -514,10 +510,10 @@ const restockInventoryItem = async (req, res) => {
 
     if (error) throw error;
 
-    await supabase
+    await supabaseAdmin
       .from('inventory_transactions')
       .insert([{
-        item_id: id,
+        ingredient_id: id,
         transaction_type: 'restock',
         quantity: parseFloat(quantity),
         previous_quantity: currentItem.quantity,
@@ -548,10 +544,10 @@ const getItemTransactions = async (req, res) => {
     const from = (page - 1) * limit;
     const to = from + limit - 1;
 
-    const { data, error, count } = await supabase
+    const { data, error, count } = await supabaseAdmin
       .from('inventory_transactions')
       .select('*', { count: 'exact' })
-      .eq('item_id', id)
+      .eq('ingredient_id', id)
       .order('created_at', { ascending: false })
       .range(from, to);
 

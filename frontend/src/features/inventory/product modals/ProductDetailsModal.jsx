@@ -11,9 +11,21 @@ const ProductDetailsModal = ({
 }) => {
   if (!product) return null;
 
-  const isArchived = product.is_active === false;
+  const isArchived = product.is_archived === true
+    || product.status === 'archived'
+    || /^archived\b/i.test(product.inactive_reason || '');
+  const isNewInactive = !product.is_active
+    && product.created_at
+    && (Date.now() - new Date(product.created_at).getTime()) < 28 * 24 * 60 * 60 * 1000;
+  const statusLabel = product.status_label || (isArchived
+    ? 'Archived'
+    : product.is_active
+      ? 'Active'
+      : isNewInactive
+        ? 'Inactive (New)'
+        : 'Inactive (Discontinued)');
   const ingredients = product.product_ingredients || [];
-  const totalCogs = ingredients.reduce((total, ingredient) => {
+  const totalCogs = ingredients.length === 0 ? null : ingredients.reduce((total, ingredient) => {
     const unitPrice = Number(ingredient.ingredients?.price ?? ingredient.price) || 0;
     const quantity = Number(ingredient.quantity_per_serving ?? ingredient.quantity) || 0;
     return total + unitPrice * quantity;
@@ -27,8 +39,8 @@ const ProductDetailsModal = ({
         <div>
           <div className="product-details-title-row">
             <h3>{product.name || 'Unnamed product'}</h3>
-            <span className={`product-details-status ${isArchived ? 'archived' : 'active'}`}>
-              {isArchived ? 'Archived' : 'Active'}
+            <span className={`product-details-status ${isArchived ? 'archived' : product.is_active ? 'active' : 'archived'}`}>
+              {statusLabel}
             </span>
           </div>
           <p>{product.category || 'Uncategorized'}{product.serving_size_label ? ` | ${product.serving_size_label}` : ''}</p>
@@ -50,7 +62,7 @@ const ProductDetailsModal = ({
           </div>
           <div>
             <span>Total COGS</span>
-            <strong>{formatCurrency(totalCogs)}</strong>
+            <strong>{totalCogs === null ? 'N/A' : formatCurrency(totalCogs)}</strong>
           </div>
         </div>
 

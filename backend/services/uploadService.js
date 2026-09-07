@@ -498,6 +498,62 @@ class UploadService {
         throw productFetchError || salesFetchError;
       }
 
+      // Only active products with a mapped recipe deduct stock automatically.
+      const activeProductIds = new Set(
+        (productRows || []).filter((product) => product.is_active === true).map((product) => product.id)
+      );
+      if (activeProductIds.size > 0) {
+        const { data: recipeRows, error: recipeError } = await supabaseAdmin
+          .from('product_ingredients')
+          .select('product_id, ingredient_id, quantity_per_serving')
+          .in('product_id', [...activeProductIds]);
+
+        if (recipeError) throw recipeError;
+
+        const deductions = new Map();
+        for (const sale of dailySalesRows) {
+          if (!activeProductIds.has(sale.product_id)) continue;
+          for (const recipe of (recipeRows || []).filter((row) => row.product_id === sale.product_id)) {
+            const amount = Number(recipe.quantity_per_serving) * Number(sale.quantity_sold);
+            if (!Number.isFinite(amount) || amount <= 0) continue;
+            deductions.set(recipe.ingredient_id, (deductions.get(recipe.ingredient_id) || 0) + amount);
+          }
+        }
+
+        for (const [ingredientId, deduction] of deductions) {
+          const { data: ingredient, error: ingredientError } = await supabaseAdmin
+            .from('ingredients')
+            .select('quantity')
+            .eq('id', ingredientId)
+            .single();
+
+          if (ingredientError) throw ingredientError;
+
+          const previousQuantity = Number(ingredient.quantity) || 0;
+          const newQuantity = Math.max(0, previousQuantity - deduction);
+          const { error: updateIngredientError } = await supabaseAdmin
+            .from('ingredients')
+            .update({ quantity: newQuantity, updated_by: numericId })
+            .eq('id', ingredientId);
+
+          if (updateIngredientError) throw updateIngredientError;
+
+          const { error: transactionError } = await supabaseAdmin
+            .from('inventory_transactions')
+            .insert({
+              ingredient_id: ingredientId,
+              transaction_type: 'sale',
+              quantity: -deduction,
+              previous_quantity: previousQuantity,
+              new_quantity: newQuantity,
+              reason: 'Automatic deduction from active mapped product sales',
+              created_by: numericId
+            });
+
+          if (transactionError) throw transactionError;
+        }
+      }
+
       const salesByProductId = new Map();
       for (const sale of salesRows || []) {
         const dates = salesByProductId.get(sale.product_id) || [];
@@ -514,7 +570,8 @@ class UploadService {
           firstSoldDate: firstSoldDate || null,
           lastSoldDate: lastSoldDate || null,
           createdAt: product.created_at || null,
-          isActive: Boolean(product.is_active)
+          isActive: Boolean(product.is_active),
+          inactiveReason: product.inactive_reason
         });
 
         const { error: updateError } = await supabaseAdmin.from('products')

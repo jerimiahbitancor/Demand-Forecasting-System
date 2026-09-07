@@ -513,9 +513,11 @@ isValidUserId(userId) {
         return data.id;
       }
 
-      const insertData = { 
+      const insertData = {
         name: name,
-        unit: unit 
+        unit: unit,
+        category: 'Other',
+        quantity: 0
       };
 
       const { data: newData, error: insertError } = await supabaseAdmin.from('ingredients')

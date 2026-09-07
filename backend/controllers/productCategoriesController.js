@@ -4,7 +4,7 @@ const getProductCategories = async (req, res) => {
   try {
     const { data, error } = await supabaseAdmin
       .from('product_categories')
-      .select('id, name, description, created_at, updated_at')
+      .select('id, name, created_at, updated_at')
       .order('name');
 
     if (error) throw error;
@@ -22,7 +22,7 @@ const createProductCategory = async (req, res) => {
 
     const { data, error } = await supabaseAdmin
       .from('product_categories')
-      .insert([{ name, description: req.body.description || null }])
+      .insert([{ name }])
       .select()
       .single();
 

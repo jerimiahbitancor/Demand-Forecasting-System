@@ -27,6 +27,15 @@ import ProductRestoreModal from '../product modals/ProductRestoreModal';
 
 const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:5000/api';
 
+const calculateProductCogs = (product) => {
+  if (!product?.product_ingredients?.length) return null;
+  return product.product_ingredients.reduce((total, ingredient) => {
+    const ingredientPrice = Number(ingredient.ingredients?.price) || 0;
+    const quantity = Number(ingredient.quantity_per_serving) || 0;
+    return total + ingredientPrice * quantity;
+  }, 0);
+};
+
 const STORAGE_KEYS = {
   MAPPING_DATA: 'mapping_data',
   CATEGORIES: 'mapping_categories',
@@ -179,14 +188,16 @@ const ProductManagement = () => {
   const updateStats = useCallback((items) => {
     const total = items.length;
     
-    const totalCOGS = items.reduce((sum, item) => sum + ((item.price || 0) * 0.6), 0);
-    const avgCOGS = total > 0 ? totalCOGS / total : 0;
+    const mappedItems = items.filter(item => calculateProductCogs(item) !== null);
+    const totalCOGS = mappedItems.reduce((sum, item) => sum + calculateProductCogs(item), 0);
+    const avgCOGS = mappedItems.length > 0 ? totalCOGS / mappedItems.length : 0;
     
     const lowMarginProducts = items.filter(item => {
-      const price = item.price || 0;
-      const cogs = price * 0.6;
-      const margin = price > 0 ? ((price - cogs) / price) * 100 : 0;
-      return margin < 30 && price > 0;
+      if (!item.product_ingredients?.length) return false;
+      const price = Number(item.price) || 0;
+      const cogs = calculateProductCogs(item);
+      const foodCostPercentage = price > 0 ? (cogs / price) * 100 : null;
+      return foodCostPercentage !== null && foodCostPercentage > 30;
     }).length;
     
     const unmappedProducts = items.filter(item => 
@@ -767,17 +778,15 @@ const ProductManagement = () => {
 
   // ============ GET STATUS DETAILS ============
   const getStatusDetails = (product) => {
-    const isActive = product?.is_active === true;
-    const hasIngredients = product?.product_ingredients && product.product_ingredients.length > 0;
+    const lifecycleStatus = product?.status || null;
+    const isActive = lifecycleStatus ? lifecycleStatus === 'active' : product?.is_active === true;
+    const hasIngredients = Array.isArray(product?.product_ingredients)
+      && product.product_ingredients.length > 0;
+    const isArchived = lifecycleStatus === 'archived' || product?.is_archived === true
+      || /^archived\b/i.test(product?.inactive_reason || '');
     
     const price = product?.price || 0;
-    const cogs = hasIngredients
-      ? product.product_ingredients.reduce((sum, ingredient) => {
-          const ingredientPrice = ingredient.ingredients?.price || 0;
-          const quantity = ingredient.quantity_per_serving || 0;
-          return sum + ingredientPrice * quantity;
-        }, 0)
-      : null;
+    const cogs = calculateProductCogs(product);
     const foodCostPercentage = cogs !== null && price > 0 ? (cogs / price) * 100 : null;
     const warningThreshold = 30;
     const isLowMargin = foodCostPercentage !== null && foodCostPercentage > warningThreshold;
@@ -785,15 +794,20 @@ const ProductManagement = () => {
     
     const createdDate = new Date(product?.created_at);
     const daysOld = (Date.now() - createdDate.getTime()) / (1000 * 60 * 60 * 24);
-    const isNew = daysOld < 28;
-    const isDiscontinued = !isActive && daysOld > 28;
+    const isNew = lifecycleStatus === 'new' || (!lifecycleStatus && daysOld < 28);
+    const isDiscontinued = lifecycleStatus === 'inactive' || (!lifecycleStatus && !isActive && daysOld > 28);
     
     let label = 'Active';
     let className = 'status-active';
     let dotColor = '#16a34a';
     let tooltip = 'This product is active and being forecasted.';
     
-    if (isUnmapped) {
+    if (isArchived) {
+      label = 'Archived';
+      className = 'status-archived';
+      dotColor = '#6b7280';
+      tooltip = 'Archived product. It is excluded from active forecasting and ingredient demand estimation until restored.';
+    } else if (isUnmapped) {
       label = 'Unmapped';
       className = 'status-unmapped';
       dotColor = '#9ca3af';
@@ -820,7 +834,7 @@ const ProductManagement = () => {
       tooltip = 'Product is inactive.';
     }
 
-    return { label, className, dotColor, tooltip, isActive, isUnmapped, isLowMargin, isNew, isDiscontinued };
+    return { label, className, dotColor, tooltip, isActive, isArchived, isUnmapped, isLowMargin, isNew, isDiscontinued };
   };
 
   // ============ SORT OPTIONS ============
@@ -937,20 +951,20 @@ const ProductManagement = () => {
   ];
 
   const highFoodCostItems = mappingData.filter(item => {
-    const price = item.price || 0;
-    const cogs = price * 0.6;
-    const margin = price > 0 ? ((price - cogs) / price) * 100 : 0;
-    return margin < 30 && price > 0;
+    const price = Number(item.price) || 0;
+    const cogs = calculateProductCogs(item);
+    return cogs !== null && price > 0 && (cogs / price) * 100 > 30;
   });
 
   // Get sample data for tooltip
   const getTooltipData = () => {
     const sampleProducts = mappingData.slice(0, 6);
-    const totalIngredientCost = sampleProducts.reduce((sum, item) => sum + ((item.price || 0) * 0.6), 0);
-    const avgCogs = sampleProducts.length > 0 ? totalIngredientCost / sampleProducts.length : 0;
+    const mappedSamples = sampleProducts.filter(item => calculateProductCogs(item) !== null);
+    const totalIngredientCost = mappedSamples.reduce((sum, item) => sum + calculateProductCogs(item), 0);
+    const avgCogs = mappedSamples.length > 0 ? totalIngredientCost / mappedSamples.length : 0;
     const avgPrice = sampleProducts.length > 0 ? sampleProducts.reduce((sum, item) => sum + (item.price || 0), 0) / sampleProducts.length : 0;
     
-    return { sampleProducts, totalIngredientCost, avgCogs, avgPrice };
+    return { sampleProducts, mappedSamples, totalIngredientCost, avgCogs, avgPrice };
   };
 
   const tooltipData = getTooltipData();
@@ -1023,12 +1037,12 @@ const ProductManagement = () => {
                         </tr>
                       </thead>
                       <tbody>
-                        {tooltipData.sampleProducts.length > 0 ? (
-                          tooltipData.sampleProducts.map((item, idx) => (
+                        {tooltipData.mappedSamples.length > 0 ? (
+                          tooltipData.mappedSamples.map((item, idx) => (
                             <tr key={idx}>
                               <td>{item.name}</td>
                               <td>{formatCurrency(item.price)}</td>
-                              <td>{formatCurrency((item.price || 0) * 0.6)}</td>
+                              <td>{formatCurrency(calculateProductCogs(item))}</td>
                             </tr>
                           ))
                         ) : (
@@ -1036,7 +1050,7 @@ const ProductManagement = () => {
                             <td colSpan="3">No products available</td>
                           </tr>
                         )}
-                        {tooltipData.sampleProducts.length > 0 && (
+                        {tooltipData.mappedSamples.length > 0 && (
                           <tr className="tooltip-total-row">
                             <td><strong>Total</strong></td>
                             <td>—</td>
@@ -1046,7 +1060,7 @@ const ProductManagement = () => {
                       </tbody>
                     </table>
                     <div className="tooltip-calculation">
-                      <span><strong>Calculation:</strong> {formatCurrency(tooltipData.totalIngredientCost)} total estimated ingredient cost ÷ {tooltipData.sampleProducts.length || 1} mapped menu items = <strong>{formatCurrency(tooltipData.avgCogs)}</strong> average per item</span>
+                      <span><strong>Calculation:</strong> {formatCurrency(tooltipData.totalIngredientCost)} total mapped ingredient cost ÷ {tooltipData.mappedSamples.length || 1} mapped menu items = <strong>{formatCurrency(tooltipData.avgCogs)}</strong> average per item</span>
                     </div>
                     <span className="tooltip-note">
                       Average COGS is a general cost overview. Interpret it together with selling prices: {formatCurrency(tooltipData.avgCogs)} may be high for a ₱60 product but low for a ₱200 product.
@@ -1349,11 +1363,11 @@ const ProductManagement = () => {
               <tbody>
                 {currentData.map((item, index) => {
                   const status = getStatusDetails(item);
-                  const totalIngredientCost = item.product_ingredients?.reduce((sum, pi) => {
+                  const totalIngredientCost = item.product_ingredients?.length ? item.product_ingredients.reduce((sum, pi) => {
                     const price = pi.ingredients?.price || 0;
                     const qty = pi.quantity_per_serving || 0;
                     return sum + (price * qty);
-                  }, 0) || 0;
+                  }, 0) : null;
 
                   return (
                     <tr key={item.id}>
@@ -1379,7 +1393,7 @@ const ProductManagement = () => {
                         )}
                       </td>
                       <td className="price-cell">{formatCurrency(item.price)}</td>
-                      <td>{formatCurrency(totalIngredientCost)}</td>
+                      <td>{totalIngredientCost === null ? 'N/A' : formatCurrency(totalIngredientCost)}</td>
                       <td>
                         <div className="status-pill-group">
                           <span className={`product-status-badge ${status.className}`}>
@@ -1508,7 +1522,8 @@ const ProductManagement = () => {
                       {Array.isArray(selectedLowMarginItem) ? (
                         selectedLowMarginItem.map((item, idx) => {
                           const price = item.price || 0;
-                          const cogs = price * 0.6;
+                          const cogs = calculateProductCogs(item);
+                          if (cogs === null) return null;
                           const margin = price > 0 ? ((price - cogs) / price) * 100 : 0;
                           const foodCostPercentage = price > 0 ? (cogs / price) * 100 : 0;
                           const profit = price - cogs;

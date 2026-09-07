@@ -7,12 +7,22 @@ function toDate(value) {
   return Number.isNaN(date.getTime()) ? null : date;
 }
 
-function deriveProductStatus({ firstSoldDate, lastSoldDate, createdAt, isActive = false }) {
+function deriveProductStatus({ firstSoldDate, lastSoldDate, createdAt, isActive = false, inactiveReason = null }) {
+  const isArchived = /^archived\b/i.test(inactiveReason || '');
+  if (isArchived) {
+    return {
+      status: 'archived',
+      label: 'ARCHIVED',
+      note: inactiveReason,
+      isActive: false,
+      isArchived: true,
+    };
+  }
+
   const now = new Date();
   const cutoffDate = new Date(now.getTime() - (28 * DAY_MS));
   const firstDate = toDate(firstSoldDate);
   const lastDate = toDate(lastSoldDate);
-  const createdDate = toDate(createdAt);
 
   if (lastDate && lastDate >= cutoffDate) {
     const hasEnoughHistory = firstDate && firstDate <= new Date(now.getTime() - (28 * DAY_MS));
@@ -22,6 +32,7 @@ function deriveProductStatus({ firstSoldDate, lastSoldDate, createdAt, isActive 
         label: 'ACTIVE',
         note: PRODUCT_STATUS_NOTES.ACTIVE,
         isActive: true,
+        isArchived: false,
       };
     }
 
@@ -30,24 +41,20 @@ function deriveProductStatus({ firstSoldDate, lastSoldDate, createdAt, isActive 
       label: 'INACTIVE (NEW)',
       note: PRODUCT_STATUS_NOTES.NEW_PRODUCT,
       isActive: false,
+      isArchived: false,
     };
   }
 
-  if (firstDate && firstDate < cutoffDate) {
+  // Discontinued means the last recorded sale is older than 28 days.
+  // A product with no sales history is still a new product, regardless of
+  // how long ago its database row was created.
+  if (lastDate && lastDate < cutoffDate) {
     return {
       status: 'inactive',
       label: 'INACTIVE (DISCONTINUED)',
       note: PRODUCT_STATUS_NOTES.STALE,
       isActive: false,
-    };
-  }
-
-  if (createdDate && createdDate < cutoffDate) {
-    return {
-      status: 'inactive',
-      label: 'INACTIVE (DISCONTINUED)',
-      note: PRODUCT_STATUS_NOTES.STALE,
-      isActive: false,
+      isArchived: false,
     };
   }
 
@@ -56,6 +63,7 @@ function deriveProductStatus({ firstSoldDate, lastSoldDate, createdAt, isActive 
     label: 'INACTIVE (NEW)',
     note: PRODUCT_STATUS_NOTES.NEW_PRODUCT,
     isActive: false,
+    isArchived: false,
   };
 }
 
