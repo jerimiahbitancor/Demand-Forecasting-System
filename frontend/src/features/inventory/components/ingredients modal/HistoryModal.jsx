@@ -3,7 +3,7 @@ import { FaClock, FaTimes, FaBoxes, FaHistory, FaArrowLeft, FaArrowRight, FaTag,
 import Tippy from "@tippyjs/react";
 import "tippy.js/dist/tippy.css";
 import "tippy.js/animations/scale.css";
-import InventoryModal from "./InventoryModal";
+import InventoryModal from "../InventoryModal";
 import "./HistoryModal.css";
 
 const HistoryModal = ({ item, apiClient, onClose }) => {

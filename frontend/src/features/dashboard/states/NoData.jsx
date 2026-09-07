@@ -1,7 +1,7 @@
 // states/NoData.jsx
 import Navbar from "../../components/Navbar/Navbar";
 import "../states/statescss/NoData.css";
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import axios from 'axios';
 import { useNavigate } from "react-router-dom"; // Import useNavigate
 import noDataImage from "../../../assets/images/NoData.png";
@@ -11,6 +11,7 @@ const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:5000/api';
 const NoData = () => {
   const navigate = useNavigate(); // Initialize navigate
   const [progressPercentage, setProgressPercentage] = useState(0);
+  const isMountedRef = useRef(true);
 
   // Navigation handlers
   const handleUploadData = () => {
@@ -72,9 +73,10 @@ const NoData = () => {
       if (!stateResult.data.success) return;
 
       const { state, progress } = stateResult.data.data;
+      if (!isMountedRef.current) return;
       setProgressPercentage(progress?.progress || 0);
 
-      if (state !== 'no-data') {
+      if (isMountedRef.current && state !== 'no-data') {
         navigate('/dashboard', { replace: true });
       }
     } catch (error) {
@@ -86,25 +88,30 @@ const NoData = () => {
           || 0;
 
         if (uploadCount > 0) {
+          if (!isMountedRef.current) return;
           setProgressPercentage(Math.min((uploadCount / 12) * 100, 100));
           navigate('/dashboard', { replace: true });
         } else {
+          if (!isMountedRef.current) return;
           setProgressPercentage(0);
         }
       } catch (fallbackError) {
         console.error('Error fetching upload fallback:', fallbackError);
-        setProgressPercentage(0);
+        if (isMountedRef.current) setProgressPercentage(0);
       }
     }
   };
 
   useEffect(() => {
+    isMountedRef.current = true;
+
     const initialFetch = setTimeout(fetchDataStatus, 0);
     const interval = setInterval(() => {
       fetchDataStatus();
     }, 3000);
 
     return () => {
+      isMountedRef.current = false;
       clearTimeout(initialFetch);
       clearInterval(interval);
     };

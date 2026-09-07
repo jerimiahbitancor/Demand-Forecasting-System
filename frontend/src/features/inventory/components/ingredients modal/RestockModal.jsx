@@ -4,7 +4,7 @@ import {
   FaBoxes,
   FaExclamationTriangle,
 } from "react-icons/fa";
-import InventoryModal from "./InventoryModal";
+import InventoryModal from "../InventoryModal";
 import "./RestockModal.css";
 
 const RestockModal = ({

@@ -1,7 +1,7 @@
 // states/UploadedInsufficient.jsx
 import Navbar from "../../components/Navbar/Navbar";
 import "../states/statescss/UploadedInsufficient.css";
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import axios from "axios";
 import { useNavigate } from "react-router-dom";
 import uploadedInsufficientImage from "../../../assets/images/NoData.png";
@@ -18,6 +18,7 @@ const UploadedInsufficient = () => {
   const [isLoading, setIsLoading] = useState(true);
   const [hasData, setHasData] = useState(false);
   const [products, setProducts] = useState([]);
+  const isMountedRef = useRef(true);
 
   // Navigation handlers
   const handleUploadData = () => {
@@ -111,7 +112,7 @@ const UploadedInsufficient = () => {
         const progressPercent = (months / totalMonthsNeeded) * 100;
         setDataProgress(Math.min(progressPercent, 100));
 
-        if (state !== 'uploaded-insufficient') {
+        if (isMountedRef.current && state !== 'uploaded-insufficient') {
           navigate('/dashboard', { replace: true });
         }
       }
@@ -178,6 +179,7 @@ const UploadedInsufficient = () => {
 
   // Initial fetch and polling
   useEffect(() => {
+    isMountedRef.current = true;
     const loadData = async () => {
       await fetchDataStatus();
       await fetchUploadProgress();
@@ -192,6 +194,7 @@ const UploadedInsufficient = () => {
     const productsInterval = setInterval(fetchProducts, 10000);
 
     return () => {
+      isMountedRef.current = false;
       clearInterval(interval);
       clearInterval(productsInterval);
     };
