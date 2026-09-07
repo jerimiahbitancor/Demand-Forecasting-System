@@ -482,6 +482,16 @@
   background: #9ca3af;
 }
 
+/* Archived - Gray */
+.product-status-badge.status-archived {
+  background: #e5e7eb;
+  color: #4b5563;
+}
+
+.product-status-badge.status-archived .product-status-dot {
+  background: #6b7280;
+}
+
 /* Low Margin - Pink */
 .product-status-badge.status-low-margin {
   background: #fce7f3;

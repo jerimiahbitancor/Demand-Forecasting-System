@@ -66,7 +66,7 @@ const updateUnit = async (req, res) => {
       if (ingredientError) throw ingredientError;
 
       const { error: inventoryError } = await supabaseAdmin
-        .from('inventory_items')
+        .from('ingredients')
         .update({ unit: name })
         .eq('unit', currentUnit.name);
       if (inventoryError) throw inventoryError;

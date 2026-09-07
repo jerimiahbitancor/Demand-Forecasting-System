@@ -40,7 +40,7 @@ CREATE TABLE public.business_profile (
   business_name character varying NOT NULL,
   business_email character varying NOT NULL,
   business_contact_number character varying NOT NULL,
-  address text,
+  business_address text,
   logo_url character varying,
   updated_at timestamp without time zone DEFAULT now(),
   CONSTRAINT business_profile_pkey PRIMARY KEY (id)
@@ -66,7 +66,7 @@ CREATE TABLE public.products (
   serving_size_label character varying,
   is_active boolean DEFAULT true,
   first_sold_date date,
-  inactive_reason USER-DEFINED,
+  inactive_reason text,
   inactive_since timestamp without time zone,
   created_at timestamp without time zone DEFAULT now(),
   CONSTRAINT products_pkey PRIMARY KEY (id)
@@ -76,12 +76,20 @@ CREATE TABLE public.ingredients (
   name character varying NOT NULL UNIQUE,
   unit character varying NOT NULL,
   price numeric,
+  category character varying NOT NULL,
+  quantity numeric NOT NULL DEFAULT 0,
+  min_stock numeric DEFAULT 0,
+  is_archived boolean DEFAULT false,
+  created_at timestamp with time zone NOT NULL DEFAULT timezone('utc'::text, now()),
+  updated_at timestamp with time zone NOT NULL DEFAULT timezone('utc'::text, now()),
+  created_by integer,
+  updated_by integer,
   CONSTRAINT ingredients_pkey PRIMARY KEY (id)
 );
 CREATE TABLE public.product_ingredients (
   id integer GENERATED ALWAYS AS IDENTITY NOT NULL,
-  product_id integer,
-  ingredient_id integer,
+  product_id integer NOT NULL,
+  ingredient_id integer NOT NULL,
   quantity_per_serving numeric NOT NULL,
   CONSTRAINT product_ingredients_pkey PRIMARY KEY (id),
   CONSTRAINT product_ingredients_product_id_fkey FOREIGN KEY (product_id) REFERENCES public.products(id),
@@ -146,25 +154,40 @@ CREATE TABLE public.forecast_cogs (
   CONSTRAINT forecast_cogs_pkey PRIMARY KEY (id),
   CONSTRAINT forecast_cogs_forecast_id_fkey FOREIGN KEY (forecast_id) REFERENCES public.forecasts(id)
 );
-CREATE TABLE public.ingredient_stock (
-  id integer GENERATED ALWAYS AS IDENTITY NOT NULL,
-  ingredient_id integer UNIQUE,
-  current_quantity numeric NOT NULL DEFAULT 0,
-  reorder_threshold numeric,
-  updated_at timestamp without time zone DEFAULT now(),
-  CONSTRAINT ingredient_stock_pkey PRIMARY KEY (id),
-  CONSTRAINT ingredient_stock_ingredient_id_fkey FOREIGN KEY (ingredient_id) REFERENCES public.ingredients(id)
+CREATE TABLE public.ingredient_categories (
+  id uuid NOT NULL DEFAULT gen_random_uuid(),
+  name character varying NOT NULL UNIQUE,
+  created_at timestamp with time zone NOT NULL DEFAULT timezone('utc'::text, now()),
+  updated_at timestamp with time zone NOT NULL DEFAULT timezone('utc'::text, now()),
+  CONSTRAINT ingredient_categories_pkey PRIMARY KEY (id)
 );
-CREATE TABLE public.stock_movements (
-  id integer GENERATED ALWAYS AS IDENTITY NOT NULL,
+CREATE TABLE public.inventory_transactions (
+  id uuid NOT NULL DEFAULT gen_random_uuid(),
+  transaction_type character varying NOT NULL,
+  quantity numeric NOT NULL,
+  previous_quantity numeric NOT NULL,
+  new_quantity numeric NOT NULL,
+  reason character varying,
+  notes text,
+  created_at timestamp with time zone NOT NULL DEFAULT timezone('utc'::text, now()),
+  created_by integer,
   ingredient_id integer,
-  reference_upload_id integer,
-  movement_type character varying NOT NULL,
-  quantity_change numeric NOT NULL,
-  created_at timestamp without time zone DEFAULT now(),
-  CONSTRAINT stock_movements_pkey PRIMARY KEY (id),
-  CONSTRAINT stock_movements_ingredient_id_fkey FOREIGN KEY (ingredient_id) REFERENCES public.ingredients(id),
-  CONSTRAINT stock_movements_reference_upload_id_fkey FOREIGN KEY (reference_upload_id) REFERENCES public.uploads(id)
+  CONSTRAINT inventory_transactions_pkey PRIMARY KEY (id),
+  CONSTRAINT inventory_transactions_ingredient_fk FOREIGN KEY (ingredient_id) REFERENCES public.ingredients(id)
+);
+CREATE TABLE public.ingredient_units (
+  id uuid NOT NULL DEFAULT gen_random_uuid(),
+  name character varying NOT NULL UNIQUE,
+  created_at timestamp with time zone NOT NULL DEFAULT timezone('utc'::text, now()),
+  updated_at timestamp with time zone NOT NULL DEFAULT timezone('utc'::text, now()),
+  CONSTRAINT ingredient_units_pkey PRIMARY KEY (id)
+);
+CREATE TABLE public.product_categories (
+  id uuid NOT NULL DEFAULT gen_random_uuid(),
+  name character varying NOT NULL UNIQUE,
+  created_at timestamp with time zone NOT NULL DEFAULT timezone('utc'::text, now()),
+  updated_at timestamp with time zone NOT NULL DEFAULT timezone('utc'::text, now()),
+  CONSTRAINT product_categories_pkey PRIMARY KEY (id)
 );
 CREATE TABLE public.market_price (
   id integer GENERATED ALWAYS AS IDENTITY NOT NULL,

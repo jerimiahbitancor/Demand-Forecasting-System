@@ -12,8 +12,8 @@ function toDbRow(payload) {
   const row = {
     business_name: payload.business_name,
     business_address: payload.business_address,
-    business_email: payload.business_email || null,
-    business_contact_number: payload.business_contact_number || null,
+    business_email: payload.business_email || '',
+    business_contact_number: payload.business_contact_number || '',
   };
   if (payload.logo !== undefined) {
     row.logo_url = payload.logo;

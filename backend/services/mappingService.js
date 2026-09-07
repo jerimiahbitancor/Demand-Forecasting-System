@@ -1,5 +1,6 @@
 // services/mappingService.js
 const { supabase, isConfigured, supabaseAdmin } = require('../config/supabase');
+const { deriveProductStatus } = require('./productStatusService');
 
 class MappingService {
   constructor() {
@@ -162,13 +163,47 @@ class MappingService {
         category: item.category || 'Uncategorized',
         serving_size_label: item.serving_size_label || 'serving',
         is_active: item.is_active,
+        is_archived: /^archived\b/i.test(item.inactive_reason || ''),
         created_at: item.created_at,
         first_sold_date: item.first_sold_date,
         inactive_reason: item.inactive_reason,
         inactive_since: item.inactive_since,
+        status: /^archived\b/i.test(item.inactive_reason || '') ? 'archived' : (item.is_active ? 'active' : 'inactive'),
+        status_label: /^archived\b/i.test(item.inactive_reason || '') ? 'ARCHIVED' : (item.is_active ? 'ACTIVE' : 'INACTIVE (NEW)'),
         // For ingredients, we need to fetch from product_ingredients
         product_ingredients: []
       }));
+
+      if (transformedData.length > 0) {
+        const { data: salesData, error: salesError } = await supabaseAdmin
+          .from('daily_sales')
+          .select('product_id, sale_date')
+          .in('product_id', transformedData.map(product => product.id))
+          .order('sale_date', { ascending: true });
+
+        if (salesError) throw salesError;
+
+        const salesByProduct = new Map();
+        for (const sale of salesData || []) {
+          const dates = salesByProduct.get(sale.product_id) || [];
+          dates.push(sale.sale_date);
+          salesByProduct.set(sale.product_id, dates);
+        }
+
+        for (const product of transformedData) {
+          const statusDetails = deriveProductStatus({
+            firstSoldDate: salesByProduct.get(product.id)?.[0] || product.first_sold_date,
+            lastSoldDate: salesByProduct.get(product.id)?.at(-1) || product.first_sold_date || null,
+            createdAt: product.created_at,
+            isActive: product.is_active,
+            inactiveReason: product.inactive_reason
+          });
+          product.status = statusDetails.status;
+          product.status_label = statusDetails.label;
+          product.status_note = statusDetails.note;
+          product.is_archived = statusDetails.isArchived;
+        }
+      }
 
       // Fetch all product ingredients in one query instead of one query per product.
       if (transformedData.length > 0) {
@@ -178,10 +213,11 @@ class MappingService {
           .select(`
             product_id,
             quantity_per_serving,
-            inventory_items!inner (
+            ingredients!inner (
               id,
               name,
-              unit
+              unit,
+              price
             )
           `)
           .in('product_id', productIds);
@@ -192,12 +228,13 @@ class MappingService {
           for (const pi of ingredientsData) {
             const productIngredients = ingredientsByProduct.get(pi.product_id) || [];
             productIngredients.push({
-              id: pi.inventory_items?.id,
+              id: pi.ingredients?.id,
               quantity_per_serving: pi.quantity_per_serving,
               ingredients: {
-                id: pi.inventory_items?.id,
-                name: pi.inventory_items?.name,
-                unit: pi.inventory_items?.unit
+                id: pi.ingredients?.id,
+                name: pi.ingredients?.name,
+                unit: pi.ingredients?.unit,
+                price: pi.ingredients?.price
               }
             });
             ingredientsByProduct.set(pi.product_id, productIngredients);
@@ -276,6 +313,7 @@ class MappingService {
         category: data.category || 'Uncategorized',
         serving_size_label: data.serving_size_label || 'serving',
         is_active: data.is_active,
+        is_archived: /^archived\b/i.test(data.inactive_reason || ''),
         created_at: data.created_at,
         first_sold_date: data.first_sold_date,
         inactive_reason: data.inactive_reason,
@@ -288,22 +326,24 @@ class MappingService {
         .from('product_ingredients')
         .select(`
           quantity_per_serving,
-          inventory_items!inner (
+          ingredients!inner (
             id,
             name,
-            unit
+            unit,
+            price
           )
         `)
         .eq('product_id', id);
 
       if (!ingredientsError && ingredientsData) {
         transformedData.product_ingredients = ingredientsData.map(pi => ({
-          id: pi.inventory_items?.id,
+          id: pi.ingredients?.id,
           quantity_per_serving: pi.quantity_per_serving,
           ingredients: {
-            id: pi.inventory_items?.id,
-            name: pi.inventory_items?.name,
-            unit: pi.inventory_items?.unit
+            id: pi.ingredients?.id,
+            name: pi.ingredients?.name,
+            unit: pi.ingredients?.unit,
+            price: pi.ingredients?.price
           }
         }));
       }
@@ -360,7 +400,7 @@ class MappingService {
         for (const ingredient of productData.ingredients) {
           // Find the inventory item by name
           const { data: inventoryItem, error: inventoryError } = await supabaseAdmin
-            .from('inventory_items')
+            .from('ingredients')
             .select('id')
             .ilike('name', ingredient.name)
             .maybeSingle();
@@ -464,7 +504,7 @@ class MappingService {
         // Insert new ingredients
         for (const ingredient of productData.ingredients) {
           const { data: inventoryItem, error: inventoryError } = await supabaseAdmin
-            .from('inventory_items')
+            .from('ingredients')
             .select('id')
             .ilike('name', ingredient.name)
             .maybeSingle();

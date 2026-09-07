@@ -5,7 +5,7 @@ const getCategories = async (req, res) => {
   try {
     const { data, error } = await supabaseAdmin
       .from('ingredient_categories')
-      .select('id, name, description, created_at, updated_at')
+      .select('id, name, created_at, updated_at')
       .order('name');
 
     if (error) throw error;
@@ -22,7 +22,7 @@ const getCategories = async (req, res) => {
 
 const createCategory = async (req, res) => {
   try {
-    const { name, description } = req.body;
+    const { name } = req.body;
 
     if (!name) {
       return res.status(400).json({ success: false, error: 'Category name is required' });
@@ -30,7 +30,7 @@ const createCategory = async (req, res) => {
 
     const { data, error } = await supabaseAdmin
       .from('ingredient_categories')
-      .insert([{ name: name.trim(), description: description || null }])
+      .insert([{ name: name.trim() }])
       .select()
       .single();
 
@@ -71,7 +71,7 @@ const updateCategory = async (req, res) => {
 
     if (currentCategory.name !== name.trim()) {
       const { error: inventoryError } = await supabaseAdmin
-        .from('inventory_items')
+        .from('ingredients')
         .update({ category: name.trim() })
         .eq('category', currentCategory.name);
       if (inventoryError) throw inventoryError;
