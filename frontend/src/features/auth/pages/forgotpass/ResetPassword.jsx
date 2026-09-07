@@ -10,6 +10,7 @@ import {
   FaSpinner,
 } from 'react-icons/fa';
 import './ResetPassword.css';
+import { useBusinessLogo } from '../../../../context/BusinessProfileContext';
 
 const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:5000/api';
 
@@ -23,6 +24,7 @@ const getPasswordRules = (password) => [
 
 const ResetPassword = () => {
   const navigate = useNavigate();
+  const businessLogo = useBusinessLogo();
   const location = useLocation();
   const email = location.state?.email || 'your email';
   const code = location.state?.code;
@@ -163,7 +165,7 @@ const ResetPassword = () => {
             <img
               alt="Chef Duo Logo"
               className="logo"
-              src="/public/logo.png"
+              src={businessLogo}
             />
             <h1 className="brand-title">Set New Password</h1>
             <p className="brand-subtitle">

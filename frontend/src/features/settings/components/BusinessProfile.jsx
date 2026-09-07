@@ -5,6 +5,7 @@ import axios from 'axios';
 import toast from 'react-hot-toast';
 import "./BusinessProfile.css";
 import { authService } from '../../../services/authService';
+import { publishBusinessProfile } from '../../../context/BusinessProfileContext';
 
 const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:5000/api';
 
@@ -115,8 +116,10 @@ function BusinessProfile() {
 
       toast.dismiss(uploadingToast);
       if (response.data.success) {
-        setFormData((prev) => ({ ...prev, logo: response.data.url }));
+        const logo = response.data.url;
+        setFormData((prev) => ({ ...prev, logo }));
         setLogoPreview(response.data.url);
+        publishBusinessProfile({ logo });
         toast.success('Logo uploaded successfully');
       }
     } catch (error) {
@@ -161,6 +164,7 @@ function BusinessProfile() {
 
       toast.dismiss(savingToast);
       if (response.data.success) {
+        publishBusinessProfile(response.data.data || formData);
         toast.success('Business profile saved successfully!');
       } else {
         toast.error('Failed to save business profile');

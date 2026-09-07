@@ -73,7 +73,7 @@ const EditIngredientModal = ({
 
 					<div className="form-group">
 						<label className="form-label">Unit Cost <span className="required-star">*</span></label>
-						<input type="number" className={`form-input ${formErrors.price ? "error" : ""}`} value={formData.price} onChange={(event) => update("price", event.target.value)} placeholder="0.00" min="0" step="0.01" />
+						<input type="number" className={`form-input ${formErrors.price ? "error" : ""}`} value={formData.price} onChange={(event) => update("price", event.target.value)} placeholder="0.01" min="0.01" step="0.01" />
 						{formErrors.price && <span className="form-error">{formErrors.price}</span>}
 					</div>
 

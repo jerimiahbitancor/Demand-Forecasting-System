@@ -5,11 +5,13 @@ import Swal from 'sweetalert2';
 import '../../../../utils/swalTheme.css';
 import { FaEnvelope, FaKey, FaSpinner, FaArrowLeft } from 'react-icons/fa';
 import { useAuth } from '../../../../context/AuthContext';
+import { useBusinessLogo } from '../../../../context/BusinessProfileContext';
 import './VerifyEmail.css';
 
 const VerifyEmail = () => {
   const navigate = useNavigate();
   const { verifyOTP, resendOTP, registrationData, user } = useAuth();
+  const businessLogo = useBusinessLogo();
   
   // Get data from AuthContext
   const email = registrationData?.email;
@@ -151,7 +153,7 @@ const VerifyEmail = () => {
           <img
             alt="Chef Duo Logo"
             className="logo"
-            src="/public/logo.png"
+            src={businessLogo}
           />
           <h1 className="brand-title">Verify Your Email</h1>
           <p className="brand-subtitle">

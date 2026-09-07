@@ -470,8 +470,8 @@ const IngredientManagement = () => {
     }
     if (!formData.price || formData.price === '') {
       errors.price = 'Price is required';
-    } else if (isNaN(parseFloat(formData.price)) || parseFloat(formData.price) < 0) {
-      errors.price = 'Price must be a valid number';
+    } else if (!Number.isFinite(Number(formData.price)) || Number(formData.price) <= 0) {
+      errors.price = 'Price must be greater than 0';
     }
 
     setFormErrors(errors);

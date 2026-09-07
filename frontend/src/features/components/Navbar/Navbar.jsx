@@ -4,6 +4,7 @@ import { NavLink, useNavigate } from 'react-router-dom';
 import Swal from 'sweetalert2';
 import '../../../utils/swalTheme.css';
 import { useAuth } from '../../../context/AuthContext';
+import { useBusinessLogo } from '../../../context/BusinessProfileContext';
 import { 
   FaChartBar,
   FaDatabase,
@@ -24,6 +25,7 @@ const Navbar = () => {
   const [isMobileProfileOpen, setIsMobileProfileOpen] = useState(false);
   const navigate = useNavigate();
   const { logout, user } = useAuth();
+  const businessLogo = useBusinessLogo();
 
   // Close dropdown when clicking outside
   useEffect(() => {
@@ -114,7 +116,7 @@ const Navbar = () => {
           <img
             alt="Chef Duo Logo"
             className="logo"
-            src="/logo.png"
+            src={businessLogo}
           />
         </div>
         <span className="brand-text">Demand Forecasting</span>

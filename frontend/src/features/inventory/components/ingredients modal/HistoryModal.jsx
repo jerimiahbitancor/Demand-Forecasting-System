@@ -68,9 +68,7 @@ const HistoryModal = ({ item, apiClient, onClose }) => {
         <div className="inventory-history-header-left">
           <div className="inventory-history-item-row">
             <span className="item-name">{item.name || "Unnamed"}</span>
-            <div className="btn-history" disabled>
-             History
-            </div>
+           
           </div>
           {/* Info Cards inline */}
           <div className="inventory-history-info-cards-inline">
@@ -272,11 +270,7 @@ const HistoryModal = ({ item, apiClient, onClose }) => {
       </div>
 
       {/* Footer */}
-      <div className="inventory-history-footer">
-        <button className="btn-close" onClick={onClose}>
-          Close
-        </button>
-      </div>
+    
     </InventoryModal>
   );
 };

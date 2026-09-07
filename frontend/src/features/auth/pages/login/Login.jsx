@@ -11,6 +11,7 @@ import {
   FaSpinner
 } from 'react-icons/fa';
 import { useAuth } from '../../../../context/AuthContext';
+import { useBusinessLogo } from '../../../../context/BusinessProfileContext';
 import './Login.css';
 import { useSetupGuard } from '../../../../hooks/useSetupGuard';
 
@@ -18,6 +19,7 @@ const Login = () => {
   const navigate = useNavigate();
   const { login, loading } = useAuth();
   const checking = useSetupGuard('login');
+  const businessLogo = useBusinessLogo();
   
   const [formData, setFormData] = useState({
     email: '',
@@ -146,9 +148,9 @@ const Login = () => {
             <img
               alt="Chef Duo Logo"
               className="logo"
-              src="/public/logo.png"
+              src={businessLogo}
             />
-            <h1 className="brand-title">ChefDuo Demand Forecasting</h1>
+            <h1 className="brand-title">ChefDuo Forecast</h1>
             <p className="brand-subtitle">Welcome back! Log in to your account.</p>
           </div>
 

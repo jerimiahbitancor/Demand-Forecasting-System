@@ -12,6 +12,7 @@ import {
 } from 'react-icons/fa';
 import { FiX } from 'react-icons/fi';
 import { useAuth } from '../../../../context/AuthContext';
+import { useBusinessLogo } from '../../../../context/BusinessProfileContext';
 import './Register.css';
 import { useSetupGuard } from '../../../../hooks/useSetupGuard'; 
 
@@ -19,6 +20,7 @@ const Register = () => {
   const navigate = useNavigate();
   const { register, loading } = useAuth();
   const checking = useSetupGuard('register');
+  const businessLogo = useBusinessLogo();
   
   const [formData, setFormData] = useState({
     fullName: '',
@@ -141,10 +143,10 @@ const Register = () => {
             <img
               alt="Chef Duo Logo"
               className="logo"
-              src="/public/logo.png"
+              src={businessLogo}
             />
-            <h1 className="brand-title">ChefDuo Demand Forecasting</h1>
-            <p className="brand-subtitle">Join our vibrant culinary community today.</p>
+            <h1 className="brand-title">ChefDuo Forecast</h1>
+            <p className="brand-subtitle">Demand Forecasting and Supply Chain Decision Support System</p>
           </div>
 
           {error && (
