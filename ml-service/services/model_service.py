@@ -36,6 +36,7 @@ from sklearn.metrics import mean_absolute_error, mean_squared_error
 
 from services.feature_engineering import FEATURE_COLUMNS
 from services.model_storage import save_model_to_storage, new_model_version
+from utils.debug_log import log_stage
 
 
 def chronological_split(df: pd.DataFrame, train_fraction: float = 0.8):
@@ -65,6 +66,11 @@ def train_global_model(features_df: pd.DataFrame):
     aggregate scores and a per-product breakdown.
     """
     train_df, test_df = chronological_split(features_df)
+    log_stage("train split", train_df, extra={"train_fraction": 0.8})
+    log_stage("test split", test_df, extra={
+        "train_ends": str(train_df["sale_date"].max()) if not train_df.empty else None,
+        "test_starts": str(test_df["sale_date"].min()) if not test_df.empty else None,
+    })
 
     if len(train_df) < 200:
         raise ValueError(
