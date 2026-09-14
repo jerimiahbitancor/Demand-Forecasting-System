@@ -1,5 +1,5 @@
 // frontend/src/features/settings/components/BusinessProfile.jsx
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { FiUploadCloud, FiSave, FiEdit, FiX } from "react-icons/fi";
 import axios from 'axios';
 import toast from 'react-hot-toast';
@@ -24,6 +24,7 @@ function BusinessProfile() {
   const [isLoading, setIsLoading] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
   const [isUploadingLogo, setIsUploadingLogo] = useState(false);
+  const logoInputRef = useRef(null);
 
   const apiClient = axios.create({
     baseURL: API_URL,
@@ -82,9 +83,10 @@ function BusinessProfile() {
   const handleFileSelect = (e) => {
     const file = e.target.files[0];
     if (file) validateAndSetLogoFile(file);
+    e.target.value = '';
   };
 
-  const validateAndSetLogoFile = async (file) => {
+  const validateAndSetLogoFile = (file) => {
     const validTypes = ["image/png", "image/jpeg", "image/gif", "image/svg+xml"];
     if (!validTypes.includes(file.type) && !file.name.match(/\.(png|jpg|jpeg|gif|svg)$/i)) {
       toast.error("Please upload a PNG, JPG, JPEG, GIF, or SVG image");
@@ -100,37 +102,6 @@ function BusinessProfile() {
     const reader = new FileReader();
     reader.onload = (e) => setLogoPreview(e.target.result);
     reader.readAsDataURL(file);
-
-    setIsUploadingLogo(true);
-    const uploadingToast = toast.loading('Uploading logo...');
-    try {
-      const form = new FormData();
-      form.append('logo', file);
-
-      const authHeaders = await authService.getAuthHeaders();
-      const response = await axios.post(
-        `${API_URL}/settings/business-profile/logo`,
-        form,
-        { headers: { ...authHeaders } }
-      );
-
-      toast.dismiss(uploadingToast);
-      if (response.data.success) {
-        const logo = response.data.url;
-        setFormData((prev) => ({ ...prev, logo }));
-        setLogoPreview(response.data.url);
-        publishBusinessProfile({ logo });
-        toast.success('Logo uploaded successfully');
-      }
-    } catch (error) {
-      toast.dismiss(uploadingToast);
-      console.error('Error uploading logo:', error);
-      toast.error(error.response?.data?.error || 'Failed to upload logo');
-      setLogoFile(null);
-      setLogoPreview(null);
-    } finally {
-      setIsUploadingLogo(false);
-    }
   };
 
   const handleDragOver = (e) => {
@@ -160,11 +131,34 @@ function BusinessProfile() {
     const savingToast = toast.loading('Saving business profile...');
 
     try {
-      const response = await apiClient.post('/settings/business-profile', formData);
+      let profileToSave = formData;
+
+      if (logoFile) {
+        setIsUploadingLogo(true);
+        const form = new FormData();
+        form.append('logo', logoFile);
+
+        const authHeaders = await authService.getAuthHeaders();
+        const logoResponse = await axios.post(
+          `${API_URL}/settings/business-profile/logo`,
+          form,
+          { headers: { ...authHeaders } }
+        );
+
+        if (!logoResponse.data.success || !logoResponse.data.url) {
+          throw new Error(logoResponse.data.error || 'Failed to upload logo');
+        }
+
+        profileToSave = { ...formData, logo: logoResponse.data.url };
+      }
+
+      const response = await apiClient.post('/settings/business-profile', profileToSave);
 
       toast.dismiss(savingToast);
       if (response.data.success) {
-        publishBusinessProfile(response.data.data || formData);
+        setFormData(response.data.data || profileToSave);
+        setLogoFile(null);
+        publishBusinessProfile(response.data.data || profileToSave);
         toast.success('Business profile saved successfully!');
       } else {
         toast.error('Failed to save business profile');
@@ -172,9 +166,10 @@ function BusinessProfile() {
     } catch (error) {
       toast.dismiss(savingToast);
       console.error('Error saving business profile:', error);
-      toast.error(error.response?.data?.error || 'Failed to save business profile');
+      toast.error(error.response?.data?.error || error.message || 'Failed to save business profile');
     } finally {
       setIsSaving(false);
+      setIsUploadingLogo(false);
     }
   };
 
@@ -265,7 +260,7 @@ function BusinessProfile() {
               </div>
               <button 
                 className="logo-change-btn" 
-                onClick={() => document.getElementById("logoFileInput").click()}
+                onClick={() => logoInputRef.current?.click()}
                 disabled={isUploadingLogo}
               >
                 <FiEdit size={14} /> Change Logo
@@ -280,7 +275,7 @@ function BusinessProfile() {
               onDrop={handleFileDrop}
               onDragOver={handleDragOver}
               onDragLeave={handleDragLeave}
-              onClick={() => !isUploadingLogo && document.getElementById("logoFileInput").click()}
+              onClick={() => !isUploadingLogo && logoInputRef.current?.click()}
             >
               <div className="drop-zone-icon">
                 <FiUploadCloud size={28} />
@@ -298,16 +293,18 @@ function BusinessProfile() {
                   <p className="drop-zone-hint">Supports PNG, JPG, GIF, SVG up to 5MB</p>
                 </>
               )}
-              <input
-                type="file"
-                id="logoFileInput"
-                className="file-input"
-                accept=".png,.jpg,.jpeg,.gif,.svg"
-                onChange={handleFileSelect}
-                disabled={isUploadingLogo}
-              />
             </div>
           )}
+
+          <input
+            ref={logoInputRef}
+            type="file"
+            id="logoFileInput"
+            className="file-input"
+            accept=".png,.jpg,.jpeg,.gif,.svg"
+            onChange={handleFileSelect}
+            disabled={isUploadingLogo}
+          />
         </div>
       </div>
 

@@ -41,6 +41,13 @@ export const BusinessProfileProvider = ({ children }) => {
   }, []);
 
   useEffect(() => {
+    const favicon = document.querySelector('link[rel="icon"]');
+    if (favicon) {
+      favicon.href = profile.logo || '/logo.png';
+    }
+  }, [profile.logo]);
+
+  useEffect(() => {
     if (authLoading || !user) return undefined;
     let active = true;
 
