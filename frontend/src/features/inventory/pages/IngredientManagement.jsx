@@ -1,6 +1,7 @@
 // components/IngredientManagement.jsx
 import { useState, useEffect, useMemo, useCallback, useRef } from "react";
 import "./Inventory.css";
+import "../InventoryControls.css";
 import { 
   FaPlus, 
   FaEdit, 
@@ -28,6 +29,7 @@ import 'tippy.js/animations/scale.css';
 import AddIngredientModal from '../components/ingredients modal/AddIngredientModal';
 import EditIngredientModal from '../components/ingredients modal/EditIngredientModal';
 import InventoryConfirmationModal from '../components/ingredients modal/InventoryConfirmationModal';
+import InventoryModal from '../components/InventoryModal';
 import RestockModal from '../components/ingredients modal/RestockModal';
 import HistoryModal from '../components/ingredients modal/HistoryModal';
 import ArchiveModal from '../components/ingredients modal/ArchiveModal';
@@ -73,6 +75,8 @@ const IngredientManagement = () => {
   const [isViewModalOpen, setIsViewModalOpen] = useState(false);
   const [isRestoreModalOpen, setIsRestoreModalOpen] = useState(false);
   const [selectedItem, setSelectedItem] = useState(null);
+  const [selectedIds, setSelectedIds] = useState([]);
+  const [isBulkArchiveOpen, setIsBulkArchiveOpen] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
 
   // Refs for preventing multiple requests
@@ -454,6 +458,64 @@ const IngredientManagement = () => {
     }
   };
 
+  // ============ BULK SELECTION HANDLERS ============
+  const toggleSelectItem = (id) => {
+    setSelectedIds((prev) =>
+      prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]
+    );
+  };
+
+  const toggleSelectAll = () => {
+    const selectableIds = inventoryItems.filter((i) => !i.is_archived).map((i) => i.id);
+    const allSelected =
+      selectableIds.length > 0 &&
+      selectableIds.every((id) => selectedIds.includes(id));
+    setSelectedIds(allSelected ? [] : selectableIds);
+  };
+
+  const allPageSelected =
+    inventoryItems.filter((i) => !i.is_archived).length > 0 &&
+    inventoryItems
+      .filter((i) => !i.is_archived)
+      .every((i) => selectedIds.includes(i.id));
+
+  const selectedNamesList = (() => {
+    const names = selectedIds
+      .map((id) => inventoryItems.find((i) => i.id === id)?.name)
+      .filter(Boolean);
+    if (names.length > 5) return `${names.slice(0, 5).join(', ')} and ${names.length - 5} more`;
+    return names.join(', ') || 'N/A';
+  })();
+
+  const handleBulkArchive = async () => {
+    const idsToArchive = selectedIds.filter((id) => {
+      const item = inventoryItems.find((i) => i.id === id);
+      return item && !item.is_archived;
+    });
+    if (!idsToArchive.length) {
+      toast.error('No active items are selected to archive');
+      setIsBulkArchiveOpen(false);
+      return;
+    }
+
+    setIsSubmitting(true);
+    let archived = 0;
+    try {
+      for (const id of idsToArchive) {
+        const response = await apiClient.patch(`/inventory/items/${id}/archive`);
+        if (response.data.success) archived += 1;
+      }
+      toast.success(`${archived} item(s) archived successfully!`);
+      setIsBulkArchiveOpen(false);
+      setSelectedIds([]);
+      setTimeout(() => fetchInventory(), 500);
+    } catch (error) {
+      toast.error(error.response?.data?.error || 'Failed to archive selected items');
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
   // ============ FORM HANDLERS ============
   const validateForm = () => {
     const errors = {};
@@ -757,7 +819,6 @@ const IngredientManagement = () => {
       {/* Controls */}
       <div className="inventory-controls">
         <div className="inventory-search-box">
-          <div className="inventory-search-icon" />
           <input
             type="text"
             className="inventory-search-input"
@@ -826,6 +887,25 @@ const IngredientManagement = () => {
             <option value="batch">Sort By: Batch</option>
           </select>
 
+          {selectedIds.length > 0 && (
+            <>
+              <button 
+                className="btn-warning"
+                onClick={() => setIsBulkArchiveOpen(true)}
+                aria-label={`Archive ${selectedIds.length} selected item(s)`}
+              >
+                <FaArchive /> Archive Selected ({selectedIds.length})
+              </button>
+              <button 
+                className="btn-secondary"
+                onClick={() => setSelectedIds([])}
+                aria-label="Clear selection"
+              >
+                <FaTimes /> Clear
+              </button>
+            </>
+          )}
+
           <button 
             className="btn-primary"
             onClick={() => {
@@ -865,6 +945,15 @@ const IngredientManagement = () => {
             <table className="inventory-table">
               <thead>
                 <tr>
+                  <th className="inventory-checkbox-cell">
+                    <input
+                      type="checkbox"
+                      className="inventory-row-checkbox"
+                      checked={allPageSelected}
+                      onChange={toggleSelectAll}
+                      aria-label="Select all items on this page"
+                    />
+                  </th>
                   <th>#</th>
                   <th className="sortable" onClick={() => handleSort('name')}>
                     Item Name {sortField === 'name' && (sortDirection === 'asc' ? <FaSortAmountUp /> : <FaSortAmountDown />)}
@@ -879,7 +968,7 @@ const IngredientManagement = () => {
                   <th className="sortable" onClick={() => handleSort('price')}>
                     Unit Cost {sortField === 'price' && (sortDirection === 'asc' ? <FaSortAmountUp /> : <FaSortAmountDown />)}
                   </th>
-                  <th>Market Price</th>
+                  <th title="Average of the latest recorded price across all market price sources (Robinson's, SM, Puregold, Wet Market, DA Reference).">Avg Market Price</th>
                   <th className="sortable" onClick={() => handleSort('updated_at')}>
                     Last Updated {sortField === 'updated_at' && (sortDirection === 'asc' ? <FaSortAmountUp /> : <FaSortAmountDown />)}
                   </th>
@@ -894,6 +983,16 @@ const IngredientManagement = () => {
                   const isArchived = item.is_archived;
                   return (
                     <tr key={item.id || index} className={isArchived ? 'archived-row' : ''}>
+                      <td className="inventory-checkbox-cell">
+                        <input
+                          type="checkbox"
+                          className="inventory-row-checkbox"
+                          checked={selectedIds.includes(item.id)}
+                          onChange={() => toggleSelectItem(item.id)}
+                          disabled={isArchived}
+                          aria-label={`Select ${item.name || 'item'}`}
+                        />
+                      </td>
                       <td>{displayIndex}</td>
                       <td className="inventory-item-name-cell">
                         <span className="inventory-item-name">{item.name || 'Unnamed'}</span>
@@ -909,7 +1008,11 @@ const IngredientManagement = () => {
                         {item.quantity || 0}
                       </td>
                       <td>{formatCurrency(item.price)}</td>
-                      <td>{formatCurrency(item.market_price || item.price)}</td>
+                      <td>
+                        {item.avg_market_price !== null && item.avg_market_price !== undefined
+                          ? formatCurrency(item.avg_market_price)
+                          : <span className="market-price-empty">—</span>}
+                      </td>
                       <td>{formatDate(item.updated_at || item.created_at)}</td>
                       <td>
                         <span className={`inventory-stock-status ${status.className}`}>
@@ -972,51 +1075,60 @@ const IngredientManagement = () => {
             </table>
           </div>
 
-          {/* Pagination */}
-          {totalPages > 1 && (
+          {/* Pagination — always visible so it's clear the table is split 10 per page */}
+          {inventoryItems.length > 0 && (
             <div className="inventory-pagination">
-              <button 
-                className="inventory-pagination-btn"
-                onClick={() => setCurrentPage(prev => Math.max(prev - 1, 1))}
-                disabled={currentPage === 1}
-              >
-                <FaArrowLeft /> Previous
-              </button>
-              
-              <div className="inventory-pagination-numbers">
-                {Array.from({ length: Math.min(5, totalPages) }, (_, i) => {
-                  let pageNumber;
-                  if (totalPages <= 5) {
-                    pageNumber = i + 1;
-                  } else if (currentPage <= 3) {
-                    pageNumber = i + 1;
-                  } else if (currentPage >= totalPages - 2) {
-                    pageNumber = totalPages - 4 + i;
-                  } else {
-                    pageNumber = currentPage - 2 + i;
-                  }
-                  if (pageNumber > 0 && pageNumber <= totalPages) {
-                    return (
-                      <button
-                        key={pageNumber}
-                        className={`inventory-pagination-number ${currentPage === pageNumber ? 'active' : ''}`}
-                        onClick={() => setCurrentPage(pageNumber)}
-                      >
-                        {pageNumber}
-                      </button>
-                    );
-                  }
-                  return null;
-                })}
+              <span className="inventory-pagination-info">
+                Showing {(currentPage - 1) * itemsPerPage + 1}–
+                {Math.min(currentPage * itemsPerPage, totalItems || inventoryItems.length)} of {totalItems || inventoryItems.length} items
+              </span>
+
+              <div className="inventory-pagination-controls">
+                <button 
+                  className="inventory-pagination-btn"
+                  onClick={() => setCurrentPage(prev => Math.max(prev - 1, 1))}
+                  disabled={currentPage === 1}
+                >
+                  <FaArrowLeft /> Previous
+                </button>
+                
+                <div className="inventory-pagination-numbers">
+                  {Array.from({ length: Math.min(5, totalPages) }, (_, i) => {
+                    let pageNumber;
+                    if (totalPages <= 5) {
+                      pageNumber = i + 1;
+                    } else if (currentPage <= 3) {
+                      pageNumber = i + 1;
+                    } else if (currentPage >= totalPages - 2) {
+                      pageNumber = totalPages - 4 + i;
+                    } else {
+                      pageNumber = currentPage - 2 + i;
+                    }
+                    if (pageNumber > 0 && pageNumber <= totalPages) {
+                      return (
+                        <button
+                          key={pageNumber}
+                          className={`inventory-pagination-number ${currentPage === pageNumber ? 'active' : ''}`}
+                          onClick={() => setCurrentPage(pageNumber)}
+                        >
+                          {pageNumber}
+                        </button>
+                      );
+                    }
+                    return null;
+                  })}
+                </div>
+
+                <button 
+                  className="inventory-pagination-btn"
+                  onClick={() => setCurrentPage(prev => Math.min(prev + 1, totalPages))}
+                  disabled={currentPage === totalPages}
+                >
+                  Next <FaArrowRight />
+                </button>
               </div>
 
-              <button 
-                className="inventory-pagination-btn"
-                onClick={() => setCurrentPage(prev => Math.min(prev + 1, totalPages))}
-                disabled={currentPage === totalPages}
-              >
-                Next <FaArrowRight />
-              </button>
+              <div className="inventory-pagination-anchor" aria-hidden="true"></div>
             </div>
           )}
         </>
@@ -1056,6 +1168,42 @@ const IngredientManagement = () => {
       {isRestoreModalOpen && <InventoryConfirmationModal type="restore" item={selectedItem} isSubmitting={isSubmitting} onConfirm={handleRestoreItem} onClose={() => setIsRestoreModalOpen(false)} />}
       {isRestockModalOpen && <RestockModal item={selectedItem} data={restockData} isSubmitting={isSubmitting} onChange={setRestockData} onSubmit={handleRestock} onClose={() => { setIsRestockModalOpen(false); setRestockData({ quantity: '', reason: '', notes: '' }); }} />}
       {isHistoryModalOpen && <HistoryModal key={selectedItem?.id} item={selectedItem} apiClient={apiClient} onClose={() => setIsHistoryModalOpen(false)} />}
+
+      {/* Bulk Archive Modal */}
+      {isBulkArchiveOpen && (
+        <InventoryModal className="modal-md inventory-confirmation-modal" onClose={() => { if (!isSubmitting) setIsBulkArchiveOpen(false); }}>
+          <div className="modal-header inventory-modal-header">
+            <h3 className="modal-title">Archive Selected Items</h3>
+            <button className="modal-close-btn" onClick={() => { if (!isSubmitting) setIsBulkArchiveOpen(false); }}>
+              <FaTimes />
+            </button>
+          </div>
+          <div className="modal-body inventory-modal-body">
+            <div className="confirmation-content">
+              <div className="confirmation-icon warning">
+                <FaArchive size={32} />
+              </div>
+              <h4>Archive {selectedIds.length} selected ingredient(s)?</h4>
+              <p>
+                You are about to archive <strong>{selectedIds.length} ingredient(s)</strong>.
+                Archived items are hidden from the main inventory but can be restored later.
+              </p>
+              <div className="item-details">
+                <p><strong>Selected:</strong> {selectedIds.length} ingredient(s)</p>
+                <p><strong>Items:</strong> {selectedNamesList}</p>
+              </div>
+            </div>
+          </div>
+          <div className="modal-footer inventory-modal-footer">
+            <button className="btn-secondary" onClick={() => setIsBulkArchiveOpen(false)} disabled={isSubmitting}>
+              Cancel
+            </button>
+            <button className="btn-warning" onClick={handleBulkArchive} disabled={isSubmitting}>
+              {isSubmitting ? 'Archiving...' : <><FaArchive /> Archive Items</>}
+            </button>
+          </div>
+        </InventoryModal>
+      )}
 
       {legacyModalsEnabled() && <>
       {/* Add Modal */}

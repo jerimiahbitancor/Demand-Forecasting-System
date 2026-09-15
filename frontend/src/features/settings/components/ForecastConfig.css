@@ -157,19 +157,43 @@
 .fc-management-tabs.single { grid-template-columns: minmax(0, 1fr); }
 .fc-management-table-wrap { flex: 1; overflow: hidden; background: var(--color-bg-white); border-radius: 0 0 5px 5px; }
 .fc-management-table { width: 100%; height: 100%; border-collapse: collapse; table-layout: fixed; font-size: 14px; }
-.fc-management-table th, .fc-management-table td { height: 28px; border-right: 1px solid var(--color-border); border-bottom: 1px solid var(--color-border); text-align: center; }
+.fc-management-table th, .fc-management-table td { height: 28px; border-right: 1px solid var(--color-border); border-bottom: 1px solid var(--color-border); text-align: center; overflow-wrap: break-word; word-break: break-word; vertical-align: middle; }
 .fc-management-table th:last-child, .fc-management-table td:last-child { border-right: 0; }
 .fc-management-table th { font-size: 14px; }
 .fc-edit-button { display: inline-grid; place-items: center; padding: 3px 7px; border: 0; border-radius: 3px; background: var(--color-bg-light); color: var(--color-text-primary); cursor: pointer; }
 .fc-edit-button svg { width: 12px; height: 12px; }
+.fc-row-actions { display: flex; align-items: center; justify-content: center; gap: 6px; }
+.fc-delete-button { display: inline-grid; place-items: center; padding: 3px 7px; border: 0; border-radius: 3px; background: var(--color-bg-light); color: var(--color-error, #dc2626); cursor: pointer; transition: background 0.2s, color 0.2s; }
+.fc-delete-button svg { width: 12px; height: 12px; }
+.fc-delete-button:hover { background: #fee2e2; color: #dc2626; }
 .fc-empty-row td { height: 27px; }
-.fc-dialog-backdrop { position: fixed; inset: 0; z-index: 10; display: grid; place-items: center; padding: 20px; background: rgba(28, 38, 50, .45); }
-.fc-dialog { width: min(360px, 100%); padding: 24px; border-radius: 10px; background: var(--color-bg-white); box-shadow: 0 12px 40px rgba(28, 38, 50, .2); }
-.fc-dialog h2 { margin-bottom: 18px; font-size: 18px; }
-.fc-dialog label { display: grid; gap: 7px; font-size: 12px; font-weight: 700; }
+.fc-dialog-backdrop { position: fixed; inset: 0; z-index: 10000; display: grid; place-items: center; padding: 20px; background: rgba(28, 38, 50, .45); }
+.fc-dialog { width: min(400px, 100%); padding: 24px; border-radius: 10px; background: var(--color-bg-white); box-shadow: 0 12px 40px rgba(28, 38, 50, .2); }
+.fc-dialog-header { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 4px; }
+.fc-dialog-header h2 { margin: 0; font-size: 18px; }
+.fc-dialog-close { display: inline-grid; place-items: center; width: 28px; height: 28px; border: 0; border-radius: 6px; background: transparent; color: var(--color-text-secondary); cursor: pointer; }
+.fc-dialog-close:hover { background: var(--color-bg-light); color: var(--color-text-primary); }
+.fc-dialog-context { margin: 0 0 18px; font-size: 12px; color: var(--color-text-secondary); }
+.fc-dialog-label { display: grid; gap: 7px; font-size: 12px; font-weight: 700; }
+.fc-dialog-input { width: 100%; padding: 10px 12px; border: 1px solid var(--color-border, #d1d5db); border-radius: 6px; font-size: 14px; color: var(--color-text-primary); background: var(--color-bg-white); outline: none; box-sizing: border-box; transition: border-color 0.2s, box-shadow 0.2s; }
+.fc-dialog-input:focus { border-color: var(--color-red-primary); box-shadow: 0 0 0 3px rgba(163, 29, 29, 0.12); }
 .fc-dialog-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 20px; }
-.fc-dialog-actions button { border: 0; border-radius: 6px; padding: 9px 14px; cursor: pointer; }
+.fc-dialog-actions button { border: 0; border-radius: 6px; padding: 9px 14px; cursor: pointer; display: inline-flex; align-items: center; gap: 6px; font-size: 13px; font-weight: 600; }
+.fc-dialog-cancel { background: var(--color-bg-light); color: var(--color-text-primary); }
+.fc-dialog-cancel:hover { background: var(--color-border-hover); }
+.fc-dialog-cancel:disabled { opacity: 0.6; cursor: not-allowed; }
 .fc-dialog-submit { background: var(--color-red-primary); color: var(--color-white); }
+.fc-dialog-submit:hover { filter: brightness(0.95); }
+.fc-dialog-delete { background: #ef4444; color: #fff; }
+.fc-dialog-delete:hover { background: #dc2626; }
+.fc-dialog-delete:disabled { opacity: 0.6; cursor: not-allowed; }
+.fc-delete-dialog { text-align: center; }
+.fc-delete-dialog h2 { margin: 0 0 8px; font-size: 18px; }
+.fc-delete-dialog > p { margin: 0 0 4px; font-size: 13px; color: var(--color-text-secondary); line-height: 1.5; }
+.fc-delete-dialog .fc-dialog-actions { justify-content: center; }
+.fc-dialog-icon { width: 52px; height: 52px; margin: 0 auto 14px; border-radius: 50%; display: grid; place-items: center; }
+.fc-dialog-icon.warning { background: #fef3c7; color: #d97706; }
+.fc-dialog-icon svg { width: 22px; height: 22px; }
 
 @media (max-width: 880px) {
   .fc-inner { flex-direction: column; }

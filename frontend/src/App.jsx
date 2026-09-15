@@ -20,6 +20,7 @@ import Settings from './features/settings/pages/Settings';
 import Analytics from './features/analytics/pages/Analytics';
 import InventoryManagement from './features/inventory/pages/InventoryManagement';
 import IngredientManagement from './features/inventory/pages/IngredientManagement';
+import NotificationsPage from './features/components/Notification/NotificationsPage';
 import './App.css';
 import './RouteGuard.css';
 import Landing from './features/landing/Landing';
@@ -227,6 +228,9 @@ function App() {
 
         {/* Settings - Protected */}
         <Route path="/settings" element={<ProtectedRoute><Settings /></ProtectedRoute>} />
+
+        {/* Notifications */}
+        <Route path="/notifications" element={<ProtectedRoute><NotificationsPage /></ProtectedRoute>} />
 
         {/* Profile */}
         <Route path="/profile" element={<Navigate to="/settings" replace />} />

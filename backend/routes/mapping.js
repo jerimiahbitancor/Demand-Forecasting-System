@@ -4,6 +4,9 @@ const router = express.Router();
 const authenticate = require('../middleware/auth');
 const mappingService = require('../services/mappingService');
 const uploadService = require('../services/uploadService');
+const { logAction } = require('../services/auditService');
+
+const actorOf = (req) => req.user?.name || req.user?.email || null;
 
 // ============== PRODUCT ENDPOINTS ==============
 
@@ -62,6 +65,12 @@ router.post('/products/sync-from-sales', authenticate, async (req, res) => {
 
     const result = await uploadService.syncProductsFromSales(productNames, userId);
 
+    logAction(
+      'products_synced',
+      `Synced ${productNames.length} product name${productNames.length === 1 ? '' : 's'} from sales data — "${productNames.join('", "')}"`,
+      actorOf(req)
+    );
+
     return res.json({
       success: true,
       ...result
@@ -105,6 +114,12 @@ router.post('/products/:id/archive', authenticate, async (req, res) => {
 
     const product = await mappingService.archiveProduct(productId, reason, userId);
 
+    logAction(
+      'product_archived',
+      `Archived product "${product?.name || productId}"${reason ? ` — ${reason}` : ''}`,
+      actorOf(req)
+    );
+
     res.json({
       success: true,
       data: product,
@@ -143,6 +158,12 @@ router.post('/products/:id/reactivate', authenticate, async (req, res) => {
     const product = await mappingService.reactivateProduct(productId, userId, {
       forceReactivate: forceReactivate === true || forceReactivate === 'true'
     });
+
+    logAction(
+      'product_reactivated',
+      `Reactivated product "${product?.name || productId}"`,
+      actorOf(req)
+    );
 
     res.json({
       success: true,
@@ -292,7 +313,13 @@ router.post('/products', authenticate, async (req, res) => {
       })),
       user_id: userId
     });
-    
+
+    logAction(
+      'product_created',
+      `Created product "${product?.name || name.trim()}" (₱${priceNum})`,
+      actorOf(req)
+    );
+
     res.status(201).json({
       success: true,
       data: product,
@@ -390,6 +417,12 @@ router.put('/products/:id', authenticate, async (req, res) => {
         error: 'Product not found or you do not have permission'
       });
     }
+
+    logAction(
+      'product_updated',
+      `Updated product "${product?.name || name || productId}"`,
+      actorOf(req)
+    );
     
     console.log('Product updated successfully:', product);
     console.log('===== END UPDATE =====');
@@ -440,6 +473,7 @@ router.delete('/products/:id', authenticate, async (req, res) => {
     
     console.log(`Deleting product ${productId} for user: ${userId}`);
     
+    const productToDelete = await mappingService.getProductById(productId, userId);
     const success = await mappingService.deleteProduct(productId, userId);
     
     if (!success) {
@@ -448,6 +482,12 @@ router.delete('/products/:id', authenticate, async (req, res) => {
         error: 'Product not found or you do not have permission'
       });
     }
+
+    logAction(
+      'product_deleted',
+      `Deleted product "${productToDelete?.name || productId}"`,
+      actorOf(req)
+    );
     
     res.json({
       success: true,

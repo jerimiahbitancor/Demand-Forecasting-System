@@ -142,11 +142,11 @@
 }
 
 .notification-item.unread {
-  background: var(--color-red-light, #fde8e8);
+  background: var(--color-green-light, #e8fded);
 }
 
 .notification-item.unread:hover {
-  background: #fce4e4;
+  background: #d5edda;
 }
 
 .notification-icon {
@@ -178,6 +178,21 @@
 .notification-icon.notification-info {
   background: #dbeafe;
   color: #1e40af;
+}
+
+.notification-icon.notification-upload {
+  background: #fef3c7;
+  color: #92400e;
+}
+
+.notification-icon.notification-file {
+  background: #ede9fe;
+  color: #5b21b6;
+}
+
+.notification-icon.notification-pending {
+  background: #e0f2fe;
+  color: #075985;
 }
 
 .notification-content {

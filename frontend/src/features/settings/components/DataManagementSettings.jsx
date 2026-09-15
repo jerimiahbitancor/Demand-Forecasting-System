@@ -1,6 +1,6 @@
 // DataManagementSettings.jsx
-import { useState } from "react";
-import { FiInfo, FiAlertTriangle, FiDownload, FiCheck, FiX } from "react-icons/fi";
+import { useState, useEffect } from "react";
+import { FiInfo, FiAlertTriangle, FiDownload, FiCheck, FiX, FiTrash2, FiRefreshCw, FiDatabase } from "react-icons/fi";
 import axios from 'axios';
 import toast from 'react-hot-toast';
 import "./DataManagementSettings.css";
@@ -12,10 +12,12 @@ function DataManagementSettings() {
   const [backupStatus, setBackupStatus] = useState(null);
   const [resetStatus, setResetStatus] = useState(null);
   const [exportStatus, setExportStatus] = useState(null);
+  const [backups, setBackups] = useState([]);
+  const [backupsLoading, setBackupsLoading] = useState(false);
 
   // Get auth token
   const getAuthToken = () => {
-    return localStorage.getItem('token');
+    return sessionStorage.getItem('access_token') || localStorage.getItem('token');
   };
 
   // Axios instance
@@ -37,6 +39,50 @@ function DataManagementSettings() {
     (error) => Promise.reject(error)
   );
 
+  // Load the list of backups stored in the Supabase "files" bucket
+  const fetchBackups = async (silent = true) => {
+    if (!silent) setBackupsLoading(true);
+    try {
+      const response = await apiClient.get('/settings/backups');
+      if (response.data.success) {
+        setBackups(response.data.data || []);
+      }
+    } catch (error) {
+      console.error('Error fetching backups:', error);
+    } finally {
+      setBackupsLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    const id = setTimeout(() => {
+      fetchBackups(true);
+    }, 0);
+    return () => clearTimeout(id);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const handleDownloadBackup = (url) => {
+    if (url) window.open(url, '_blank', 'noopener,noreferrer');
+  };
+
+  const handleDeleteBackup = async (name) => {
+    const confirmed = window.confirm(
+      `Delete backup "${name}"? This will permanently remove the file from the files bucket.`
+    );
+    if (!confirmed) return;
+
+    try {
+      const response = await apiClient.delete(`/settings/backups/${encodeURIComponent(name)}`);
+      if (response.data.success) {
+        toast.success('Backup deleted');
+        fetchBackups(true);
+      }
+    } catch (error) {
+      toast.error(error.response?.data?.error || 'Failed to delete backup');
+    }
+  };
+
   // Backup Database handler
   const handleCreateBackup = async () => {
     setBackupStatus("loading");
@@ -48,11 +94,12 @@ function DataManagementSettings() {
       toast.dismiss(loadingToast);
       if (response.data.success) {
         setBackupStatus("success");
-        toast.success('Database backup created successfully!');
-        // Download the backup file
+        toast.success('Backup stored in the files bucket!');
+        // Download the backup file from Supabase Storage
         if (response.data.data?.url) {
-          window.open(response.data.data.url, '_blank');
+          window.open(response.data.data.url, '_blank', 'noopener,noreferrer');
         }
+        fetchBackups(true);
         setTimeout(() => {
           setBackupStatus(null);
         }, 3000);
@@ -305,6 +352,72 @@ function DataManagementSettings() {
             </button>
           </div>
         </div>
+      </div>
+
+      {/* Stored Backups (from the Supabase "files" bucket) */}
+      <div className="settings-section backups-section">
+        <div className="backups-header">
+          <div>
+            <h3 className="section-title">Stored Backups</h3>
+            <p className="section-subtitle">
+              Backup files kept in the Supabase Storage bucket <strong>files</strong>.
+            </p>
+          </div>
+          <button
+            className="btn-backups-refresh"
+            onClick={() => fetchBackups(false)}
+            disabled={backupsLoading}
+          >
+            <FiRefreshCw size={14} className={backupsLoading ? 'backups-spin' : ''} />
+            Refresh
+          </button>
+        </div>
+
+        {backupsLoading ? (
+          <div className="status-message loading backups-loading">
+            <span className="spinner"></span>
+            Loading backups...
+          </div>
+        ) : backups.length === 0 ? (
+          <div className="backups-empty">
+            <FiDatabase size={28} />
+            <p>No backups stored yet. Click <strong>CREATE BACKUP</strong> to store your first snapshot.</p>
+          </div>
+        ) : (
+          <div className="backups-list">
+            {backups.map((item) => (
+              <div className="backup-row" key={item.path}>
+                <div className="backup-file">
+                  <FiDatabase size={16} className="backup-file-icon" />
+                  <div className="backup-file-info">
+                    <span className="backup-name" title={item.name}>{item.name}</span>
+                    <span className="backup-meta">
+                      {item.sizeLabel}
+                      {item.createdAt ? ` · ${new Date(item.createdAt).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' })}` : ''}
+                    </span>
+                  </div>
+                </div>
+                <div className="backup-actions">
+                  <button
+                    className="btn-backup-download"
+                    onClick={() => handleDownloadBackup(item.url)}
+                    disabled={!item.url}
+                  >
+                    <FiDownload size={14} />
+                    Download
+                  </button>
+                  <button
+                    className="btn-backup-delete"
+                    onClick={() => handleDeleteBackup(item.name)}
+                  >
+                    <FiTrash2 size={14} />
+                    Delete
+                  </button>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
       </div>
     </div>
   );
