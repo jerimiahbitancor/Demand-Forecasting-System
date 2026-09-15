@@ -9,6 +9,20 @@ import { publishBusinessProfile } from '../../../context/BusinessProfileContext'
 
 const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:5000/api';
 
+// 0=Monday..6=Sunday — matches date.weekday() in ml-service/services
+// forecast_service.py, so nothing needs translating between what's
+// stored here and what the forecast pipeline checks.
+const OPERATING_DAY_OPTIONS = [
+  { value: 0, label: 'Mon' },
+  { value: 1, label: 'Tue' },
+  { value: 2, label: 'Wed' },
+  { value: 3, label: 'Thu' },
+  { value: 4, label: 'Fri' },
+  { value: 5, label: 'Sat' },
+  { value: 6, label: 'Sun' },
+];
+const DEFAULT_OPERATING_DAYS = [0, 1, 2, 3, 4];
+
 function BusinessProfile() {
   const [formData, setFormData] = useState({
     business_name: "",
@@ -16,6 +30,9 @@ function BusinessProfile() {
     business_email: "",
     business_contact_number: "",
     logo: null,
+    operating_days: DEFAULT_OPERATING_DAYS,
+    opens_at: "",
+    closes_at: "",
   });
 
   const [logoFile, setLogoFile] = useState(null);
@@ -51,9 +68,18 @@ function BusinessProfile() {
       setIsLoading(true);
       const response = await apiClient.get('/settings/business-profile');
       if (response.data.success && response.data.data) {
-        setFormData(response.data.data);
-        if (response.data.data.logo) {
-          setLogoPreview(response.data.data.logo);
+        const profile = response.data.data;
+        setFormData({
+          ...profile,
+          operating_days: Array.isArray(profile.operating_days) && profile.operating_days.length > 0
+            ? profile.operating_days
+            : DEFAULT_OPERATING_DAYS,
+          // Postgres `time` comes back as 'HH:MM:SS' — <input type="time"> wants 'HH:MM'.
+          opens_at: (profile.opens_at || "").slice(0, 5),
+          closes_at: (profile.closes_at || "").slice(0, 5),
+        });
+        if (profile.logo) {
+          setLogoPreview(profile.logo);
         }
       }
     } catch (error) {
@@ -71,6 +97,16 @@ function BusinessProfile() {
   const handleInputChange = (e) => {
     const { name, value } = e.target;
     setFormData((prev) => ({ ...prev, [name]: value }));
+  };
+
+  const toggleOperatingDay = (dayValue) => {
+    setFormData((prev) => {
+      const current = prev.operating_days || [];
+      const next = current.includes(dayValue)
+        ? current.filter((d) => d !== dayValue)
+        : [...current, dayValue].sort((a, b) => a - b);
+      return { ...prev, operating_days: next };
+    });
   };
 
   const handleFileDrop = (e) => {
@@ -124,6 +160,11 @@ function BusinessProfile() {
   const handleSaveChanges = async () => {
     if (!formData.business_name || !formData.business_address) {
       toast.error('Business name and address are required');
+      return;
+    }
+
+    if (!formData.operating_days || formData.operating_days.length === 0) {
+      toast.error('Select at least one operating day');
       return;
     }
 
@@ -305,6 +346,65 @@ function BusinessProfile() {
             onChange={handleFileSelect}
             disabled={isUploadingLogo}
           />
+        </div>
+
+        <div className="schedule-section">
+          <div className="upload-header">
+            <h3 className="upload-title">Operating Schedule</h3>
+            <p className="upload-subtitle">
+              Used by the forecasting pipeline to know which future dates to forecast for versus
+              treat as closed — a schedule change here takes effect on the next forecast run.
+            </p>
+          </div>
+
+          <div className="form-group">
+            <label className="form-label">Operating Days</label>
+            <div className="day-toggle-group">
+              {OPERATING_DAY_OPTIONS.map((day) => {
+                const isActive = (formData.operating_days || []).includes(day.value);
+                return (
+                  <button
+                    type="button"
+                    key={day.value}
+                    className={`day-toggle-btn ${isActive ? 'active' : ''}`}
+                    onClick={() => toggleOperatingDay(day.value)}
+                  >
+                    {day.label}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+
+          <div className="schedule-time-row">
+            <div className="form-group">
+              <label htmlFor="opensAt" className="form-label">
+                Opens At
+              </label>
+              <input
+                type="time"
+                id="opensAt"
+                name="opens_at"
+                className="form-input"
+                value={formData.opens_at}
+                onChange={handleInputChange}
+              />
+            </div>
+
+            <div className="form-group">
+              <label htmlFor="closesAt" className="form-label">
+                Closes At
+              </label>
+              <input
+                type="time"
+                id="closesAt"
+                name="closes_at"
+                className="form-input"
+                value={formData.closes_at}
+                onChange={handleInputChange}
+              />
+            </div>
+          </div>
         </div>
       </div>
 

@@ -131,6 +131,89 @@ def get_recipe_and_stock() -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 
+DEFAULT_OPERATING_DAYS = {0, 1, 2, 3, 4}  # Mon-Fri — current confirmed schedule
+
+
+def get_operating_days() -> set:
+    """
+    The owner-configured set of weekdays the business operates on
+    (0=Monday..6=Sunday, matching date.weekday()), from
+    business_profile.operating_days. Falls back to the current
+    confirmed Mon-Fri schedule if the row or column is missing (e.g.
+    before migration 004 has been run), rather than crashing a forecast
+    run over a config lookup.
+    """
+    response = (
+        supabase.table("business_profile")
+        .select("operating_days")
+        .limit(1)
+        .execute()
+    )
+    if not response.data or response.data[0].get("operating_days") is None:
+        return set(DEFAULT_OPERATING_DAYS)
+    return set(response.data[0]["operating_days"])
+
+
+def get_earliest_data_date():
+    """
+    The earliest date this service has real sales data for — used for
+    the one-time "has 12 months of history elapsed yet" gate before the
+    very first training run is allowed (see /train in app.py).
+
+    Prefers the earliest confirmed_open business_days date, since that's
+    the more reliable open/closed-aware signal; falls back to the
+    earliest daily_sales.sale_date when business_days has no rows yet
+    (e.g. history uploaded before the business_days table/writes
+    existed). Returns None if there's no data at all.
+    """
+    response = (
+        supabase.table("business_days")
+        .select("business_date")
+        .eq("status", "confirmed_open")
+        .order("business_date", desc=False)
+        .limit(1)
+        .execute()
+    )
+    if response.data:
+        return response.data[0]["business_date"]
+
+    response = (
+        supabase.table("daily_sales")
+        .select("sale_date")
+        .order("sale_date", desc=False)
+        .limit(1)
+        .execute()
+    )
+    if response.data:
+        return response.data[0]["sale_date"]
+    return None
+
+
+def get_latest_confirmed_open_date():
+    """
+    The most recent business_date with status='confirmed_open' in
+    business_days — used to compute forecast staleness (how many days
+    of sales uploads are still pending vs. what the forecast actually
+    used as its freshest lag input). Returns None if no date has ever
+    been confirmed open yet (e.g. before the first upload).
+
+    NOTE: this is the one place this service reads business_days —
+    Express owns writing to that table (on upload / manual closure),
+    this service only ever reads it, same as every other table here.
+    """
+    response = (
+        supabase.table("business_days")
+        .select("business_date")
+        .eq("status", "confirmed_open")
+        .order("business_date", desc=True)
+        .limit(1)
+        .execute()
+    )
+    if not response.data:
+        return None
+    return response.data[0]["business_date"]
+
+
 def get_safety_buffer_percentage() -> float:
     """
     Single configurable safety buffer (default 15%), owner-set in

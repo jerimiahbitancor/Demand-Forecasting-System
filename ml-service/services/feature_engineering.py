@@ -98,8 +98,19 @@ def engineer_features(sales_df: pd.DataFrame) -> pd.DataFrame:
     # shift(1) before rolling() so rolling_7 for day i uses days i-1..i-7,
     # never day i itself — this is the off-by-one leak called out in the
     # pipeline walkthrough.
-    sales_df["rolling_7"] = grouped.shift(1).rolling(window=7).mean()
-    sales_df["rolling_14"] = grouped.shift(1).rolling(window=14).mean()
+    #
+    # CRITICAL: must use .transform() here, not grouped.shift(1).rolling(...).
+    # grouped.shift(1) is per-product, but the flat Series it returns loses
+    # that grouping — a plain .rolling() chained onto it slides across
+    # product boundaries near the top of each product's block (rows are
+    # sorted product_id, sale_date). .transform() keeps the whole
+    # shift+rolling computation inside each group.
+    sales_df["rolling_7"] = grouped.transform(
+        lambda x: x.shift(1).rolling(window=7, min_periods=7).mean()
+    )
+    sales_df["rolling_14"] = grouped.transform(
+        lambda x: x.shift(1).rolling(window=14, min_periods=14).mean()
+    )
 
     sales_df["product_id"] = sales_df["product_id"].astype("category")
 
