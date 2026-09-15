@@ -169,7 +169,7 @@ class BusinessProfileController {
         throw new Error(`Storage upload failed: ${error.message}`);
       }
 
-      const publicUrl = `${SUPABASE_URL}/storage/v1/object/public/${LOGO_BUCKET}/${objectPath}`;
+      const publicUrl = `${SUPABASE_URL}/storage/v1/object/public/${LOGO_BUCKET}/${objectPath}?v=${Date.now()}`;
       res.json({ success: true, url: publicUrl, data });
     } catch (error) {
       res.status(500).json({
