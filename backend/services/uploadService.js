@@ -449,7 +449,12 @@ class UploadService {
         dailySalesRows.push({
           product_id: productId,
           sale_date: saleDate,
-          quantity_sold: Number.isFinite(quantity) && quantity > 0 ? Math.round(quantity) : 1,
+          // A missing/blank/non-numeric "Items sold" value must become a
+          // real 0, never a fabricated 1 — the ML pipeline treats an
+          // explicit zero-quantity row as legitimate "sold nothing that
+          // day" signal (see feature_engineering.py's closed-day docstring).
+          // Silently inventing a sale of 1 here would corrupt training data.
+          quantity_sold: Number.isFinite(quantity) ? Math.max(0, Math.round(quantity)) : 0,
           upload_id: uploadId || null
         });
         if (!categoryByProductId.has(productId)) {

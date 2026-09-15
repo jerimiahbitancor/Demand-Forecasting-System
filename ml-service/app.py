@@ -12,22 +12,26 @@ Plus /health for Render's health check and for Express to confirm this
 service is up before showing "Training in progress" style states.
 """
 import logging
+from datetime import date
 from functools import wraps
 import pandas as pd
 from flask import Flask, request, jsonify
 
 from config import ML_SERVICE_SHARED_SECRET, MIN_TRAINING_OBSERVATIONS
 from services.data_loader import (
-    get_active_products, get_daily_sales,
+    get_active_products, get_daily_sales, get_earliest_data_date,
+    get_latest_confirmed_open_date, get_operating_days,
     get_recipe_and_stock, get_safety_buffer_percentage,
 )
 from services.preprocessing import validate_sales_data, clean_sales_data, DataValidationError
 from services.feature_engineering import engineer_features, FEATURE_COLUMNS
 from services.model_service import train_global_model, filter_training_eligible
+from services.model_storage import load_latest_model
 from services.forecast_service import generate_forecast, classify_forecast, ModelNotReadyError
 from services.business_logic import estimate_ingredient_demand, estimate_cogs
 from services.supabase_writer import (
     write_model_metrics, write_forecast, write_classification, write_forecast_cogs,
+    write_forecast_run,
 )
 from utils.debug_log import log_stage, log_metrics
 
@@ -108,7 +112,41 @@ def train():
     data (stays out of training, but is NOT inactive/discontinued
     because of that), or inactive/discontinued while still having
     plenty of historical observations on record.
+
+    ALSO GATED (first run only): 12 calendar months must have elapsed
+    since the earliest data this service has, before the very first
+    training run is allowed at all. This is separate from and on top of
+    MIN_TRAINING_OBSERVATIONS — that constant governs which pooled
+    products make it into any given run; this gate is a one-time,
+    system-level check that doesn't apply once a model already exists.
+    Ideally this would be a button-disabling check on Express's side
+    before it even offers "Start Training" to the owner, but Express's
+    ml-service wiring doesn't exist yet, so it lives here for now.
     """
+    # One-time, first-training-only gate: 12 calendar months must have
+    # elapsed since the earliest data this service has, distinct from
+    # MIN_TRAINING_OBSERVATIONS (which is per-product and applies on
+    # every run, first or not). Once a model exists, this gate never
+    # applies again — monthly retraining afterward has an established
+    # baseline (previous model_metrics rows) to compare against instead.
+    existing_model, _ = load_latest_model()
+    if existing_model is None:
+        earliest = get_earliest_data_date()
+        if earliest is None:
+            return jsonify({
+                "status": "failed",
+                "reason": "no sales data uploaded yet",
+            }), 422
+        days_of_history = (date.today() - date.fromisoformat(earliest)).days
+        if days_of_history < 365:
+            return jsonify({
+                "status": "failed",
+                "reason": (
+                    f"only {days_of_history} days of history since {earliest} — "
+                    "first training run requires 12 months (365 days) of data"
+                ),
+            }), 422
+
     active_ids = get_active_products()["id"].astype(int).tolist()
 
     pooled_frames = []
@@ -176,17 +214,32 @@ def forecast():
     (classification, ingredient demand, COGS) on top of the results.
 
     Accepts {"horizon_days": 1 or 7} in the JSON body — 1 for the
-    daily refresh, 7 for the weekly recursive forecast (Mon-Sun).
-    Weekend dates within that horizon are resolved to 0 by business
-    rule inside generate_forecast(), not sent through the model — see
+    daily refresh, 7 for the weekly recursive forecast (Mon-Sun), both
+    starting from TODAY (see generate_forecast()'s start_offset — day 1
+    of a forecast run is today, not tomorrow). Weekend dates within
+    that horizon are resolved to 0 by business rule inside
+    generate_forecast(), not sent through the model — see
     forecast_service.py's module docstring for why.
+
+    The model and the active-product id list are loaded ONCE here and
+    passed into every generate_forecast() call, instead of each call
+    re-loading them — with ~61 products that used to mean 61 redundant
+    Supabase Storage downloads per forecast run.
     """
     body = request.get_json(silent=True) or {}
     horizon_days = int(body.get("horizon_days", 1))
+    run_type = body.get("run_type") or ("daily" if horizon_days == 1 else "weekly")
+
+    model, model_version = load_latest_model()
+    if model is None:
+        return jsonify({"status": "failed", "reason": "no trained global model found in storage yet"}), 422
 
     products_df = get_active_products()
     recipe_df = get_recipe_and_stock()
     safety_buffer = get_safety_buffer_percentage()
+    operating_days = get_operating_days()
+    # Loaded once here, not per product — see generate_forecast()'s docstring.
+    known_categories = products_df["id"].astype(int).tolist()
 
     day1_forecasts_by_product = {}
     results = []
@@ -194,10 +247,12 @@ def forecast():
     for _, product in products_df.iterrows():
         product_id = int(product["id"])
         try:
-            forecast_rows = generate_forecast(product_id, horizon_days)
+            forecast_rows = generate_forecast(
+                product_id, model, model_version, known_categories, horizon_days,
+                operating_days=operating_days,
+            )
 
-            for row in forecast_rows:
-                write_forecast(row)
+            forecast_ids = [write_forecast(row) for row in forecast_rows]
 
             first_day_qty = forecast_rows[0]["predicted_quantity"]
             day1_forecasts_by_product[product_id] = first_day_qty
@@ -206,9 +261,8 @@ def forecast():
             write_classification(product_id, classification)
 
             cogs = estimate_cogs(first_day_qty, product_id, recipe_df)
-            # forecast_cogs needs the forecast row's id from the upsert;
-            # in production, capture that id from write_forecast's
-            # response rather than re-querying here.
+            if forecast_ids[0] is not None:
+                write_forecast_cogs(forecast_ids[0], cogs)
 
             results.append({
                 "product_id": product_id, "status": "forecasted",
@@ -224,9 +278,26 @@ def forecast():
         day1_forecasts_by_product, recipe_df, safety_buffer
     )
 
+    # Freshness: how many confirmed-open days are still missing between
+    # the latest confirmed upload and today. An unconfirmed PAST day used
+    # as a lag input never blocks generate_forecast() above — it just
+    # falls back to the latest confirmed observation, and this number is
+    # what tells Express/the dashboard that happened, so they can show
+    # "forecast generated using data as of {last_confirmed_date}"
+    # instead of failing or pretending everything is current.
+    last_confirmed_date = get_latest_confirmed_open_date()
+    if last_confirmed_date:
+        stale_days = max(0, (date.today() - date.fromisoformat(last_confirmed_date)).days - 1)
+    else:
+        stale_days = 0
+
+    write_forecast_run(run_type, model_version, last_confirmed_date, stale_days)
+
     return jsonify({
         "results": results,
         "ingredient_demand": ingredient_demand_df.to_dict(orient="records"),
+        "last_confirmed_date": last_confirmed_date,
+        "stale_days": stale_days,
     }), 200
 
 

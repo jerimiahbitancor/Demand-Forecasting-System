@@ -41,20 +41,27 @@ PH_HOLIDAYS = {
     date(2025, 12, 30),  # Rizal Day
     date(2025, 12, 31),  # Last Day of the Year
 
-    # 2026 — verify against the official Proclamation once published
+    # 2026 — confirmed against Proclamation No. 1006 (issued Sept 3, 2026)
     date(2026, 1, 1),
-    date(2026, 4, 2),    # Maundy Thursday (estimate, verify)
-    date(2026, 4, 3),    # Good Friday (estimate, verify)
+    date(2026, 2, 17),   # Chinese New Year (special)
+    date(2026, 3, 20),   # Eid'l Fitr (regular, movable — reconfirm closer to date)
+    date(2026, 4, 2),    # Maundy Thursday
+    date(2026, 4, 3),    # Good Friday
+    date(2026, 4, 4),    # Black Saturday (special)
     date(2026, 4, 9),
     date(2026, 5, 1),
+    date(2026, 5, 27),   # Eid'l Adha (regular, movable — reconfirm closer to date)
     date(2026, 6, 12),
     date(2026, 8, 21),
-    date(2026, 8, 31),   # National Heroes Day (last Mon of Aug, estimate)
+    date(2026, 8, 31),   # National Heroes Day (last Mon of Aug)
     date(2026, 11, 1),
+    date(2026, 11, 2),   # All Souls' Day (special)
     date(2026, 11, 30),
     date(2026, 12, 8),
+    date(2026, 12, 24),  # Christmas Eve (special)
     date(2026, 12, 25),
     date(2026, 12, 30),
+    date(2026, 12, 31),  # Last Day of the Year (special)
 }
 
 

@@ -18,6 +18,17 @@ function toDbRow(payload) {
   if (payload.logo !== undefined) {
     row.logo_url = payload.logo;
   }
+  // operating_days: 0=Monday..6=Sunday, same convention ml-service's
+  // forecast_service.py uses — no translation needed on either side.
+  if (payload.operating_days !== undefined) {
+    row.operating_days = payload.operating_days;
+  }
+  if (payload.opens_at !== undefined) {
+    row.opens_at = payload.opens_at;
+  }
+  if (payload.closes_at !== undefined) {
+    row.closes_at = payload.closes_at;
+  }
   return row;
 }
 
@@ -29,6 +40,9 @@ function toApiShape(row) {
     business_email: row.business_email,
     business_contact_number: row.business_contact_number,
     logo: row.logo_url,
+    operating_days: row.operating_days,
+    opens_at: row.opens_at,
+    closes_at: row.closes_at,
     updated_at: row.updated_at,
   };
 }

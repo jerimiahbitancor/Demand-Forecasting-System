@@ -9,6 +9,7 @@ const fileProcessor = require('../services/fileProcessor');
 const uploadService = require('../services/uploadService');
 const menuService = require('../services/menuService');
 const mappingService = require('../services/mappingService');
+const businessDayService = require('../services/businessDayService');
 
 router.post(
   '/',
@@ -182,6 +183,12 @@ router.post(
             await mappingService.reconcileProductActivation(numericId);
           } catch (reconcileError) {
             console.error('Error reconciling product activation after sales upload:', reconcileError);
+          }
+
+          try {
+            await businessDayService.confirmOpenDatesForUpload(uploadId);
+          } catch (businessDayError) {
+            console.error('Error confirming business_days as open after upload:', businessDayError);
           }
 
           return res.status(201).json({
