@@ -1,8 +1,11 @@
 // backend/controllers/businessProfile.js
 const { supabaseAdmin } = require('../config/supabase');
+const { logAction } = require('../services/auditService');
 
 const SUPABASE_URL = process.env.SUPABASE_URL;
 const LOGO_BUCKET = 'business-logo';
+
+const actorOf = (req) => req.user?.name || req.user?.email || null;
 
 // The DB schema now matches the frontend's field names exactly
 // (business_name, business_address, business_email,
@@ -125,6 +128,12 @@ class BusinessProfileController {
 
       if (error) throw error;
 
+      logAction(
+        existingRow?.id ? 'business_profile_updated' : 'business_profile_created',
+        `${existingRow?.id ? 'Updated' : 'Created'} business profile "${business_name}"` + (req.body.business_address ? ` at ${req.body.business_address}` : ''),
+        actorOf(req)
+      );
+
       res.json({
         success: true,
         message: 'Business profile saved.',
@@ -184,6 +193,13 @@ class BusinessProfileController {
       }
 
       const publicUrl = `${SUPABASE_URL}/storage/v1/object/public/${LOGO_BUCKET}/${objectPath}?v=${Date.now()}`;
+
+      logAction(
+        'business_logo_updated',
+        'Updated business profile logo',
+        actorOf(req)
+      );
+
       res.json({ success: true, url: publicUrl, data });
     } catch (error) {
       res.status(500).json({

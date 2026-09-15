@@ -34,6 +34,10 @@
   max-width: 900px;
 }
 
+.inventory-modal-content.market-trend-modal {
+  max-height: 60vh;
+}
+
 .inventory-modal-header {
   display: flex;
   flex-shrink: 0;

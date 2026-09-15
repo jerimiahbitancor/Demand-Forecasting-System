@@ -1,5 +1,8 @@
 // controllers/inventoryController.js
 const { supabaseAdmin } = require('../config/supabase');
+const { logAction } = require('../services/auditService');
+
+const actorOf = (req) => req.user?.name || req.user?.email || null;
 
 // Helper function to get user ID - SIMPLIFIED
 // Use req.user.id directly since it already contains the numeric user ID
@@ -168,9 +171,49 @@ const getInventoryItems = async (req, res) => {
       : filteredData;
     const total = status && status !== 'All' ? filteredData.length : (count || 0);
 
+    // ---- Avg market price from the market_price table ----
+    // For each ingredient on this page: take the latest recorded price per
+    // source (robinsons/sm/puregold/wet_market/da_reference) and average them.
+    // This gives staff a single "average store price" number per ingredient.
+    const pageIds = (paginatedData || []).map((item) => item.id);
+    const avgMap = {};
+
+    if (pageIds.length) {
+      const { data: marketRows, error: marketPriceError } = await supabaseAdmin
+        .from('market_price')
+        .select('ingredient_id, source, price, scraped_at')
+        .in('ingredient_id', pageIds);
+
+      if (marketPriceError) throw marketPriceError;
+
+      const latestByKey = new Map();
+      for (const row of (marketRows || [])) {
+        const key = `${row.ingredient_id}:${row.source}`;
+        const existing = latestByKey.get(key);
+        if (!existing || new Date(row.scraped_at) > new Date(existing.scraped_at)) {
+          latestByKey.set(key, row);
+        }
+      }
+
+      const sums = {};
+      const counts = {};
+      latestByKey.forEach((row) => {
+        sums[row.ingredient_id] = (sums[row.ingredient_id] || 0) + Number(row.price);
+        counts[row.ingredient_id] = (counts[row.ingredient_id] || 0) + 1;
+      });
+      Object.keys(sums).forEach((ingId) => {
+        avgMap[ingId] = counts[ingId] ? Number((sums[ingId] / counts[ingId]).toFixed(2)) : null;
+      });
+    }
+
+    const data = (paginatedData || []).map((item) => ({
+      ...item,
+      avg_market_price: avgMap[item.id] !== undefined ? avgMap[item.id] : null
+    }));
+
     res.json({
       success: true,
-      data: paginatedData,
+      data,
       total,
       page: pageNumber,
       limit: pageLimit,
@@ -277,6 +320,12 @@ const createInventoryItem = async (req, res) => {
 
     console.log('✅ Item created successfully:', data.id);
 
+    await logAction(
+      'item_created',
+      `Added ingredient "${data.name}" (qty ${data.quantity}, ₱${data.price}/${data.unit})`,
+      actorOf(req)
+    );
+
     res.json({ success: true, data, message: 'Item added successfully' });
   } catch (error) {
     console.error('❌ Error creating item:', error);
@@ -360,6 +409,12 @@ const updateInventoryItem = async (req, res) => {
 
     console.log('✅ Item updated successfully:', data.id);
 
+    await logAction(
+      'item_updated',
+      `Updated ingredient "${currentItem.name || data.name}"`,
+      actorOf(req)
+    );
+
     res.json({ success: true, data, message: 'Item updated successfully' });
   } catch (error) {
     console.error('❌ Error updating item:', error);
@@ -373,12 +428,28 @@ const deleteInventoryItem = async (req, res) => {
     const { id } = req.params;
     console.log('🗑️ Deleting inventory item:', id);
 
+    const { data: currentItem, error: fetchError } = await supabaseAdmin
+      .from('ingredients')
+      .select('name')
+      .eq('id', id)
+      .single();
+
+    if (fetchError && fetchError.code === 'PGRST116') {
+      return res.status(404).json({ success: false, error: 'Item not found' });
+    }
+
     const { error } = await supabaseAdmin
       .from('ingredients')
       .delete()
       .eq('id', id);
 
     if (error) throw error;
+
+    await logAction(
+      'item_deleted',
+      `Deleted ingredient "${currentItem?.name || id}"`,
+      actorOf(req)
+    );
 
     console.log('✅ Item deleted successfully:', id);
     res.json({ success: true, message: 'Item deleted successfully' });
@@ -399,7 +470,7 @@ const archiveInventoryItem = async (req, res) => {
 
     const { data: currentItem, error: fetchError } = await supabaseAdmin
       .from('ingredients')
-      .select('is_archived')
+      .select('is_archived, name')
       .eq('id', id)
       .single();
 
@@ -418,6 +489,12 @@ const archiveInventoryItem = async (req, res) => {
       .single();
 
     if (error) throw error;
+
+    await logAction(
+      'item_archived',
+      `${currentItem.is_archived ? 'Unarchived' : 'Archived'} ingredient "${currentItem.name}"`,
+      actorOf(req)
+    );
 
     console.log('✅ Item archived successfully:', id);
     res.json({ 
@@ -440,7 +517,7 @@ const restoreInventoryItem = async (req, res) => {
     const userId = getUserIdFromAuth(req);
     const { data: currentItem, error: fetchError } = await supabaseAdmin
       .from('ingredients')
-      .select('is_archived')
+      .select('is_archived, name')
       .eq('id', id)
       .single();
 
@@ -455,6 +532,12 @@ const restoreInventoryItem = async (req, res) => {
       .single();
 
     if (error) throw error;
+
+    await logAction(
+      'item_restored',
+      `Restored ingredient "${currentItem?.name || data?.name || id}"`,
+      actorOf(req)
+    );
 
     console.log('✅ Item restored successfully:', id);
     res.json({
@@ -522,6 +605,12 @@ const restockInventoryItem = async (req, res) => {
         notes: notes || null,
         created_by: userId
       }]);
+
+    await logAction(
+      'item_restocked',
+      `Restocked ingredient "${currentItem.name}" by ${parseFloat(quantity)} ${currentItem.unit || ''}`,
+      actorOf(req)
+    );
 
     console.log('✅ Item restocked successfully:', { id, newQuantity });
     res.json({

@@ -19,6 +19,8 @@ const unitsRoutes = require('./routes/units');
 const productCategoriesRoutes = require('./routes/productCategories');
 const businessDaysRoutes = require('./routes/businessDays');
 const mlRoutes = require('./routes/ml');
+const marketPriceRoutes = require('./routes/marketPrice');
+const auditRoutes = require('./routes/audit');
 
 // Load environment variables
 dotenv.config({ path: path.join(__dirname, '.env') });
@@ -62,6 +64,11 @@ if (process.env.NODE_ENV !== 'production') {
   });
 }
 
+// Global audit trail — logs every non-GET request (except routes that
+// already write their own detailed audit entries).
+const auditTrail = require('./middleware/auditTrail');
+app.use('/api', auditTrail);
+
 // ============= ROUTES =============
 app.use('/api/auth', authRoutes);
 app.use('/api/users', userRoutes);
@@ -75,6 +82,8 @@ app.use('/api/units', unitsRoutes);
 app.use('/api/product-categories', productCategoriesRoutes);
 app.use('/api/business-days', businessDaysRoutes);
 app.use('/api/ml', mlRoutes);
+app.use('/api/market-prices', marketPriceRoutes);
+app.use('/api/audit', auditRoutes);
 
 // ============= HEALTH CHECK =============
 app.get('/health', (req, res) => {
@@ -120,6 +129,15 @@ app.use((err, req, res, next) => {
 });
 
 // ============= START SERVER =============
+const { refreshLowStockNotifications } = require('./services/notificationService');
+
+// Keep the notification bell in sync with inventory levels: refresh shortly
+// after boot, then every 6 hours. New low-stock ingredients get alerts and
+// recovered ingredients get their alerts retired automatically.
+const LOW_STOCK_REFRESH_MS = 6 * 60 * 60 * 1000;
+setTimeout(() => refreshLowStockNotifications().catch(() => {}), 15000);
+setInterval(() => refreshLowStockNotifications().catch(() => {}), LOW_STOCK_REFRESH_MS);
+
 app.listen(PORT, () => {
   console.log(`🚀 Server running on port ${PORT}`);
 });

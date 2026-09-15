@@ -1,4 +1,7 @@
 const { supabaseAdmin } = require('../config/supabase');
+const { logAction } = require('../services/auditService');
+
+const actorOf = (req) => req.user?.name || req.user?.email || null;
 
 const getProductCategories = async (req, res) => {
   try {
@@ -27,6 +30,9 @@ const createProductCategory = async (req, res) => {
       .single();
 
     if (error) throw error;
+
+    await logAction('product_category_created', `Created product category "${data.name}"`, actorOf(req));
+
     res.status(201).json({ success: true, data, message: 'Product category created successfully' });
   } catch (error) {
     console.error('Error creating product category:', error);
@@ -62,6 +68,12 @@ const updateProductCategory = async (req, res) => {
       if (productError) throw productError;
     }
 
+    await logAction(
+      'product_category_updated',
+      `Renamed product category "${currentCategory.name}" to "${name}"`,
+      actorOf(req)
+    );
+
     res.json({ success: true, data, message: 'Product category updated successfully' });
   } catch (error) {
     console.error('Error updating product category:', error);
@@ -69,4 +81,49 @@ const updateProductCategory = async (req, res) => {
   }
 };
 
-module.exports = { getProductCategories, createProductCategory, updateProductCategory };
+const deleteProductCategory = async (req, res) => {
+  try {
+    const { data: currentCategory, error: lookupError } = await supabaseAdmin
+      .from('product_categories')
+      .select('name')
+      .eq('id', req.params.id)
+      .single();
+    if (lookupError) throw lookupError;
+
+    const { data: affected, error: affectedError } = await supabaseAdmin
+      .from('products')
+      .select('id')
+      .eq('category', currentCategory.name);
+    if (affectedError) throw affectedError;
+
+    if (affected.length > 0) {
+      const { error: reassignError } = await supabaseAdmin
+        .from('products')
+        .update({ category: 'Uncategorized' })
+        .eq('category', currentCategory.name);
+      if (reassignError) throw reassignError;
+    }
+
+    const { error: deleteError } = await supabaseAdmin
+      .from('product_categories')
+      .delete()
+      .eq('id', req.params.id);
+    if (deleteError) throw deleteError;
+
+    await logAction(
+      'product_category_deleted',
+      `Deleted product category "${currentCategory.name}" (${affected.length} product(s) moved to "Uncategorized")`,
+      actorOf(req)
+    );
+
+    res.json({
+      success: true,
+      message: `Product category deleted. ${affected.length} product(s) moved to "Uncategorized".`
+    });
+  } catch (error) {
+    console.error('Error deleting product category:', error);
+    res.status(500).json({ success: false, error: error.message });
+  }
+};
+
+module.exports = { getProductCategories, createProductCategory, updateProductCategory, deleteProductCategory };

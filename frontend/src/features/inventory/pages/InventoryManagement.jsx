@@ -2,16 +2,18 @@
 import { useState } from "react";
 import "./InventoryManagement.css";
 import Navbar from "../../components/Navbar/Navbar";
-import { FaBoxes, FaClipboardList } from 'react-icons/fa';
+import { FaBoxes, FaClipboardList, FaTags } from 'react-icons/fa';
 import Ingredient from "./IngredientManagement";
 import Product from "./ProductManagement";
+import MarketPrice from "./MarketPriceManagement";
 
 const InventoryManagement = () => {
   const [activeTab, setActiveTab] = useState("ingredient");
 
   const tabs = [
   { id: "ingredient", label: "Ingredient Management", icon: FaBoxes },
-    { id: "product", label: "Product Management", icon: FaClipboardList }
+    { id: "product", label: "Product Management", icon: FaClipboardList },
+    { id: "market", label: "Market Price", icon: FaTags },
    
   ];
 
@@ -47,6 +49,7 @@ const InventoryManagement = () => {
             <div className="tab-content">
               {activeTab === "ingredient" && <Ingredient />}
               {activeTab === "product" && <Product />}
+              {activeTab === "market" && <MarketPrice />}
             </div>
           </div>
         </div>

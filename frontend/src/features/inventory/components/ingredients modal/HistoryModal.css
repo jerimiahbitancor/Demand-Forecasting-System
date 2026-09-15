@@ -243,12 +243,13 @@ display: flex;
 
 /* Table */
 .history-table-wrapper {
-  overflow-x: auto;
+  overflow: visible;
   margin-bottom: 1rem;
 }
 
 .history-table {
   width: 100%;
+  table-layout: fixed;
   border-collapse: collapse;
   font-size: 0.8rem;
 }
@@ -266,6 +267,8 @@ display: flex;
   text-transform: uppercase;
   letter-spacing: 0.05em;
   border-bottom: 2px solid #e5e7eb;
+  overflow-wrap: break-word;
+  word-break: break-word;
 }
 
 .history-table td {
@@ -273,6 +276,8 @@ display: flex;
   border-bottom: 1px solid #f3f4f6;
   color: #1f2937;
   vertical-align: middle;
+  overflow-wrap: break-word;
+  word-break: break-word;
 }
 
 .history-table tbody tr:hover {
@@ -521,11 +526,11 @@ display: flex;
   }
 
   .history-table-wrapper {
-    overflow-x: auto;
+    overflow: visible;
   }
 
   .history-table {
-    min-width: 500px;
+    min-width: 0;
   }
 
   .history-pagination .page-btn {

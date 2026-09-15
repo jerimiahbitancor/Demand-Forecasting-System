@@ -317,7 +317,6 @@
 }
 
 .heatmap-wrapper {
-  overflow-x: auto;
-  -webkit-overflow-scrolling: touch;
+  overflow-x: visible;
   margin-bottom: 8px;
 }

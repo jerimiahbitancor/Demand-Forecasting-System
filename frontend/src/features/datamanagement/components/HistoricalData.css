@@ -120,11 +120,12 @@
 }
 
 .historical-table-wrapper {
-  overflow-x: auto;
+  overflow: visible;
 }
 
 .historical-table {
   width: 100%;
+  table-layout: fixed;
   border-collapse: collapse;
 }
 
@@ -141,6 +142,8 @@
   text-transform: uppercase;
   letter-spacing: 0.5px;
   border-bottom: 2px solid var(--color-border-light);
+  white-space: normal;
+  overflow-wrap: break-word;
 }
 
 .historical-table td {
@@ -148,6 +151,8 @@
   font-size: 14px;
   color: var(--color-text-primary);
   border-bottom: 1px solid var(--color-border-light);
+  overflow-wrap: break-word;
+  word-break: break-word;
 }
 
 .historical-table tbody tr:hover {
@@ -531,11 +536,12 @@
 }
 
 .historical-table-wrapper {
-  overflow-x: auto;
+  overflow: visible;
 }
 
 .historical-table {
   width: 100%;
+  table-layout: fixed;
   border-collapse: collapse;
   font-size: 14px;
 }
@@ -553,12 +559,16 @@
   text-transform: uppercase;
   letter-spacing: 0.5px;
   border-bottom: 2px solid var(--color-border-light);
+  white-space: normal;
+  overflow-wrap: break-word;
 }
 
 .historical-table td {
   padding: 12px 16px;
   border-bottom: 1px solid var(--color-border-light);
   color: var(--color-text-primary);
+  overflow-wrap: break-word;
+  word-break: break-word;
 }
 
 .historical-table tbody tr:hover {
