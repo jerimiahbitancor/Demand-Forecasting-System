@@ -23,7 +23,15 @@ SUPABASE_SERVICE_KEY = os.environ.get("SUPABASE_SERVICE_KEY")
 ML_SERVICE_SHARED_SECRET = os.environ.get("ML_SERVICE_SHARED_SECRET")
 MODEL_DIR = os.environ.get("MODEL_DIR", "./models")
 SUPABASE_MODEL_BUCKET = os.environ.get("SUPABASE_MODEL_BUCKET", "ml-models")
-MIN_TRAINING_DAYS = int(os.environ.get("MIN_TRAINING_DAYS", "90"))
+
+# Renamed from MIN_TRAINING_DAYS: this counts actual valid daily sales
+# OBSERVATIONS (rows in daily_sales), never calendar days elapsed —
+# see get_training_eligible_products() in data_loader.py. The old name
+# implied a calendar-age requirement, which is explicitly wrong per
+# the eligibility clarification: a product open 40 calendar days with
+# sales on only 20 of them has 20 observations, not 40, and stays
+# ineligible.
+MIN_TRAINING_OBSERVATIONS = int(os.environ.get("MIN_TRAINING_OBSERVATIONS", "28"))
 
 if not SUPABASE_URL or not SUPABASE_SERVICE_KEY:
     raise RuntimeError(

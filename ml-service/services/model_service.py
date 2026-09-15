@@ -36,6 +36,50 @@ from sklearn.metrics import mean_absolute_error, mean_squared_error
 
 from services.feature_engineering import FEATURE_COLUMNS
 from services.model_storage import save_model_to_storage, new_model_version
+from utils.debug_log import log_stage
+
+
+def filter_training_eligible(features_df: pd.DataFrame, min_observations: int):
+    """
+    Eligibility, corrected: counts USABLE rows per product AFTER
+    feature engineering and warmup-row removal — not raw daily_sales
+    rows before it.
+
+    WHY THIS MOVED HERE (out of data_loader.py, and out of a raw
+    row-count check): rolling_14 needs 14 PRIOR observations before it
+    stops being NaN, so a product's first 14 rows in the sequence
+    always get dropped by the caller's dropna(subset=FEATURE_COLUMNS)
+    before training — regardless of how many raw rows that product
+    had. A product with exactly 28 raw observations would only
+    contribute ~14 actual usable training rows, silently under the
+    intended bar. Counting real survivors directly, instead of
+    inferring the loss by subtracting a hardcoded warmup constant
+    (e.g. 28 + 14 = 42), means this stays correct even if the warmup
+    window changes later (a new rolling_28 feature, for instance)
+    without anyone having to remember to update a second number to
+    match.
+
+    features_df must already be the output of engineer_features(...)
+    with NaN warmup rows already dropped by the caller — this function
+    only counts what SURVIVED that, per product.
+
+    Returns (filtered_df, excluded_report) — filtered_df contains only
+    rows belonging to products that cleared the bar; excluded_report
+    lists every product that didn't, with its actual usable count, so
+    the /train response can explain exactly why each excluded product
+    was left out rather than silently vanishing from training.
+    """
+    counts = features_df.groupby("product_id", observed=True).size()
+    eligible_ids = counts[counts >= min_observations].index
+    excluded_counts = counts[counts < min_observations]
+
+    filtered_df = features_df[features_df["product_id"].isin(eligible_ids)]
+    excluded_report = [
+        {"product_id": int(pid), "usable_observations": int(count),
+         "required": min_observations}
+        for pid, count in excluded_counts.items()
+    ]
+    return filtered_df, excluded_report
 
 
 def chronological_split(df: pd.DataFrame, train_fraction: float = 0.8):
@@ -65,6 +109,11 @@ def train_global_model(features_df: pd.DataFrame):
     aggregate scores and a per-product breakdown.
     """
     train_df, test_df = chronological_split(features_df)
+    log_stage("train split", train_df, extra={"train_fraction": 0.8})
+    log_stage("test split", test_df, extra={
+        "train_ends": str(train_df["sale_date"].max()) if not train_df.empty else None,
+        "test_starts": str(test_df["sale_date"].min()) if not test_df.empty else None,
+    })
 
     if len(train_df) < 200:
         raise ValueError(

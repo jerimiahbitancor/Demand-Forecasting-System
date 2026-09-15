@@ -16,19 +16,20 @@ from functools import wraps
 import pandas as pd
 from flask import Flask, request, jsonify
 
-from config import ML_SERVICE_SHARED_SECRET, MIN_TRAINING_DAYS
+from config import ML_SERVICE_SHARED_SECRET, MIN_TRAINING_OBSERVATIONS
 from services.data_loader import (
-    get_active_products, get_daily_sales, get_recipe_and_stock,
-    get_safety_buffer_percentage,
+    get_active_products, get_daily_sales,
+    get_recipe_and_stock, get_safety_buffer_percentage,
 )
 from services.preprocessing import validate_sales_data, clean_sales_data, DataValidationError
 from services.feature_engineering import engineer_features, FEATURE_COLUMNS
-from services.model_service import train_global_model
+from services.model_service import train_global_model, filter_training_eligible
 from services.forecast_service import generate_forecast, classify_forecast, ModelNotReadyError
 from services.business_logic import estimate_ingredient_demand, estimate_cogs
 from services.supabase_writer import (
     write_model_metrics, write_forecast, write_classification, write_forecast_cogs,
 )
+from utils.debug_log import log_stage, log_metrics
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("ml-service")
@@ -63,31 +64,60 @@ def health():
 def train():
     """
     Trains the single global model on every eligible active product's
-    pooled history. Per confirmed decision: eligible means
-    is_active=true AND first_sold_date is at least 28 days before
-    today — newer products stay out of THIS training run entirely
-    (not just skipped-with-a-warning) since 28 days isn't enough for
-    even one rolling_14 window to be real, let alone contribute a
-    meaningful gradient signal to a shared model.
+    pooled history.
+
+    TRIGGER: manual only, via an owner-facing "Start Training" button
+    in Express — NOT automatic on reaching some data threshold. There
+    is no reliable way for this service (or Express) to know whether
+    the owner is still mid-upload of their historical data or genuinely
+    done, so guessing when to auto-start training risks training on a
+    half-uploaded dataset. Express should also verify the most recent
+    row in `uploads` has status='completed' before calling this route —
+    otherwise a click during an in-flight upload could still race
+    against a dataset that isn't finished being written.
+
+    Once an initial model exists, monthly SCHEDULED retraining is fine
+    — that decision was different: at that point there's an established
+    baseline (previous model_metrics rows) to compare a new run against.
+
+    Eligibility, corrected per your own refinement of the observation-
+    count clarification: a product needs at least
+    MIN_TRAINING_OBSERVATIONS (default 28) USABLE rows AFTER feature
+    engineering and warmup-row removal — not 28 raw daily_sales rows
+    before it. rolling_14 needs 14 prior observations before it stops
+    being NaN, so a product's first 14 rows always get dropped before
+    training regardless of its raw count; a product with exactly 28
+    raw observations would only contribute ~14 real training rows,
+    silently under the intended bar. See
+    model_service.filter_training_eligible() for the corrected check,
+    which counts real post-warmup survivors directly rather than
+    inferring the loss by subtracting a hardcoded constant.
+
+    This also changes WHEN eligibility is checked: every active
+    product's validated sales are pooled and feature-engineered first;
+    eligibility is only evaluated afterward, on the actual result.
+    Products that don't clear the bar are excluded from the final
+    training set but still show up in the response's "excluded" list
+    with their real usable count, not silently dropped earlier in the
+    pipeline before that count even exists.
+
+    Eligibility (enough data) is still deliberately kept separate from
+    activity status: get_active_products() answers "is this product
+    active"; filter_training_eligible() answers "does it have enough
+    usable observations" — a product can be active with too little
+    data (stays out of training, but is NOT inactive/discontinued
+    because of that), or inactive/discontinued while still having
+    plenty of historical observations on record.
     """
-    all_products_df = get_active_products()
-    eligible_ids = [
-        int(row["id"]) for _, row in all_products_df.iterrows()
-        if row.get("first_sold_date") is not None
-    ]
+    active_ids = get_active_products()["id"].astype(int).tolist()
 
     pooled_frames = []
     skipped = []
-    for product_id in eligible_ids:
+    for product_id in active_ids:
         try:
             sales_df = get_daily_sales(product_id)
             validate_sales_data(sales_df)
             sales_df = clean_sales_data(sales_df)
-
-            if len(sales_df) < MIN_TRAINING_DAYS:
-                skipped.append({"product_id": product_id, "reason": f"only {len(sales_df)} days"})
-                continue
-
             pooled_frames.append(sales_df)
         except (DataValidationError, ValueError) as e:
             logger.warning(f"Skipping product {product_id} from training: {e}")
@@ -96,12 +126,27 @@ def train():
     if not pooled_frames:
         return jsonify({
             "status": "failed",
-            "reason": "no eligible products had enough validated history",
+            "reason": "no active products had validated sales history",
             "skipped": skipped,
         }), 422
 
     all_sales_df = pd.concat(pooled_frames, ignore_index=True)
+    log_stage("after preprocessing (pooled, cleaned)", all_sales_df)
+
     features_df = engineer_features(all_sales_df).dropna(subset=FEATURE_COLUMNS)
+    log_stage("after feature engineering (NaN warm-up rows dropped)", features_df)
+
+    features_df, excluded = filter_training_eligible(features_df, MIN_TRAINING_OBSERVATIONS)
+    log_stage("after eligibility filter (usable post-warmup rows)", features_df,
+              extra={"excluded_products": len(excluded)})
+
+    if features_df.empty:
+        return jsonify({
+            "status": "failed",
+            "reason": "no product had enough usable post-warmup observations",
+            "skipped": skipped,
+            "excluded": excluded,
+        }), 422
 
     try:
         _, metrics, model_version = train_global_model(features_df)
@@ -109,13 +154,15 @@ def train():
         logger.error(f"Global training failed: {e}")
         return jsonify({"status": "failed", "reason": str(e)}), 422
 
+    log_metrics(f"evaluation results — {model_version}", metrics)
     write_model_metrics(model_version, metrics)
 
     return jsonify({
         "status": "trained",
         "model_version": model_version,
-        "products_included": len(pooled_frames),
+        "products_included": features_df["product_id"].nunique(),
         "products_skipped": skipped,
+        "products_excluded_insufficient_data": excluded,
         "metrics": metrics,
     }), 200
 

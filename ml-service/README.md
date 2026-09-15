@@ -91,11 +91,41 @@ model's live accuracy turns out worse than the one it replaced.
   problem anymore — it's a known closure.
 - **Weekly forecast:** Monday–Sunday (7 calendar days), with the
   weekend-closure rule above applied to Saturday/Sunday specifically.
-- **Retraining cadence:** monthly.
-- **Product eligibility for training:** `is_active = true` AND
-  `first_sold_date` at least 28 days before the training cutoff.
+- **Retraining cadence:** monthly, but the FIRST training run is
+  **manually triggered** by the owner via a "Start Training" button —
+  never automatic. There's no reliable way to know whether the owner
+  is still mid-upload of historical data or genuinely done, so
+  guessing when to auto-start risks training on a half-uploaded
+  dataset. Express should verify the latest `uploads` row has
+  `status='completed'` before allowing the button to fire.
+- **Training eligibility (corrected):** a product needs at least
+  `MIN_TRAINING_OBSERVATIONS` (default 28) ACTUAL valid daily sales
+  observations — rows in `daily_sales` — never calendar days elapsed
+  since first sold. A product open 40 calendar days with sales on only
+  20 of them has 20 observations and stays ineligible. This is a
+  data-sufficiency check, entirely separate from whether a product is
+  "active" — see `product_status` below and
+  `data_loader.get_training_eligible_products()`.
+- **Product status:** `is_active` alone couldn't represent ACTIVE /
+  INACTIVE(NEW) / INACTIVE(DISCONTINUED) / ARCHIVED. Migration
+  `migrations/001_add_product_status.sql` adds a `status` enum as the
+  single source of truth, with `is_active` becoming a GENERATED column
+  derived from it — existing `is_active=true` queries elsewhere in the
+  codebase keep working unmodified. "MAPPED"/"UNMAPPED" is deliberately
+  NOT a stored status — it's derived live from `product_ingredients`.
 - **Rollback:** always deploy the newly trained model; the previous
   version stays retrievable by its timestamped filename in Storage.
+
+## Database migration
+
+Run `migrations/001_add_product_status.sql` against your Supabase
+project before relying on the `status` column. It's written as a
+single transaction with a documented rollback plan in a trailing
+comment. The migration includes a best-effort backfill from existing
+`is_active`/`inactive_reason` data — follow it up with Express's
+product status logic doing a real per-product recompute (actually
+counting `daily_sales` observations) to correct anything the backfill
+guessed wrong.
 
 ## Setup
 

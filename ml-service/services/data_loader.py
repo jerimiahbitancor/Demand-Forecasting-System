@@ -14,16 +14,62 @@ from config import supabase
 
 def get_active_products():
     """
-    Products eligible for forecasting: active, not archived.
-    Returns a DataFrame with id, name, price.
+    Products whose STATUS is active — a pure activity/lifecycle check,
+    with no data-sufficiency logic mixed in. Deliberately separate from
+    get_training_eligible_products() below: "is this product active"
+    and "does this product have enough observations to train on" are
+    two different questions per the eligibility clarification, and
+    conflating them was the bug in the previous version of this file.
+
+    Reads the generated `is_active` column (kept for compatibility with
+    the rest of the codebase), which is always in sync with the new
+    `status` enum — see migrations/001_add_product_status.sql.
     """
     response = (
         supabase.table("products")
-        .select("id, name, price, is_active, first_sold_date")
+        .select("id, name, price, is_active, status, first_sold_date")
         .eq("is_active", True)
         .execute()
     )
     return pd.DataFrame(response.data)
+
+
+def get_training_eligible_products(min_observations: int) -> list:
+    """
+    Returns the list of product_ids with at least `min_observations`
+    valid daily sales observations — per the corrected eligibility
+    rule: this counts ACTUAL ROWS in daily_sales (each row already
+    represents one aggregated, valid daily observation — see
+    get_daily_sales' docstring on why closed/missing days never
+    produce a row at all), never calendar days since first_sold_date.
+
+    A product can satisfy this and still not be "active" (e.g. it's
+    INACTIVE_DISCONTINUED but retains historical data), and a product
+    can be "active" and still fail this (freshly added, real sales,
+    just not 28 of them yet). Callers that need BOTH — active AND
+    enough data — should intersect this function's result with
+    get_active_products()'s ids, not rely on either alone.
+    """
+    active_ids = set(get_active_products()["id"].astype(int).tolist())
+    if not active_ids:
+        return []
+
+    response = (
+        supabase.table("daily_sales")
+        .select("product_id, sale_date")
+        .in_("product_id", list(active_ids))
+        .execute()
+    )
+    df = pd.DataFrame(response.data)
+    if df.empty:
+        return []
+
+    # Defensive dedup: count UNIQUE observation dates per product, not
+    # raw row count — guards against any duplicate (product_id, date)
+    # rows slipping through before clean_sales_data() has run on them.
+    observation_counts = df.groupby("product_id")["sale_date"].nunique()
+    eligible = observation_counts[observation_counts >= min_observations]
+    return eligible.index.astype(int).tolist()
 
 
 def get_daily_sales(product_id: int = None) -> pd.DataFrame:
