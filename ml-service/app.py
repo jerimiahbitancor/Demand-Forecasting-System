@@ -18,12 +18,12 @@ from flask import Flask, request, jsonify
 
 from config import ML_SERVICE_SHARED_SECRET, MIN_TRAINING_OBSERVATIONS
 from services.data_loader import (
-    get_active_products, get_training_eligible_products, get_daily_sales,
+    get_active_products, get_daily_sales,
     get_recipe_and_stock, get_safety_buffer_percentage,
 )
 from services.preprocessing import validate_sales_data, clean_sales_data, DataValidationError
 from services.feature_engineering import engineer_features, FEATURE_COLUMNS
-from services.model_service import train_global_model
+from services.model_service import train_global_model, filter_training_eligible
 from services.forecast_service import generate_forecast, classify_forecast, ModelNotReadyError
 from services.business_logic import estimate_ingredient_demand, estimate_cogs
 from services.supabase_writer import (
@@ -80,31 +80,40 @@ def train():
     — that decision was different: at that point there's an established
     baseline (previous model_metrics rows) to compare a new run against.
 
-    Eligibility, corrected per the observation-count clarification:
-    a product needs at least MIN_TRAINING_OBSERVATIONS (default 28)
-    ACTUAL valid daily sales observations — rows in daily_sales, each
-    already representing one aggregated day — not 28 calendar days
-    since it was first sold. A product open 40 calendar days with
-    sales recorded on only 20 of them has 20 observations, not 40, and
-    stays ineligible. This is checked directly against daily_sales via
-    get_training_eligible_products(), replacing the two DIFFERENT and
-    inconsistent thresholds an earlier version of this route had (a
-    28-calendar-day check in get_active_products, and a separate,
-    differently-valued row-count check inline here) with exactly one.
+    Eligibility, corrected per your own refinement of the observation-
+    count clarification: a product needs at least
+    MIN_TRAINING_OBSERVATIONS (default 28) USABLE rows AFTER feature
+    engineering and warmup-row removal — not 28 raw daily_sales rows
+    before it. rolling_14 needs 14 prior observations before it stops
+    being NaN, so a product's first 14 rows always get dropped before
+    training regardless of its raw count; a product with exactly 28
+    raw observations would only contribute ~14 real training rows,
+    silently under the intended bar. See
+    model_service.filter_training_eligible() for the corrected check,
+    which counts real post-warmup survivors directly rather than
+    inferring the loss by subtracting a hardcoded constant.
 
-    Eligibility (enough data) is deliberately kept separate from
+    This also changes WHEN eligibility is checked: every active
+    product's validated sales are pooled and feature-engineered first;
+    eligibility is only evaluated afterward, on the actual result.
+    Products that don't clear the bar are excluded from the final
+    training set but still show up in the response's "excluded" list
+    with their real usable count, not silently dropped earlier in the
+    pipeline before that count even exists.
+
+    Eligibility (enough data) is still deliberately kept separate from
     activity status: get_active_products() answers "is this product
-    active", get_training_eligible_products() answers "does it have
-    enough observations" — a product can be active with too little
+    active"; filter_training_eligible() answers "does it have enough
+    usable observations" — a product can be active with too little
     data (stays out of training, but is NOT inactive/discontinued
     because of that), or inactive/discontinued while still having
     plenty of historical observations on record.
     """
-    eligible_ids = get_training_eligible_products(MIN_TRAINING_OBSERVATIONS)
+    active_ids = get_active_products()["id"].astype(int).tolist()
 
     pooled_frames = []
     skipped = []
-    for product_id in eligible_ids:
+    for product_id in active_ids:
         try:
             sales_df = get_daily_sales(product_id)
             validate_sales_data(sales_df)
@@ -117,7 +126,7 @@ def train():
     if not pooled_frames:
         return jsonify({
             "status": "failed",
-            "reason": "no eligible products had enough validated history",
+            "reason": "no active products had validated sales history",
             "skipped": skipped,
         }), 422
 
@@ -126,6 +135,18 @@ def train():
 
     features_df = engineer_features(all_sales_df).dropna(subset=FEATURE_COLUMNS)
     log_stage("after feature engineering (NaN warm-up rows dropped)", features_df)
+
+    features_df, excluded = filter_training_eligible(features_df, MIN_TRAINING_OBSERVATIONS)
+    log_stage("after eligibility filter (usable post-warmup rows)", features_df,
+              extra={"excluded_products": len(excluded)})
+
+    if features_df.empty:
+        return jsonify({
+            "status": "failed",
+            "reason": "no product had enough usable post-warmup observations",
+            "skipped": skipped,
+            "excluded": excluded,
+        }), 422
 
     try:
         _, metrics, model_version = train_global_model(features_df)
@@ -139,8 +160,9 @@ def train():
     return jsonify({
         "status": "trained",
         "model_version": model_version,
-        "products_included": len(pooled_frames),
+        "products_included": features_df["product_id"].nunique(),
         "products_skipped": skipped,
+        "products_excluded_insufficient_data": excluded,
         "metrics": metrics,
     }), 200
 
