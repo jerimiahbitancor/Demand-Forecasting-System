@@ -228,7 +228,12 @@ const UploadData = ({
     baseURL: apiUrl || 'http://localhost:5000/api',
     headers: {
       'Content-Type': 'application/json',
-    }
+    },
+    // Without this, a request to an unreachable/hung backend just spins
+    // forever — axios has no default timeout. 30s is generous enough for
+    // a slow upload but still bounds the wait so a dead backend fails
+    // fast and visibly instead of leaving the UI stuck with no feedback.
+    timeout: 30000
   });
 
   apiClient.interceptors.request.use(
@@ -735,7 +740,12 @@ const UploadData = ({
       });
 
       if (uploaded === 0) {
-        throw new Error('No sales files were uploaded successfully.');
+        // Per-file errors are caught inside uploadOneSalesFile and never
+        // reach this catch on their own (Promise.allSettled never
+        // rejects) — attach the first one as `cause` so the catch block
+        // below can still tell a dead backend apart from a real
+        // validation/duplicate rejection.
+        throw new Error('No sales files were uploaded successfully.', { cause: failedFiles[0]?.error });
       }
 
       setSalesProgress(100);
@@ -799,30 +809,44 @@ const UploadData = ({
     } catch (error) {
       console.error('Upload error:', error);
       console.error('Error response:', error.response?.data);
-      
+
       setSalesUploadStatus('error');
       setSalesProgress(salesUploadedCount > 0 ? 100 : 0);
       saveUploadStatus('sales', { status: 'error', progress: salesUploadedCount > 0 ? 100 : 0, uploadedCount: salesUploadedCount });
-      
-      const errorMsg = error.response?.data?.error || error.message || 'Upload failed';
-      const details = error.response?.data?.details || '';
-      
+
+      // The aggregate "No files uploaded" error carries the real per-file
+      // failure as `cause` (see the throw above) — unwrap it so a dead/
+      // unreachable/timed-out backend can be told apart from a genuine
+      // validation or duplicate rejection.
+      const underlying = error.cause || error;
+      const isConnectionFailure = underlying.code === 'ECONNABORTED' || !underlying.response;
+
+      const errorMsg = underlying.response?.data?.error || underlying.message || error.message || 'Upload failed';
+      const details = underlying.response?.data?.details || '';
+
       if (salesToastId) toast.dismiss(salesToastId);
-      
-      if (error.response?.status === 409) {
-        const id = toast.error(`Upload failed: ${error.response?.data?.message || 'Duplicate file detected'}`);
+
+      if (isConnectionFailure) {
+        // No response at all (connection refused, DNS failure, or our
+        // 30s axios timeout) — retrying this exact request against a
+        // backend that isn't there just repeats the same silent hang, so
+        // this is surfaced immediately instead of a generic message.
+        const id = toast.error("Can't reach the server — check that the backend is running.");
         setSalesToastId(id);
-      } else if (error.response?.status === 400) {
+      } else if (underlying.response?.status === 409) {
+        const id = toast.error(`Upload failed: ${underlying.response?.data?.message || 'Duplicate file detected'}`);
+        setSalesToastId(id);
+      } else if (underlying.response?.status === 400) {
         const id = toast.error(`Validation error: ${details || errorMsg}`);
         setSalesToastId(id);
-      } else if (error.response?.status === 500) {
+      } else if (underlying.response?.status === 500) {
         const id = toast.error(`Server error: ${details || errorMsg}`);
         setSalesToastId(id);
       } else {
         const id = toast.error(`Upload failed: ${errorMsg}`);
         setSalesToastId(id);
       }
-      
+
       setTimeout(() => {
         setSalesUploadStatus(null);
         setSalesProcessingIndices(new Set());
@@ -1093,7 +1117,10 @@ const UploadData = ({
       });
 
       if (uploaded === 0) {
-        throw new Error('No menu files were uploaded successfully.');
+        // See the matching comment in handleSalesConfirm: attach the
+        // first per-file error as `cause` so the catch block can tell a
+        // dead backend apart from a real validation/duplicate rejection.
+        throw new Error('No menu files were uploaded successfully.', { cause: failedFiles[0]?.error });
       }
 
       setMenuProgress(100);
@@ -1142,15 +1169,25 @@ const UploadData = ({
     } catch (error) {
       console.error('Menu upload error:', error);
       console.error('Error response:', error.response?.data);
-      
+
       setMenuUploadStatus('error');
       setMenuProgress(menuUploadedCount > 0 ? 100 : 0);
       saveUploadStatus('menu', { status: 'error', progress: menuUploadedCount > 0 ? 100 : 0, uploadedCount: menuUploadedCount });
-      
-      const errorMsg = error.response?.data?.error || error.message || 'Upload failed';
+
+      // See the matching comment in handleSalesConfirm's catch block.
+      const underlying = error.cause || error;
+      const isConnectionFailure = underlying.code === 'ECONNABORTED' || !underlying.response;
+
       if (menuToastId) toast.dismiss(menuToastId);
-      const id = toast.error(`Upload failed: ${errorMsg}`);
-      setMenuToastId(id);
+
+      if (isConnectionFailure) {
+        const id = toast.error("Can't reach the server — check that the backend is running.");
+        setMenuToastId(id);
+      } else {
+        const errorMsg = underlying.response?.data?.error || underlying.message || error.message || 'Upload failed';
+        const id = toast.error(`Upload failed: ${errorMsg}`);
+        setMenuToastId(id);
+      }
       
       setTimeout(() => {
         setMenuUploadStatus(null);

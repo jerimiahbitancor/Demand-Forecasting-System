@@ -1,6 +1,7 @@
 // services/mappingService.js
 const { supabase, isConfigured, supabaseAdmin } = require('../config/supabase');
 const { deriveProductStatus } = require('./productStatusService');
+const { PRODUCT_DB_STATUS_BY_DERIVED } = require('./productStatusConstants');
 
 class MappingService {
   constructor() {
@@ -376,13 +377,17 @@ class MappingService {
 
       console.log('Creating product in products table');
 
-      // Insert into products table
+      // Insert into products table. products.is_active is a GENERATED
+      // column (derived from status) — writing it directly throws
+      // Postgres error 428C9. A freshly created product hasn't sold
+      // anything yet, so it starts 'inactive_new', same as the column
+      // default and consistent with deriveProductStatus()'s own logic.
       const insertData = {
         name: productData.name.trim(),
         price: Number.isFinite(parseFloat(productData.price)) ? parseFloat(productData.price) : 0,
         category: productData.category || 'Uncategorized',
         serving_size_label: productData.serving_size_label || 'serving',
-        is_active: true
+        status: PRODUCT_DB_STATUS_BY_DERIVED.new
       };
 
       const { data: product, error: productError } = await supabaseAdmin.from('products')
@@ -480,7 +485,18 @@ class MappingService {
       if (productData.price !== undefined) updateData.price = parseFloat(productData.price);
       if (productData.category !== undefined) updateData.category = productData.category || 'Uncategorized';
       if (productData.serving_size_label !== undefined) updateData.serving_size_label = productData.serving_size_label || 'serving';
-      if (productData.is_active !== undefined) updateData.is_active = productData.is_active;
+      // is_active is GENERATED from status (428C9 if written directly).
+      // No caller currently sends is_active on this endpoint, but the API
+      // still accepts it — map explicitly to a status instead of
+      // hardcoding a bare enum string. false is mapped to
+      // 'inactive_discontinued' rather than 'inactive_new': this is a
+      // manual toggle on an EXISTING product, and 'new' specifically
+      // means "no sales history yet", which doesn't apply here.
+      if (productData.is_active !== undefined) {
+        updateData.status = productData.is_active
+          ? PRODUCT_DB_STATUS_BY_DERIVED.active
+          : PRODUCT_DB_STATUS_BY_DERIVED.inactive;
+      }
 
       const { data: product, error: productError } = await supabaseAdmin.from('products')
         .update(updateData)
@@ -635,8 +651,10 @@ class MappingService {
         };
       }
 
+      // is_active is GENERATED from status — write status instead (428C9
+      // if written directly).
       const updateData = {
-        is_active: false,
+        status: PRODUCT_DB_STATUS_BY_DERIVED.archived,
         inactive_reason: storedReason,
         inactive_since: new Date().toISOString()
       };
@@ -694,8 +712,10 @@ class MappingService {
         };
       }
 
+      // is_active is GENERATED from status — write status instead (428C9
+      // if written directly).
       const updateData = {
-        is_active: true,
+        status: PRODUCT_DB_STATUS_BY_DERIVED.active,
         inactive_reason: null,
         inactive_since: null
       };
@@ -845,19 +865,6 @@ class MappingService {
         }
       }
 
-      // deriveProductStatus() returns a short display status ('active' |
-      // 'new' | 'inactive' | 'archived') used elsewhere purely for UI
-      // labels — it does NOT match the product_status DB enum, which
-      // only accepts 'active' | 'inactive_new' | 'inactive_discontinued'
-      // | 'archived'. Writing 'new'/'inactive' straight to the column
-      // would fail on every row, so translate before writing.
-      const DB_STATUS_BY_DERIVED = {
-        active: 'active',
-        new: 'inactive_new',
-        inactive: 'inactive_discontinued',
-        archived: 'archived',
-      };
-
       const updates = [];
       for (const product of products) {
         const derived = deriveProductStatus({
@@ -867,7 +874,7 @@ class MappingService {
           isActive: product.is_active,
           inactiveReason: product.inactive_reason,
         });
-        const dbStatus = DB_STATUS_BY_DERIVED[derived.status];
+        const dbStatus = PRODUCT_DB_STATUS_BY_DERIVED[derived.status];
 
         if (dbStatus && dbStatus !== product.status) {
           updates.push({ id: product.id, status: dbStatus });

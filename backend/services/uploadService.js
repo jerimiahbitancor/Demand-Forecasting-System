@@ -3,7 +3,7 @@ const { supabase, isConfigured, supabaseAdmin } = require('../config/supabase');
 const mappingService = require('./mappingService');
 const mlService = require('./mlService');
 const { deriveProductStatus } = require('./productStatusService');
-const { PRODUCT_STATUS_NOTES } = require('./productStatusConstants');
+const { PRODUCT_STATUS_NOTES, PRODUCT_DB_STATUS_BY_DERIVED } = require('./productStatusConstants');
 
 class UploadService {
   constructor() {
@@ -512,7 +512,7 @@ class UploadService {
       }
 
       const { data: productRows, error: productFetchError } = await supabaseAdmin.from('products')
-        .select('id, created_at, first_sold_date, is_active, inactive_reason, inactive_since')
+        .select('id, created_at, first_sold_date, is_active, inactive_reason, inactive_since, status')
         .in('id', selectedProductIds);
       const { data: salesRows, error: salesFetchError } = await supabaseAdmin.from('daily_sales')
         .select('product_id, sale_date')
@@ -616,6 +616,13 @@ class UploadService {
           inactiveReason: product.inactive_reason
         });
 
+        // is_active is a GENERATED column (derived from status) — writing
+        // it directly throws Postgres error 428C9. deriveProductStatus()
+        // returns a short display code ('active'/'new'/'inactive'/
+        // 'archived') that doesn't match the products.status DB enum, so
+        // translate through the shared map before writing.
+        const dbStatus = PRODUCT_DB_STATUS_BY_DERIVED[status.status];
+
         const nextFirstSoldDate = firstSoldDate ? firstSoldDate.slice(0, 10) : null;
         const nextInactiveReason = status.note || null;
         const nextInactiveSince = status.isActive
@@ -623,7 +630,7 @@ class UploadService {
           : (product.inactive_since || new Date().toISOString().slice(0, 10));
 
         const unchanged = (product.first_sold_date || null) === nextFirstSoldDate
-          && Boolean(product.is_active) === status.isActive
+          && product.status === dbStatus
           && (product.inactive_reason || null) === nextInactiveReason
           && (product.inactive_since || null) === nextInactiveSince;
 
@@ -632,7 +639,7 @@ class UploadService {
         statusUpdates.push({
           id: product.id,
           first_sold_date: nextFirstSoldDate,
-          is_active: status.isActive,
+          status: dbStatus,
           inactive_reason: nextInactiveReason,
           inactive_since: nextInactiveSince
         });

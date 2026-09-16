@@ -65,12 +65,24 @@ router.post(
   virusScan,
   validateUploadData,
   async (req, res) => {
+    // Declared here, not inside the try block below, so the catch block
+    // (which references it to mark a failed pipeline as 'failed') can
+    // actually see it — a `let` declared inside `try { }` is scoped to
+    // that block only and is NOT visible in the matching `catch { }`.
+    // With it stuck inside the try, any error thrown after
+    // saveUploadRecord() succeeded caused a ReferenceError inside the
+    // catch handler itself, which meant no response was ever sent to the
+    // client (the request just hung until timeout) and the
+    // updateUploadStatus(uploadId, 'failed', ...) call never ran, so the
+    // upload stayed 'pending' and kept blocking retries via
+    // checkDuplicateUpload for a full hour.
+    let uploadId = null;
     try {
       const { fileType } = req.body;
       const file = req.file;
-      
+
       const userId = req.user?.user_id || req.user?.id || null;
-      
+
       if (!file) {
         return res.status(400).json({ error: 'No file uploaded' });
       }
@@ -119,7 +131,6 @@ router.post(
       console.log('File processed:', processedData.rowCount, 'rows');
 
       let result;
-      let uploadId = null;
 
       if (fileType === 'menu') {
         uploadService.markUploadProcessing(file.originalname, numericId);
