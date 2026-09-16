@@ -312,6 +312,14 @@ isValidUserId(userId) {
         const price = parseFloat(row[priceCol]);
         const category = categoryCol ? row[categoryCol]?.trim() : 'Uncategorized';
 
+        // Persist the category into the product_categories config table so it
+        // appears in Settings → Forecast Config (non-fatal).
+        try {
+          await ensureProductCategory(category);
+        } catch (categoryRegisterError) {
+          console.error(`Failed to register category "${category}" from menu upload:`, categoryRegisterError);
+        }
+
         const salesCoverage = await this.getProductSalesCoverage(productName, userId);
         if (!salesCoverage.hasSales) {
           const warningMessage = `Product "${productName}" was not found in sales data. It will be treated as a future product and excluded from forecasting until sales appear.`;

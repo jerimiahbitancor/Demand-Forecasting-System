@@ -48,13 +48,17 @@
   display: flex;
   align-items: center;
   gap: 12px;
-  margin-bottom: 24px;
+  
 }
 
 .analytics-header .page-title {
-  font-size: 28px;
-  font-weight: 700;
-  color: var(--color-text-primary);
+ 
+}
+
+.page-subtitle {
+  font-size: 14px;
+  color: #6b7280;
+  margin-bottom: 20px;
 }
 
 .breadcrumb-separator {
@@ -204,7 +208,7 @@
 }
 
 .analytics-table th {
-  text-align: left;
+  text-align: center;
   padding: 10px 12px;
   background-color: var(--color-bg-light);
   color: var(--color-text-light);

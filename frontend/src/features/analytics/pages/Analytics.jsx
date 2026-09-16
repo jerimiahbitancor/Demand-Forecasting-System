@@ -30,8 +30,16 @@ const Analytics = () => {
         {/* Breadcrumb header */}
         <div className="analytics-header">
           <h1 className="page-title">Analytics</h1>
+         
+        
           <span className="breadcrumb-separator">&gt;</span>
           <span className="breadcrumb-current">{activeTabMeta.label}</span>
+          
+        </div>
+        <div className="analytics-subtitle">
+          <p className="page-subtitle">
+            Explore your sales data and gain insights into your business performance. Use the tabs below to navigate between different analytics views.
+          </p>
         </div>
 
         {/* Tab bar */}

@@ -5,6 +5,7 @@ import toast from "react-hot-toast";
 import { FiChevronDown, FiSearch, FiCalendar, FiInfo, FiZap, FiExternalLink } from "react-icons/fi";
 import GenerateReportModal from "../../components/Reports/GenerateReportModal.jsx";
 import { buildSalesForecastPDF, generateExcel } from "./../../../services/reportService.js";
+import { logAuditEvent, formatAuditDateRange } from "../../../services/auditClient.js";
 import DatePicker from "./shared/DatePicker.jsx";
 import ExpandableModal from "./shared/ExpandableModal.jsx";
 import Pagination from "./shared/Pagination.jsx";
@@ -492,6 +493,10 @@ function Forecasting() {
       return;
     }
 
+    logAuditEvent(
+      'report_generated',
+      `Generated the Sales & Demand Forecast report (${format === 'pdf' ? 'PDF' : 'Excel'})${formatAuditDateRange(dateRange) ? ` — ${formatAuditDateRange(dateRange)}` : ''}`
+    );
     setIsReportModalOpen(false);
   };
 
