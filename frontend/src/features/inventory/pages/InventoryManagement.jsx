@@ -26,7 +26,7 @@ const InventoryManagement = () => {
           <div>
             <h1 className="page-title">Inventory Management</h1>
             <p className="page-subtitle">
-              Manage your inventory items and product catalog
+              Manage your inventory items and product list, and keep track of market prices for your ingredients.
             </p>
           </div>
         </div>

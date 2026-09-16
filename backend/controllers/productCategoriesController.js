@@ -1,10 +1,13 @@
 const { supabaseAdmin } = require('../config/supabase');
 const { logAction } = require('../services/auditService');
+const { syncProductCategoriesFromProducts } = require('../services/productCategoryService');
 
 const actorOf = (req) => req.user?.name || req.user?.email || null;
 
 const getProductCategories = async (req, res) => {
   try {
+    await syncProductCategoriesFromProducts();
+
     const { data, error } = await supabaseAdmin
       .from('product_categories')
       .select('id, name, created_at, updated_at')

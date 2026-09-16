@@ -3,6 +3,7 @@ const { supabase, isConfigured, supabaseAdmin } = require('../config/supabase');
 const mappingService = require('./mappingService');
 const { deriveProductStatus } = require('./productStatusService');
 const { PRODUCT_STATUS_NOTES } = require('./productStatusConstants');
+const { ensureProductCategories } = require('./productCategoryService');
 
 class UploadService {
   constructor() {
@@ -485,6 +486,17 @@ class UploadService {
         }
       }
 
+      // Persist discovered categories into the product_categories config
+      // table so they appear in Settings → Forecast Config (non-fatal).
+      try {
+        const registered = await ensureProductCategories([...categoryByProductId.values()]);
+        if (registered.length > 0) {
+          console.log(`✅ Registered ${registered.length} product categor${registered.length === 1 ? 'y' : 'ies'} from sales upload: ${registered.map((c) => c.name).join(', ')}`);
+        }
+      } catch (categoryRegisterError) {
+        console.error('Failed to register categories from sales upload:', categoryRegisterError);
+      }
+
       let productsUpdated = 0;
       const selectedProductIds = [...productIds];
       if (selectedProductIds.length === 0) {
@@ -503,9 +515,38 @@ class UploadService {
         throw productFetchError || salesFetchError;
       }
 
-      // Only active products with a mapped recipe deduct stock automatically.
+      // Re-derive each product's lifecycle status from the freshest sales
+      // dates BEFORE any stock deduction, so the "product status and recipe"
+      // rule is enforced with current data:
+      //   ACTIVE  + mapped recipe -> deduct stock
+      //   INACTIVE (NEW)/DISCONTINUED/ARCHIVED -> never deduct
+      const salesByProductId = new Map();
+      for (const sale of salesRows || []) {
+        const dates = salesByProductId.get(sale.product_id) || [];
+        dates.push(sale.sale_date);
+        salesByProductId.set(sale.product_id, dates);
+      }
+
+      const statusByProductId = new Map();
+      for (const product of productRows || []) {
+        const productSales = salesByProductId.get(product.id) || [];
+        const firstSoldDate = productSales[0] || product.first_sold_date || null;
+        const lastSoldDate = productSales[productSales.length - 1] || firstSoldDate || null;
+        const status = deriveProductStatus({
+          firstSoldDate: firstSoldDate || null,
+          lastSoldDate: lastSoldDate || null,
+          createdAt: product.created_at || null,
+          isActive: Boolean(product.is_active),
+          inactiveReason: product.inactive_reason
+        });
+        statusByProductId.set(product.id, { status, firstSoldDate, lastSoldDate });
+      }
+
+      // Only products freshly derived as ACTIVE with a mapped recipe deduct.
       const activeProductIds = new Set(
-        (productRows || []).filter((product) => product.is_active === true).map((product) => product.id)
+        [...statusByProductId.entries()]
+          .filter(([, { status }]) => status.status === 'active')
+          .map(([id]) => id)
       );
       if (activeProductIds.size > 0) {
         const { data: recipeRows, error: recipeError } = await supabaseAdmin
@@ -559,31 +600,16 @@ class UploadService {
         }
       }
 
-      const salesByProductId = new Map();
-      for (const sale of salesRows || []) {
-        const dates = salesByProductId.get(sale.product_id) || [];
-        dates.push(sale.sale_date);
-        salesByProductId.set(sale.product_id, dates);
-      }
-
       for (const product of productRows || []) {
-        const productSales = salesByProductId.get(product.id) || [];
-
-        const firstSoldDate = productSales[0] || product.first_sold_date || null;
-        const lastSoldDate = productSales[productSales.length - 1] || firstSoldDate || null;
-        const status = deriveProductStatus({
-          firstSoldDate: firstSoldDate || null,
-          lastSoldDate: lastSoldDate || null,
-          createdAt: product.created_at || null,
-          isActive: Boolean(product.is_active),
-          inactiveReason: product.inactive_reason
-        });
+        const { status, firstSoldDate, lastSoldDate } = statusByProductId.get(product.id) || {};
 
         const { error: updateError } = await supabaseAdmin.from('products')
           .update({
             first_sold_date: firstSoldDate ? firstSoldDate.slice(0, 10) : null,
             is_active: status.isActive,
-            inactive_reason: status.note || null,
+            inactive_reason: status.isArchived
+              ? (product.inactive_reason || status.note)
+              : (status.isActive ? null : (status.note || null)),
             inactive_since: status.isActive ? null : (product.inactive_since || new Date().toISOString().slice(0, 10))
           })
           .eq('id', product.id);

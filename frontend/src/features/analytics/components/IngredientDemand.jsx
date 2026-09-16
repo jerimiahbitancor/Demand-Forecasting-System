@@ -3,6 +3,7 @@ import { useState } from "react";
 import { FiSearch, FiInfo, FiDownload, FiExternalLink, FiShoppingCart } from "react-icons/fi";
 import GenerateReportModal from "../../components/Reports/GenerateReportModal.jsx";
 import { buildIngredientDemandPDF, buildGroceryListPDF, generateExcel } from "./../../../services/reportService.js";
+import { logAuditEvent, formatAuditDateRange } from "../../../services/auditClient.js";
 import DatePicker from "./shared/DatePicker.jsx";
 import ExpandableModal from "./shared/ExpandableModal.jsx";
 import Pagination from "./shared/Pagination.jsx";
@@ -339,6 +340,10 @@ function IngredientDemand() {
       );
     }
 
+    logAuditEvent(
+      'report_generated',
+      `Generated the Ingredient Demand report (${format === 'pdf' ? 'PDF' : 'Excel'})${formatAuditDateRange(dateRange) ? ` — ${formatAuditDateRange(dateRange)}` : ''}`
+    );
     setIsReportModalOpen(false);
   };
 

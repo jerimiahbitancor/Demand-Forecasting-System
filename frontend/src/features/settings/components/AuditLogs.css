@@ -42,6 +42,73 @@
   cursor: not-allowed;
 }
 
+.audit-header-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.55rem;
+  flex-shrink: 0;
+  flex-wrap: wrap;
+}
+
+.audit-export-btn {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.5rem 0.95rem;
+  border: none;
+  border-radius: 8px;
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: #ffffff;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  flex-shrink: 0;
+  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.08);
+}
+
+.audit-export-btn svg {
+  flex-shrink: 0;
+}
+
+.audit-export-btn:focus-visible {
+  outline: 2px solid #3b82f6;
+  outline-offset: 2px;
+}
+
+.audit-export-btn:active {
+  transform: translateY(1px);
+  box-shadow: none;
+}
+
+.audit-export-btn:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+  transform: none;
+  box-shadow: none;
+}
+
+/* CSV export — green download button */
+.audit-export-csv {
+  background: linear-gradient(135deg, #059669, #047857);
+}
+
+.audit-export-csv:hover:not(:disabled) {
+  background: linear-gradient(135deg, #047857, #065f46);
+  box-shadow: 0 4px 12px rgba(5, 150, 105, 0.3);
+  transform: translateY(-1px);
+}
+
+/* PDF export — brand red document button */
+.audit-export-pdf {
+  background: linear-gradient(135deg, #a31d1d, #8a1818);
+}
+
+.audit-export-pdf:hover:not(:disabled) {
+  background: linear-gradient(135deg, #b02323, #7c1414);
+  box-shadow: 0 4px 12px rgba(163, 29, 29, 0.32);
+  transform: translateY(-1px);
+}
+
 .spinning {
   animation: audit-spin 0.8s linear infinite;
 }
@@ -113,7 +180,7 @@
 }
 
 .audit-table thead th {
-  text-align: left;
+  text-align: center;
   padding: 0.7rem 1rem;
   background: #f8fafc;
   color: #475569;
@@ -132,6 +199,10 @@
 
 .audit-th-action {
   width: 160px;
+}
+
+.audit-th-actor {
+  width: 150px;
 }
 
 .audit-table tbody td {
@@ -160,6 +231,11 @@
 .audit-td-details {
   line-height: 1.5;
   word-break: break-word;
+}
+
+.audit-td-actor {
+  white-space: nowrap;
+  color: #475569;
 }
 
 /* Action badges */

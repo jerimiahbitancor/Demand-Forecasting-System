@@ -128,6 +128,7 @@
   color: #4b5563;
   font-size: 0.72rem;
   text-transform: uppercase;
+  text-align: center;
 }
 
 .product-details-table tr:last-child td {

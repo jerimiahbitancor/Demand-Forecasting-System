@@ -327,3 +327,8 @@ input:disabled {
 .input-with-icon .password-toggle {
   right: 12px;
 }
+
+/* Global: center all table headers across every system table */
+thead th {
+  text-align: center;
+}

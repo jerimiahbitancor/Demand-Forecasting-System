@@ -14,22 +14,37 @@ const ProductDetailsModal = ({
   const isArchived = product.is_archived === true
     || product.status === 'archived'
     || /^archived\b/i.test(product.inactive_reason || '');
-  const isNewInactive = !product.is_active
-    && product.created_at
-    && (Date.now() - new Date(product.created_at).getTime()) < 28 * 24 * 60 * 60 * 1000;
+  const isActive = product.status === 'active'
+    || (!product.status && product.is_active === true);
+  const hasIngredients = Array.isArray(product.product_ingredients) && product.product_ingredients.length > 0;
   const statusLabel = product.status_label || (isArchived
-    ? 'Archived'
-    : product.is_active
-      ? 'Active'
-      : isNewInactive
-        ? 'Inactive (New)'
-        : 'Inactive (Discontinued)');
+    ? 'ARCHIVED'
+    : isActive
+      ? 'ACTIVE'
+      : product.status === 'new'
+        ? 'INACTIVE (NEW)'
+        : 'INACTIVE (DISCONTINUED)');
   const ingredients = product.product_ingredients || [];
   const totalCogs = ingredients.length === 0 ? null : ingredients.reduce((total, ingredient) => {
     const unitPrice = Number(ingredient.ingredients?.price ?? ingredient.price) || 0;
     const quantity = Number(ingredient.quantity_per_serving ?? ingredient.quantity) || 0;
     return total + unitPrice * quantity;
   }, 0);
+
+  const foodCostPercentage = totalCogs !== null && (product.price || 0) > 0
+    ? (totalCogs / product.price) * 100
+    : null;
+
+  let forecastNote = 'Excluded from forecasting until activated.';
+  if (isActive && hasIngredients) {
+    forecastNote = 'Included in forecasting, ingredient demand estimation, automatic stock deduction, and COGS/food cost calculation.';
+  } else if (isActive && !hasIngredients) {
+    forecastNote = 'Included in forecasting but excluded from ingredient demand estimation, automatic stock deduction, and COGS/food cost calculation until a recipe is added.';
+  } else if (isArchived) {
+    forecastNote = 'Removed from the active product list. Excluded from forecasting and ingredient demand estimation. Historical data is retained.';
+  } else if (!isActive) {
+    forecastNote = 'Excluded from forecasting and automatic stock deduction until sales resume or 28 days of sales data are reached.';
+  }
 
   const formatCurrency = (amount) => `₱${amount.toFixed(2)}`;
 
@@ -39,11 +54,12 @@ const ProductDetailsModal = ({
         <div>
           <div className="product-details-title-row">
             <h3>{product.name || 'Unnamed product'}</h3>
-            <span className={`product-details-status ${isArchived ? 'archived' : product.is_active ? 'active' : 'archived'}`}>
+            <span className={`product-details-status ${isArchived ? 'archived' : isActive ? 'active' : 'archived'}`}>
               {statusLabel}
             </span>
           </div>
           <p>{product.category || 'Uncategorized'}{product.serving_size_label ? ` | ${product.serving_size_label}` : ''}</p>
+          <p style={{ fontSize: 12, color: '#6b7280', marginTop: 4 }}>{forecastNote}</p>
         </div>
         <button className="modal-close-btn" onClick={onClose} aria-label="Close product details">
           <FaTimes />
@@ -63,6 +79,10 @@ const ProductDetailsModal = ({
           <div>
             <span>Total COGS</span>
             <strong>{totalCogs === null ? 'N/A' : formatCurrency(totalCogs)}</strong>
+          </div>
+          <div>
+            <span>Food Cost %</span>
+            <strong>{foodCostPercentage === null ? 'N/A' : `${foodCostPercentage.toFixed(1)}%`}</strong>
           </div>
         </div>
 

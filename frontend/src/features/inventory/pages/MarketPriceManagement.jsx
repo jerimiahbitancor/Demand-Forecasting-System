@@ -55,6 +55,32 @@ const DEFAULT_SOURCES = [
   { key: "da_reference", label: "DA Reference", tooltip: "Manually copied from DA Bantay Presyo (da.gov.ph/price-monitoring). Official government reference price." },
 ];
 
+const PROTECTED_SOURCE_KEYS = ["wet_market", "da_reference"];
+
+// Until the market_sources table is provisioned, deletions are tracked locally
+// so staff can remove built-in sources and have the columns disappear.
+const REMOVED_SOURCES_KEY = 'chefduo_removed_market_sources';
+
+const getRemovedSourceKeys = () => {
+  try {
+    const parsed = JSON.parse(localStorage.getItem(REMOVED_SOURCES_KEY) || '[]');
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+};
+
+const removeSourceLocally = (key) => {
+  try {
+    const current = getRemovedSourceKeys();
+    if (!current.includes(key)) {
+      localStorage.setItem(REMOVED_SOURCES_KEY, JSON.stringify([...current, key]));
+    }
+  } catch {
+    // Storage unavailable; best effort only.
+  }
+};
+
 const LINE_PALETTE = [
   "#3b82f6", "#f59e0b", "#16a34a", "#8b5cf6", "#ef4444",
   "#06b6d4", "#ec4899", "#84cc16", "#7c3aed", "#f97316",
@@ -417,8 +443,9 @@ const MarketPriceManagement = () => {
     try {
       const response = await apiClient.get('/market-prices/sources');
       if (response.data.success) {
-        const loaded = response.data.data || [];
-        setSources(loaded.length ? loaded : DEFAULT_SOURCES);
+        const loaded = (response.data.data || []).length ? response.data.data : DEFAULT_SOURCES;
+        const removed = getRemovedSourceKeys();
+        setSources(removed.length ? loaded.filter((s) => !removed.includes(s.key)) : loaded);
       }
     } catch (error) {
       console.error('Error fetching market sources:', error);
@@ -521,8 +548,8 @@ const MarketPriceManagement = () => {
   };
 
   const handleDeleteSource = async (src) => {
-    if (!src.id) {
-      toast.error('This is a built-in source and cannot be removed');
+    if (PROTECTED_SOURCE_KEYS.includes(src.key)) {
+      toast.error(`"${src.label}" is a required source and cannot be removed`);
       return;
     }
     if (!window.confirm(`Remove market source "${src.label}"? Existing price records for it will stop appearing.`)) {
@@ -530,12 +557,18 @@ const MarketPriceManagement = () => {
     }
     setSourceActionLoading(true);
     try {
-      const response = await apiClient.delete(`/market-prices/sources/${src.id}`);
-      if (response.data.success) {
-        toast.success(response.data.message || 'Source removed');
-        if (selectedSource === src.key) setSelectedSource("All");
-        refreshAfterSourcesChanged();
+      if (src.id) {
+        const response = await apiClient.delete(`/market-prices/sources/${src.id}`);
+        if (!response.data.success) {
+          toast.error(response.data.message || 'Failed to remove source');
+          return;
+        }
+      } else {
+        removeSourceLocally(src.key);
       }
+      toast.success(`Source "${src.label}" removed`);
+      if (selectedSource === src.key) setSelectedSource("All");
+      refreshAfterSourcesChanged();
     } catch (error) {
       toast.error(error.response?.data?.error || 'Failed to remove source');
     } finally {
@@ -674,19 +707,29 @@ const MarketPriceManagement = () => {
   }, [showTrend, trendIngredientId, fetchHistory]);
 
   const trendChartData = useMemo(() => {
+    // One point per recording (time-stamped), so the trend line forms as soon
+    // as a second recording happens — even within the same day. Grouping by day
+    // alone collapsed everything into a single dot and made the line invisible.
     const pointMap = {};
     (trendRows || []).forEach((row) => {
-      let dateKey = 'N/A';
+      let key = 'N/A';
       try {
-        dateKey = new Date(row.scraped_at).toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+        key = new Date(row.scraped_at).toLocaleString('en-US', {
+          month: 'short',
+          day: 'numeric',
+          hour: 'numeric',
+          minute: '2-digit',
+        });
       } catch {
         /* ignore malformed dates */
       }
-      if (!pointMap[dateKey]) pointMap[dateKey] = { date: dateKey };
-      pointMap[dateKey][row.source] = Number(row.price);
+      if (!pointMap[key]) pointMap[key] = { date: key };
+      pointMap[key][row.source] = Number(row.price);
     });
     return Object.values(pointMap);
   }, [trendRows]);
+
+  const trendPointCount = useMemo(() => trendChartData.length, [trendChartData]);
 
   const presentTrendSources = useMemo(() => {
     const present = new Set();
@@ -1448,7 +1491,7 @@ const MarketPriceManagement = () => {
                     <Tooltip />
                     <Legend />
                     {presentTrendSources.map((col, i) => (
-                      <Area key={col.key} type="monotone" dataKey={col.key} name={labelOf(col.key)} stroke={colorOf(i)} fill={colorOf(i)} fillOpacity={0.15} />
+                      <Area key={col.key} type="monotone" connectNulls dataKey={col.key} name={labelOf(col.key)} stroke={colorOf(i)} fill={colorOf(i)} fillOpacity={0.15} />
                     ))}
                   </AreaChart>
                 ) : (
@@ -1462,16 +1505,24 @@ const MarketPriceManagement = () => {
                       <Line
                         key={col.key}
                         type="monotone"
+                        connectNulls
                         dataKey={col.key}
                         name={labelOf(col.key)}
                         stroke={colorOf(i)}
                         strokeWidth={2}
                         dot={{ r: 3 }}
+                        activeDot={{ r: 5 }}
                       />
                     ))}
                   </LineChart>
                 )}
               </ResponsiveContainer>
+            )}
+
+            {!trendLoading && trendPointCount < 2 && presentTrendSources.length > 0 && (
+              <div className="market-price-chart-hint">
+                Only 1 recording point so far — save this ingredient's prices again (even later today) and the trend line will start drawing.
+              </div>
             )}
 
             {insights.length > 0 && (
@@ -1538,6 +1589,9 @@ const MarketPriceManagement = () => {
             <p className="form-label" style={{ marginBottom: 8 }}>
               Add your own store or market. It becomes a new column in the price table.
             </p>
+            <p className="form-label" style={{ marginBottom: 8, color: '#9ca3af', fontSize: 12 }}>
+              Wet Market and DA Reference are required and cannot be removed. Other sources can be removed anytime; their columns disappear from the price table.
+            </p>
             <div className="market-source-add-row">
               <input
                 type="text"
@@ -1567,9 +1621,13 @@ const MarketPriceManagement = () => {
                   <span className="market-source-list-label">{s.label}</span>
                   <button
                     className="market-source-remove-btn"
-                    title={s.id ? `Remove ${s.label}` : 'Built-in source (cannot be removed)'}
+                    title={
+                      PROTECTED_SOURCE_KEYS.includes(s.key)
+                        ? 'Required source (cannot be removed)'
+                        : `Remove ${s.label}`
+                    }
                     onClick={() => handleDeleteSource(s)}
-                    disabled={sourceActionLoading || !s.id}
+                    disabled={sourceActionLoading || PROTECTED_SOURCE_KEYS.includes(s.key)}
                   >
                     <FaTrash size={12} />
                   </button>
