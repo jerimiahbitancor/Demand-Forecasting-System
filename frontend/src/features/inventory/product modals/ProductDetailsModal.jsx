@@ -4,6 +4,7 @@ import './ProductDetailsModal.css';
 
 const ProductDetailsModal = ({
   product,
+  computedStatus,
   isArchiving,
   onArchive,
   onRestore,
@@ -11,19 +12,37 @@ const ProductDetailsModal = ({
 }) => {
   if (!product) return null;
 
-  const isArchived = product.is_archived === true
+  const isArchived = computedStatus?.isArchived
+    || product.is_archived === true
     || product.status === 'archived'
     || /^archived\b/i.test(product.inactive_reason || '');
-  const isActive = product.status === 'active'
-    || (!product.status && product.is_active === true);
+  const isActive = computedStatus?.isActive ?? (
+    product.status === 'active'
+    || (!product.status && product.is_active === true)
+  );
   const hasIngredients = Array.isArray(product.product_ingredients) && product.product_ingredients.length > 0;
-  const statusLabel = product.status_label || (isArchived
-    ? 'ARCHIVED'
-    : isActive
-      ? 'ACTIVE'
-      : product.status === 'new'
-        ? 'INACTIVE (NEW)'
-        : 'INACTIVE (DISCONTINUED)');
+  const isUnmapped = computedStatus?.isUnmapped ?? !hasIngredients;
+  const statusLabel = computedStatus?.label
+    || (isArchived
+      ? 'ARCHIVED'
+      : isUnmapped
+        ? 'UNMAPPED'
+        : isActive
+          ? 'ACTIVE'
+          : product.status === 'new'
+            ? 'INACTIVE (NEW)'
+            : 'INACTIVE (DISCONTINUED)');
+  const badgeClass = (computedStatus?.className && {
+    'status-active': 'active',
+    'status-archived': 'archived',
+    'status-unmapped': 'unmapped',
+    'status-low-margin': 'low-margin',
+    'status-discontinued': 'discontinued',
+    'status-inactive': 'inactive',
+    'status-inactive-new': 'inactive-new',
+  }[computedStatus.className]) || (
+    isArchived ? 'archived' : isUnmapped ? 'unmapped' : isActive ? 'active' : 'archived'
+  );
   const ingredients = product.product_ingredients || [];
   const totalCogs = ingredients.length === 0 ? null : ingredients.reduce((total, ingredient) => {
     const unitPrice = Number(ingredient.ingredients?.price ?? ingredient.price) || 0;
@@ -54,7 +73,7 @@ const ProductDetailsModal = ({
         <div>
           <div className="product-details-title-row">
             <h3>{product.name || 'Unnamed product'}</h3>
-            <span className={`product-details-status ${isArchived ? 'archived' : isActive ? 'active' : 'archived'}`}>
+            <span className={`product-details-status ${badgeClass}`}>
               {statusLabel}
             </span>
           </div>

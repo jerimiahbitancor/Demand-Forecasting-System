@@ -666,20 +666,21 @@ const bulkUpsertPrices = async (req, res) => {
     }
 
     const ingredientName = ingredient?.name || `ingredient #${ingredientId}`;
+    const cleanIngredientName = ingredientName.replace(/\s*\([^)]*\)\s*$/, '').trim() || ingredientName;
     const details = validEntries
       .map((e) => `${labelForSource(sources, e.source)} ₱${e.price}`)
       .join(', ');
 
     await logAction(
       'price_updated',
-      `Updated ${validEntries.length} market price(s) for ${ingredientName}: ${details}`,
+      `Updated ${validEntries.length} market price(s) for ${cleanIngredientName}: ${details}`,
       actorOf(req)
     );
 
     createNotification({
       userId: req.user?.user_id,
       type: 'success',
-      title: `Market prices updated for ${ingredientName}`,
+      title: `Market prices updated for ${cleanIngredientName}`,
       message: `Updated ${validEntries.length} price(s) (${ingredient?.unit || 'unit'}): ${details}`,
       link: '/inventory-management',
       metadata: { kind: 'market_price', action: 'bulk_updated', ingredient_id: ingredientId },

@@ -1853,6 +1853,7 @@ const ProductManagement = () => {
       {isProductDetailsModalOpen && selectedItem && (
         <ProductDetailsModal
           product={selectedItem}
+          computedStatus={getStatusDetails(selectedItem)}
           isArchiving={isArchiving}
           onArchive={() => {
             setIsProductDetailsModalOpen(false);
