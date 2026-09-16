@@ -792,6 +792,8 @@ const ProductManagement = () => {
   };
 
   // ============ GET STATUS DETAILS ============
+  const FOOD_COST_WARNING_THRESHOLD = 30;
+
   const getStatusDetails = (product) => {
     const lifecycleStatus = product?.status || null;
     const isActive = lifecycleStatus ? lifecycleStatus === 'active' : product?.is_active === true;
@@ -803,6 +805,7 @@ const ProductManagement = () => {
     const price = product?.price || 0;
     const cogs = calculateProductCogs(product);
     const foodCostPercentage = cogs !== null && price > 0 ? (cogs / price) * 100 : null;
+    const isLowMargin = foodCostPercentage !== null && foodCostPercentage > FOOD_COST_WARNING_THRESHOLD;
     const warningThreshold = foodCostThreshold;
     const isLowMargin = foodCostPercentage !== null && foodCostPercentage > warningThreshold;
     const isUnmapped = !hasIngredients;
@@ -815,38 +818,49 @@ const ProductManagement = () => {
     let label = 'Active';
     let className = 'status-active';
     let dotColor = '#16a34a';
-    let tooltip = 'This product is active and being forecasted.';
+    let tooltip = 'Included in forecasting, ingredient demand estimation, automatic stock deduction, and COGS/food cost calculation.';
     
     if (isArchived) {
       label = 'Archived';
       className = 'status-archived';
       dotColor = '#6b7280';
-      tooltip = 'Archived product. It is excluded from active forecasting and ingredient demand estimation until restored.';
+      tooltip = 'Removed from the active product list. Excluded from forecasting and ingredient demand estimation. Historical data is retained. Can be restored by the owner.';
     } else if (isUnmapped) {
       label = 'Unmapped';
       className = 'status-unmapped';
       dotColor = '#9ca3af';
-      tooltip = 'No ingredient recipe configured. This product cannot be included in ingredient demand estimates or the shopping list. Add a recipe using the Edit button.';
+      if (!isActive && isNew) {
+        tooltip = 'Requires a recipe and at least 28 days of sales data before forecasting is available.';
+      } else if (!isActive && isDiscontinued) {
+        tooltip = 'No sales for 28+ days. Requires a recipe. Excluded from forecasting until sales resume.';
+      } else {
+        tooltip = 'No ingredient recipe configured. Included in forecasting but excluded from ingredient demand estimation, automatic stock deduction, and COGS/food cost calculation. Add a recipe using the Edit button.';
+      }
     } else if (isLowMargin && hasIngredients) {
       label = 'High Food Cost';
       className = 'status-low-margin';
       dotColor = '#ec4899';
+      tooltip = 'COGS and food cost are calculated. Food cost exceeds the warning threshold. Consider adjusting price or reducing ingredient costs.';
       tooltip = `This product's Food Cost Percentage is above ${foodCostThreshold}%. Consider adjusting price or reducing ingredient costs.`;
     } else if (!isActive && isDiscontinued) {
       label = 'Discontinued';
       className = 'status-discontinued';
       dotColor = '#dc2626';
-      tooltip = 'No sales recorded in 28 days. Excluded from forecasting until sales resume.';
+      tooltip = 'No sales for 28+ days. Excluded from forecasting and automatic stock deduction until sales resume. Historical data is retained.';
     } else if (!isActive && isNew) {
       label = 'INACTIVE (NEW)';
       className = 'status-inactive-new';
       dotColor = '#f59e0b';
-      tooltip = 'New product detected. Forecast will be available after 28 days of sales data.';
+      if (hasIngredients) {
+        tooltip = 'New product. COGS and food cost are calculated. Forecasting will be available after 28 days of sales data.';
+      } else {
+        tooltip = 'New product. Requires a recipe and at least 28 days of sales data before forecasting is available.';
+      }
     } else if (!isActive) {
       label = 'INACTIVE';
       className = 'status-inactive';
       dotColor = '#6b7280';
-      tooltip = 'Product is inactive.';
+      tooltip = 'Product is inactive. Excluded from forecasting until reactivated.';
     }
 
     return { label, className, dotColor, tooltip, isActive, isArchived, isUnmapped, isLowMargin, isNew, isDiscontinued };
@@ -1416,16 +1430,22 @@ const ProductManagement = () => {
                       <td>{totalIngredientCost === null ? 'N/A' : formatCurrency(totalIngredientCost)}</td>
                       <td>
                         <div className="status-pill-group">
-                          <span className={`product-status-badge ${status.className}`}>
-                            <span className="product-status-dot" style={{ backgroundColor: status.dotColor }}></span>
-                            {status.label}
-                          </span>
-                          {status.isUnmapped || status.isLowMargin || !status.isActive ? (
-                            <span className="status-info-wrapper" title={status.tooltip}>
-                              <FaInfoCircle size={12} className="status-info-icon" />
-                              <span className="status-tooltip">{status.tooltip}</span>
+                          <Tippy
+                            content={status.tooltip}
+                            placement="top"
+                            animation="scale"
+                            duration={200}
+                            theme="dark"
+                            arrow
+                            trigger="mouseenter focus"
+                            appendTo={() => document.body}
+                            zIndex={100000}
+                          >
+                            <span className={`product-status-badge ${status.className}`} tabIndex={0} style={{ cursor: 'help' }}>
+                              <span className="product-status-dot" style={{ backgroundColor: status.dotColor }}></span>
+                              {status.label}
                             </span>
-                          ) : null}
+                          </Tippy>
                         </div>
                       </td>
                       <td>{formatDate(item.created_at)}</td>
@@ -1603,52 +1623,50 @@ const ProductManagement = () => {
             </div>
 
             <div className="modal-body">
-              <div className="form-row">
-                <div className="form-group">
-                  <label className="form-label">Product Name <span className="required-star">*</span></label>
-                  <input
-                    type="text"
-                    placeholder="Enter product name"
-                    value={formData.productName}
-                    onChange={(e) => {
-                      if (!isViewMode) {
-                        setFormData({...formData, productName: e.target.value});
-                        if (formErrors.productName) {
-                          setFormErrors({...formErrors, productName: ""});
-                        }
+              <div className="form-group">
+                <label className="form-label">Product Name <span className="required-star">*</span></label>
+                <input
+                  type="text"
+                  placeholder="Enter product name"
+                  value={formData.productName}
+                  onChange={(e) => {
+                    if (!isViewMode) {
+                      setFormData({...formData, productName: e.target.value});
+                      if (formErrors.productName) {
+                        setFormErrors({...formErrors, productName: ""});
                       }
-                    }}
-                    readOnly={isViewMode}
-                    className={`form-input ${formErrors.productName ? 'error' : ''} ${isViewMode ? 'readonly' : ''}`}
-                  />
-                  {formErrors.productName && (
-                    <span className="error-text">{formErrors.productName}</span>
-                  )}
-                </div>
+                    }
+                  }}
+                  readOnly={isViewMode}
+                  className={`form-input ${formErrors.productName ? 'error' : ''} ${isViewMode ? 'readonly' : ''}`}
+                />
+                {formErrors.productName && (
+                  <span className="error-text">{formErrors.productName}</span>
+                )}
+              </div>
 
-                <div className="form-group">
-                  <label className="form-label">Price <span className="required-star">*</span></label>
-                  <input
-                    type="number"
-                    placeholder="Enter product price"
-                    value={formData.price}
-                    onChange={(e) => {
-                      if (!isViewMode) {
-                        setFormData({...formData, price: e.target.value});
-                        if (formErrors.price) {
-                          setFormErrors({...formErrors, price: ""});
-                        }
+              <div className="form-group">
+                <label className="form-label">Price <span className="required-star">*</span></label>
+                <input
+                  type="number"
+                  placeholder="Enter product price"
+                  value={formData.price}
+                  onChange={(e) => {
+                    if (!isViewMode) {
+                      setFormData({...formData, price: e.target.value});
+                      if (formErrors.price) {
+                        setFormErrors({...formErrors, price: ""});
                       }
-                    }}
-                    readOnly={isViewMode}
-                    step="0.01"
-                    min="0.01"
-                    className={`form-input ${formErrors.price ? 'error' : ''} ${isViewMode ? 'readonly' : ''}`}
-                  />
-                  {formErrors.price && (
-                    <span className="error-text">{formErrors.price}</span>
-                  )}
-                </div>
+                    }
+                  }}
+                  readOnly={isViewMode}
+                  step="0.01"
+                  min="0.01"
+                  className={`form-input ${formErrors.price ? 'error' : ''} ${isViewMode ? 'readonly' : ''}`}
+                />
+                {formErrors.price && (
+                  <span className="error-text">{formErrors.price}</span>
+                )}
               </div>
 
               <div className="form-group">
@@ -1681,22 +1699,6 @@ const ProductManagement = () => {
                 {formErrors.category && (
                   <span className="error-text">{formErrors.category}</span>
                 )}
-              </div>
-
-              <div className="form-group">
-                <label className="form-label">Serving Size Label</label>
-                <input
-                  type="text"
-                  placeholder="e.g., serving, kg, pcs, L"
-                  value={formData.servingSize}
-                  onChange={(e) => {
-                    if (!isViewMode) {
-                      setFormData({...formData, servingSize: e.target.value});
-                    }
-                  }}
-                  readOnly={isViewMode}
-                  className={`form-input ${isViewMode ? 'readonly' : ''}`}
-                />
               </div>
 
               <div className="form-group">

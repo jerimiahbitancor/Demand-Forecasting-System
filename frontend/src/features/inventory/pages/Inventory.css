@@ -170,7 +170,7 @@
 
   .inventory-table th {
     padding: 12px 16px;
-    text-align: left;
+    text-align: center;
     font-weight: 600;
     color: #6b7280;
     font-size: 12px;
@@ -1749,6 +1749,17 @@
   max-width: 360px;
 }
 
+.market-price-chart-hint {
+  margin-top: 10px;
+  padding: 10px 12px;
+  background: #fffbeb;
+  border: 1px solid #fde68a;
+  color: #92400e;
+  border-radius: 8px;
+  font-size: 12.5px;
+  line-height: 1.5;
+}
+
 .market-price-insights {
   margin-top: 10px;
   padding: 10px 12px;
@@ -1872,6 +1883,13 @@
 .inventory-table.market-table td:nth-child(13) {
   width: 120px;
   text-align: left;
+}
+
+/* Center every market price table header; the td below keep their own alignment */
+.inventory-table.market-table th:nth-child(n+5):nth-child(-n+11),
+.inventory-table.market-table th:nth-child(1),
+.inventory-table.market-table th:nth-child(13) {
+  text-align: center;
 }
 
 /* Market Price modal - compact height */

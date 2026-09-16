@@ -36,7 +36,7 @@ const TABLES = [
   'business_days',
   'product_classifications',
   'notifications',
-  'system_actions_log',
+  'audit_logs',
   'user'
 ];
 

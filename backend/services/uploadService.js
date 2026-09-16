@@ -571,11 +571,10 @@ class UploadService {
               .update({ category: normalizedCategory })
               .eq('id', productId);
 
-            if (categoryUpdateError) {
-              throw categoryUpdateError;
-            }
-          }
+        if (categoryUpdateError) {
+          throw categoryUpdateError;
         }
+      }
 
         const selectedProductIds = [...productIds];
         if (selectedProductIds.length === 0) {
@@ -594,15 +593,15 @@ class UploadService {
           throw productFetchError || salesFetchError;
         }
 
-        // Only active products with a mapped recipe deduct stock automatically.
-        const activeProductIds = new Set(
-          (productRows || []).filter((product) => product.is_active === true).map((product) => product.id)
-        );
-        if (activeProductIds.size > 0) {
-          const { data: recipeRows, error: recipeError } = await supabaseAdmin
-            .from('product_ingredients')
-            .select('product_id, ingredient_id, quantity_per_serving')
-            .in('product_id', [...activeProductIds]);
+      // Only active products with a mapped recipe deduct stock automatically.
+      const activeProductIds = new Set(
+        (productRows || []).filter((product) => product.is_active === true).map((product) => product.id)
+      );
+      if (activeProductIds.size > 0) {
+        const { data: recipeRows, error: recipeError } = await supabaseAdmin
+          .from('product_ingredients')
+          .select('product_id, ingredient_id, quantity_per_serving')
+          .in('product_id', [...activeProductIds]);
 
           if (recipeError) throw recipeError;
 
@@ -655,73 +654,38 @@ class UploadService {
                 created_by: numericId
               });
 
-            if (transactionError) throw transactionError;
-          }
+          if (transactionError) throw transactionError;
         }
+      }
 
-        const salesByProductId = new Map();
-        for (const sale of salesRows || []) {
-          const dates = salesByProductId.get(sale.product_id) || [];
-          dates.push(sale.sale_date);
-          salesByProductId.set(sale.product_id, dates);
-        }
+      const salesByProductId = new Map();
+      for (const sale of salesRows || []) {
+        const dates = salesByProductId.get(sale.product_id) || [];
+        dates.push(sale.sale_date);
+        salesByProductId.set(sale.product_id, dates);
+      }
 
-        // Skip products whose status doesn't actually change (the common
-        // case) — a no-op check against fields already in memory from
-        // productRows above. (productsUpdated means "products whose status
-        // actually changed," not "products touched" — a more accurate
-        // number for the upload summary shown to the owner.)
-        //
-        // Per-row .update(), not a batched .upsert(rows, {onConflict:
-        // 'id'}) — see the matching comment on the category-backfill step
-        // above for why: that exact upsert pattern was observed to take
-        // the INSERT branch under concurrent uploads for a product id that
-        // demonstrably already existed, violating a NOT NULL constraint on
-        // a column this payload never intended to set. Every id here comes
-        // from productRows, fetched earlier in this same function, so a
-        // plain update is correct and can't hit that failure mode.
-        for (const product of productRows || []) {
-          const productSales = salesByProductId.get(product.id) || [];
+      for (const product of productRows || []) {
+        const productSales = salesByProductId.get(product.id) || [];
 
-          const firstSoldDate = productSales[0] || product.first_sold_date || null;
-          const lastSoldDate = productSales[productSales.length - 1] || firstSoldDate || null;
-          const status = deriveProductStatus({
-            firstSoldDate: firstSoldDate || null,
-            lastSoldDate: lastSoldDate || null,
-            createdAt: product.created_at || null,
-            isActive: Boolean(product.is_active),
-            inactiveReason: product.inactive_reason
-          });
+        const firstSoldDate = productSales[0] || product.first_sold_date || null;
+        const lastSoldDate = productSales[productSales.length - 1] || firstSoldDate || null;
+        const status = deriveProductStatus({
+          firstSoldDate: firstSoldDate || null,
+          lastSoldDate: lastSoldDate || null,
+          createdAt: product.created_at || null,
+          isActive: Boolean(product.is_active),
+          inactiveReason: product.inactive_reason
+        });
 
-          // is_active is a GENERATED column (derived from status) — writing
-          // it directly throws Postgres error 428C9. deriveProductStatus()
-          // returns a short display code ('active'/'new'/'inactive'/
-          // 'archived') that doesn't match the products.status DB enum, so
-          // translate through the shared map before writing.
-          const dbStatus = PRODUCT_DB_STATUS_BY_DERIVED[status.status];
-
-          const nextFirstSoldDate = firstSoldDate ? firstSoldDate.slice(0, 10) : null;
-          const nextInactiveReason = status.note || null;
-          const nextInactiveSince = status.isActive
-            ? null
-            : (product.inactive_since || new Date().toISOString().slice(0, 10));
-
-          const unchanged = (product.first_sold_date || null) === nextFirstSoldDate
-            && product.status === dbStatus
-            && (product.inactive_reason || null) === nextInactiveReason
-            && (product.inactive_since || null) === nextInactiveSince;
-
-          if (unchanged) continue;
-
-          const { error: statusUpdateError } = await supabaseAdmin
-            .from('products')
-            .update({
-              first_sold_date: nextFirstSoldDate,
-              status: dbStatus,
-              inactive_reason: nextInactiveReason,
-              inactive_since: nextInactiveSince
-            })
-            .eq('id', product.id);
+        const { error: updateError } = await supabaseAdmin.from('products')
+          .update({
+            first_sold_date: firstSoldDate ? firstSoldDate.slice(0, 10) : null,
+            is_active: status.isActive,
+            inactive_reason: status.note || null,
+            inactive_since: status.isActive ? null : (product.inactive_since || new Date().toISOString().slice(0, 10))
+          })
+          .eq('id', product.id);
 
           if (statusUpdateError) throw statusUpdateError;
           productsUpdated += 1;

@@ -748,6 +748,94 @@ class MappingService {
     }
   }
 
+  // Called after sales/menu uploads so products are re-evaluated using the
+  // freshest sales history. Products whose derived status changed get their
+  // DB flags updated; the frontend session cache is cleared so the next
+  // request reflects the corrected statuses.
+  async reconcileProductActivation(userId) {
+    try {
+      const numericId = await this.getNumericUserId(userId);
+      if (!numericId) return 0;
+
+      if (!this.isSupabaseReady()) {
+        this.clearSession(numericId);
+        return 0;
+      }
+
+      const { data: products, error } = await supabaseAdmin
+        .from('products')
+        .select('id, is_active, inactive_reason, inactive_since, created_at, first_sold_date');
+      if (error) throw error;
+      if (!products?.length) {
+        this.clearSession(numericId);
+        return 0;
+      }
+
+      const productIds = products.map((p) => p.id);
+      const { data: sales, error: salesError } = await supabaseAdmin
+        .from('daily_sales')
+        .select('product_id, sale_date')
+        .in('product_id', productIds);
+      if (salesError) throw salesError;
+
+      const salesByProduct = new Map();
+      for (const s of sales || []) {
+        const dates = salesByProduct.get(s.product_id) || [];
+        dates.push(s.sale_date);
+        salesByProduct.set(s.product_id, dates);
+      }
+
+      let updated = 0;
+      for (const p of products) {
+        const dates = salesByProduct.get(p.id) || [];
+        const firstSoldDate = dates[0] || p.first_sold_date || null;
+        const lastSoldDate = dates.at(-1) || firstSoldDate || null;
+
+        const sd = deriveProductStatus({
+          firstSoldDate,
+          lastSoldDate,
+          createdAt: p.created_at,
+          isActive: Boolean(p.is_active),
+          inactiveReason: p.inactive_reason
+        });
+
+        const reasonField = sd.isArchived
+          ? (p.inactive_reason || sd.note)
+          : (sd.isActive ? null : (sd.note || null));
+        const inactiveSince = sd.isActive
+          ? null
+          : (p.inactive_since || new Date().toISOString().slice(0, 10));
+        const firstSold = firstSoldDate ? firstSoldDate.slice(0, 10) : null;
+
+        const changed =
+          Boolean(p.is_active) !== sd.isActive ||
+          (p.inactive_reason || null) !== (reasonField || null) ||
+          (!sd.isActive && p.inactive_since !== inactiveSince) ||
+          (p.first_sold_date || null) !== firstSold;
+
+        if (!changed) continue;
+
+        const { error: updateErr } = await supabaseAdmin
+          .from('products')
+          .update({
+            first_sold_date: firstSold,
+            is_active: sd.isActive,
+            inactive_reason: reasonField,
+            inactive_since: inactiveSince
+          })
+          .eq('id', p.id);
+
+        if (!updateErr) updated += 1;
+      }
+
+      this.clearSession(numericId);
+      return updated;
+    } catch (error) {
+      console.error('Error reconciling product activation:', error);
+      return 0;
+    }
+  }
+
   getAllowedArchiveReasons() {
     return [
       'Discontinued product',
