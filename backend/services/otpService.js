@@ -160,7 +160,7 @@ const storeOTP = async (userId, email, otp, type) => {
   }
 
   // ✅ Then insert or upsert the NEW OTP (avoid unique constraint on user_id)
-  const { data: upsertData, error: upsertError } = await supabaseAdmin
+  const { error: upsertError } = await supabaseAdmin
     .from(table)
     .upsert(
       {
@@ -180,9 +180,7 @@ const storeOTP = async (userId, email, otp, type) => {
     throw upsertError;
   }
 
-  console.log('Upsert result:', { table, upsertData });
-
-  console.log('✅ New OTP stored for user:', userId, 'OTP:', otp);
+  console.log('✅ New OTP stored for user:', userId, 'table:', table);
   return { success: true };
 };
 

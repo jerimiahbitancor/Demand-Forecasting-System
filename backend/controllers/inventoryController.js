@@ -443,7 +443,22 @@ const deleteInventoryItem = async (req, res) => {
       .delete()
       .eq('id', id);
 
-    if (error) throw error;
+    if (error) {
+      // 23503 = FK violation: this ingredient is still referenced by a
+      // recipe (product_ingredients) or a stock movement
+      // (inventory_transactions), both ON DELETE RESTRICT. A hard delete
+      // here would otherwise surface as an unhandled 500 — tell the
+      // caller what actually happened and point at the existing archive
+      // action instead of leaving orphaned references or a confusing error.
+      if (error.code === '23503') {
+        return res.status(409).json({
+          success: false,
+          error: 'Ingredient is in use',
+          message: 'This ingredient is used in a recipe or has stock history and cannot be deleted. Archive it instead.'
+        });
+      }
+      throw error;
+    }
 
     await logAction(
       'item_deleted',

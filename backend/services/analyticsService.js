@@ -9,6 +9,12 @@
 // display, since ml-service never exposes an HTTP API of its own for
 // Express to call read-only.
 const { supabaseAdmin } = require('../config/supabase');
+const dayjs = require('dayjs');
+const utc = require('dayjs/plugin/utc');
+const timezone = require('dayjs/plugin/timezone');
+dayjs.extend(utc);
+dayjs.extend(timezone);
+const PH_TZ = 'Asia/Manila';
 
 // Critical <50%, Low <100%, Normal 100-200%, Excess >200% of forecasted
 // demand — locked thresholds, matches ml-service/services/business_logic.py's
@@ -65,17 +71,23 @@ const FEATURE_LABELS = {
   rolling_14: 'Rolling Average (14 days)',
 };
 
+// The business operates on PH local time (see otpService.js/uploadService.js),
+// but this file used to derive "today" via `new Date().toISOString().slice(0,10)`
+// — the UTC calendar date. Render's server clock runs in UTC, so anywhere
+// from midnight to ~7:59 AM PH time, the UTC date is still the *previous*
+// day: "today's forecast" / "yesterday's sales" would silently read one
+// business day stale during that window. Anchoring on dayjs().tz(PH_TZ)
+// instead makes every date-only value in this file agree with the
+// business's actual calendar day.
 function toDateOnly(d) {
-  return d.toISOString().slice(0, 10);
+  return dayjs(d).tz(PH_TZ).format('YYYY-MM-DD');
 }
 
 function defaultDateRange(daysBack = 30, daysForward = 7) {
-  const today = new Date();
-  const from = new Date(today);
-  from.setDate(from.getDate() - daysBack);
-  const to = new Date(today);
-  to.setDate(to.getDate() + daysForward);
-  return { from: toDateOnly(from), to: toDateOnly(to), today: toDateOnly(today) };
+  const today = dayjs().tz(PH_TZ);
+  const from = today.subtract(daysBack, 'day');
+  const to = today.add(daysForward, 'day');
+  return { from: from.format('YYYY-MM-DD'), to: to.format('YYYY-MM-DD'), today: today.format('YYYY-MM-DD') };
 }
 
 // Next daily 9:00 AM forecast-refresh run, per the system module doc's
@@ -694,7 +706,7 @@ async function getIngredientDemandAnalytics({ date, weekStart } = {}) {
 // ---------------------------------------------------------------------
 async function getForecastSummary() {
   const today = defaultDateRange().today;
-  const yesterday = toDateOnly(new Date(Date.now() - 86400000));
+  const yesterday = dayjs().tz(PH_TZ).subtract(1, 'day').format('YYYY-MM-DD');
   const safetyBufferPct = await getSafetyBufferPercentage();
   const bufferMultiplier = 1 + safetyBufferPct / 100;
 

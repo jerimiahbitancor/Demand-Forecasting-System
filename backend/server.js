@@ -1,8 +1,18 @@
 // server.js
-const express = require('express');
-const cors = require('cors');
 const dotenv = require('dotenv');
 const path = require('path');
+
+// Load environment variables FIRST, before any route/service module is
+// required below — several of those modules read process.env at their own
+// top level (e.g. config/supabase.js). This worked by accident before
+// because config/supabase.js happened to call its own dotenv.config()
+// early enough in the require chain, but any module that reads env vars
+// without going through that file first would have silently gotten
+// undefined values. Loading env here removes that ordering dependency.
+dotenv.config({ path: path.join(__dirname, '.env') });
+
+const express = require('express');
+const cors = require('cors');
 const helmet = require('helmet');
 const rateLimit = require('express-rate-limit');
 
@@ -23,9 +33,6 @@ const analyticsRoutes = require('./routes/analytics');
 const forecastSummaryRoutes = require('./routes/forecastSummary');
 const marketPriceRoutes = require('./routes/marketPrice');
 const auditRoutes = require('./routes/audit');
-
-// Load environment variables
-dotenv.config({ path: path.join(__dirname, '.env') });
 
 const app = express();
 const PORT = process.env.PORT || 5000;

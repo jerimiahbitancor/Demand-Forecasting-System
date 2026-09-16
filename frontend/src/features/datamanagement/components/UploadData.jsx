@@ -1,5 +1,5 @@
 // components/UploadData.jsx
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   FiUploadCloud,
   FiAlertCircle,
@@ -19,20 +19,41 @@ import { useAuth } from "../../../context/AuthContext";
 
 const BULK_UPLOAD_STATUS_KEY = 'bulk_upload_status';
 
+// Plain, non-mutating read — just what's currently in storage, no
+// "is this stale" judgment. Safe to call on every tick of the 500ms
+// polling interval (see syncUploadStatus below), including while a real
+// upload is actively in progress and genuinely, correctly 'loading'.
+const peekStoredUploadStatus = (type) => {
+  try {
+    const stored = JSON.parse(sessionStorage.getItem(BULK_UPLOAD_STATUS_KEY) || '{}');
+    return stored[type] || null;
+  } catch {
+    return null;
+  }
+};
+
+// Mount-time-only recovery: a page load/refresh always destroys whatever
+// request was actually in flight — there is no way an upload can
+// genuinely still be "loading" by the time a *fresh* component mount
+// reads this. Trusting a persisted 'loading' status in that case
+// permanently disables the upload button (its `disabled` check includes
+// `status === 'loading'`) and nothing will ever resolve it back to
+// 'success'/'error', because the request that would have done that no
+// longer exists.
+//
+// This must NEVER be called from the recurring 500ms polling interval —
+// it used to be, and that meant every poll tick during a real, currently
+// uploading request (which writes 'loading' to storage many times over
+// its lifetime, via saveUploadStatus) got "corrected" to 'error' and
+// written back, flashing a false "Upload failed" mid-upload before the
+// real completion state landed a moment later. Call this only from the
+// one-time useState initializers below; use peekStoredUploadStatus for
+// anything that runs repeatedly.
 const getStoredUploadStatus = (type) => {
   try {
     const stored = JSON.parse(sessionStorage.getItem(BULK_UPLOAD_STATUS_KEY) || '{}');
     const status = stored[type] || null;
 
-    // A page load/refresh always destroys whatever request was actually in
-    // flight — there is no way an upload can genuinely still be "loading"
-    // by the time this runs again. Trusting a persisted 'loading' status
-    // permanently disables the upload button (its `disabled` check
-    // includes `status === 'loading'`) and NOTHING will ever resolve it
-    // back to 'success'/'error', because the request that would have done
-    // that no longer exists. Also polled every 500ms (see the
-    // syncUploadStatus interval) so this can't self-heal on its own —
-    // correct it here, once, at the source both readers share.
     if (status && status.status === 'loading') {
       const corrected = { ...status, status: 'error' };
       stored[type] = corrected;
@@ -143,6 +164,17 @@ const UploadData = ({
 }) => {
   const { getToken, checkUploadStatus } = useAuth();
 
+  // Synchronous re-entrancy locks for the confirm handlers below. The
+  // `disabled` button state (salesUploadStatus/menuUploadStatus) is React
+  // state — it only takes effect on the next render, not immediately — so
+  // a fast double-click can invoke the handler twice before the button
+  // visually disables. Both concurrent calls would then upload the same
+  // files, racing to insert the same (product_id, sale_date) rows in
+  // daily_sales. A ref is checked/set synchronously, so the second call
+  // bails out before doing any work.
+  const salesSubmittingRef = useRef(false);
+  const menuSubmittingRef = useRef(false);
+
   // Sales upload state - MULTIPLE FILES
   const [salesFiles, setSalesFiles] = useState(() => getStoredFiles('sales'));
   const [isSalesDragging, setIsSalesDragging] = useState(false);
@@ -184,8 +216,8 @@ const UploadData = ({
 
   useEffect(() => {
     const syncUploadStatus = () => {
-      const salesStatus = getStoredUploadStatus('sales');
-      const menuStatus = getStoredUploadStatus('menu');
+      const salesStatus = peekStoredUploadStatus('sales');
+      const menuStatus = peekStoredUploadStatus('menu');
 
       if (salesStatus) {
         setSalesUploadStatus(salesStatus.status || null);
@@ -665,7 +697,10 @@ const UploadData = ({
       setSalesToastId(id);
       return;
     }
-    
+
+    if (salesSubmittingRef.current) return;
+    salesSubmittingRef.current = true;
+
     try {
       setSalesUploadStatus('loading');
       setSalesProgress(0);
@@ -851,6 +886,8 @@ const UploadData = ({
         setSalesUploadStatus(null);
         setSalesProcessingIndices(new Set());
       }, 3000);
+    } finally {
+      salesSubmittingRef.current = false;
     }
   };
 
@@ -1040,7 +1077,10 @@ const UploadData = ({
       setMenuToastId(id);
       return;
     }
-    
+
+    if (menuSubmittingRef.current) return;
+    menuSubmittingRef.current = true;
+
     try {
       setMenuUploadStatus('loading');
       setMenuProgress(0);
@@ -1193,6 +1233,8 @@ const UploadData = ({
         setMenuUploadStatus(null);
         setMenuProcessingIndices(new Set());
       }, 3000);
+    } finally {
+      menuSubmittingRef.current = false;
     }
   };
 

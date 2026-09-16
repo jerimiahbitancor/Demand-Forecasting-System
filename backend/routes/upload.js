@@ -350,14 +350,30 @@ router.post(
       }
       
       if (error.message && error.message.includes('already been uploaded')) {
-        return res.status(409).json({ 
+        return res.status(409).json({
           success: false,
           error: 'Duplicate upload',
-          details: error.message 
+          details: error.message
         });
       }
-      
-      res.status(500).json({ 
+
+      // Postgres unique violation on daily_sales(product_id, sale_date) —
+      // a genuine data conflict (this date was already uploaded for this
+      // product), never transient. Returning a plain 500 here makes the
+      // frontend's withTransientRetry retry it twice, pointlessly, since
+      // the conflicting row never goes away. A clean 409 with a
+      // `message` field matches the shape the frontend's 409 handler
+      // already reads (see UploadData.jsx's `underlying.response?.data?.message`).
+      if (error.code === '23505' && /daily_sales/i.test(error.message || error.details || '')) {
+        return res.status(409).json({
+          success: false,
+          error: 'Duplicate sales data',
+          message: 'Some rows in this file duplicate dates already uploaded for the same product. Please remove or correct those rows before re-uploading.',
+          details: error.message
+        });
+      }
+
+      res.status(500).json({
         success: false,
         error: 'Failed to process upload',
         details: error.message 

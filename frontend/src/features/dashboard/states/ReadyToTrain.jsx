@@ -87,18 +87,27 @@ const ReadyToTrain = () => {
 
   const handleStartTraining = async () => {
     setIsStarting(true);
+    // This POST doesn't resolve until training finishes server-side —
+    // don't wait on it to navigate. Dashboard.jsx polls
+    // /upload/dashboard-state every 5s and will pick up
+    // 'training-in-progress' as soon as the in-flight flag flips, well
+    // before this promise itself settles.
+    //
+    // The toast used to be unconditional: "Training started" fired
+    // immediately, before the request even reached the server, so a
+    // same-instant rejection (e.g. the upload-not-finished 409) showed
+    // its own error toast stacked right on top of a "started" toast that
+    // was never true. Using one toast id for the whole lifecycle means
+    // there's only ever one message on screen, and it only ever claims
+    // "started" once the server has actually accepted the request.
+    const toastId = toast.loading("Starting training…");
     try {
-      // This POST doesn't resolve until training finishes server-side —
-      // don't wait on it to navigate. Dashboard.jsx polls
-      // /upload/dashboard-state every 5s and will pick up
-      // 'training-in-progress' as soon as the in-flight flag flips,
-      // well before this promise itself settles.
-      axios.post(`${API_URL}/ml/train`, {}, {
+      await axios.post(`${API_URL}/ml/train`, {}, {
         headers: { Authorization: `Bearer ${getAuthToken()}` },
-      }).catch((err) => {
-        toast.error(err.response?.data?.error || "Training failed to start");
       });
-      toast.success("Training started — this can take a few minutes.");
+      toast.success("Training completed successfully.", { id: toastId });
+    } catch (err) {
+      toast.error(err.response?.data?.error || "Training failed to start", { id: toastId });
     } finally {
       setIsStarting(false);
     }
