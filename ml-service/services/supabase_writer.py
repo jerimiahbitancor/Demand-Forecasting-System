@@ -56,6 +56,7 @@ def write_model_metrics(model_version: str, metrics: dict):
         "mae": aggregate["mae"],
         "rmse": aggregate["rmse"],
         "notes": f"global model; worst products: {worst_summary}" if worst_summary else "global model",
+        "feature_importance": metrics.get("feature_importance"),
     }).execute()
 
 

@@ -781,6 +781,100 @@ class MappingService {
       return 0;
     }
   }
+
+  // Recomputes products.status (active / new / inactive / archived) for
+  // every product from real signals — first_sold_date, most recent
+  // daily_sales row, and inactive_reason — using the same
+  // deriveProductStatus() rule the rest of the codebase already reads
+  // (productStatusService.js, imported above). This was being CALLED
+  // after every upload (see routes/upload.js) but never actually
+  // existed on this class, so it threw and was silently swallowed by
+  // the caller's try/catch every single time — meaning products.status
+  // has effectively never been updated since whatever the one-time
+  // migration backfill set it to. Fixing it here, not just adding a
+  // stub, since anything reading products.status (training eligibility,
+  // the Product Status analytics panel, the Dashboard's "all active
+  // products have recipes" check) depends on it being real.
+  //
+  // Products are shared business data (no user_id column — see schema),
+  // so this recomputes status for ALL products; userId is accepted only
+  // for call-site compatibility with the existing upload.js callers.
+  async reconcileProductActivation(userId = null) {
+    if (!this.isSupabaseReady()) {
+      return { updated: 0 };
+    }
+
+    try {
+      const { data: products, error: productsError } = await supabaseAdmin
+        .from('products')
+        .select('id, first_sold_date, created_at, is_active, inactive_reason, status');
+
+      if (productsError) throw productsError;
+      if (!products || products.length === 0) {
+        return { updated: 0 };
+      }
+
+      const { data: salesRows, error: salesError } = await supabaseAdmin
+        .from('daily_sales')
+        .select('product_id, sale_date')
+        .order('sale_date', { ascending: false });
+
+      if (salesError) throw salesError;
+
+      // First row seen per product_id is its most recent sale, since the
+      // query above is already ordered sale_date descending.
+      const lastSoldDateByProduct = new Map();
+      for (const row of salesRows || []) {
+        if (!lastSoldDateByProduct.has(row.product_id)) {
+          lastSoldDateByProduct.set(row.product_id, row.sale_date);
+        }
+      }
+
+      // deriveProductStatus() returns a short display status ('active' |
+      // 'new' | 'inactive' | 'archived') used elsewhere purely for UI
+      // labels — it does NOT match the product_status DB enum, which
+      // only accepts 'active' | 'inactive_new' | 'inactive_discontinued'
+      // | 'archived'. Writing 'new'/'inactive' straight to the column
+      // would fail on every row, so translate before writing.
+      const DB_STATUS_BY_DERIVED = {
+        active: 'active',
+        new: 'inactive_new',
+        inactive: 'inactive_discontinued',
+        archived: 'archived',
+      };
+
+      const updates = [];
+      for (const product of products) {
+        const derived = deriveProductStatus({
+          firstSoldDate: product.first_sold_date,
+          lastSoldDate: lastSoldDateByProduct.get(product.id) || null,
+          createdAt: product.created_at,
+          isActive: product.is_active,
+          inactiveReason: product.inactive_reason,
+        });
+        const dbStatus = DB_STATUS_BY_DERIVED[derived.status];
+
+        if (dbStatus && dbStatus !== product.status) {
+          updates.push({ id: product.id, status: dbStatus });
+        }
+      }
+
+      for (const update of updates) {
+        const { error: updateError } = await supabaseAdmin
+          .from('products')
+          .update({ status: update.status })
+          .eq('id', update.id);
+        if (updateError) {
+          console.error(`Error updating status for product ${update.id}:`, updateError);
+        }
+      }
+
+      return { updated: updates.length, checked: products.length };
+    } catch (error) {
+      console.error('Error reconciling product activation:', error);
+      throw error;
+    }
+  }
 }
 
 module.exports = new MappingService();

@@ -84,6 +84,9 @@ const ProductManagement = () => {
   const [isSaving, setIsSaving] = useState(false);
   const [isArchiving, setIsArchiving] = useState(false);
   const [lastUpdated, setLastUpdated] = useState(null);
+  // Owner-configurable via Settings > Forecast Configuration (defaults
+  // to 35%, the settled spec value — see forecast_config.food_cost_warning_threshold).
+  const [foodCostThreshold, setFoodCostThreshold] = useState(35);
   
   const [mappingData, setMappingData] = useState([]);
   const [categories, setCategories] = useState(['All']);
@@ -184,6 +187,18 @@ const ProductManagement = () => {
     return client;
   }, [getToken]);
 
+  useEffect(() => {
+    let cancelled = false;
+    apiClient.get('/settings/forecast-config')
+      .then((response) => {
+        if (!cancelled && response.data.success && response.data.data.food_cost_warning_threshold != null) {
+          setFoodCostThreshold(response.data.data.food_cost_warning_threshold);
+        }
+      })
+      .catch((error) => console.error('Error fetching food cost threshold:', error));
+    return () => { cancelled = true; };
+  }, [apiClient]);
+
   // ============ UPDATE STATS ============
   const updateStats = useCallback((items) => {
     const total = items.length;
@@ -197,20 +212,20 @@ const ProductManagement = () => {
       const price = Number(item.price) || 0;
       const cogs = calculateProductCogs(item);
       const foodCostPercentage = price > 0 ? (cogs / price) * 100 : null;
-      return foodCostPercentage !== null && foodCostPercentage > 30;
+      return foodCostPercentage !== null && foodCostPercentage > foodCostThreshold;
     }).length;
-    
-    const unmappedProducts = items.filter(item => 
+
+    const unmappedProducts = items.filter(item =>
       !item.product_ingredients || item.product_ingredients.length === 0
     ).length;
-    
+
     setProductStats({
       total_menu_items: total,
       avg_cogs: avgCOGS,
       low_margin_products: lowMarginProducts,
       unmapped_products: unmappedProducts
     });
-  }, []);
+  }, [foodCostThreshold]);
 
   // ============ FETCH INVENTORY ITEMS FOR INGREDIENTS ============
   const fetchInventoryItems = useCallback(async () => {
@@ -788,7 +803,7 @@ const ProductManagement = () => {
     const price = product?.price || 0;
     const cogs = calculateProductCogs(product);
     const foodCostPercentage = cogs !== null && price > 0 ? (cogs / price) * 100 : null;
-    const warningThreshold = 30;
+    const warningThreshold = foodCostThreshold;
     const isLowMargin = foodCostPercentage !== null && foodCostPercentage > warningThreshold;
     const isUnmapped = !hasIngredients;
     
@@ -816,7 +831,7 @@ const ProductManagement = () => {
       label = 'High Food Cost';
       className = 'status-low-margin';
       dotColor = '#ec4899';
-      tooltip = 'This product has a profit margin below 30%. Consider adjusting price or reducing ingredient costs.';
+      tooltip = `This product's Food Cost Percentage is above ${foodCostThreshold}%. Consider adjusting price or reducing ingredient costs.`;
     } else if (!isActive && isDiscontinued) {
       label = 'Discontinued';
       className = 'status-discontinued';
@@ -953,7 +968,7 @@ const ProductManagement = () => {
   const highFoodCostItems = mappingData.filter(item => {
     const price = Number(item.price) || 0;
     const cogs = calculateProductCogs(item);
-    return cogs !== null && price > 0 && (cogs / price) * 100 > 30;
+    return cogs !== null && price > 0 && (cogs / price) * 100 > foodCostThreshold;
   });
 
   // Get sample data for tooltip
@@ -969,7 +984,10 @@ const ProductManagement = () => {
 
   const tooltipData = getTooltipData();
 
-  // Static high food cost examples for the tooltip
+  // Static high food cost examples for the tooltip — illustrative only,
+  // percentages recomputed from the sample numbers so the copy stays
+  // internally consistent (Food Cost % = COGS / Selling Price × 100,
+  // not the old "profit margin" framing this used to use).
   const lowMarginTooltipData = [
     {
       name: 'Breaded Porkchop',
@@ -977,7 +995,7 @@ const ProductManagement = () => {
       ingredientCost: 62,
       profit: 17,
       margin: 21,
-      description: "Only ₱17 stays with you after ingredients. Below 30% threshold."
+      description: `Food Cost Percentage is 78% — above the ${foodCostThreshold}% threshold. Only ₱17 stays with you after ingredients.`
     },
     {
       name: 'Adobo',
@@ -985,7 +1003,7 @@ const ProductManagement = () => {
       ingredientCost: 88,
       profit: 22,
       margin: 20,
-      description: "Sells for ₱110 but ingredients cost ₱88. Very little profit left. Below 30% threshold."
+      description: `Food Cost Percentage is 80% — above the ${foodCostThreshold}% threshold. Very little profit left after ingredient cost.`
     }
   ];
 
@@ -1150,7 +1168,7 @@ const ProductManagement = () => {
                           <span className="tooltip-item-value margin-low">21%</span>
                         </div>
                         <div className="tooltip-item-description">
-                          Only ₱17 stays with you after ingredients. Below 30% threshold.
+                          Only ₱17 stays with you after ingredients. Food cost is above the {foodCostThreshold}% threshold.
                         </div>
                       </div>
 
@@ -1182,7 +1200,7 @@ const ProductManagement = () => {
                           <span className="tooltip-item-value margin-low">20%</span>
                         </div>
                         <div className="tooltip-item-description">
-                          Sells for ₱110 but ingredients cost ₱88. Very little profit left. Below 30% threshold.
+                          Sells for ₱110 but ingredients cost ₱88. Very little profit left. Food cost is above the {foodCostThreshold}% threshold.
                         </div>
                       </div>
 
@@ -1230,7 +1248,7 @@ const ProductManagement = () => {
                 {highFoodCostItems.length}
               </span>
             </div>
-            <p className="product-stat-card-change">Below 30% profit margin</p>
+            <p className="product-stat-card-change">Food cost above {foodCostThreshold}%</p>
           </div>
         </div>
 

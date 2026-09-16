@@ -70,12 +70,30 @@ async function checkHealth() {
   }
 }
 
+// POST /api/ml/train blocks synchronously until Flask's /train finishes
+// (no job queue) — there's otherwise no way for anything else (the
+// Dashboard state machine, TrainingInProgress.jsx's polling) to know
+// "training is actually running right now" versus just "an upload is
+// pending". This in-memory flag is the same pattern uploadService.js
+// already uses for processingUploads. It resets on an Express restart
+// mid-training, same tradeoff as that existing pattern — acceptable at
+// capstone/single-owner scale, not something a multi-instance
+// deployment could rely on.
+let trainingInFlight = false;
+
+function isTrainingInFlight() {
+  return trainingInFlight;
+}
+
 // Manual-only, per the confirmed design — this function doesn't decide
 // WHETHER to train, it just calls /train. The "should we allow this
 // right now" checks (upload completeness, 12-month gate) live in the
 // route handler and inside ml-service's /train respectively.
 function train() {
-  return callMlService('/train', {});
+  trainingInFlight = true;
+  return callMlService('/train', {}).finally(() => {
+    trainingInFlight = false;
+  });
 }
 
 // horizonDays: 1 for the daily refresh, 7 for the weekly Monday run.
@@ -85,4 +103,4 @@ function forecast({ horizonDays = 1, runType } = {}) {
   return callMlService('/forecast', { horizon_days: horizonDays, run_type: runType });
 }
 
-module.exports = { train, forecast, checkHealth, MlServiceError };
+module.exports = { train, forecast, checkHealth, isTrainingInFlight, MlServiceError };

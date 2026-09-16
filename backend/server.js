@@ -19,6 +19,8 @@ const unitsRoutes = require('./routes/units');
 const productCategoriesRoutes = require('./routes/productCategories');
 const businessDaysRoutes = require('./routes/businessDays');
 const mlRoutes = require('./routes/ml');
+const analyticsRoutes = require('./routes/analytics');
+const forecastSummaryRoutes = require('./routes/forecastSummary');
 
 // Load environment variables
 dotenv.config({ path: path.join(__dirname, '.env') });
@@ -75,6 +77,8 @@ app.use('/api/units', unitsRoutes);
 app.use('/api/product-categories', productCategoriesRoutes);
 app.use('/api/business-days', businessDaysRoutes);
 app.use('/api/ml', mlRoutes);
+app.use('/api/analytics', analyticsRoutes);
+app.use('/api/forecast', forecastSummaryRoutes);
 
 // ============= HEALTH CHECK =============
 app.get('/health', (req, res) => {

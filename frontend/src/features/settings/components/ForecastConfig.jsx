@@ -14,6 +14,8 @@ const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:5000/api';
 function ForecastConfig() {
   const { getToken } = useAuth();
   const [value, setValue] = useState(15);
+  const [foodCostThreshold, setFoodCostThreshold] = useState(35);
+  const [isSavingConfig, setIsSavingConfig] = useState(false);
   const [thresholds, setThresholds] = useState({ critical: 50, low: 100, excess: 200 });
   const [categoryTab, setCategoryTab] = useState('ingredient');
   const [unitTab, setUnitTab] = useState('ingredient');
@@ -63,13 +65,43 @@ function ForecastConfig() {
     }
   };
 
+  const fetchForecastConfig = async () => {
+    try {
+      const response = await apiClient.get('/settings/forecast-config');
+      if (response.data.success) {
+        const config = response.data.data;
+        if (config.safety_buffer_percentage != null) setValue(config.safety_buffer_percentage);
+        if (config.food_cost_warning_threshold != null) setFoodCostThreshold(config.food_cost_warning_threshold);
+      }
+    } catch (error) {
+      console.error('Error fetching forecast config:', error);
+      // Keep the defaults (15%, 35%) — the config row may not exist yet.
+    }
+  };
+
   useEffect(() => {
     Promise.resolve().then(fetchManagementData);
+    Promise.resolve().then(fetchForecastConfig);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  const handleSaveConfig = () => {
-    toast('This feature is not yet implemented.');
+  const handleSaveConfig = async () => {
+    setIsSavingConfig(true);
+    try {
+      const response = await apiClient.post('/settings/forecast-config', {
+        safety_buffer_percentage: value,
+        food_cost_warning_threshold: foodCostThreshold,
+      });
+      if (response.data.success) {
+        toast.success('Forecast configuration saved.');
+      } else {
+        toast.error('Failed to save configuration.');
+      }
+    } catch (error) {
+      toast.error(error.response?.data?.error || 'Failed to save configuration.');
+    } finally {
+      setIsSavingConfig(false);
+    }
   };
 
   const handleSaveThresholds = () => {
@@ -195,11 +227,79 @@ function ForecastConfig() {
             </div>
           </div>
 
-          <button 
-            className="fc-save" 
+          <button
+            className="fc-save"
             onClick={handleSaveConfig}
+            disabled={isSavingConfig}
           >
-            SAVE CONFIGURATION
+            {isSavingConfig ? 'SAVING…' : 'SAVE CONFIGURATION'}
+          </button>
+        </div>
+
+        <div className="fc-card fc-left">
+          <div className="fc-title-row">
+            <h2 className="fc-title">High Food Cost Warning Threshold</h2>
+            <Tippy
+              content={(
+                <div className="fc-tooltip-content">
+                  <strong>Food Cost Percentage = (COGS ÷ Selling Price) × 100</strong>
+                  <p>A product is flagged "High Food Cost" once its Food Cost Percentage
+                    exceeds this threshold — a warning indicator to review price, recipe,
+                    portion size, or sourcing, not an automatic profitability verdict.</p>
+                  <p><strong>Default:</strong> 35%</p>
+                </div>
+              )}
+              placement="top"
+              animation="scale"
+              duration={200}
+              theme="dark"
+              arrow={true}
+              delay={[100, 0]}
+              maxWidth={360}
+              interactive={true}
+              trigger="mouseenter focus click"
+            >
+              <button type="button" className="fc-info-button" aria-label="Explain food cost threshold">
+                <FiInfo aria-hidden="true" />
+              </button>
+            </Tippy>
+          </div>
+          <div className="fc-desc-card">
+            <strong>Description:</strong> Products whose ingredient cost exceeds this percentage
+            of their selling price are flagged in Inventory Management &gt; Product Management.
+          </div>
+
+          <div className="fc-control-card">
+            <div className="fc-slider-row">
+              <div className="fc-slider-value-row">
+                <div className="fc-percent">[{foodCostThreshold}%]</div>
+                <input
+                  className="fc-slider"
+                  type="range"
+                  min="1"
+                  max="100"
+                  value={foodCostThreshold}
+                  onChange={(e) => setFoodCostThreshold(Number(e.target.value))}
+                />
+                <div className="fc-adjust-controls">
+                  <button type="button" onClick={() => setFoodCostThreshold(Math.min(100, foodCostThreshold + 1))} aria-label="Increase food cost threshold">+</button>
+                  <button type="button" onClick={() => setFoodCostThreshold(Math.max(1, foodCostThreshold - 1))} aria-label="Decrease food cost threshold">-</button>
+                </div>
+              </div>
+              <div className="fc-scale">
+                <span>0%</span>
+                <span>50%</span>
+                <span>100%</span>
+              </div>
+            </div>
+          </div>
+
+          <button
+            className="fc-save"
+            onClick={handleSaveConfig}
+            disabled={isSavingConfig}
+          >
+            {isSavingConfig ? 'SAVING…' : 'SAVE CONFIGURATION'}
           </button>
         </div>
 
