@@ -1186,7 +1186,10 @@ class UploadService {
           pending: filtered.filter((upload) => upload.status === 'pending').length,
           failed: filtered.filter((upload) => upload.status === 'failed').length,
           sales_records: filtered.reduce((sum, upload) => sum + (upload.row_count || 0), 0),
-          months_uploaded: Math.min(filtered.length, 12),
+          days_of_history: 0,
+          months_uploaded: 0,
+          actual_days_uploaded: 0,
+          actual_months_uploaded: 0,
           menu_items: this.memoryStore.products.length,
           last_sync: filtered[filtered.length - 1]?.upload_date || null
         };
@@ -1205,14 +1208,30 @@ class UploadService {
 
       if (uploadError) throw uploadError;
 
-      const uploadedMonths = new Set(
-        uploads
-          .map((upload) => this.extractDateFromFilename(upload.filename || ''))
-          .filter(Boolean)
-          .map((date) => date.slice(0, 7))
-      );
       const uploadIds = uploads.map((upload) => upload.id).filter(Boolean);
 
+      // Two different numbers, deliberately kept separate:
+      //
+      // - days_of_history/months_uploaded ("elapsed calendar time since
+      //   the earliest sale date") mirrors ml-service/app.py's actual
+      //   first-training gate exactly, so the "ready to train"/
+      //   "insufficient data" dashboard state can never drift from
+      //   whether a real /train call would actually be allowed to run.
+      //   This is intentionally tolerant of closed days — a business
+      //   that's open Mon-Fri only will still reach 365 here after a
+      //   calendar year, same as ml-service's own gate.
+      //
+      // - actual_days_uploaded/actual_months_uploaded ("how many distinct
+      //   calendar days actually have a real sales row") is what gets
+      //   shown to the owner as "how much sales data have I uploaded" —
+      //   uploading a handful of sample rows from over a year ago would
+      //   otherwise make days_of_history alone look like "12/12 months
+      //   met" the instant today's real clock has drifted far enough past
+      //   that old date, even though almost no data actually exists. The
+      //   owner needs an honest count of what's actually been uploaded to
+      //   track progress by, independent of the gate.
+      let earliestSaleDate = null;
+      let distinctSaleDays = 0;
       if (uploadIds.length > 0) {
         try {
           const { data: salesDates = [], error: salesDatesError } = await supabaseAdmin
@@ -1222,16 +1241,23 @@ class UploadService {
 
           if (salesDatesError) throw salesDatesError;
 
-          const months = new Set(
-            salesDates
-              .map((sale) => String(sale.sale_date || '').slice(0, 7))
-              .filter(Boolean)
+          const distinctDates = new Set(
+            salesDates.map((sale) => sale.sale_date).filter(Boolean)
           );
-          months.forEach((month) => uploadedMonths.add(month));
+          distinctSaleDays = distinctDates.size;
+          if (distinctDates.size > 0) {
+            earliestSaleDate = [...distinctDates].sort()[0];
+          }
         } catch (salesDatesError) {
-          console.warn('Could not calculate uploaded months:', salesDatesError.message);
+          console.warn('Could not calculate sales date coverage:', salesDatesError.message);
         }
       }
+
+      const daysOfHistory = earliestSaleDate
+        ? Math.max(0, dayjs().tz(PH_TZ).diff(dayjs(earliestSaleDate), 'day'))
+        : 0;
+      const monthsUploaded = Math.min(Math.floor(daysOfHistory / 30), 12);
+      const actualMonthsUploaded = Math.min(Math.floor(distinctSaleDays / 30), 12);
 
       let menuQuery = supabaseAdmin.from('products')
         .select('*', { count: 'exact', head: true });
@@ -1253,7 +1279,10 @@ class UploadService {
         pending: uploads.filter((upload) => upload.status === 'pending').length,
         failed: uploads.filter((upload) => upload.status === 'failed').length,
         sales_records: uploads.reduce((sum, upload) => sum + (upload.row_count || 0), 0),
-        months_uploaded: Math.min(uploadedMonths.size || uploads.length, 12),
+        days_of_history: daysOfHistory,
+        months_uploaded: monthsUploaded,
+        actual_days_uploaded: distinctSaleDays,
+        actual_months_uploaded: actualMonthsUploaded,
         menu_items: menuItemsCount || 0,
         last_sync: uploads[uploads.length - 1]?.upload_date || new Date().toISOString()
       };
@@ -1416,7 +1445,12 @@ class UploadService {
       return { state: 'no-data', stats, progress };
     }
 
-    if ((stats.months_uploaded || 0) < 12) {
+    // Matches ml-service/app.py's actual first-training gate exactly
+    // (days since earliest sale date >= 365) — months_uploaded is a
+    // display-only derivative of the same days_of_history number, so
+    // gating on the day count directly instead of the rounded-down
+    // months figure avoids the two ever disagreeing.
+    if ((stats.days_of_history || 0) < 365) {
       return { state: 'uploaded-insufficient', stats, progress };
     }
 

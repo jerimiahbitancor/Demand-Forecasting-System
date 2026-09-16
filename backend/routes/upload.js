@@ -108,8 +108,9 @@ router.post(
           console.log('Duplicate upload detected:', file.originalname);
           return res.status(409).json({
             success: false,
-            error: 'Duplicate upload detected',
-            message: 'This file has already been uploaded recently. Please wait before uploading again.'
+            error: 'Duplicate upload',
+            duplicate: true,
+            message: 'This file has already been uploaded and processed. Re-uploading it would create duplicate sales records, so it was skipped — no action needed.'
           });
         }
       } catch (dupError) {
@@ -319,7 +320,9 @@ router.post(
       if (error.message && error.message.includes('Duplicate upload')) {
         return res.status(409).json({
           success: false,
-          error: 'Duplicate upload detected',
+          error: 'Duplicate upload',
+          duplicate: true,
+          message: 'This file has already been uploaded and processed. Re-uploading it would create duplicate sales records, so it was skipped — no action needed.',
           details: error.message
         });
       }
@@ -353,6 +356,8 @@ router.post(
         return res.status(409).json({
           success: false,
           error: 'Duplicate upload',
+          duplicate: true,
+          message: 'This file has already been uploaded and processed. Re-uploading it would create duplicate sales records, so it was skipped — no action needed.',
           details: error.message
         });
       }
@@ -368,6 +373,7 @@ router.post(
         return res.status(409).json({
           success: false,
           error: 'Duplicate sales data',
+          duplicate: true,
           message: 'Some rows in this file duplicate dates already uploaded for the same product. Please remove or correct those rows before re-uploading.',
           details: error.message
         });

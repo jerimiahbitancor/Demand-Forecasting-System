@@ -191,6 +191,12 @@ const UploadData = ({
   // genuinely in flight at once — a Set of indices, not one index.
   const [salesProcessingIndices, setSalesProcessingIndices] = useState(() => new Set());
   const [salesDoneIndices, setSalesDoneIndices] = useState(() => new Set());
+  // Per-file failure reason, keyed by index — 'duplicate' (this exact
+  // file/date was already uploaded before, not a real error) vs 'error'
+  // (something actually went wrong). Without this, a batch upload could
+  // only report an aggregate "N file(s) skipped" with no way to tell the
+  // user which files, or whether it was safe to ignore.
+  const [salesFailedIndices, setSalesFailedIndices] = useState(() => new Map());
   const [salesUploadedCount, setSalesUploadedCount] = useState(
     () => getStoredUploadStatus('sales')?.uploadedCount || 0
   );
@@ -706,6 +712,7 @@ const UploadData = ({
       setSalesProgress(0);
       setSalesProcessingIndices(new Set());
       setSalesDoneIndices(new Set());
+      setSalesFailedIndices(new Map());
       setSalesUploadedCount(0);
       saveUploadStatus('sales', {
         status: 'loading',
@@ -718,6 +725,11 @@ const UploadData = ({
       let uploaded = 0;
       const failedFiles = [];
       let completed = 0;
+      // Plain local map (not React state) so the logic right below —
+      // deciding whether every failure was a harmless duplicate — can
+      // read it synchronously within this same function call, instead of
+      // racing a setState update that only lands on the next render.
+      const fileOutcomes = new Map();
 
       const uploadOneSalesFile = async (file, i) => {
         setSalesProcessingIndices((prev) => new Set(prev).add(i));
@@ -746,8 +758,23 @@ const UploadData = ({
             throw new Error(response?.data?.error || `Failed to upload ${file.name}`);
           }
 
+          fileOutcomes.set(i, { status: 'success' });
           setSalesDoneIndices((prev) => new Set(prev).add(i));
           return response;
+        } catch (err) {
+          // A 409 here means "this exact file/date is already in the
+          // system" (see backend/routes/upload.js's `duplicate: true`
+          // responses) — expected and harmless, not a real failure. Any
+          // other status (or no response at all) is a genuine error.
+          const isDuplicate = err?.response?.data?.duplicate === true || err?.response?.status === 409;
+          const message = err?.response?.data?.message || err?.response?.data?.error || err?.message || 'Upload failed';
+          fileOutcomes.set(i, { status: isDuplicate ? 'duplicate' : 'error', message });
+          setSalesFailedIndices((prev) => {
+            const next = new Map(prev);
+            next.set(i, { status: isDuplicate ? 'duplicate' : 'error', message });
+            return next;
+          });
+          throw err;
         } finally {
           setSalesProcessingIndices((prev) => {
             const next = new Set(prev);
@@ -763,16 +790,68 @@ const UploadData = ({
 
       const salesResults = await runBatched(salesFiles, UPLOAD_CONCURRENCY, uploadOneSalesFile);
 
+      let duplicateCount = 0;
+      let errorCount = 0;
       salesResults.forEach((result, i) => {
         if (result.status === 'fulfilled' && result.value?.data?.success) {
           uploaded++;
           setSalesUploadedCount(uploaded);
         } else {
           const error = result.reason || new Error('Upload failed');
-          failedFiles.push({ name: salesFiles[i].name, error });
+          const outcome = fileOutcomes.get(i);
+          if (outcome?.status === 'duplicate') {
+            duplicateCount++;
+          } else {
+            errorCount++;
+          }
+          failedFiles.push({ name: salesFiles[i].name, error, status: outcome?.status || 'error' });
           console.error(`Sales file failed: ${salesFiles[i].name}`, error);
         }
       });
+
+      if (uploaded === 0 && errorCount === 0 && duplicateCount > 0) {
+        // Every file that "failed" was actually already uploaded before —
+        // nothing is broken and no data was lost, so this doesn't belong
+        // in the same red "Upload failed" path as a real error. Treat it
+        // as its own graceful, informational outcome instead.
+        setSalesProgress(100);
+        setSalesUploadStatus('duplicate');
+        saveUploadStatus('sales', { status: 'duplicate', progress: 100, uploadedCount: 0 });
+
+        if (salesToastId) toast.dismiss(salesToastId);
+        const id = toast(
+          duplicateCount === totalFiles
+            ? `All ${totalFiles} file(s) were already uploaded previously — no changes made.`
+            : `${duplicateCount} of ${totalFiles} file(s) were already uploaded previously — no changes made.`,
+          { icon: '⚠️' }
+        );
+        setSalesToastId(id);
+
+        await checkUploadStatus();
+
+        setTimeout(() => {
+          clearUploadStatus('sales');
+          setSalesUploadStatus(null);
+          setSalesFiles([]);
+          setSalesProgress(0);
+          setSalesValidated(false);
+          setSalesValidationErrors([]);
+          setIsSalesValid(false);
+          setSalesProcessingIndices(new Set());
+          setSalesDoneIndices(new Set());
+          setSalesFailedIndices(new Map());
+          setSalesUploadedCount(0);
+          setSalesPreviewData({
+            totalRecords: 0,
+            validRecords: 0,
+            invalidRecords: 0,
+            systemMatch: "0%",
+            issues: []
+          });
+        }, 3000);
+
+        return;
+      }
 
       if (uploaded === 0) {
         // Per-file errors are caught inside uploadOneSalesFile and never
@@ -786,7 +865,7 @@ const UploadData = ({
       setSalesProgress(100);
       setSalesUploadStatus('success');
       saveUploadStatus('sales', { status: 'success', progress: 100, uploadedCount: uploaded });
-      
+
       const summary = {
         totalRows: salesPreviewData.totalRecords,
         validRows: salesPreviewData.validRecords,
@@ -795,20 +874,19 @@ const UploadData = ({
         filesUploaded: uploaded,
         totalFiles: totalFiles
       };
-      
+
       setSalesPreviewData({
         ...salesPreviewData,
-        systemMatch: salesPreviewData.totalRecords > 0 ? 
+        systemMatch: salesPreviewData.totalRecords > 0 ?
           `${Math.round((salesPreviewData.validRecords / salesPreviewData.totalRecords) * 100)}%` : '0%'
       });
-      
+
       if (salesToastId) toast.dismiss(salesToastId);
-      const failedMessage = failedFiles.length > 0
-        ? ` ${failedFiles.length} file(s) skipped.`
-        : '';
-      const id = toast.success(`Uploaded ${uploaded}/${totalFiles} sales files.${failedMessage}`);
+      const duplicateMessage = duplicateCount > 0 ? ` ${duplicateCount} already uploaded previously (skipped).` : '';
+      const errorMessage = errorCount > 0 ? ` ${errorCount} failed.` : '';
+      const id = toast.success(`Uploaded ${uploaded}/${totalFiles} sales files.${duplicateMessage}${errorMessage}`);
       setSalesToastId(id);
-      
+
       await checkUploadStatus();
 
       Object.keys(sessionStorage).forEach((key) => {
@@ -823,6 +901,13 @@ const UploadData = ({
       }
       
       setTimeout(() => {
+        // Clears the persisted sessionStorage entry too, not just local
+        // React state — otherwise navigating away and back to this page
+        // re-mounts the component, whose useState initializers read
+        // sessionStorage fresh (see getStoredFiles/getStoredUploadStatus
+        // above) and resurrect this already-finished "success" banner and
+        // file list as if the upload had just happened again.
+        clearUploadStatus('sales');
         setSalesUploadStatus(null);
         setSalesFiles([]);
         setSalesProgress(0);
@@ -831,6 +916,7 @@ const UploadData = ({
         setIsSalesValid(false);
         setSalesProcessingIndices(new Set());
         setSalesDoneIndices(new Set());
+        setSalesFailedIndices(new Map());
         setSalesUploadedCount(0);
         setSalesPreviewData({
           totalRecords: 0,
@@ -839,8 +925,8 @@ const UploadData = ({
           systemMatch: "0%",
           issues: []
         });
-      }, 5000);
-      
+      }, 3000);
+
     } catch (error) {
       console.error('Upload error:', error);
       console.error('Error response:', error.response?.data);
@@ -883,8 +969,14 @@ const UploadData = ({
       }
 
       setTimeout(() => {
+        // Same reasoning as the success-path reset above: this must also
+        // clear sessionStorage, not just local state, or a failed upload
+        // reappears as a stale "Upload failed" banner on the next visit
+        // to this page even though nothing is actually still failing.
+        clearUploadStatus('sales');
         setSalesUploadStatus(null);
         setSalesProcessingIndices(new Set());
+        setSalesFailedIndices(new Map());
       }, 3000);
     } finally {
       salesSubmittingRef.current = false;
@@ -1265,6 +1357,7 @@ const UploadData = ({
   const ProgressBar = ({ progress, status }) => {
     const getColor = () => {
       if (status === 'error') return '#ef4444';
+      if (status === 'duplicate') return '#f59e0b';
       if (status === 'success') return '#10b981';
       if (progress < 100) return '#3b82f6';
       return '#10b981';
@@ -1308,7 +1401,7 @@ const UploadData = ({
           fontSize: '12px',
           color: '#6b7280'
         }}>
-          <span>{status === 'loading' ? 'Uploading...' : status === 'success' ? 'Complete!' : status === 'error' ? 'Failed' : 'Ready'}</span>
+          <span>{status === 'loading' ? 'Uploading...' : status === 'success' ? 'Complete!' : status === 'duplicate' ? 'Already uploaded' : status === 'error' ? 'Failed' : 'Ready'}</span>
           <span>{Math.min(progress, 100)}%</span>
         </div>
         <style>{`
@@ -1332,7 +1425,7 @@ const UploadData = ({
   // processingIndices/doneIndices are Sets, since UPLOAD_CONCURRENCY > 1
   // means several files are genuinely uploading at the same time — a
   // single "current index" can no longer represent progress accurately.
-  const renderFileList = (files, onRemove, uploadStatus, processingIndices, doneIndices, uploadedCount) => {
+  const renderFileList = (files, onRemove, uploadStatus, processingIndices, doneIndices, uploadedCount, failedIndices = new Map()) => {
     if (files.length === 0) return null;
 
     return (
@@ -1346,28 +1439,37 @@ const UploadData = ({
           )}
         </div>
         <div className="file-list">
-          {files.map((file, index) => (
-            <div key={index} className={`file-item ${uploadStatus === 'loading' && processingIndices.has(index) ? 'processing' : ''}`}>
-              <FiFile className="file-icon" />
-              <span className="file-name">{file.name}</span>
-              <span className="file-size">{formatFileSize(file.size)}</span>
-              {uploadStatus === 'loading' && processingIndices.has(index) && (
-                <span className="file-status uploading">Uploading...</span>
-              )}
-              {uploadStatus === 'loading' && !processingIndices.has(index) && doneIndices.has(index) && (
-                <span className="file-status done">✓ Done</span>
-              )}
-              {uploadStatus !== 'loading' && (
-                <button
-                  className="remove-file-btn"
-                  onClick={() => onRemove(index)}
-                  title="Remove file"
-                >
-                  <FiTrash2 size={14} />
-                </button>
-              )}
-            </div>
-          ))}
+          {files.map((file, index) => {
+            const failure = failedIndices.get(index);
+            return (
+              <div key={index} className={`file-item ${uploadStatus === 'loading' && processingIndices.has(index) ? 'processing' : ''}`}>
+                <FiFile className="file-icon" />
+                <span className="file-name">{file.name}</span>
+                <span className="file-size">{formatFileSize(file.size)}</span>
+                {processingIndices.has(index) && (
+                  <span className="file-status uploading">Uploading...</span>
+                )}
+                {!processingIndices.has(index) && doneIndices.has(index) && (
+                  <span className="file-status done">✓ Done</span>
+                )}
+                {!processingIndices.has(index) && failure?.status === 'duplicate' && (
+                  <span className="file-status duplicate" title={failure.message}>⚠ Already uploaded</span>
+                )}
+                {!processingIndices.has(index) && failure?.status === 'error' && (
+                  <span className="file-status error" title={failure.message}>✗ Failed</span>
+                )}
+                {uploadStatus !== 'loading' && (
+                  <button
+                    className="remove-file-btn"
+                    onClick={() => onRemove(index)}
+                    title="Remove file"
+                  >
+                    <FiTrash2 size={14} />
+                  </button>
+                )}
+              </div>
+            );
+          })}
         </div>
       </div>
     );
@@ -1463,7 +1565,8 @@ const UploadData = ({
                 salesUploadStatus,
                 salesProcessingIndices,
                 salesDoneIndices,
-                salesUploadedCount
+                salesUploadedCount,
+                salesFailedIndices
               )}
 
               {/* Upload Status with Progress Bar */}
@@ -1479,6 +1582,13 @@ const UploadData = ({
                   <FiCheckCircle size={20} />
                   Upload successful! {salesUploadedCount} file(s) uploaded.
                   <ProgressBar progress={100} status="success" />
+                </div>
+              )}
+              {salesUploadStatus === 'duplicate' && (
+                <div className="upload-status warning">
+                  <FiAlertCircle size={20} />
+                  Already uploaded — {salesFailedIndices.size} file(s) were previously uploaded. No changes were made.
+                  <ProgressBar progress={100} status="duplicate" />
                 </div>
               )}
               {salesUploadStatus === 'error' && (

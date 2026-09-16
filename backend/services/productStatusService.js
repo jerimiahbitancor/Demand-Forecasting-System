@@ -7,6 +7,22 @@ function toDate(value) {
   return Number.isNaN(date.getTime()) ? null : date;
 }
 
+// Dev-only "as-of date" override for local testing against historical
+// snapshots whose latest sale date has fallen behind real wall-clock
+// time (e.g. a 12-month CSV dump that stops months before today) —
+// without it, the 28-day activity window below always evaluates against
+// real "now" and can never classify anything as active once enough real
+// time has passed since the snapshot was taken. Never honored when
+// NODE_ENV is 'production', regardless of what's in the environment.
+function getEffectiveNow() {
+  const override = process.env.DEV_NOW_OVERRIDE;
+  if (override && process.env.NODE_ENV !== 'production') {
+    const parsed = new Date(override);
+    if (!Number.isNaN(parsed.getTime())) return parsed;
+  }
+  return new Date();
+}
+
 function deriveProductStatus({ firstSoldDate, lastSoldDate, createdAt, isActive = false, inactiveReason = null }) {
   const isArchived = /^archived\b/i.test(inactiveReason || '');
   if (isArchived) {
@@ -24,7 +40,7 @@ function deriveProductStatus({ firstSoldDate, lastSoldDate, createdAt, isActive 
     };
   }
 
-  const now = new Date();
+  const now = getEffectiveNow();
   const cutoffDate = new Date(now.getTime() - (28 * DAY_MS));
   const firstDate = toDate(firstSoldDate);
   const lastDate = toDate(lastSoldDate);
