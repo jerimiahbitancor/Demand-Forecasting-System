@@ -176,13 +176,20 @@ function drawSectionTitle(doc, y, text) {
   return y + 6;
 }
 
-function drawTable(doc, y, { head, body, columnStyles, didParseCell }) {
+function drawTable(doc, y, { head, body, columnStyles, didParseCell, tableStyles = {} }) {
   autoTable(doc, {
     startY: y,
     head: [head],
     body,
     margin: { left: PAGE_MARGIN, right: PAGE_MARGIN },
-    styles: { fontSize: 8, textColor: COLOR.textPrimary, lineColor: COLOR.borderLight, lineWidth: 0.15 },
+    styles: {
+      fontSize: 8,
+      textColor: COLOR.textPrimary,
+      lineColor: COLOR.borderLight,
+      lineWidth: 0.15,
+      overflow: 'linebreak',
+      ...tableStyles,
+    },
     headStyles: { fillColor: COLOR.bgPrimary, textColor: COLOR.textPrimary, fontStyle: 'bold' },
     alternateRowStyles: { fillColor: [255, 255, 255] },
     columnStyles,
@@ -592,5 +599,41 @@ export async function buildGroceryListPDF({
   doc.text(`${business?.name || 'ChefDuo'} Forecast System`, MARGIN, backFooterY + 2);
   doc.text('Page 2 of 2', MARGIN + CONTENT_W, backFooterY + 2, { align: 'right' });
 
+  return doc;
+}
+
+// ---------------------------------------------------------------------
+// Audit Logs report — reuses the same header/footer/table template as the
+// Analytics reports. `rows` is already human-readable from the page:
+//   { date, action, performedBy, details }
+// ---------------------------------------------------------------------
+export async function buildAuditLogsPDF({ dateRangeLabel, business, rows }) {
+  const doc = new jsPDF({ unit: 'mm', format: 'a4' });
+  const logoDataUrl = await loadLogoBase64();
+
+  let y = drawHeader(doc, {
+    reportTitle: 'Audit Logs Report',
+    dateRangeLabel: dateRangeLabel || 'All time',
+    generatedLabel: generatedLabelNow(),
+    business,
+    logoDataUrl,
+  });
+
+  y = drawSectionTitle(doc, y, `Audit entries \u2014 ${rows.length} total`);
+
+  drawTable(doc, y, {
+    head: ['No.', 'Date & Time', 'Action', 'Performed By', 'Details'],
+    body: rows.map((r, i) => [i + 1, r.date, r.action, r.performedBy, r.details]),
+    columnStyles: {
+      0: { cellWidth: 10, halign: 'center' },
+      1: { cellWidth: 34 },
+      2: { cellWidth: 33 },
+      3: { cellWidth: 30 },
+      4: { cellWidth: 180 - 10 - 34 - 33 - 30 },
+    },
+    tableStyles: { fontSize: 6.5, cellPadding: 2, lineHeight: 1.25 },
+  });
+
+  addFooterToAllPages(doc);
   return doc;
 }

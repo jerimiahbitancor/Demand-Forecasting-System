@@ -1,8 +1,9 @@
 // AuditLogs.jsx
 import { useCallback, useEffect, useState } from "react";
-import { FiRefreshCw, FiX, FiInbox, FiChevronLeft, FiChevronRight } from "react-icons/fi";
+import { FiRefreshCw, FiX, FiInbox, FiChevronLeft, FiChevronRight, FiDownload, FiFileText } from "react-icons/fi";
 import axios from 'axios';
 import toast from 'react-hot-toast';
+import { buildAuditLogsPDF } from "../../../services/reportService";
 import "./AuditLogs.css";
 import "../../../features/inventory/InventoryControls.css";
 
@@ -68,6 +69,26 @@ const ACTION_LABELS = {
   backup_created: 'Backup Created',
   backup_deleted: 'Backup Deleted',
   data_reset: 'Data Reset',
+  notification_read: 'Notification Read',
+  notification_updated: 'Notification Updated',
+  notification_deleted: 'Notification Deleted',
+  notification_clear_all: 'All Notifications Cleared',
+  notification_mark_all_read: 'All Notifications Marked Read',
+  business_day_closed: 'Business Day Closed',
+  ml_training_started: 'Model Training Started',
+  forecast_generated: 'Forecast Generated',
+  password_change_code_sent: 'Password Change Code Sent',
+  password_changed: 'Password Changed',
+  user_updated: 'User Updated',
+  user_deleted: 'User Deleted',
+  product_cache_refreshed: 'Product Cache Refreshed',
+  report_generated: 'Report Generated',
+
+  // Legacy action types produced by the old auto-trail middleware.
+  adjust_notifications_read: 'Notification Read',
+  adjust_notifications_mark_all_read: 'All Notifications Marked Read',
+  delete_notifications_clear_all: 'All Notifications Cleared',
+  adjust_business_days_close: 'Business Day Closed',
 };
 
 const labelFor = (action) =>
@@ -112,6 +133,7 @@ function AuditLogs() {
   const [totalPages, setTotalPages] = useState(0);
   const [loading, setLoading] = useState(false);
   const [loaded, setLoaded] = useState(false);
+  const [exporting, setExporting] = useState(false);
 
   const fetchLogs = useCallback(
     async (targetPage) => {
@@ -164,6 +186,129 @@ function AuditLogs() {
     setFilters((prev) => ({ ...prev, [field]: value }));
   };
 
+  // Fetches every log matching the applied filters (paginated, since the
+  // API caps each page at 100 rows) so exports include the full set.
+  const fetchAllForExport = async () => {
+    const limit = 100;
+    let targetPage = 1;
+    let all = [];
+    for (;;) {
+      const response = await apiClient.get('/audit/logs', {
+        params: { ...appliedFilters, page: targetPage, limit },
+      });
+      const batch = response.data.data || [];
+      all = all.concat(batch);
+      if (batch.length < limit) break;
+      targetPage += 1;
+    }
+    return all;
+  };
+
+  const fetchBusinessForReport = async () => {
+    try {
+      const response = await apiClient.get('/settings/business-profile');
+      const d = response.data?.data;
+      if (d) {
+        return {
+          name: d.business_name || 'ChefDuo',
+          address: d.address || d.business_address || '',
+          email: d.business_email || '',
+          contact: d.business_contact_number || '',
+        };
+      }
+    } catch {
+      // Keep the report usable even if the profile fetch fails.
+    }
+    return { name: 'ChefDuo', address: '', email: '', contact: '' };
+  };
+
+  const reportDateLabel = () => {
+    const opts = { month: 'short', day: 'numeric', year: 'numeric' };
+    if (appliedFilters.from && appliedFilters.to) {
+      return `${new Date(appliedFilters.from).toLocaleDateString('en-US', opts)} \u2013 ${new Date(appliedFilters.to).toLocaleDateString('en-US', opts)}`;
+    }
+    if (appliedFilters.from) {
+      return `From ${new Date(appliedFilters.from).toLocaleDateString('en-US', opts)}`;
+    }
+    if (appliedFilters.to) {
+      return `Until ${new Date(appliedFilters.to).toLocaleDateString('en-US', opts)}`;
+    }
+    return 'All time';
+  };
+
+  const exportFileLabel = () => `audit-logs-${new Date().toISOString().slice(0, 10)}`;
+
+  const escapeCell = (value) => {
+    if (value === null || value === undefined) return '';
+    const str = String(value);
+    return /[",\n]/.test(str) ? `"${str.replace(/"/g, '""')}"` : str;
+  };
+
+  const handleExportCsv = async () => {
+    setExporting(true);
+    try {
+      const data = await fetchAllForExport();
+      if (data.length === 0) {
+        toast.error('No audit entries to export');
+        return;
+      }
+      const header = ['Date & Time', 'Action', 'Performed By', 'Details'];
+      const lines = [header.map(escapeCell).join(',')];
+      data.forEach((log) => {
+        lines.push([
+          formatDateTime(log.performed_at),
+          labelFor(log.action_type),
+          log.performed_by,
+          log.details,
+        ].map(escapeCell).join(','));
+      });
+
+      const blob = new Blob(['\uFEFF' + lines.join('\n')], { type: 'text/csv;charset=utf-8;' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `${exportFileLabel()}.csv`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+      toast.success(`Exported ${data.length} audit entr${data.length === 1 ? 'y' : 'ies'} to CSV`);
+    } catch (error) {
+      toast.error(error.response?.data?.error || 'Failed to export CSV');
+    } finally {
+      setExporting(false);
+    }
+  };
+
+  const handleExportPdf = async () => {
+    setExporting(true);
+    try {
+      const data = await fetchAllForExport();
+      if (data.length === 0) {
+        toast.error('No audit entries to export');
+        return;
+      }
+      const business = await fetchBusinessForReport();
+      const rows = data.map((log) => ({
+        date: formatDateTime(log.performed_at),
+        action: labelFor(log.action_type),
+        performedBy: log.performed_by || '\u2014',
+        details: log.details || '\u2014',
+      }));
+      const doc = await buildAuditLogsPDF({
+        dateRangeLabel: reportDateLabel(),
+        business,
+        rows,
+      });
+      doc.save(`${exportFileLabel()}.pdf`);
+      toast.success(`Exported ${data.length} audit entr${data.length === 1 ? 'y' : 'ies'} to PDF`);
+    } catch (error) {
+      toast.error(error.response?.data?.error || 'Failed to export PDF');
+    } finally {
+      setExporting(false);
+    }
+  };
+
   return (
     <div className="audit-logs-container">
       <div className="settings-section audit-section">
@@ -174,15 +319,35 @@ function AuditLogs() {
               Chronological trail of system actions (price recordings, deletions, and management changes).
             </p>
           </div>
-          <button
-            className="audit-refresh-btn"
-            onClick={() => fetchLogs(1)}
-            disabled={loading}
-            title="Refresh logs"
-          >
-            <FiRefreshCw size={15} className={loading ? 'spinning' : ''} />
-            Refresh
-          </button>
+          <div className="audit-header-actions">
+            <button
+              className="audit-export-btn audit-export-csv"
+              onClick={handleExportCsv}
+              disabled={loading || exporting}
+              title="Export audit logs as CSV"
+            >
+              <FiDownload size={14} />
+              CSV
+            </button>
+            <button
+              className="audit-export-btn audit-export-pdf"
+              onClick={handleExportPdf}
+              disabled={loading || exporting}
+              title="Export audit logs as PDF"
+            >
+              <FiFileText size={14} />
+              PDF
+            </button>
+            <button
+              className="audit-refresh-btn"
+              onClick={() => fetchLogs(1)}
+              disabled={loading}
+              title="Refresh logs"
+            >
+              <FiRefreshCw size={15} className={loading ? 'spinning' : ''} />
+              Refresh
+            </button>
+          </div>
         </div>
 
         {/* Filters */}
@@ -263,6 +428,7 @@ function AuditLogs() {
                 <tr>
                   <th className="audit-th-time">Date &amp; Time</th>
                   <th className="audit-th-action">Action</th>
+                  <th className="audit-th-actor">Performed By</th>
                   <th>Details</th>
                 </tr>
               </thead>
@@ -275,6 +441,7 @@ function AuditLogs() {
                         {labelFor(log.action_type)}
                       </span>
                     </td>
+                    <td className="audit-td-actor">{log.performed_by || '—'}</td>
                     <td className="audit-td-details">{log.details || '—'}</td>
                   </tr>
                 ))}

@@ -1,15 +1,15 @@
 // components/HistoricalData.jsx
 import { useState, useEffect, useCallback, useMemo } from "react";
 import { 
-  FiChevronLeft, 
-  FiChevronRight, 
   FiDownload,
   FiSearch,
   FiRefreshCw
 } from "react-icons/fi";
+import { FaArrowLeft, FaArrowRight } from "react-icons/fa";
 import axios from 'axios';
 import toast from 'react-hot-toast';
 import "./HistoricalData.css";
+import "../../inventory/pages/Inventory.css";
 import { useAuth } from "../../../context/AuthContext";
 
 const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:5000/api';
@@ -215,28 +215,10 @@ const HistoricalData = () => {
     return filtered;
   }, [historicalData, searchTerm, sortBy]);
 
-  const itemsPerPage = 5;
+  const itemsPerPage = 10;
   const totalPages = Math.ceil(filteredData.length / itemsPerPage) || 1;
   const startIndex = (currentPage - 1) * itemsPerPage;
   const currentData = filteredData.slice(startIndex, startIndex + itemsPerPage);
-
-  const getPageNumbers = useMemo(() => {
-    const pages = [];
-    if (totalPages <= 7) {
-      for (let i = 1; i <= totalPages; i++) {
-        pages.push(i);
-      }
-    } else {
-      pages.push(1);
-      if (currentPage > 3) pages.push('...');
-      for (let i = Math.max(2, currentPage - 1); i <= Math.min(totalPages - 1, currentPage + 1); i++) {
-        pages.push(i);
-      }
-      if (currentPage < totalPages - 2) pages.push('...');
-      pages.push(totalPages);
-    }
-    return pages;
-  }, [totalPages, currentPage]);
 
   const formatDate = (dateString) => {
     if (!dateString) return 'N/A';
@@ -267,8 +249,17 @@ const HistoricalData = () => {
     }
   };
 
-  const handleDownload = (item) => {
-    toast.success(`Downloading ${item.fileName}...`);
+  const handleDownload = async (item) => {
+    try {
+      const response = await apiClient.get(`/upload/${item.id}/download`);
+      if (response.data.success && response.data.url) {
+        window.open(response.data.url, '_blank');
+      } else {
+        toast.error(response.data.error || 'Download failed');
+      }
+    } catch (error) {
+      toast.error(error.response?.data?.error || 'Failed to download file');
+    }
   };
 
   return (
@@ -359,38 +350,58 @@ const HistoricalData = () => {
           )}
         </div>
 
-        {totalPages > 1 && !loading && (
-          <div className="pagination">
-            <div className="pagination-left">
+        {filteredData.length > 0 && !loading && (
+          <div className="inventory-pagination">
+            <span className="inventory-pagination-info">
+              Showing {startIndex + 1}–{Math.min((currentPage) * itemsPerPage, filteredData.length)} of {filteredData.length} items
+            </span>
+
+            <div className="inventory-pagination-controls">
               <button 
-                className="page-btn"
-                onClick={() => setCurrentPage(Math.max(1, currentPage - 1))}
+                className="inventory-pagination-btn"
+                onClick={() => setCurrentPage(prev => Math.max(prev - 1, 1))}
                 disabled={currentPage === 1}
               >
-                <FiChevronLeft size={16} /> Previous
+                <FaArrowLeft /> Previous
               </button>
-            </div>
-            <div className="pagination-center">
-              {getPageNumbers.map((page, index) => (
-                <button
-                  key={index}
-                  className={`page-number ${page === currentPage ? 'active' : ''} ${page === '...' ? 'dots' : ''}`}
-                  onClick={() => typeof page === 'number' && setCurrentPage(page)}
-                  disabled={page === '...'}
-                >
-                  {page}
-                </button>
-              ))}
-            </div>
-            <div className="pagination-right">
+              
+              <div className="inventory-pagination-numbers">
+                {Array.from({ length: Math.min(5, totalPages) }, (_, i) => {
+                  let pageNumber;
+                  if (totalPages <= 5) {
+                    pageNumber = i + 1;
+                  } else if (currentPage <= 3) {
+                    pageNumber = i + 1;
+                  } else if (currentPage >= totalPages - 2) {
+                    pageNumber = totalPages - 4 + i;
+                  } else {
+                    pageNumber = currentPage - 2 + i;
+                  }
+                  if (pageNumber > 0 && pageNumber <= totalPages) {
+                    return (
+                      <button
+                        key={pageNumber}
+                        className={`inventory-pagination-number ${currentPage === pageNumber ? 'active' : ''}`}
+                        onClick={() => setCurrentPage(pageNumber)}
+                      >
+                        {pageNumber}
+                      </button>
+                    );
+                  }
+                  return null;
+                })}
+              </div>
+
               <button 
-                className="page-btn"
-                onClick={() => setCurrentPage(Math.min(totalPages, currentPage + 1))}
+                className="inventory-pagination-btn"
+                onClick={() => setCurrentPage(prev => Math.min(prev + 1, totalPages))}
                 disabled={currentPage === totalPages}
               >
-                Next <FiChevronRight size={16} />
+                Next <FaArrowRight />
               </button>
             </div>
+
+            <div className="inventory-pagination-anchor" aria-hidden="true"></div>
           </div>
         )}
       </div>

@@ -1,6 +1,7 @@
 // services/menuService.js
 const { supabase, isConfigured, supabaseAdmin } = require('../config/supabase');
 const { PRODUCT_STATUS_NOTES } = require('./productStatusConstants');
+const { ensureProductCategory } = require('./productCategoryService');
 
 class MenuService {
   constructor() {
@@ -311,6 +312,14 @@ isValidUserId(userId) {
         const unit = row[unitCol]?.trim();
         const price = parseFloat(row[priceCol]);
         const category = categoryCol ? row[categoryCol]?.trim() : 'Uncategorized';
+
+        // Persist the category into the product_categories config table so it
+        // appears in Settings → Forecast Config (non-fatal).
+        try {
+          await ensureProductCategory(category);
+        } catch (categoryRegisterError) {
+          console.error(`Failed to register category "${category}" from menu upload:`, categoryRegisterError);
+        }
 
         const salesCoverage = await this.getProductSalesCoverage(productName, userId);
         if (!salesCoverage.hasSales) {

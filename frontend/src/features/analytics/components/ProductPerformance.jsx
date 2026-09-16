@@ -5,6 +5,7 @@ import toast from "react-hot-toast";
 import { FiChevronDown, FiSearch, FiCalendar, FiInfo, FiExternalLink } from "react-icons/fi";
 import GenerateReportModal from "../../components/Reports/GenerateReportModal.jsx";
 import { buildProductPerformancePDF, generateExcel } from "./../../../services/reportService.js";
+import { logAuditEvent, formatAuditDateRange } from "../../../services/auditClient.js";
 import DatePicker from "./shared/DatePicker.jsx";
 import ExpandableModal from "./shared/ExpandableModal.jsx";
 import Pagination from "./shared/Pagination.jsx";
@@ -382,6 +383,11 @@ function ProductPerformance() {
         "product-performance-report.xlsx"
       );
     }
+
+    logAuditEvent(
+      'report_generated',
+      `Generated the Product Performance report (${format === 'pdf' ? 'PDF' : 'Excel'})${formatAuditDateRange(dateRange) ? ` — ${formatAuditDateRange(dateRange)}` : ''}`
+    );
       toast.success("Report generated successfully!");
     } catch (err) {
       console.error("Error building report:", err);

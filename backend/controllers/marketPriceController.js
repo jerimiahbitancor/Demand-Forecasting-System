@@ -34,6 +34,9 @@ const DEFAULT_SOURCES = [
   { key: 'da_reference', label: 'DA Reference', tooltip: 'Manually copied from the DA Bantay Presyo page (da.gov.ph/price-monitoring).' }
 ];
 
+// These two are required reference sources and can never be removed.
+const PROTECTED_SOURCE_KEYS = new Set(['wet_market', 'da_reference']);
+
 const ALLOWED_UNITS = ['kg', 'g', 'L', 'mL', 'pcs', 'box', 'pack'];
 
 let cachedSources = null;
@@ -41,14 +44,44 @@ let cachedSources = null;
 const getMarketSources = async ({ force = false } = {}) => {
   if (cachedSources && !force) return cachedSources;
   try {
+    // Check across ALL rows (active + inactive) so soft-deleted defaults are
+    // never resurrected by the seed step below.
     const { data, error } = await supabaseAdmin
       .from('market_sources')
-      .select('key, label, tooltip, display_order, is_active')
-      .eq('is_active', true)
+      .select('id, key, label, tooltip, display_order, is_active')
       .order('display_order', { ascending: true });
-    if (!error && Array.isArray(data) && data.length > 0) {
-      cachedSources = data.map((s) => ({ id: s.id, key: s.key, label: s.label, tooltip: s.tooltip || '' }));
-      return cachedSources;
+
+    if (!error && Array.isArray(data)) {
+      // Seed any built-in defaults that are missing as rows (only new inserts).
+      const existingKeys = new Set(data.map((s) => s.key));
+      const missingDefaults = DEFAULT_SOURCES
+        .filter((d) => !existingKeys.has(d.key))
+        .map((d, i) => ({
+          key: d.key,
+          label: d.label,
+          tooltip: d.tooltip,
+          display_order: i + 1
+        }));
+      if (missingDefaults.length > 0) {
+        try {
+          const { error: seedError } = await supabaseAdmin
+            .from('market_sources')
+            .insert(missingDefaults);
+          if (seedError) {
+            console.error(`Failed to seed default market sources (${missingDefaults.length}):`, seedError);
+          }
+        } catch (seedError) {
+          console.error('Failed to seed default market sources:', seedError);
+        }
+      }
+
+      const active = data
+        .filter((s) => s.is_active !== false)
+        .map((s) => ({ id: s.id, key: s.key, label: s.label, tooltip: s.tooltip || '' }));
+      if (active.length > 0) {
+        cachedSources = active;
+        return cachedSources;
+      }
     }
   } catch (e) {
     // `market_sources` table not present yet — fall back to the built-in defaults.
@@ -639,7 +672,7 @@ const bulkUpsertPrices = async (req, res) => {
 
     await logAction(
       'price_updated',
-      `Updated ${validEntries.length} market price(s) for ${ingredientName} (${ingredient?.unit || 'unit'}): ${details}`,
+      `Updated ${validEntries.length} market price(s) for ${ingredientName}: ${details}`,
       actorOf(req)
     );
 
@@ -744,9 +777,17 @@ const deleteSource = async (req, res) => {
       return res.status(404).json({ success: false, error: 'Source not found' });
     }
 
+    if (PROTECTED_SOURCE_KEYS.has(existing.key)) {
+      return res.status(400).json({
+        success: false,
+        error: `"${existing.label}" is a required reference source and cannot be removed`
+      });
+    }
+
+    // Soft delete: keep the row for audit but stop showing it as active.
     const { error } = await supabaseAdmin
       .from('market_sources')
-      .delete()
+      .update({ is_active: false, updated_at: new Date().toISOString() })
       .eq('id', id);
 
     if (error) throw error;

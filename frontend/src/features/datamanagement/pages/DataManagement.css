@@ -910,6 +910,7 @@
 
 .history-table th {
   padding: 16px 24px;
+  text-align: center;
   font-size: 10px;
   text-transform: uppercase;
   font-weight: 700;
