@@ -571,10 +571,74 @@ class UploadService {
               .update({ category: normalizedCategory })
               .eq('id', productId);
 
-        if (categoryUpdateError) {
-          throw categoryUpdateError;
-        }
+<<<<<<<<< Temporary merge branch 1
+      const { data: productRows, error: productFetchError } = await supabaseAdmin.from('products')
+        .select('id, created_at, first_sold_date, is_active, inactive_reason, inactive_since')
+        .in('id', selectedProductIds);
+      const { data: salesRows, error: salesFetchError } = await supabaseAdmin.from('daily_sales')
+        .select('product_id, sale_date')
+        .in('product_id', selectedProductIds)
+        .order('sale_date', { ascending: true });
+
+      if (productFetchError || salesFetchError) {
+        throw productFetchError || salesFetchError;
       }
+
+      // Re-derive each product's lifecycle status from the freshest sales
+      // dates BEFORE any stock deduction, so the "product status and recipe"
+      // rule is enforced with current data:
+      //   ACTIVE  + mapped recipe -> deduct stock
+      //   INACTIVE (NEW)/DISCONTINUED/ARCHIVED -> never deduct
+      const salesByProductId = new Map();
+      for (const sale of salesRows || []) {
+        const dates = salesByProductId.get(sale.product_id) || [];
+        dates.push(sale.sale_date);
+        salesByProductId.set(sale.product_id, dates);
+      }
+
+      const statusByProductId = new Map();
+      for (const product of productRows || []) {
+        const productSales = salesByProductId.get(product.id) || [];
+        const firstSoldDate = productSales[0] || product.first_sold_date || null;
+        const lastSoldDate = productSales[productSales.length - 1] || firstSoldDate || null;
+        const status = deriveProductStatus({
+          firstSoldDate: firstSoldDate || null,
+          lastSoldDate: lastSoldDate || null,
+          createdAt: product.created_at || null,
+          isActive: Boolean(product.is_active),
+          inactiveReason: product.inactive_reason
+        });
+        statusByProductId.set(product.id, { status, firstSoldDate, lastSoldDate });
+      }
+
+      // Only products freshly derived as ACTIVE with a mapped recipe deduct.
+      const activeProductIds = new Set(
+        [...statusByProductId.entries()]
+          .filter(([, { status }]) => status.status === 'active')
+          .map(([id]) => id)
+      );
+      if (activeProductIds.size > 0) {
+        const { data: recipeRows, error: recipeError } = await supabaseAdmin
+          .from('product_ingredients')
+          .select('product_id, ingredient_id, quantity_per_serving')
+          .in('product_id', [...activeProductIds]);
+
+        if (recipeError) throw recipeError;
+
+        const deductions = new Map();
+        for (const sale of dailySalesRows) {
+          if (!activeProductIds.has(sale.product_id)) continue;
+          for (const recipe of (recipeRows || []).filter((row) => row.product_id === sale.product_id)) {
+            const amount = Number(recipe.quantity_per_serving) * Number(sale.quantity_sold);
+            if (!Number.isFinite(amount) || amount <= 0) continue;
+            deductions.set(recipe.ingredient_id, (deductions.get(recipe.ingredient_id) || 0) + amount);
+=========
+            if (categoryUpdateError) {
+              throw categoryUpdateError;
+            }
+>>>>>>>>> Temporary merge branch 2
+          }
+        }
 
         const selectedProductIds = [...productIds];
         if (selectedProductIds.length === 0) {
