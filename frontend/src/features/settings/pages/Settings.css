@@ -156,7 +156,7 @@
   border: 1px solid #f0f0f0;
 }
 
-.tabs-header {
+.tabs-header1 {
  display: flex;
     border-bottom: 1px solid #f0f0f0;
     background-color: #faf8f7;
@@ -164,7 +164,7 @@
     padding: 0 0px;
     flex-direction: row;
     align-items: flex-start;
-    justify-content: flex-start;
+    justify-content: space-evenly;
 }
 .tab-btn {
   display: flex;

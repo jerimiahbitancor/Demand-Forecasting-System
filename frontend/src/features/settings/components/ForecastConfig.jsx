@@ -5,11 +5,16 @@ import toast from 'react-hot-toast';
 import Tippy from '@tippyjs/react';
 import 'tippy.js/dist/tippy.css';
 import 'tippy.js/animations/scale.css';
-import { FiEdit2, FiInfo, FiPlus } from 'react-icons/fi';
+import { FiEdit2, FiInfo, FiPlus, FiTrash, FiX } from 'react-icons/fi';
 import { useAuth } from '../../../context/AuthContext';
 import './ForecastConfig.css';
 
 const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:5000/api';
+
+const NAME_LABELS = {
+  category: 'Category',
+  unit: 'Unit',
+};
 
 function ForecastConfig() {
   const { getToken } = useAuth();
@@ -23,6 +28,8 @@ function ForecastConfig() {
   const [unitData, setUnitData] = useState({ ingredient: [] });
   const [managementDialog, setManagementDialog] = useState(null);
   const [managementValue, setManagementValue] = useState('');
+  const [deleteDialog, setDeleteDialog] = useState(null);
+  const [isDeleting, setIsDeleting] = useState(false);
 
   // Axios instance
   const apiClient = axios.create({
@@ -114,6 +121,13 @@ function ForecastConfig() {
     setManagementValue(item.name || item);
   };
 
+  const getEndpoint = (type, activeTab) => {
+    if (type === 'category') {
+      return activeTab === 'product' ? '/product-categories' : '/categories';
+    }
+    return '/units';
+  };
+
   const handleManagementSubmit = (event) => {
     event.preventDefault();
     const nextValue = managementValue.trim();
@@ -123,9 +137,7 @@ function ForecastConfig() {
       return;
     }
     const activeTab = managementDialog.activeTab;
-    const endpoint = isCategory
-      ? (activeTab === 'product' ? '/product-categories' : '/categories')
-      : '/units';
+    const endpoint = getEndpoint(managementDialog.type, activeTab);
     const request = managementDialog.mode === 'new'
       ? apiClient.post(endpoint, { name: nextValue })
       : apiClient.put(`${endpoint}/${managementDialog.originalValue.id}`, { name: nextValue });
@@ -134,6 +146,36 @@ function ForecastConfig() {
       return fetchManagementData();
     }).then(() => toast.success(`${managementDialog.mode === 'new' ? 'Added' : 'Updated'} ${isCategory ? 'category' : 'unit'}.`))
       .catch((error) => toast.error(error.response?.data?.error || `Failed to save ${isCategory ? 'category' : 'unit'}.`));
+  };
+
+  const handleManagementDelete = async () => {
+    if (!deleteDialog) return;
+    const { type, activeTab, item } = deleteDialog;
+    const nameLabel = NAME_LABELS[type] || 'item';
+    setIsDeleting(true);
+    try {
+      const response = await apiClient.delete(`${getEndpoint(type, activeTab)}/${item.id}`);
+      setDeleteDialog(null);
+      await fetchManagementData();
+      toast.success(response.data?.message || `${nameLabel} deleted.`);
+    } catch (error) {
+      toast.error(error.response?.data?.error || `Failed to delete ${nameLabel.toLowerCase()}.`);
+    } finally {
+      setIsDeleting(false);
+    }
+  };
+
+  const renderDialogTitle = () => {
+    const mode = managementDialog.mode === 'new' ? 'Add' : 'Edit';
+    const name = NAME_LABELS[managementDialog.type] || 'item';
+    return `${mode} ${name}`;
+  };
+
+  const renderDialogContext = () => {
+    if (managementDialog.type === 'unit' || managementDialog.activeTab === 'ingredient') {
+      return 'Ingredient Management';
+    }
+    return 'Product Management';
   };
 
   const renderManagementCard = (type, title, subtitle, activeTab, setActiveTab, data, columnLabel, tabs = [['ingredient', 'Ingredient Management'], ['product', 'Product Management']]) => (
@@ -161,7 +203,12 @@ function ForecastConfig() {
             {data[activeTab].map((item) => (
               <tr key={item.id || item.name}>
                 <td>{item.name || item}</td>
-                <td><button type="button" className="fc-edit-button" aria-label={`Edit ${item.name || item}`} onClick={() => openManagementDialog(type, 'edit', item)}><FiEdit2 aria-hidden="true" /></button></td>
+                <td>
+                  <div className="fc-row-actions">
+                    <button type="button" className="fc-edit-button" aria-label={`Edit ${item.name || item}`} onClick={() => openManagementDialog(type, 'edit', item)}><FiEdit2 aria-hidden="true" /></button>
+                    <button type="button" className="fc-delete-button" aria-label={`Delete ${item.name || item}`} onClick={() => setDeleteDialog({ type, activeTab, item })}><FiTrash aria-hidden="true" /></button>
+                  </div>
+                </td>
               </tr>
             ))}
             {Array.from({ length: Math.max(0, 4 - data[activeTab].length) }).map((_, index) => <tr className="fc-empty-row" key={`empty-${index}`}><td></td><td></td></tr>)}
@@ -374,11 +421,46 @@ function ForecastConfig() {
       </div>
       {managementDialog && (
         <div className="fc-dialog-backdrop" role="presentation" onMouseDown={() => setManagementDialog(null)}>
-          <form className="fc-dialog" onSubmit={handleManagementSubmit} onMouseDown={(event) => event.stopPropagation()}>
-            <h2>{managementDialog.mode === 'new' ? `Add ${managementDialog.type === 'category' ? 'Category' : 'Unit'} – ${managementDialog.type === 'unit' || managementDialog.activeTab === 'ingredient' ? 'Ingredient Management' : 'Product Management'}` : `Edit ${managementDialog.type === 'category' ? 'Category' : 'Unit'} – ${managementDialog.type === 'unit' || managementDialog.activeTab === 'ingredient' ? 'Ingredient Management' : 'Product Management'}`}</h2>
-            <label>{managementDialog.type === 'category' ? 'Category name' : 'Unit name'}<input autoFocus value={managementValue} onChange={(event) => setManagementValue(event.target.value)} /></label>
-            <div className="fc-dialog-actions"><button type="button" onClick={() => setManagementDialog(null)}>Cancel</button><button type="submit" className="fc-dialog-submit">Save</button></div>
+          <form className="fc-dialog fc-edit-dialog" onSubmit={handleManagementSubmit} onMouseDown={(event) => event.stopPropagation()}>
+            <div className="fc-dialog-header">
+              <h2>{renderDialogTitle()}</h2>
+              <button type="button" className="fc-dialog-close" onClick={() => setManagementDialog(null)} aria-label="Close dialog"><FiX aria-hidden="true" /></button>
+            </div>
+            <p className="fc-dialog-context">Used in <strong>{renderDialogContext()}</strong></p>
+            <label className="fc-dialog-label">
+              {managementDialog.type === 'category' ? 'Category name' : 'Unit name'}
+              <input
+                className="fc-dialog-input"
+                autoFocus
+                value={managementValue}
+                onChange={(event) => setManagementValue(event.target.value)}
+                placeholder={managementDialog.type === 'category' ? 'e.g. Vegetables' : 'e.g. Kilograms (kg)'}
+              />
+            </label>
+            <div className="fc-dialog-actions">
+              <button type="button" className="fc-dialog-cancel" onClick={() => setManagementDialog(null)}>Cancel</button>
+              <button type="submit" className="fc-dialog-submit">{managementDialog.mode === 'new' ? 'Add' : 'Save Changes'}</button>
+            </div>
           </form>
+        </div>
+      )}
+
+      {deleteDialog && (
+        <div className="fc-dialog-backdrop" role="presentation" onMouseDown={() => { if (!isDeleting) setDeleteDialog(null); }}>
+          <div className="fc-dialog fc-delete-dialog" onMouseDown={(event) => event.stopPropagation()}>
+            <div className="fc-dialog-icon warning"><FiTrash aria-hidden="true" /></div>
+            <h2>Delete {NAME_LABELS[deleteDialog.type]}?</h2>
+            <p>
+              You are about to delete <strong>"{deleteDialog.item.name || deleteDialog.item}"</strong>.
+              Items that still use it will be updated automatically.
+            </p>
+            <div className="fc-dialog-actions">
+              <button type="button" className="fc-dialog-cancel" onClick={() => setDeleteDialog(null)} disabled={isDeleting}>Cancel</button>
+              <button type="button" className="fc-dialog-delete" onClick={handleManagementDelete} disabled={isDeleting}>
+                {isDeleting ? 'Deleting...' : <><FiTrash aria-hidden="true" /> Delete</>}
+              </button>
+            </div>
+          </div>
         </div>
       )}
     </section>

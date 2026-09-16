@@ -11,13 +11,13 @@ import {
   FaInfoCircle,
   FaArchive,
   FaChevronDown,
-  FaSearch,
   FaEye,
   FaUndo,
 } from "react-icons/fa";
 import axios from 'axios';
 import toast from 'react-hot-toast';
 import "./ProductManagement.css";
+import "../InventoryControls.css";
 import { useAuth } from "../../../context/AuthContext";
 import Tippy from '@tippyjs/react';
 import 'tippy.js/dist/tippy.css';
@@ -1293,13 +1293,12 @@ const ProductManagement = () => {
 
    
 
-      <div className="product-controls">
-        <div className="search-wrapper">
-          <FaSearch className="search-icon" />
+      <div className="inventory-controls">
+        <div className="inventory-search-box">
           <input
             type="text"
             placeholder="Search product or ingredient..."
-            className="search-input"
+            className="inventory-search-input"
             value={searchTerm}
             onChange={(e) => {
               setSearchTerm(e.target.value);
@@ -1307,9 +1306,9 @@ const ProductManagement = () => {
             }}
           />
         </div>
-        <div className="filter-wrapper">
+        <div className="inventory-controls-right">
           <select 
-            className="filter-select"
+            className="inventory-sort-select"
             value={statusFilter}
             onChange={(e) => {
               setStatusFilter(e.target.value);
@@ -1322,16 +1321,19 @@ const ProductManagement = () => {
             <option value="inactive">Inactive products</option>
           </select>
           <select 
-            className="filter-select"
+            className="inventory-sort-select"
             value={selectedCategory}
-            onChange={(e) => setSelectedCategory(e.target.value)}
+            onChange={(e) => {
+              setSelectedCategory(e.target.value);
+              setCurrentPage(1);
+            }}
           >
             {categories.map(cat => (
               <option key={cat} value={cat}>{cat}</option>
             ))}
           </select>
           <select 
-            className="sort-select"
+            className="inventory-sort-select"
             value={sortBy}
             onChange={(e) => setSortBy(e.target.value)}
           >
@@ -1471,38 +1473,48 @@ const ProductManagement = () => {
           )}
         </div>
 
-        {totalPages > 1 && mappingData.length > 0 && (
+        {/* Pagination — always visible so it's clear the table is split 10 per page */}
+        {mappingData.length > 0 && (
           <div className="pagination">
-            <div className="pagination-left">
-              <button 
-                className="page-btn"
-                onClick={() => setCurrentPage(Math.max(1, currentPage - 1))}
-                disabled={currentPage === 1}
-              >
-                <FaChevronLeft /> Previous
-              </button>
+            <div className="pagination-info-wrap">
+              <span className="pagination-info">
+                Showing {Math.min(startIndex + 1, mappingData.length)}–
+                {Math.min(startIndex + itemsPerPage, mappingData.length)} of {mappingData.length} items
+              </span>
             </div>
-            <div className="pagination-center">
-              {getPageNumbers.map((page, index) => (
-                <button
-                  key={index}
-                  className={`page-number ${page === currentPage ? 'active' : ''} ${page === '...' ? 'dots' : ''}`}
-                  onClick={() => typeof page === 'number' && setCurrentPage(page)}
-                  disabled={page === '...'}
+            <div className="pagination-controls">
+              <div className="pagination-left">
+                <button 
+                  className="page-btn"
+                  onClick={() => setCurrentPage(Math.max(1, currentPage - 1))}
+                  disabled={currentPage === 1}
                 >
-                  {page}
+                  <FaChevronLeft /> Previous
                 </button>
-              ))}
+              </div>
+              <div className="pagination-center">
+                {getPageNumbers.map((page, index) => (
+                  <button
+                    key={index}
+                    className={`page-number ${page === currentPage ? 'active' : ''} ${page === '...' ? 'dots' : ''}`}
+                    onClick={() => typeof page === 'number' && setCurrentPage(page)}
+                    disabled={page === '...'}
+                  >
+                    {page}
+                  </button>
+                ))}
+              </div>
+              <div className="pagination-right">
+                <button 
+                  className="page-btn"
+                  onClick={() => setCurrentPage(Math.min(totalPages, currentPage + 1))}
+                  disabled={currentPage === totalPages}
+                >
+                  Next <FaChevronRight />
+                </button>
+              </div>
             </div>
-            <div className="pagination-right">
-              <button 
-                className="page-btn"
-                onClick={() => setCurrentPage(Math.min(totalPages, currentPage + 1))}
-                disabled={currentPage === totalPages}
-              >
-                Next <FaChevronRight />
-              </button>
-            </div>
+            <div className="pagination-anchor" aria-hidden="true"></div>
           </div>
         )}
       </div>

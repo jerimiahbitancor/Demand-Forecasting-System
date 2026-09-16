@@ -3,7 +3,10 @@ const express = require('express');
 const router = express.Router();
 const authenticate = require('../middleware/auth');
 const mlService = require('../services/mlService');
+const { createNotification } = require('../services/notificationService');
 const { supabaseAdmin } = require('../config/supabase');
+
+const userIdOf = (req) => req.user?.user_id || req.user?.id || null;
 
 function respondWithMlError(res, error, fallbackMessage) {
   console.error(fallbackMessage, error);
@@ -35,6 +38,14 @@ router.post('/train', authenticate, async (req, res) => {
     if (error) throw error;
 
     if (latestUpload && latestUpload.status && latestUpload.status !== 'completed') {
+      createNotification({
+        userId: userIdOf(req),
+        type: 'pending',
+        title: 'Training on hold',
+        message: 'The most recent upload has not finished processing yet — training will not start until it completes.',
+        link: '/data-management',
+        metadata: { kind: 'training', status: 'deferred' },
+      });
       return res.status(409).json({
         success: false,
         error: 'The most recent upload has not finished processing yet',
@@ -42,9 +53,36 @@ router.post('/train', authenticate, async (req, res) => {
       });
     }
 
+    createNotification({
+      userId: userIdOf(req),
+      type: 'pending',
+      title: 'Forecast model training started',
+      message: 'Training the forecast model on your uploaded data — you will be notified when it finishes.',
+      link: '/analytics',
+      metadata: { kind: 'training', status: 'started' },
+    });
+
     const result = await mlService.train();
+
+    createNotification({
+      userId: userIdOf(req),
+      type: 'success',
+      title: 'Forecast model training completed',
+      message: 'Training finished successfully — the forecast model is ready for the current data.',
+      link: '/analytics',
+      metadata: { kind: 'training', status: 'completed' },
+    });
+
     res.json({ success: true, data: result });
   } catch (error) {
+    createNotification({
+      userId: userIdOf(req),
+      type: 'error',
+      title: 'Model training failed',
+      message: `Forecast training failed — ${(error && error.message) || 'check data quality.'}`,
+      link: '/analytics',
+      metadata: { kind: 'training', status: 'failed' },
+    });
     respondWithMlError(res, error, 'Failed to trigger training');
   }
 });
@@ -59,8 +97,26 @@ router.post('/forecast', authenticate, async (req, res) => {
   try {
     const { horizonDays, runType } = req.body || {};
     const result = await mlService.forecast({ horizonDays, runType });
+
+    createNotification({
+      userId: userIdOf(req),
+      type: 'success',
+      title: 'Forecast report is ready',
+      message: `Forecast${horizonDays === 7 ? ' for the next week' : ' for today'} has been generated and saved. Check the Forecasts page to review it.`,
+      link: '/analytics',
+      metadata: { kind: 'forecast', status: 'ready', horizon_days: horizonDays || 1 },
+    });
+
     res.json({ success: true, data: result });
   } catch (error) {
+    createNotification({
+      userId: userIdOf(req),
+      type: 'error',
+      title: 'Forecast generation failed',
+      message: `Could not generate the forecast — ${(error && error.message) || 'check data quality or model availability.'}`,
+      link: '/analytics',
+      metadata: { kind: 'forecast', status: 'failed' },
+    });
     respondWithMlError(res, error, 'Failed to trigger forecast');
   }
 });

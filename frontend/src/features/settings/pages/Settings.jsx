@@ -1,12 +1,12 @@
 // frontend/src/features/settings/Settings.jsx
 import { useState } from 'react';
 import { 
-  FiSave, 
   FiUser, 
   FiBriefcase, 
   FiSliders, 
   FiDatabase,
   FiBookOpen,
+  FiShield,
 } from 'react-icons/fi';
 import Navbar from '../../components/Navbar/Navbar.jsx';
 import BusinessProfile from '../components/BusinessProfile.jsx';
@@ -14,6 +14,7 @@ import AccountSettings from '../components/AccountSettings.jsx';
 import ForecastConfig from '../components/ForecastConfig.jsx';
 import DataManagementSettings from '../components/DataManagementSettings.jsx';
 import Documentation from '../components/AboutDocumentation.jsx';
+import AuditLogs from '../components/AuditLogs.jsx';
 import './Settings.css';
 
 const Settings = () => {
@@ -24,6 +25,7 @@ const Settings = () => {
     { id: 'account', label: 'Account Settings', icon: <FiUser size={18} /> },
     { id: 'forecast', label: 'Forecast Configuration', icon: <FiSliders size={18} /> },
     { id: 'data', label: 'Data Management Settings', icon: <FiDatabase size={18} /> },
+    { id: 'audit', label: 'Audit Logs', icon: <FiShield size={18} /> },
     { id: 'documentation', label: 'About & Documentation', icon: <FiBookOpen size={18} /> },
   ];
 
@@ -37,6 +39,8 @@ const Settings = () => {
         return <ForecastConfig />;
       case 'data':
         return <DataManagementSettings />;
+      case 'audit':
+        return <AuditLogs />;
       case 'documentation':
         return <Documentation />;
       default:
@@ -65,7 +69,7 @@ const Settings = () => {
           {/* Tabbed Container */}
           <div className="tabbed-container">
             {/* Tabs Header */}
-            <div className="tabs-header">
+            <div className="tabs-header1">
               {tabs.map((tab) => (
                 <button
                   key={tab.id}

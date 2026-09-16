@@ -10,10 +10,56 @@ const uploadService = require('../services/uploadService');
 const menuService = require('../services/menuService');
 const mappingService = require('../services/mappingService');
 const businessDayService = require('../services/businessDayService');
+const { logAction } = require('../services/auditService');
+const { createNotification } = require('../services/notificationService');
+
+const actorOf = (req) => req.user?.name || req.user?.email || null;
+
+// Fire-and-forget error notification whenever an upload request ends with a
+// failure status, no matter which middleware/handler rejected it.
+const notifyUploadOutcome = (req, res, next) => {
+  const send = res.json;
+  res.json = (body) => {
+    res.locals.errBody = body;
+    return send.call(res, body);
+  };
+
+  res.on('finish', () => {
+    if (req.method !== 'POST' || res.statusCode < 400) return;
+    const userId = req.user?.user_id || req.user?.id || null;
+    if (!userId) return;
+
+    const body = res.locals.errBody || {};
+    const raw = body && (body.message || body.error || body.details);
+    const detail = typeof raw === 'string' && raw.trim() ? raw.trim() : 'Upload failed';
+    const filename = req.file?.originalname || 'file';
+
+    let title = 'Upload failed';
+    if (/duplicate/i.test(detail)) {
+      title = 'Upload failed: duplicate detected';
+    } else if (/column/i.test(detail)) {
+      title = 'Upload failed: missing required columns';
+    } else if (/invalid file|file type|format/i.test(detail)) {
+      title = 'Upload failed: invalid file format';
+    }
+
+    createNotification({
+      userId,
+      type: 'error',
+      title,
+      message: `"${filename}" — ${detail}`,
+      link: '/data-management',
+      metadata: { kind: 'upload_failed', filename },
+    });
+  });
+
+  next();
+};
 
 router.post(
   '/',
   authenticate,
+  notifyUploadOutcome,
   uploadSingle,
   validateFile,
   virusScan,
@@ -97,6 +143,21 @@ router.post(
           } catch (reconcileError) {
             console.error('Error reconciling product activation after menu upload:', reconcileError);
           }
+
+          logAction(
+            'upload_menu',
+            `Uploaded menu data "${file.originalname}" (${result.validation.totalRows} rows, ${result.productsInserted || 0} products, ${result.ingredientsInserted || 0} ingredients)`,
+            actorOf(req)
+          );
+
+          createNotification({
+            userId: numericId,
+            type: 'success',
+            title: 'Menu data uploaded',
+            message: `"${file.originalname}" was uploaded — ${result.validation.validRows} valid row(s), ${result.productsInserted || 0} products, ${result.ingredientsInserted || 0} ingredients.`,
+            link: '/data-management',
+            metadata: { kind: 'upload', type: 'menu', filename: file.originalname },
+          });
 
           return res.status(201).json({
             success: true,
@@ -190,6 +251,21 @@ router.post(
           } catch (businessDayError) {
             console.error('Error confirming business_days as open after upload:', businessDayError);
           }
+
+          logAction(
+            'upload_sales',
+            `Uploaded sales data "${file.originalname}" (${summary.totalRows} rows, ${summary.validRows} valid, ${summary.invalidRows} invalid, ${summary.productsDetected || 0} products)`,
+            actorOf(req)
+          );
+
+          createNotification({
+            userId: numericId,
+            type: 'success',
+            title: 'Sales data uploaded',
+            message: `"${file.originalname}" was uploaded — ${summary.validRows} valid row(s), ${summary.invalidRows} invalid, ${summary.productsDetected || 0} products.`,
+            link: '/data-management',
+            metadata: { kind: 'upload', type: 'sales', filename: file.originalname },
+          });
 
           return res.status(201).json({
             success: true,
@@ -429,6 +505,12 @@ router.put('/:id', authenticate, async (req, res) => {
         error: 'Upload not found or you do not have permission'
       });
     }
+
+    logAction(
+      'upload_updated',
+      `Updated upload "${upload?.filename || uploadId}" (status: ${status})`,
+      actorOf(req)
+    );
     
     res.json({
       success: true,
@@ -458,6 +540,7 @@ router.delete('/:id', authenticate, async (req, res) => {
       });
     }
     
+    const uploadToDelete = await uploadService.getUploadById(uploadId, userId);
     const success = await uploadService.deleteUpload(uploadId, userId);
     
     if (!success) {
@@ -466,6 +549,12 @@ router.delete('/:id', authenticate, async (req, res) => {
         error: 'Upload not found or you do not have permission'
       });
     }
+
+    logAction(
+      'upload_deleted',
+      `Deleted upload "${uploadToDelete?.filename || uploadId}"`,
+      actorOf(req)
+    );
     
     res.json({
       success: true,

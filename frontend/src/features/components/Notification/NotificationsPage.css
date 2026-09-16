@@ -1,0 +1,101 @@
+/* pages/NotificationsPage.css */
+.notifications-page {
+  max-width: 820px;
+  margin: 0 auto;
+  padding: 24px;
+}
+
+.notifications-page-header {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 20px;
+}
+
+.notifications-page-header h2 {
+  flex: 1;
+  margin: 0;
+  font-size: 22px;
+  font-weight: 600;
+  color: var(--color-text-primary, #1c2632);
+}
+
+.notifications-back-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 34px;
+  height: 34px;
+  border: 1px solid var(--color-border-light, #e8e0dd);
+  border-radius: 8px;
+  background: var(--color-bg-white, #ffffff);
+  color: var(--color-text-primary, #1c2632);
+  cursor: pointer;
+  font-size: 14px;
+  transition: background 0.2s ease;
+}
+
+.notifications-back-btn:hover {
+  background: var(--color-bg-light, #f8f9fa);
+}
+
+.notifications-page-actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.notifications-action-btn {
+  background: var(--color-bg-white, #ffffff);
+  border: 1px solid var(--color-border-light, #e8e0dd);
+  color: var(--color-text-secondary, #5c403c);
+  font-size: 12px;
+  font-weight: 500;
+  padding: 6px 12px;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.notifications-action-btn:hover:not(:disabled) {
+  background: var(--color-bg-light, #f8f9fa);
+  color: var(--color-red-primary, #7a0101);
+}
+
+.notifications-action-btn.danger:hover:not(:disabled) {
+  background: #fee2e2;
+  border-color: #fecaca;
+  color: #b91c1c;
+}
+
+.notifications-action-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.notification-card {
+  background: var(--color-bg-white, #ffffff);
+  border: 1px solid var(--color-border-light, #e8e0dd);
+  border-radius: 12px;
+  overflow: hidden;
+  box-shadow: 0 2px 12px rgba(0, 0, 0, 0.04);
+}
+
+.notification-list-page {
+  max-height: none;
+}
+
+@media (max-width: 600px) {
+  .notifications-page {
+    padding: 16px;
+  }
+
+  .notifications-page-header {
+    flex-wrap: wrap;
+  }
+
+  .notifications-page-header h2 {
+    flex-basis: 100%;
+    order: -1;
+  }
+}

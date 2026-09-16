@@ -197,11 +197,14 @@ const NotificationDropdown = () => {
     if (!notification.read) {
       try {
         await apiClient.patch(`/notifications/${notification.id}/read`);
-        setNotifications(prev => 
+        setNotifications(prev =>
           prev.map(n => n.id === notification.id ? { ...n, read: true } : n)
         );
-        setUnreadCount(prev => Math.max(0, prev - 1));
-        sessionStorage.setItem(STORAGE_KEYS.UNREAD_COUNT, Math.max(0, unreadCount - 1).toString());
+        setUnreadCount(prev => {
+          const next = Math.max(0, prev - 1);
+          sessionStorage.setItem(STORAGE_KEYS.UNREAD_COUNT, next.toString());
+          return next;
+        });
       } catch (error) {
         console.error('Error marking notification as read:', error);
       }
