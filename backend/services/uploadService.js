@@ -162,8 +162,11 @@ class UploadService {
       }
 
       if (!this.isSupabaseReady()) {
+        // Only a genuinely-completed upload should block a retry — a row
+        // left at 'pending' or 'failed' by a pipeline that threw partway
+        // through was never actually saved, so it shouldn't count.
         const existing = this.memoryStore.uploads.find(
-          u => u.filename === filename && u.user_id === numericId
+          u => u.filename === filename && u.user_id === numericId && u.status === 'processed'
         );
         return !!existing;
       }
@@ -175,6 +178,7 @@ class UploadService {
         .select('id, filename, upload_date')
         .eq('filename', filename)
         .eq('user_id', numericId)
+        .eq('status', 'processed')
         .gte('upload_date', oneHourAgo.toISOString())
         .limit(1);
 
@@ -425,8 +429,10 @@ class UploadService {
         throw productsError;
       }
 
+      const currentCategoryByProductId = new Map();
       for (const product of products || []) {
         productIdByName.set(String(product.name).trim().toLowerCase(), product.id);
+        currentCategoryByProductId.set(product.id, product.category);
       }
 
       const dailySalesRows = [];
@@ -474,12 +480,25 @@ class UploadService {
         }
       }
 
+      // Was one UPDATE per product every upload, even when the category was
+      // already set (the .eq('category','Uncategorized') meant most of
+      // those round trips touched 0 rows). Now: skip products that don't
+      // need a change (still in memory from the `products` fetch above,
+      // no extra query), and send the rest as one batched upsert instead
+      // of N sequential .update() calls.
+      const categoryUpdates = [];
       for (const [productId, category] of categoryByProductId) {
+        const normalizedCategory = category || 'Uncategorized';
+        const currentCategory = currentCategoryByProductId.get(productId);
+        if (currentCategory === 'Uncategorized' && normalizedCategory !== 'Uncategorized') {
+          categoryUpdates.push({ id: productId, category: normalizedCategory });
+        }
+      }
+
+      if (categoryUpdates.length > 0) {
         const { error: categoryUpdateError } = await supabaseAdmin
           .from('products')
-          .update({ category: category || 'Uncategorized' })
-          .eq('id', productId)
-          .eq('category', 'Uncategorized');
+          .upsert(categoryUpdates, { onConflict: 'id' });
 
         if (categoryUpdateError) {
           throw categoryUpdateError;
@@ -527,22 +546,31 @@ class UploadService {
         }
 
         for (const [ingredientId, deduction] of deductions) {
-          const { data: ingredient, error: ingredientError } = await supabaseAdmin
-            .from('ingredients')
-            .select('quantity')
-            .eq('id', ingredientId)
-            .single();
+          // Was SELECT quantity, then compute new = max(0, old - deduction)
+          // in JS, then UPDATE — two round trips wide open to a lost
+          // update: two concurrent uploads deducting the same ingredient
+          // can both read the same starting quantity before either write
+          // lands, so the second UPDATE clobbers the first instead of
+          // stacking. deduct_ingredient_stock() (migrations/
+          // 001_add_deduct_ingredient_stock_function.sql) does the read,
+          // clamp, and write as one atomic statement in Postgres, so
+          // concurrent callers serialize on the row instead of racing.
+          const { data: deductionResult, error: deductionError } = await supabaseAdmin
+            .rpc('deduct_ingredient_stock', {
+              p_ingredient_id: ingredientId,
+              p_deduction: deduction,
+              p_updated_by: numericId
+            });
 
-          if (ingredientError) throw ingredientError;
+          if (deductionError) throw deductionError;
 
-          const previousQuantity = Number(ingredient.quantity) || 0;
-          const newQuantity = Math.max(0, previousQuantity - deduction);
-          const { error: updateIngredientError } = await supabaseAdmin
-            .from('ingredients')
-            .update({ quantity: newQuantity, updated_by: numericId })
-            .eq('id', ingredientId);
+          const deductionRow = Array.isArray(deductionResult) ? deductionResult[0] : deductionResult;
+          if (!deductionRow) {
+            throw new Error(`Ingredient ${ingredientId} not found while deducting stock`);
+          }
 
-          if (updateIngredientError) throw updateIngredientError;
+          const previousQuantity = Number(deductionRow.previous_quantity) || 0;
+          const newQuantity = Number(deductionRow.new_quantity) || 0;
 
           const { error: transactionError } = await supabaseAdmin
             .from('inventory_transactions')
@@ -567,6 +595,14 @@ class UploadService {
         salesByProductId.set(sale.product_id, dates);
       }
 
+      // Was one UPDATE per product every upload, even for products whose
+      // status doesn't actually change (the common case). Skip is a no-op
+      // check against fields already in memory from productRows above,
+      // and the rest go out as one batched upsert instead of N sequential
+      // .update() calls. (This also makes productsUpdated mean "products
+      // whose status actually changed" instead of "products touched" —
+      // a more accurate number for the upload summary shown to the owner.)
+      const statusUpdates = [];
       for (const product of productRows || []) {
         const productSales = salesByProductId.get(product.id) || [];
 
@@ -580,18 +616,35 @@ class UploadService {
           inactiveReason: product.inactive_reason
         });
 
-        const { error: updateError } = await supabaseAdmin.from('products')
-          .update({
-            first_sold_date: firstSoldDate ? firstSoldDate.slice(0, 10) : null,
-            is_active: status.isActive,
-            inactive_reason: status.note || null,
-            inactive_since: status.isActive ? null : (product.inactive_since || new Date().toISOString().slice(0, 10))
-          })
-          .eq('id', product.id);
+        const nextFirstSoldDate = firstSoldDate ? firstSoldDate.slice(0, 10) : null;
+        const nextInactiveReason = status.note || null;
+        const nextInactiveSince = status.isActive
+          ? null
+          : (product.inactive_since || new Date().toISOString().slice(0, 10));
 
-        if (!updateError) {
-          productsUpdated += 1;
-        }
+        const unchanged = (product.first_sold_date || null) === nextFirstSoldDate
+          && Boolean(product.is_active) === status.isActive
+          && (product.inactive_reason || null) === nextInactiveReason
+          && (product.inactive_since || null) === nextInactiveSince;
+
+        if (unchanged) continue;
+
+        statusUpdates.push({
+          id: product.id,
+          first_sold_date: nextFirstSoldDate,
+          is_active: status.isActive,
+          inactive_reason: nextInactiveReason,
+          inactive_since: nextInactiveSince
+        });
+      }
+
+      if (statusUpdates.length > 0) {
+        const { error: statusUpdateError } = await supabaseAdmin
+          .from('products')
+          .upsert(statusUpdates, { onConflict: 'id' });
+
+        if (statusUpdateError) throw statusUpdateError;
+        productsUpdated = statusUpdates.length;
       }
 
       return {
@@ -761,15 +814,17 @@ class UploadService {
     };
   }
 
-  async saveUploadRecord(fileData, processedData, userId = null) {
-    let filename = fileData.originalName || fileData.filename;
-    let numericId = null;
-    
+  // numericId must be the already-resolved numeric user id — the caller
+  // (routes/upload.js) already calls getNumericUserId() and
+  // checkDuplicateUpload() once before deciding to process the file at
+  // all, so redoing both here was the exact same two Supabase queries
+  // firing twice per upload request for no reason.
+  async saveUploadRecord(fileData, processedData, numericId) {
+    const filename = fileData.originalName || fileData.filename;
+
     try {
-      numericId = await this.getNumericUserId(userId);
-      
-      console.log('Saving upload - userId:', userId, 'numericId:', numericId);
-      
+      console.log('Saving upload - numericId:', numericId);
+
       if (!numericId) {
         console.error('User not found in custom users table.');
         throw new Error('User not found. Please login again.');
@@ -779,12 +834,6 @@ class UploadService {
       if (this.isUploadProcessing(filename, numericId)) {
         console.log(`Stale processing lock found for ${filename}, clearing...`);
         this.clearProcessing(filename, numericId);
-      }
-
-      const isDuplicate = await this.checkDuplicateUpload(filename, numericId);
-      if (isDuplicate) {
-        console.log(`Duplicate upload detected: ${filename}`);
-        throw new Error('Duplicate upload detected. This file has already been uploaded recently.');
       }
 
       this.markUploadProcessing(filename, numericId);
@@ -806,12 +855,11 @@ class UploadService {
         console.log('  Errors:', validation.errors);
       }
 
-      let status = 'processed';
-      if (!validation.isValid) {
-        status = 'failed';
-      } else if (validation.invalidRows > 0) {
-        status = 'pending';
-      }
+      // 'processed' means the full pipeline (product sync, daily_sales
+      // insert, status reconciliation) actually completed — set below by
+      // routes/upload.js via updateUploadStatus() once that's true. This
+      // row existing only means validation passed and it's queued to run.
+      const status = validation.isValid ? 'pending' : 'failed';
 
       const insertData = {
         filename: filename,
@@ -866,11 +914,6 @@ class UploadService {
       // Always clear processing lock on error
       if (filename && numericId) {
         this.clearProcessing(filename, numericId);
-      } else if (filename && userId) {
-        const numId = await this.getNumericUserId(userId);
-        if (numId) {
-          this.clearProcessing(filename, numId);
-        }
       }
       console.error('Error saving upload record:', error);
       throw error;

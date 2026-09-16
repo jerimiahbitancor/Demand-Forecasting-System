@@ -132,6 +132,41 @@ app.use((err, req, res, next) => {
   res.status(status).json(response);
 });
 
+// ============= CRASH SAFETY NET =============
+// Express 4 does NOT catch a rejected promise returned from an async route
+// handler or from any "fire and forget" call (one not awaited and without
+// its own .catch()) — Node then treats it as an unhandled rejection, and
+// Node's default behavior (since v15) is to crash the ENTIRE process. With
+// no handler here, that means one bad request, anywhere across every
+// route/controller/service in this app, takes the whole server down for
+// every user — not just the request that triggered it. And since nodemon
+// does not auto-restart after a crash (it waits for a file save), the
+// server then stays dead until someone notices and restarts it by hand,
+// which is what made unrelated failures (notifications, dashboard, stats)
+// look like they were "spreading" — they were really just victims of one
+// unrelated promise crashing the process out from under them.
+//
+// unhandledRejection: log and keep running. The failed request/operation
+// is already broken either way; killing every OTHER in-flight request too
+// is strictly worse. This is a safety net for bugs we haven't found yet —
+// it is not a substitute for fixing a missing try/catch or .catch() once
+// the log below points at one.
+process.on('unhandledRejection', (reason, promise) => {
+  console.error('🔥 Unhandled Promise Rejection:', reason);
+});
+
+// uncaughtException: a thrown error outside any promise/async context is a
+// different, more dangerous situation — Node's own docs say the process's
+// internal state can no longer be trusted at that point, so the safe move
+// is to log it and exit (not "keep serving requests from a possibly-corrupt
+// process"). In production this needs a process manager (pm2, systemd,
+// Docker's restart policy) to bring it back up; in local dev, nodemon will
+// pick this up as an exit and restart on the next file save same as before.
+process.on('uncaughtException', (err) => {
+  console.error('🔥 Uncaught Exception:', err);
+  process.exit(1);
+});
+
 // ============= START SERVER =============
 const { refreshLowStockNotifications } = require('./services/notificationService');
 

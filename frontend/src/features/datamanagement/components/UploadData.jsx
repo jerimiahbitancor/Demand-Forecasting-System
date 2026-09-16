@@ -22,7 +22,30 @@ const BULK_UPLOAD_STATUS_KEY = 'bulk_upload_status';
 const getStoredUploadStatus = (type) => {
   try {
     const stored = JSON.parse(sessionStorage.getItem(BULK_UPLOAD_STATUS_KEY) || '{}');
-    return stored[type] || null;
+    const status = stored[type] || null;
+
+    // A page load/refresh always destroys whatever request was actually in
+    // flight — there is no way an upload can genuinely still be "loading"
+    // by the time this runs again. Trusting a persisted 'loading' status
+    // permanently disables the upload button (its `disabled` check
+    // includes `status === 'loading'`) and NOTHING will ever resolve it
+    // back to 'success'/'error', because the request that would have done
+    // that no longer exists. Also polled every 500ms (see the
+    // syncUploadStatus interval) so this can't self-heal on its own —
+    // correct it here, once, at the source both readers share.
+    if (status && status.status === 'loading') {
+      const corrected = { ...status, status: 'error' };
+      stored[type] = corrected;
+      try {
+        sessionStorage.setItem(BULK_UPLOAD_STATUS_KEY, JSON.stringify(stored));
+      } catch {
+        // Storage write is best-effort — the corrected value is still
+        // returned below either way.
+      }
+      return corrected;
+    }
+
+    return status;
   } catch {
     return null;
   }
@@ -58,6 +81,58 @@ const clearUploadStatus = (type) => {
   }
 };
 
+// Runs `worker(item, index)` over `items` in fixed-size batches instead of
+// all at once — firing every file concurrently (e.g. a 284-file historical
+// backfill) floods the backend and Supabase Auth with hundreds of
+// simultaneous requests, which causes widespread 500s and can starve
+// unrelated requests (like /api/notifications) into spurious 401s.
+// Shared by handleSalesConfirm and handleMenuConfirm so the two upload
+// flows can't drift out of sync on this again.
+const runBatched = async (items, concurrency, worker) => {
+  const results = new Array(items.length);
+  for (let start = 0; start < items.length; start += concurrency) {
+    const batchIndices = [];
+    for (let j = start; j < Math.min(start + concurrency, items.length); j++) {
+      batchIndices.push(j);
+    }
+    const batchResults = await Promise.allSettled(
+      batchIndices.map((i) => worker(items[i], i))
+    );
+    batchResults.forEach((result, k) => {
+      results[batchIndices[k]] = result;
+    });
+  }
+  return results;
+};
+
+const UPLOAD_CONCURRENCY = 5;
+
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+// 429/500/502/503 are transient (rate-limited, overloaded, gateway hiccup)
+// and worth a retry. 400/409 are real validation/duplicate-file errors —
+// retrying them would just repeat the same rejection, so they're excluded
+// on purpose.
+const RETRYABLE_UPLOAD_STATUSES = new Set([429, 500, 502, 503]);
+const UPLOAD_RETRY_DELAYS_MS = [500, 1500];
+
+const withTransientRetry = async (fn) => {
+  let lastError;
+  for (let attempt = 0; attempt <= UPLOAD_RETRY_DELAYS_MS.length; attempt++) {
+    try {
+      return await fn();
+    } catch (error) {
+      lastError = error;
+      const status = error?.response?.status;
+      const canRetry = RETRYABLE_UPLOAD_STATUSES.has(status) && attempt < UPLOAD_RETRY_DELAYS_MS.length;
+      if (!canRetry) throw error;
+      console.warn(`Upload got status ${status}, retrying (attempt ${attempt + 1}/${UPLOAD_RETRY_DELAYS_MS.length})...`);
+      await sleep(UPLOAD_RETRY_DELAYS_MS[attempt]);
+    }
+  }
+  throw lastError;
+};
+
 const UploadData = ({
   activeTab,
   setActiveTab,
@@ -80,7 +155,10 @@ const UploadData = ({
   const [salesValidated, setSalesValidated] = useState(false);
   const [salesValidationErrors, setSalesValidationErrors] = useState([]);
   const [salesIsValid, setIsSalesValid] = useState(false);
-  const [salesProcessingIndex, setSalesProcessingIndex] = useState(-1);
+  // Concurrency is > 1 (see UPLOAD_CONCURRENCY), so several files are
+  // genuinely in flight at once — a Set of indices, not one index.
+  const [salesProcessingIndices, setSalesProcessingIndices] = useState(() => new Set());
+  const [salesDoneIndices, setSalesDoneIndices] = useState(() => new Set());
   const [salesUploadedCount, setSalesUploadedCount] = useState(
     () => getStoredUploadStatus('sales')?.uploadedCount || 0
   );
@@ -98,7 +176,8 @@ const UploadData = ({
   const [menuValidationErrors, setMenuValidationErrors] = useState([]);
   const [menuDbDuplicates, setMenuDbDuplicates] = useState([]);
   const [menuIsValid, setMenuIsValid] = useState(false);
-  const [menuProcessingIndex, setMenuProcessingIndex] = useState(-1);
+  const [menuProcessingIndices, setMenuProcessingIndices] = useState(() => new Set());
+  const [menuDoneIndices, setMenuDoneIndices] = useState(() => new Set());
   const [menuUploadedCount, setMenuUploadedCount] = useState(
     () => getStoredUploadStatus('menu')?.uploadedCount || 0
   );
@@ -585,7 +664,8 @@ const UploadData = ({
     try {
       setSalesUploadStatus('loading');
       setSalesProgress(0);
-      setSalesProcessingIndex(0);
+      setSalesProcessingIndices(new Set());
+      setSalesDoneIndices(new Set());
       setSalesUploadedCount(0);
       saveUploadStatus('sales', {
         status: 'loading',
@@ -593,45 +673,55 @@ const UploadData = ({
         uploadedCount: 0,
         files: salesFiles.map(({ name, size, type }) => ({ name, size, type }))
       });
-      
+
       const totalFiles = salesFiles.length;
       let uploaded = 0;
       const failedFiles = [];
       let completed = 0;
 
-      const salesResults = await Promise.allSettled(salesFiles.map(async (_, i) => {
+      const uploadOneSalesFile = async (file, i) => {
+        setSalesProcessingIndices((prev) => new Set(prev).add(i));
         try {
-          setSalesProcessingIndex(i);
-          const formData = new FormData();
-          formData.append('file', salesFiles[i]);
-          formData.append('fileType', 'sales');
+          console.log(`Uploading sales file ${i + 1}/${totalFiles}: ${file.name}`);
 
-          console.log(`Uploading sales file ${i + 1}/${totalFiles}: ${salesFiles[i].name}`);
+          const response = await withTransientRetry(() => {
+            const formData = new FormData();
+            formData.append('file', file);
+            formData.append('fileType', 'sales');
 
-          const response = await apiClient.post('/upload', formData, {
-            headers: {
-              'Content-Type': 'multipart/form-data'
-            },
-            onUploadProgress: (progressEvent) => {
-              const percentCompleted = Math.round((progressEvent.loaded * 100) / progressEvent.total);
-              const overallProgress = Math.round(((completed + (percentCompleted / 100)) / totalFiles) * 100);
-              setSalesProgress(overallProgress);
-              saveUploadStatus('sales', { status: 'loading', progress: overallProgress, uploadedCount: uploaded });
-            }
+            return apiClient.post('/upload', formData, {
+              headers: {
+                'Content-Type': 'multipart/form-data'
+              },
+              onUploadProgress: (progressEvent) => {
+                const percentCompleted = Math.round((progressEvent.loaded * 100) / progressEvent.total);
+                const overallProgress = Math.round(((completed + (percentCompleted / 100)) / totalFiles) * 100);
+                setSalesProgress(overallProgress);
+                saveUploadStatus('sales', { status: 'loading', progress: overallProgress, uploadedCount: uploaded });
+              }
+            });
           });
 
           if (!response?.data?.success) {
-            throw new Error(response?.data?.error || `Failed to upload ${salesFiles[i].name}`);
+            throw new Error(response?.data?.error || `Failed to upload ${file.name}`);
           }
 
+          setSalesDoneIndices((prev) => new Set(prev).add(i));
           return response;
         } finally {
+          setSalesProcessingIndices((prev) => {
+            const next = new Set(prev);
+            next.delete(i);
+            return next;
+          });
           completed++;
           const progress = Math.round((completed / totalFiles) * 100);
           setSalesProgress(progress);
           saveUploadStatus('sales', { status: 'loading', progress, uploadedCount: uploaded });
         }
-      }));
+      };
+
+      const salesResults = await runBatched(salesFiles, UPLOAD_CONCURRENCY, uploadOneSalesFile);
 
       salesResults.forEach((result, i) => {
         if (result.status === 'fulfilled' && result.value?.data?.success) {
@@ -694,7 +784,8 @@ const UploadData = ({
         setSalesValidated(false);
         setSalesValidationErrors([]);
         setIsSalesValid(false);
-        setSalesProcessingIndex(-1);
+        setSalesProcessingIndices(new Set());
+        setSalesDoneIndices(new Set());
         setSalesUploadedCount(0);
         setSalesPreviewData({
           totalRecords: 0,
@@ -734,7 +825,7 @@ const UploadData = ({
       
       setTimeout(() => {
         setSalesUploadStatus(null);
-        setSalesProcessingIndex(-1);
+        setSalesProcessingIndices(new Set());
       }, 3000);
     }
   };
@@ -747,7 +838,8 @@ const UploadData = ({
     setSalesValidated(false);
     setSalesValidationErrors([]);
     setIsSalesValid(false);
-    setSalesProcessingIndex(-1);
+    setSalesProcessingIndices(new Set());
+    setSalesDoneIndices(new Set());
     setSalesUploadedCount(0);
     setSalesPreviewData({
       totalRecords: 0,
@@ -928,7 +1020,8 @@ const UploadData = ({
     try {
       setMenuUploadStatus('loading');
       setMenuProgress(0);
-      setMenuProcessingIndex(0);
+      setMenuProcessingIndices(new Set());
+      setMenuDoneIndices(new Set());
       setMenuUploadedCount(0);
       saveUploadStatus('menu', {
         status: 'loading',
@@ -936,45 +1029,55 @@ const UploadData = ({
         uploadedCount: 0,
         files: menuFiles.map(({ name, size, type }) => ({ name, size, type }))
       });
-      
+
       const totalFiles = menuFiles.length;
       let uploaded = 0;
       const failedFiles = [];
       let completed = 0;
 
-      const menuResults = await Promise.allSettled(menuFiles.map(async (_, i) => {
+      const uploadOneMenuFile = async (file, i) => {
+        setMenuProcessingIndices((prev) => new Set(prev).add(i));
         try {
-          setMenuProcessingIndex(i);
-          const formData = new FormData();
-          formData.append('file', menuFiles[i]);
-          formData.append('fileType', 'menu');
+          console.log(`Uploading menu file ${i + 1}/${totalFiles}: ${file.name}`);
 
-          console.log(`Uploading menu file ${i + 1}/${totalFiles}: ${menuFiles[i].name}`);
+          const response = await withTransientRetry(() => {
+            const formData = new FormData();
+            formData.append('file', file);
+            formData.append('fileType', 'menu');
 
-          const response = await apiClient.post('/upload', formData, {
-            headers: {
-              'Content-Type': 'multipart/form-data'
-            },
-            onUploadProgress: (progressEvent) => {
-              const percentCompleted = Math.round((progressEvent.loaded * 100) / progressEvent.total);
-              const overallProgress = Math.round(((completed + (percentCompleted / 100)) / totalFiles) * 100);
-              setMenuProgress(overallProgress);
-              saveUploadStatus('menu', { status: 'loading', progress: overallProgress, uploadedCount: uploaded });
-            }
+            return apiClient.post('/upload', formData, {
+              headers: {
+                'Content-Type': 'multipart/form-data'
+              },
+              onUploadProgress: (progressEvent) => {
+                const percentCompleted = Math.round((progressEvent.loaded * 100) / progressEvent.total);
+                const overallProgress = Math.round(((completed + (percentCompleted / 100)) / totalFiles) * 100);
+                setMenuProgress(overallProgress);
+                saveUploadStatus('menu', { status: 'loading', progress: overallProgress, uploadedCount: uploaded });
+              }
+            });
           });
 
           if (!response?.data?.success) {
-            throw new Error(response?.data?.error || `Failed to upload ${menuFiles[i].name}`);
+            throw new Error(response?.data?.error || `Failed to upload ${file.name}`);
           }
 
+          setMenuDoneIndices((prev) => new Set(prev).add(i));
           return response;
         } finally {
+          setMenuProcessingIndices((prev) => {
+            const next = new Set(prev);
+            next.delete(i);
+            return next;
+          });
           completed++;
           const progress = Math.round((completed / totalFiles) * 100);
           setMenuProgress(progress);
           saveUploadStatus('menu', { status: 'loading', progress, uploadedCount: uploaded });
         }
-      }));
+      };
+
+      const menuResults = await runBatched(menuFiles, UPLOAD_CONCURRENCY, uploadOneMenuFile);
 
       menuResults.forEach((result, i) => {
         const summary = result.status === 'fulfilled' ? result.value?.data?.summary || {} : {};
@@ -1025,7 +1128,8 @@ const UploadData = ({
         setMenuValidationErrors([]);
         setMenuDbDuplicates([]);
         setMenuIsValid(false);
-        setMenuProcessingIndex(-1);
+        setMenuProcessingIndices(new Set());
+        setMenuDoneIndices(new Set());
         setMenuUploadedCount(0);
         setMenuPreviewData({
           totalItems: 0,
@@ -1050,7 +1154,7 @@ const UploadData = ({
       
       setTimeout(() => {
         setMenuUploadStatus(null);
-        setMenuProcessingIndex(-1);
+        setMenuProcessingIndices(new Set());
       }, 3000);
     }
   };
@@ -1064,7 +1168,8 @@ const UploadData = ({
     setMenuValidationErrors([]);
     setMenuDbDuplicates([]);
     setMenuIsValid(false);
-    setMenuProcessingIndex(-1);
+    setMenuProcessingIndices(new Set());
+    setMenuDoneIndices(new Set());
     setMenuUploadedCount(0);
     setMenuPreviewData({
       totalItems: 0,
@@ -1145,34 +1250,36 @@ const UploadData = ({
   };
 
   // Render file list
-  const renderFileList = (files, onRemove, uploadStatus, processingIndex, uploadedCount) => {
+  // processingIndices/doneIndices are Sets, since UPLOAD_CONCURRENCY > 1
+  // means several files are genuinely uploading at the same time — a
+  // single "current index" can no longer represent progress accurately.
+  const renderFileList = (files, onRemove, uploadStatus, processingIndices, doneIndices, uploadedCount) => {
     if (files.length === 0) return null;
-    
+
     return (
       <div className="file-list-container">
         <div className="file-list-header">
           <span className="file-count">{files.length} file(s) selected</span>
           {uploadStatus === 'loading' && (
             <span className="upload-progress-info">
-              Uploading {processingIndex + 1}/{files.length}...
-              {uploadedCount > 0 && ` (${uploadedCount} completed)`}
+              Uploading {processingIndices.size} at once — {uploadedCount}/{files.length} done...
             </span>
           )}
         </div>
         <div className="file-list">
           {files.map((file, index) => (
-            <div key={index} className={`file-item ${uploadStatus === 'loading' && processingIndex === index ? 'processing' : ''}`}>
+            <div key={index} className={`file-item ${uploadStatus === 'loading' && processingIndices.has(index) ? 'processing' : ''}`}>
               <FiFile className="file-icon" />
               <span className="file-name">{file.name}</span>
               <span className="file-size">{formatFileSize(file.size)}</span>
-              {uploadStatus === 'loading' && processingIndex === index && (
+              {uploadStatus === 'loading' && processingIndices.has(index) && (
                 <span className="file-status uploading">Uploading...</span>
               )}
-              {uploadStatus === 'loading' && processingIndex > index && (
+              {uploadStatus === 'loading' && !processingIndices.has(index) && doneIndices.has(index) && (
                 <span className="file-status done">✓ Done</span>
               )}
               {uploadStatus !== 'loading' && (
-                <button 
+                <button
                   className="remove-file-btn"
                   onClick={() => onRemove(index)}
                   title="Remove file"
@@ -1272,10 +1379,11 @@ const UploadData = ({
 
               {/* File List */}
               {renderFileList(
-                salesFiles, 
-                removeSalesFile, 
-                salesUploadStatus, 
-                salesProcessingIndex, 
+                salesFiles,
+                removeSalesFile,
+                salesUploadStatus,
+                salesProcessingIndices,
+                salesDoneIndices,
                 salesUploadedCount
               )}
 

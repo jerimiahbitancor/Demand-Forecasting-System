@@ -267,6 +267,11 @@ router.post(
             metadata: { kind: 'upload', type: 'sales', filename: file.originalname },
           });
 
+          // Only now has the full pipeline actually completed — this is
+          // what makes the row count as a real duplicate for future
+          // uploads of the same filename (see checkDuplicateUpload).
+          await uploadService.updateUploadStatus(uploadId, 'processed');
+
           return res.status(201).json({
             success: true,
             message: 'Sales data uploaded successfully',
@@ -281,13 +286,25 @@ router.post(
 
     } catch (error) {
       console.error('Upload error:', error);
-      
+
       if (req.file) {
         const userId = req.user?.user_id || req.user?.id || null;
         const numericId = await uploadService.getNumericUserId(userId);
         uploadService.markUploadComplete(req.file.originalname, numericId || userId);
       }
-      
+
+      // uploadId is only set once saveUploadRecord() succeeded — if the
+      // pipeline failed after that (product sync, daily_sales insert,
+      // reconciliation), the row must be marked 'failed', not left at
+      // 'pending' forever pretending the upload is still queued.
+      if (uploadId) {
+        try {
+          await uploadService.updateUploadStatus(uploadId, 'failed', error.message);
+        } catch (statusError) {
+          console.error('Error marking upload as failed:', statusError);
+        }
+      }
+
       if (error.message && error.message.includes('Duplicate upload')) {
         return res.status(409).json({
           success: false,

@@ -75,6 +75,11 @@ router.put('/:id', authenticate, async (req, res) => {
 
     if (error) throw error;
 
+    // req.user's cached custom-user row (name/email) would otherwise keep
+    // serving the pre-update values to this same session for up to the
+    // cache TTL — see backend/middleware/auth.js.
+    authenticate.invalidateUserCache(req.user.auth_id);
+
     res.json({
       success: true,
       user: data
@@ -121,6 +126,10 @@ router.delete('/:id', authenticate, async (req, res) => {
       .eq('id', parseInt(id));
 
     if (error) throw error;
+
+    if (user.auth_id) {
+      authenticate.invalidateUserCache(user.auth_id);
+    }
 
     res.json({
       success: true,
