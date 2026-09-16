@@ -59,8 +59,8 @@ const FEATURE_LABELS = {
   is_weekend: 'Weekend',
   is_holiday: 'Holiday',
   is_payday: 'Payday',
-  lag_1: 'Sales Lag (1 day)',
-  lag_7: 'Sales Lag (7 days)',
+  lag_1: "Yesterday's Sales",
+  lag_7: 'Sales From Last Week (Same Day)',
   rolling_7: 'Rolling Average (7 days)',
   rolling_14: 'Rolling Average (14 days)',
 };
@@ -363,7 +363,9 @@ async function getProductPerformanceAnalytics({ from, to } = {}) {
     .filter(Boolean)
     .sort((a, b) => a.date.localeCompare(b.date) || a.product.localeCompare(b.product));
 
-  // --- Performance Ratio (actual_qty summed over range ÷ store average) ---
+  // --- Performance Ratio ---
+  // Quantity Sold / Revenue columns are still real actual sales summed
+  // over the range (unchanged).
   const { data: salesRows, error: salesError } = await supabaseAdmin
     .from('daily_sales')
     .select('product_id, quantity_sold')
@@ -375,16 +377,65 @@ async function getProductPerformanceAnalytics({ from, to } = {}) {
   for (const row of salesRows || []) {
     qtyByProduct.set(row.product_id, (qtyByProduct.get(row.product_id) || 0) + row.quantity_sold);
   }
-  const qtyValues = Array.from(qtyByProduct.values());
-  const rollingAvgQtyAllProducts = qtyValues.length
-    ? qtyValues.reduce((sum, v) => sum + v, 0) / qtyValues.length
-    : 0;
+
+  // Performance Ratio itself (Business Logic Doc v6, 2.2) = the
+  // product's own rolling_7 ÷ the average of every ACTIVE product's own
+  // rolling_7 on that same day — never a pooled raw-quantity total, and
+  // never each product's own historical average. rolling_7 is read
+  // straight from forecasts.rolling_7 (written by ml-service's
+  // /forecast run — see forecast_service.py + migration 007) instead of
+  // recomputed here, so this can never drift from what the model itself
+  // used. Rows written before that migration shipped have rolling_7 =
+  // null and are excluded below, not treated as 0.
+  const activeProductIds = new Set(products.filter((p) => p.status === 'active').map((p) => p.id));
+
+  const { data: rollingRows, error: rollingError } = await supabaseAdmin
+    .from('forecasts')
+    .select('product_id, forecast_date, rolling_7')
+    .gte('forecast_date', rangeFrom)
+    .lte('forecast_date', rangeTo)
+    .not('rolling_7', 'is', null);
+  if (rollingError) throw rollingError;
+
+  // forecast_date -> [{ productId, rolling7 }] for active products only
+  const rollingByDate = new Map();
+  for (const row of rollingRows || []) {
+    if (!activeProductIds.has(row.product_id)) continue;
+    const bucket = rollingByDate.get(row.forecast_date) || [];
+    bucket.push({ productId: row.product_id, rolling7: Number(row.rolling_7) });
+    rollingByDate.set(row.forecast_date, bucket);
+  }
+
+  // productId -> list of that product's daily ratios (own rolling_7 ÷
+  // that day's active-product average rolling_7), one entry per day in
+  // range that had data for it.
+  const dailyRatiosByProduct = new Map();
+  const dailyStoreAverages = [];
+  for (const entries of rollingByDate.values()) {
+    const storeAvgRolling7 = entries.reduce((sum, e) => sum + e.rolling7, 0) / entries.length;
+    if (storeAvgRolling7 <= 0) continue;
+    dailyStoreAverages.push(storeAvgRolling7);
+    for (const { productId, rolling7 } of entries) {
+      const list = dailyRatiosByProduct.get(productId) || [];
+      list.push(rolling7 / storeAvgRolling7);
+      dailyRatiosByProduct.set(productId, list);
+    }
+  }
+  const storeAverageRolling7 = dailyStoreAverages.length
+    ? dailyStoreAverages.reduce((sum, v) => sum + v, 0) / dailyStoreAverages.length
+    : null;
+
+  function averagePerformanceRatio(productId) {
+    const ratios = dailyRatiosByProduct.get(productId);
+    if (!ratios || !ratios.length) return null;
+    return ratios.reduce((sum, r) => sum + r, 0) / ratios.length;
+  }
 
   const performanceRows = Array.from(qtyByProduct.entries())
     .map(([productId, qty]) => {
       const product = productById.get(productId);
       if (!product) return null;
-      const ratio = rollingAvgQtyAllProducts > 0 ? qty / rollingAvgQtyAllProducts : null;
+      const ratio = averagePerformanceRatio(productId);
       let actionSignal = 'Insufficient data';
       if (ratio !== null) {
         if (ratio > 1.2) actionSignal = 'Keep on Menu — top performer';
@@ -468,7 +519,11 @@ async function getProductPerformanceAnalytics({ from, to } = {}) {
     demandClassification: demandRows,
     performanceRatio: {
       rows: performanceRows,
-      storeAverageQty: rollingAvgQtyAllProducts,
+      // Average, across days in range, of the active-product rolling_7
+      // average — a display figure only; each row's own ratio is
+      // computed per-day against that day's own store average, not
+      // against this single summary number.
+      storeAverageRolling7,
       range: { from: rangeFrom, to: rangeTo },
     },
     productStatus: {

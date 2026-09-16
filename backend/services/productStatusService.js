@@ -10,10 +10,15 @@ function toDate(value) {
 function deriveProductStatus({ firstSoldDate, lastSoldDate, createdAt, isActive = false, inactiveReason = null }) {
   const isArchived = /^archived\b/i.test(inactiveReason || '');
   if (isArchived) {
+    // Strip the "Archived: " sentinel mappingService.archiveProduct()
+    // writes (needed so this same regex can detect it) back off before
+    // showing the reason to the owner — they picked "Seasonal item", not
+    // "Archived: Seasonal item".
+    const displayReason = (inactiveReason || '').replace(/^archived:?\s*/i, '').trim();
     return {
       status: 'archived',
       label: 'ARCHIVED',
-      note: inactiveReason,
+      note: displayReason || inactiveReason,
       isActive: false,
       isArchived: true,
     };

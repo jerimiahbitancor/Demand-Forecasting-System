@@ -606,6 +606,21 @@ class MappingService {
       }
 
       const normalizedReason = reason.trim();
+      // deriveProductStatus() (productStatusService.js) — and three other
+      // inline copies of the same check in this file — detect "archived"
+      // purely by testing /^archived\b/i against inactive_reason. None of
+      // the three reasons getAllowedArchiveReasons() actually offers
+      // ('Discontinued product', 'Seasonal item', 'Out of stock
+      // temporarily') match that pattern, so a product archived through
+      // this endpoint with any of them was silently falling through to
+      // Inactive (Discontinued) instead of Archived. Prefixing here (once,
+      // at the single write path) instead of loosening the regex at every
+      // read site keeps the existing detection mechanism working for old
+      // rows too, e.g. the frontend's current hardcoded "Archived by user"
+      // reason, which already happened to match.
+      const storedReason = /^archived\b/i.test(normalizedReason)
+        ? normalizedReason
+        : `Archived: ${normalizedReason}`;
 
       const existingProduct = await this.getProductById(id, numericId);
       if (!existingProduct) {
@@ -616,13 +631,13 @@ class MappingService {
         return {
           ...existingProduct,
           is_active: false,
-          inactive_reason: normalizedReason
+          inactive_reason: storedReason
         };
       }
 
       const updateData = {
         is_active: false,
-        inactive_reason: normalizedReason,
+        inactive_reason: storedReason,
         inactive_since: new Date().toISOString()
       };
 
@@ -643,10 +658,10 @@ class MappingService {
         id: product.id,
         name: product.name,
         is_active: false,
-        inactive_reason: normalizedReason,
+        inactive_reason: product.inactive_reason,
         inactive_since: product.inactive_since
       };
-      
+
       return transformedData;
     } catch (error) {
       console.error('Error archiving product:', error);
