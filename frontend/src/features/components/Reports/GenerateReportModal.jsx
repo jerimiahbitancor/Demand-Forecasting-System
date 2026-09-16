@@ -17,7 +17,12 @@ const GenerateReportModal = ({ reportTitle, availableTables, onCancel, onGenerat
     new Date(new Date().setDate(new Date().getDate() - 6)),
     new Date(),
   ]);
-  const [selectedTableIds, setSelectedTableIds] = useState(availableTables.map((t) => t.id));
+  // A table can opt out of Excel export (e.g. Grocery List, per spec:
+  // "Grocery List is excluded and cannot be exported as xlsx") via
+  // { id, label, excelExcluded: true }. PDF always gets the full report
+  // regardless, so this only affects the Excel checkbox list below.
+  const excelSelectableTables = availableTables.filter((t) => !t.excelExcluded);
+  const [selectedTableIds, setSelectedTableIds] = useState(excelSelectableTables.map((t) => t.id));
   const [isGenerating, setIsGenerating] = useState(false);
 
   const toggleTable = (id) => {
@@ -80,8 +85,13 @@ const GenerateReportModal = ({ reportTitle, availableTables, onCancel, onGenerat
           {format === "excel" && (
             <div className="report-field">
               <label>Include tables</label>
+              {availableTables.some((t) => t.excelExcluded) && (
+                <p className="report-hint">
+                  {availableTables.filter((t) => t.excelExcluded).map((t) => t.label).join(', ')} not available in Excel format.
+                </p>
+              )}
               <div className="report-table-list">
-                {availableTables.map((table) => (
+                {excelSelectableTables.map((table) => (
                   <label key={table.id} className="report-table-item">
                     <input
                       type="checkbox"

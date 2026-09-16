@@ -589,6 +589,30 @@
   box-shadow: none !important;
 }
 
+/* Ready to Train panel (states/ReadyToTrain.jsx) */
+.ready-to-train-panel {
+  width: 100%;
+  background: rgba(34, 197, 94, 0.08);
+  border: 1px solid #0F9918;
+  border-radius: 8px;
+  padding: 16px 20px;
+  margin: 16px 0;
+}
+
+.ready-to-train-title {
+  font-weight: 700;
+  color: #0F9918;
+  margin: 0 0 8px 0;
+  font-size: 15px;
+}
+
+.ready-to-train-body {
+  margin: 0 0 14px 0;
+  color: #374151;
+  font-size: 14px;
+  line-height: 1.5;
+}
+
 /* Products Detected Section */
 .training-products-detected {
   width: 100%;
@@ -851,6 +875,19 @@
   background: #33548A;
   border-radius: 4px;
   transition: width 0.8s ease;
+}
+
+/* No real progress percentage exists to report (see TrainingInProgress.jsx) —
+   this shimmer signals "still working" without claiming a fake number. */
+.training-model-progress-fill--indeterminate {
+  background: linear-gradient(90deg, #33548A 25%, #6d8ac9 50%, #33548A 75%);
+  background-size: 200% 100%;
+  animation: training-progress-shimmer 1.6s linear infinite;
+}
+
+@keyframes training-progress-shimmer {
+  0% { background-position: 200% 0; }
+  100% { background-position: -200% 0; }
 }
 
 .training-model-progress-info {

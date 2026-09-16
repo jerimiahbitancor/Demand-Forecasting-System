@@ -1,5 +1,7 @@
 // components/IngredientDemand.jsx
-import { useState } from "react";
+import { useState, useEffect } from "react";
+import axios from "axios";
+import toast from "react-hot-toast";
 import { FiSearch, FiInfo, FiDownload, FiExternalLink, FiShoppingCart } from "react-icons/fi";
 import GenerateReportModal from "../../components/Reports/GenerateReportModal.jsx";
 import { buildIngredientDemandPDF, buildGroceryListPDF, generateExcel } from "./../../../services/reportService.js";
@@ -17,26 +19,62 @@ import "./IngredientDemand.css";
 
 const API_URL = import.meta.env.VITE_API_URL || "http://localhost:5000/api";
 
-// ---------------------------------------------------------------------
-// Mock data — replace with real API responses
-// ---------------------------------------------------------------------
 const weekDays = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
 
-const demandGrid = [
-  { ingredient: "Pork", values: [18.2, 18.2, 18.2, 18.2, 18.2, 18.2, 18.2], highDay: 4 },
-  { ingredient: "Rice", values: [3.9, 3.9, 3.9, 3.9, 3.9, 3.9, 3.9], highDay: 4 },
-  { ingredient: "Chicken", values: [1.4, 1.4, 1.4, 1.4, 1.4, 1.4, 1.4], highDay: 4 },
-  { ingredient: "Tomatoes", values: [0.7, 0.7, 0.7, 0.7, 0.7, 0.7, 0.7], highDay: 4 },
-  { ingredient: "Soy Sauce", values: [0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5], highDay: 4 },
-];
+function formatLongDate(dateStr) {
+  if (!dateStr) return "—";
+  const d = new Date(dateStr);
+  if (Number.isNaN(d.getTime())) return dateStr;
+  return d.toLocaleDateString("en-US", { weekday: "long", month: "long", day: "numeric", year: "numeric" });
+}
 
-const dailyIngredients = [
-  { name: "Pork", category: "Meat & Poultry", usedIn: "Tonkatsu series", forecasted: 4.73, onStock: 1.20, unit: "kg", status: "Critical", toBuy: 3.53, marketPrice: 320, estCost: 1130 },
-  { name: "Rice", category: "Grains & Starches", usedIn: "All dishes", forecasted: 21.39, onStock: 9.00, unit: "kg", status: "Low", toBuy: 12.39, marketPrice: 52, estCost: 644 },
-  { name: "Chicken", category: "Meat & Poultry", usedIn: "Poppers series", forecasted: 1.75, onStock: 2.50, unit: "kg", status: "Normal", toBuy: null, marketPrice: 210, estCost: null },
-  { name: "Soy Sauce", category: "Condiments & Sauces", usedIn: "Adobo, sauces", forecasted: 0.66, onStock: 3.00, unit: "L", status: "Excess", toBuy: null, marketPrice: 85, estCost: null },
-  { name: "Tomatoes", category: "Vegetables & Fruits", usedIn: "Tinola", forecasted: 0.87, onStock: 0.10, unit: "kg", status: "Critical", toBuy: 0.77, marketPrice: 95, estCost: 73 },
-];
+// API cell levels ('normal' | 'above_normal' | 'high') -> the CSS
+// suffix this file's heatmap-cell classes already use.
+function apiLevelToCssSuffix(level) {
+  if (level === "high") return "high";
+  if (level === "above_normal") return "above";
+  return "normal";
+}
+
+// Shared by the live page view AND handleGenerateReport (which re-fetches
+// for the report's own chosen date) — module-scope so both call sites
+// use the exact same transformation.
+function buildDemandGrid(apiRows) {
+  return (apiRows || []).map((r) => ({
+    ingredient: r.ingredient,
+    values: r.values.map((v) => Math.round(v * 100) / 100),
+    highDay: r.highDay,
+    levels: r.levels,
+  }));
+}
+
+function buildDailyIngredients(apiRows) {
+  return (apiRows || []).map((r) => ({
+    name: r.name,
+    category: r.category,
+    usedIn: r.usedIn || "—",
+    forecasted: r.forecastedNeed,
+    onStock: r.onStock,
+    unit: r.unit,
+    status: r.status,
+    toBuy: r.toBuy,
+    marketPrice: r.marketPrice,
+    estCost: r.estCost,
+  }));
+}
+
+function buildGroceryList(apiAllItems) {
+  return (apiAllItems || []).map((item) => ({
+    name: item.name,
+    category: item.category,
+    usedIn: item.usedIn || "—",
+    unit: item.unit,
+    status: item.status,
+    toBuy: item.toBuy,
+    marketPrice: item.marketPrice,
+    estCost: item.estCost,
+  }));
+}
 
 const GROCERY_CATEGORIES = [
   "Meat & Poultry",
@@ -50,10 +88,6 @@ const GROCERY_CATEGORIES = [
   "Baking & Dry Goods",
   "Packaging & Supplies",
 ];
-
-const groceryPreview = dailyIngredients.filter(
-  (item) => item.status === "Critical" || item.status === "Low"
-);
 
 // ---------------------------------------------------------------------
 // Tooltips
@@ -197,13 +231,6 @@ const tooltips = {
 };
 
 // ---------------------------------------------------------------------
-// Helper Functions
-// ---------------------------------------------------------------------
-function cellLevel(dayIndex, highDay) {
-  return dayIndex === highDay ? "high" : dayIndex % 2 === 0 ? "above" : "normal";
-}
-
-// ---------------------------------------------------------------------
 // Main Component
 // ---------------------------------------------------------------------
 function IngredientDemand() {
@@ -219,6 +246,48 @@ function IngredientDemand() {
   const [modalDailyPage, setModalDailyPage] = useState(1);
   const ROWS_PER_PAGE = 5;
 
+  const [apiData, setApiData] = useState(null);
+  const [isLoading, setIsLoading] = useState(true);
+  const [loadError, setLoadError] = useState(null);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    async function fetchIngredientDemand() {
+      setIsLoading(true);
+      setLoadError(null);
+      try {
+        const headers = await authService.getAuthHeaders();
+        const response = await axios.get(`${API_URL}/analytics/ingredient-demand`, { headers });
+        if (!cancelled) setApiData(response.data?.data || null);
+      } catch (err) {
+        console.error("Error fetching ingredient demand analytics:", err);
+        if (!cancelled) setLoadError(err.response?.data?.error || err.message || "Failed to load ingredient demand data");
+      } finally {
+        if (!cancelled) setIsLoading(false);
+      }
+    }
+
+    fetchIngredientDemand();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  // --- Derive the same shapes the JSX below already expects. ---
+  const demandGrid = buildDemandGrid(apiData?.weekly?.rows);
+  const cellLevel = (row, dayIndex) =>
+    row.levels ? apiLevelToCssSuffix(row.levels[dayIndex]) : dayIndex === row.highDay ? "high" : "normal";
+
+  const dailyIngredients = buildDailyIngredients(apiData?.daily?.rows);
+  const groceryPreview = buildGroceryList(apiData?.groceryList?.all);
+  const safetyBufferPercentage = apiData?.safetyBufferPercentage ?? 15;
+
+  const dailyDateLabel = formatLongDate(apiData?.daily?.date);
+  const weeklyRangeLabel = apiData?.weekly
+    ? `${apiData.weekly.weekStart} – ${apiData.weekly.weekEnd}`
+    : "—";
+
   const totalWeeklyPages = Math.max(1, Math.ceil(demandGrid.length / ROWS_PER_PAGE));
   const paginatedWeekly = demandGrid.slice(
     (weeklyPage - 1) * ROWS_PER_PAGE, weeklyPage * ROWS_PER_PAGE
@@ -230,7 +299,10 @@ function IngredientDemand() {
 
   const handleDownloadGroceryList = async () => {
     const itemsToDownload = groceryPreview;
-    if (itemsToDownload.length === 0) return;
+    if (itemsToDownload.length === 0) {
+      toast.error("No data is available for the selected date range.");
+      return;
+    }
 
     // Fetch business profile — same pattern used by the Generate Report handler above
     let biz = {
@@ -262,74 +334,119 @@ function IngredientDemand() {
 
     const dateLabel =
       groceryMode === "daily"
-        ? "Tomorrow · Wednesday, June 25, 2026"
-        : "Week of June 29 – July 5, 2026";
+        ? `Today · ${dailyDateLabel}`
+        : `Week of ${apiData?.weekly?.weekStart || "—"} – ${apiData?.weekly?.weekEnd || "—"}`;
 
-    const doc = await buildGroceryListPDF({
-      dateLabel,
-      business: biz,
-      groceryMode,
-      itemsToDownload,
-      GROCERY_CATEGORIES,
-    });
+    try {
+      const doc = await buildGroceryListPDF({
+        dateLabel,
+        business: biz,
+        groceryMode,
+        itemsToDownload,
+        GROCERY_CATEGORIES,
+      });
 
-    const filename = `grocery-list-chefduo-${groceryMode}.pdf`;
-    doc.save(filename);
+      const filename = `grocery-list-chefduo-${groceryMode}.pdf`;
+      doc.save(filename);
+      toast.success("Report generated successfully!");
+    } catch (err) {
+      console.error("Error building grocery list PDF:", err);
+      toast.error("Failed to generate report.");
+    }
   };
 
   const availableTables = [
-    { id: "shopping", label: "Weekly Ingredient Demand" },
+    { id: "weekly", label: "Weekly Ingredient Demand" },
     { id: "daily", label: "Daily Ingredient Demand" },
-    { id: "grocery", label: "Grocery List" },
+    // Grocery List is a print document (categorized, palengke-ordered) —
+    // excluded from Excel per spec ("Grocery List is excluded and cannot
+    // be exported as xlsx"). Still fully available as PDF (its own
+    // dedicated Download button uses buildGroceryListPDF directly).
+    { id: "grocery", label: "Grocery List", excelExcluded: true },
   ];
 
   const handleGenerateReport = async ({ format, dateRange, selectedTableIds }) => {
-    const metrics = [
-      { label: "Tracked Items", value: dailyIngredients.length, caption: "ingredients" },
-      { label: "High Demand", value: groceryPreview.length, caption: "items above usual" },
-      { label: "Main Buy Item", value: groceryPreview[0]?.name || "—", caption: "for tomorrow" },
-      { label: "High-Day Alerts", value: demandGrid.filter((row) => row.highDay === 4).length, caption: "ingredients flagged" },
-    ];
-
-    if (format === "pdf") {
-      const doc = await buildIngredientDemandPDF({
-        dateRange,
-        business: null,
-        metrics,
-        insightText: `This report summarizes the ingredient demand outlook for the selected period. ${groceryPreview[0]?.name || "Pork"} is the main item to prepare for tomorrow's shopping list.`,
-        shoppingListRows: groceryPreview,
-        highDemandRows: demandGrid.slice(0, 3).map((row) => ({
-          day: weekDays[row.highDay] || "—",
-          reason: "High demand day",
-          affected: row.ingredient,
-        })),
-        disclaimer: "Disclaimer — Ingredient estimates are based on forecasted demand and should still be checked against actual stock before purchasing.",
+    // Ingredient demand doesn't have an arbitrary date-RANGE concept on
+    // the backend (it's always exactly one week + one day) — map the
+    // modal's range onto that: weekStart from the range start, the daily
+    // snapshot from the range end.
+    const [from, to] = dateRange.map((d) => d.toISOString().slice(0, 10));
+    let reportDemandGrid, reportDailyIngredients, reportBufferPct;
+    try {
+      const headers = await authService.getAuthHeaders();
+      const response = await axios.get(`${API_URL}/analytics/ingredient-demand`, {
+        headers,
+        params: { date: to, weekStart: from },
       });
-      doc.save("ingredient-demand-report.pdf");
-    } else {
+      const data = response.data?.data;
+      reportDemandGrid = buildDemandGrid(data?.weekly?.rows);
+      reportDailyIngredients = buildDailyIngredients(data?.daily?.rows);
+      reportBufferPct = data?.safetyBufferPercentage ?? 15;
+    } catch (err) {
+      console.error("Error fetching report data:", err);
+      toast.error("Failed to load data for the selected date range.");
+      return;
+    }
+
+    if (reportDemandGrid.length === 0 && reportDailyIngredients.length === 0) {
+      toast.error("No data is available for the selected date range.");
+      return;
+    }
+
+    const bufferMultiplier = 1 + reportBufferPct / 100;
+    // buildIngredientDemandPDF's Shopping List table wants the need
+    // broken into Base Qty (pre-buffer) + Buffer + Total — the API only
+    // returns the post-buffer forecastedNeed, so back it out here rather
+    // than changing what the live Daily Ingredient Demand table shows.
+    const shoppingListRows = reportDailyIngredients
+      .filter((item) => item.status === "Critical" || item.status === "Low")
+      .map((item) => {
+        const total = item.forecasted;
+        const baseQty = bufferMultiplier > 0 ? total / bufferMultiplier : total;
+        return {
+          ingredient: item.name,
+          linkedDishes: item.usedIn,
+          baseQty: baseQty.toFixed(2),
+          buffer: (total - baseQty).toFixed(2),
+          total: total.toFixed(2),
+          unit: item.unit,
+        };
+      });
+
+    try {
+      if (format === "pdf") {
+        const doc = await buildIngredientDemandPDF({
+          dateRange,
+          business: null,
+          metrics: [
+            { label: "Tracked Items", value: reportDailyIngredients.length, caption: "ingredients" },
+            { label: "Need to Buy", value: shoppingListRows.length, caption: "items critical or low" },
+            { label: "Main Buy Item", value: shoppingListRows[0]?.ingredient || "—", caption: "for this period" },
+            { label: "High-Day Alerts", value: reportDemandGrid.filter((row) => row.levels?.includes("high")).length, caption: "ingredients flagged" },
+          ],
+          insightText: `This report summarizes the ingredient demand outlook for the selected period. ${shoppingListRows[0]?.ingredient || reportDailyIngredients[0]?.name || "—"} is the main item to prepare for this period's shopping list.`,
+          shoppingListRows,
+          highDemandRows: reportDemandGrid
+            .filter((row) => row.levels?.includes("high"))
+            .slice(0, 3)
+            .map((row) => ({
+              day: weekDays[row.levels.indexOf("high")] || "—",
+              reason: "High demand day",
+              affected: row.ingredient,
+            })),
+          disclaimer: "Disclaimer — Ingredient estimates are based on forecasted demand and should still be checked against actual stock before purchasing.",
+        });
+        doc.save("ingredient-demand-report.pdf");
+      } else {
       const sheetMap = {
-        shopping: { sheetName: "Shopping List", rows: groceryPreview.map((row) => ({ ...row })) },
-        grocery: {
-          sheetName: "Grocery List",
-          rows: groceryPreview.map((item) => ({
-            ingredient: item.name,
-            usedIn: item.usedIn,
-            toBuy: item.toBuy ?? 0,
-            unit: item.unit,
-            marketPrice: `₱${item.marketPrice}/${item.unit}`,
-            estCost: item.estCost ? `₱${item.estCost.toLocaleString()}` : "—",
-            status: item.status,
-          })),
-        },
-        heatmap: {
-          sheetName: "Weekly Planner",
-          rows: demandGrid.map((row) => ({
+        weekly: {
+          sheetName: "Weekly Ingredient Demand",
+          rows: reportDemandGrid.map((row) => ({
             ingredient: row.ingredient,
-            values: row.values.join(" | "),
-            highDay: weekDays[row.highDay] || "—",
+            ...Object.fromEntries(weekDays.map((d, i) => [d, row.values[i]])),
           })),
         },
-        ingredients: { sheetName: "Daily Ingredient Demand", rows: dailyIngredients.map((row) => ({ ...row })) },
+        daily: { sheetName: "Daily Ingredient Demand", rows: reportDailyIngredients.map((row) => ({ ...row })) },
       };
 
       generateExcel(
@@ -338,6 +455,12 @@ function IngredientDemand() {
           .map(([, value]) => value),
         "ingredient-demand-report.xlsx"
       );
+      }
+      toast.success("Report generated successfully!");
+    } catch (err) {
+      console.error("Error building report:", err);
+      toast.error("Failed to generate report.");
+      return;
     }
 
     logAuditEvent(
@@ -350,6 +473,12 @@ function IngredientDemand() {
   return (
     <>
       <div className="analytics-col-main">
+        {loadError && (
+          <InfoBanner variant="info">
+            Couldn't load ingredient demand data: {loadError}
+          </InfoBanner>
+        )}
+        {isLoading && !apiData && <p className="table-footnote">Loading ingredient demand data…</p>}
         <section className="analytics-card">
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '16px' }}>
           <h2 className="analytics-card-title" style={{ marginBottom: 0 }}>
@@ -413,7 +542,7 @@ function IngredientDemand() {
                       <td>{(weeklyPage - 1) * ROWS_PER_PAGE + i + 1}</td>
                       <td>{i < 2 ? row.ingredient : ""}</td>
                       {row.values.map((v, di) => (
-                        <td key={di} className={`heatmap-cell heatmap-cell--${cellLevel(di, row.highDay)}`}>
+                        <td key={di} className={`heatmap-cell heatmap-cell--${cellLevel(row, di)}`}>
                           {v}
                         </td>
                       ))}
@@ -480,7 +609,7 @@ function IngredientDemand() {
                   <td><span className={`status-badge status-badge--${row.status.toLowerCase()}`}>{row.status}</span></td>
                   <td>{row.toBuy === null ? <span className="value--muted">{row.status === "Normal" ? "— no order" : "— delay restock"}</span> : row.toBuy.toFixed(2)}</td>
                   <td>{row.unit}</td>
-                  <td>₱{row.marketPrice}</td>
+                  <td>{row.marketPrice === null ? "—" : `₱${row.marketPrice}`}</td>
                   <td>{row.estCost === null ? "—" : `₱${row.estCost.toLocaleString()}`}</td>
                 </tr>
               ))}
@@ -514,10 +643,10 @@ function IngredientDemand() {
             <button type="button" className={`grocery-toggle-btn ${groceryMode === 'daily' ? 'active' : ''}`} onClick={() => setGroceryMode('daily')}>Daily</button>
           </div>
           <p className="grocery-date-label">
-            {groceryMode === 'daily' ? 'For tomorrow: Thursday, June 25, 2026' : 'Next Week: June 29 – July 5, 2026'}
+            {groceryMode === 'daily' ? `For today: ${dailyDateLabel}` : `This Week: ${weeklyRangeLabel}`}
           </p>
           <InfoBanner variant="info">
-            Order quantities are based on forecasted demand minus current stock.{" "}
+            Order quantities are based on forecasted demand (plus a {safetyBufferPercentage}% safety buffer) minus current stock.{" "}
             <a href="/inventory-management" style={{color:'inherit', fontWeight:600, textDecoration:'underline'}}>See Inventory Management.</a>
           </InfoBanner>
           <div className="grocery-kpi-row">
@@ -551,7 +680,7 @@ function IngredientDemand() {
         <table className="analytics-table heatmap-table">
           <thead><tr><th>No.</th><th>Ingredient</th>{weekDays.map((day) => <th key={day}>{day}</th>)}</tr></thead>
           <tbody>{demandGrid.slice((modalWeeklyPage - 1) * 10, modalWeeklyPage * 10).map((row, i) => (
-            <tr key={row.ingredient}><td>{(modalWeeklyPage - 1) * 10 + i + 1}</td><td>{row.ingredient}</td>{row.values.map((value, dayIndex) => <td key={dayIndex} className={`heatmap-cell heatmap-cell--${cellLevel(dayIndex, row.highDay)}`}>{value}</td>)}</tr>
+            <tr key={row.ingredient}><td>{(modalWeeklyPage - 1) * 10 + i + 1}</td><td>{row.ingredient}</td>{row.values.map((value, dayIndex) => <td key={dayIndex} className={`heatmap-cell heatmap-cell--${cellLevel(row, dayIndex)}`}>{value}</td>)}</tr>
           ))}</tbody>
         </table>
         <Pagination currentPage={modalWeeklyPage} totalPages={Math.max(1, Math.ceil(demandGrid.length / 10))} onPageChange={setModalWeeklyPage} />
@@ -561,7 +690,7 @@ function IngredientDemand() {
         <table className="analytics-table">
           <thead><tr><th>No.</th><th>Ingredient</th><th>Used in</th><th>Forecasted Need</th><th>On Stock</th><th>Status</th><th>To Buy</th><th>Unit</th><th>Market Price</th><th>Est. Cost</th></tr></thead>
           <tbody>{dailyIngredients.slice((modalDailyPage - 1) * 10, modalDailyPage * 10).map((row, i) => (
-            <tr key={row.name}><td>{i + 1}</td><td>{row.name}</td><td>{row.usedIn}</td><td>{row.forecasted.toFixed(2)}</td><td>{row.onStock.toFixed(2)}</td><td><span className={`status-badge status-badge--${row.status.toLowerCase()}`}>{row.status}</span></td><td>{row.toBuy === null ? <span className="value--muted">{row.status === "Normal" ? "— no order" : "— delay restock"}</span> : row.toBuy.toFixed(2)}</td><td>{row.unit}</td><td>₱{row.marketPrice}</td><td>{row.estCost === null ? "—" : `₱${row.estCost.toLocaleString()}`}</td></tr>
+            <tr key={row.name}><td>{i + 1}</td><td>{row.name}</td><td>{row.usedIn}</td><td>{row.forecasted.toFixed(2)}</td><td>{row.onStock.toFixed(2)}</td><td><span className={`status-badge status-badge--${row.status.toLowerCase()}`}>{row.status}</span></td><td>{row.toBuy === null ? <span className="value--muted">{row.status === "Normal" ? "— no order" : "— delay restock"}</span> : row.toBuy.toFixed(2)}</td><td>{row.unit}</td><td>{row.marketPrice === null ? "—" : `₱${row.marketPrice}`}</td><td>{row.estCost === null ? "—" : `₱${row.estCost.toLocaleString()}`}</td></tr>
           ))}</tbody>
         </table>
         <Pagination currentPage={modalDailyPage} totalPages={Math.max(1, Math.ceil(dailyIngredients.length / 10))} onPageChange={setModalDailyPage} />
@@ -598,7 +727,7 @@ function IngredientDemand() {
                       <td>{item.name}</td>
                       <td>{item.toBuy?.toFixed(2) ?? "—"}</td>
                       <td>{item.unit}</td>
-                      <td>₱{item.marketPrice}/{item.unit}</td>
+                      <td>{item.marketPrice === null ? "—" : `₱${item.marketPrice}/${item.unit}`}</td>
                       <td>{item.usedIn}</td>
                     </tr>
                   ))}

@@ -4,6 +4,7 @@ const router = express.Router();
 const authenticate = require('../middleware/auth');
 const BusinessProfileController = require('../controllers/businessProfileController');
 const AccountController = require('../controllers/accountController');
+const ForecastConfigController = require('../controllers/forecastConfigController');
 const HistoryController = require('../controllers/historyController');
 const uploadLogo = require('../middleware/uploadLogo');
 const virusScan = require('../middleware/virusScan'); // generic buffer scanner, reused as-is
@@ -17,6 +18,9 @@ router.post(
   virusScan,                 // same scanner routes/upload.js already uses for CSVs
   BusinessProfileController.uploadLogo
 );
+
+router.get('/forecast-config', authenticate, ForecastConfigController.get);
+router.post('/forecast-config', authenticate, ForecastConfigController.save);
 
 // Account settings: change password flow (OTP -> verify -> change)
 router.post('/account/change-password/send-code', authenticate, AccountController.sendChangePasswordCode);

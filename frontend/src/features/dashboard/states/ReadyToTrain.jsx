@@ -1,0 +1,259 @@
+// states/ReadyToTrain.jsx
+//
+// State 3 of the 7-state Dashboard spec: >=12 months uploaded, products
+// detected, but the owner hasn't clicked Start Training yet (no model
+// exists). Distinct from State 4 (TrainingInProgress.jsx) — that one
+// only renders once mlService.isTrainingInFlight() is actually true.
+import { useState, useEffect } from "react";
+import Navbar from "../../components/Navbar/Navbar";
+import "../states/statescss/TrainingInProgress.css";
+import { useNavigate } from "react-router-dom";
+import axios from "axios";
+import toast from "react-hot-toast";
+import trainingImage from "../../../assets/images/Rene.png";
+import { FaCheckCircle } from "react-icons/fa";
+
+const API_URL = import.meta.env.VITE_API_URL || "http://localhost:5000/api";
+
+const ReadyToTrain = () => {
+  const navigate = useNavigate();
+  const [uploadedMonths, setUploadedMonths] = useState(12);
+  const [totalMonthsNeeded] = useState(12);
+  const [products, setProducts] = useState([]);
+  const [totalProducts, setTotalProducts] = useState(0);
+  const [productsWithoutRecipes, setProductsWithoutRecipes] = useState(0);
+  const [isStarting, setIsStarting] = useState(false);
+
+  const getAuthToken = () => sessionStorage.getItem("access_token") || localStorage.getItem("token");
+
+  const apiClient = axios.create({
+    baseURL: API_URL,
+    headers: { "Content-Type": "application/json" },
+  });
+  apiClient.interceptors.request.use((config) => {
+    const token = getAuthToken();
+    if (token) config.headers.Authorization = `Bearer ${token}`;
+    return config;
+  });
+
+  const formatDate = (date) => {
+    const months = ["JANUARY", "FEBRUARY", "MARCH", "APRIL", "MAY", "JUNE", "JULY", "AUGUST", "SEPTEMBER", "OCTOBER", "NOVEMBER", "DECEMBER"];
+    return `${months[date.getMonth()]}-${String(date.getDate()).padStart(2, "0")}-${date.getFullYear()}`;
+  };
+  const formatDay = (date) => ["SUNDAY", "MONDAY", "TUESDAY", "WEDNESDAY", "THURSDAY", "FRIDAY", "SATURDAY"][date.getDay()];
+  const formatTime = (date) => {
+    let hours = date.getHours();
+    const minutes = String(date.getMinutes()).padStart(2, "0");
+    const ampm = hours >= 12 ? "PM" : "AM";
+    hours = hours % 12 || 12;
+    return `${hours}:${minutes} ${ampm}`;
+  };
+  const now = new Date();
+
+  useEffect(() => {
+    let cancelled = false;
+
+    async function loadData() {
+      try {
+        const statsRes = await apiClient.get("/upload/stats/summary");
+        if (!cancelled && statsRes.data.success) {
+          const months = statsRes.data.data.months_uploaded || 12;
+          setUploadedMonths(Math.min(months, totalMonthsNeeded));
+        }
+      } catch (err) {
+        console.error("Error fetching upload stats:", err);
+      }
+
+      try {
+        const [activeRes, inactiveRes] = await Promise.all([
+          apiClient.get("/mapping/products", { params: { status: "active", forceRefresh: "true" } }),
+          apiClient.get("/mapping/products", { params: { status: "inactive", forceRefresh: "true" } }),
+        ]);
+        if (cancelled) return;
+        const active = activeRes.data.success ? activeRes.data.data || [] : [];
+        const inactive = inactiveRes.data.success ? inactiveRes.data.data || [] : [];
+        const all = [...active, ...inactive];
+        setProducts(all);
+        setTotalProducts(all.length);
+        setProductsWithoutRecipes(all.filter((p) => !p.product_ingredients?.length).length);
+      } catch (err) {
+        console.error("Error fetching products:", err);
+      }
+    }
+
+    loadData();
+    return () => { cancelled = true; };
+  }, []);
+
+  const handleStartTraining = async () => {
+    setIsStarting(true);
+    try {
+      // This POST doesn't resolve until training finishes server-side —
+      // don't wait on it to navigate. Dashboard.jsx polls
+      // /upload/dashboard-state every 5s and will pick up
+      // 'training-in-progress' as soon as the in-flight flag flips,
+      // well before this promise itself settles.
+      axios.post(`${API_URL}/ml/train`, {}, {
+        headers: { Authorization: `Bearer ${getAuthToken()}` },
+      }).catch((err) => {
+        toast.error(err.response?.data?.error || "Training failed to start");
+      });
+      toast.success("Training started — this can take a few minutes.");
+    } finally {
+      setIsStarting(false);
+    }
+  };
+
+  const productsNeedingRecipes = products
+    .filter((p) => !p.product_ingredients?.length)
+    .slice(0, 3);
+
+  return (
+    <div className="training-container">
+      <Navbar />
+      <main className="training-main">
+        <div className="training-header">
+          <div className="training-date-info">
+            <span>{formatDate(now)}</span>
+            <span className="training-date-separator">|</span>
+            <span>{formatDay(now)}</span>
+            <span className="training-date-separator">|</span>
+            <span>{formatTime(now)}</span>
+          </div>
+          <div className="training-progress-container">
+            <div className="training-progress-bar-wrapper">
+              <div
+                className="training-progress-fill"
+                style={{ width: "50%", backgroundColor: "rgba(122, 1, 1, 0.5)" }}
+              />
+              <div className="training-progress-text">
+                <span>System Status Progress</span>
+                <span>50%</span>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div className="training-content">
+          <div className="training-welcome-wrapper">
+            <div className="training-welcome-section">
+              <h3 className="training-welcome-title">Your data is ready</h3>
+              <p className="training-welcome-description">
+                Start training your forecasting model whenever you're ready.
+                <br />
+                While you're reviewing, you can also start adding ingredient recipes
+                to your products so the shopping list is ready once forecasting completes.
+              </p>
+            </div>
+            <div className="training-welcome-image">
+              <img src={trainingImage} alt="Ready to Train Illustration" className="training-welcome-img" />
+            </div>
+          </div>
+
+          <div className="training-step-cards">
+            <div className="training-step-card training-step-card-complete">
+              <div className="training-step-number training-step-number-complete">1</div>
+              <div className="training-step-content">
+                <h4 className="training-step-title training-step-title-complete">
+                  Upload Historical Sales Data
+                </h4>
+                <div className="training-data-progress-wrapper1">
+                  <div className="training-data-progress-wrapper2-complete">
+                    <div style={{ display: "flex", alignItems: "flex-start", gap: "10px" }}>
+                      <FaCheckCircle style={{ color: "#0F9918", fontSize: "18px", marginTop: "2px", flexShrink: 0 }} />
+                      <p className="training-step-description1">
+                        Requirement met — {uploadedMonths} of {totalMonthsNeeded} months of data uploaded.
+                      </p>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="ready-to-train-panel">
+                  <p className="ready-to-train-title">✅ Ready to Train</p>
+                  <p className="ready-to-train-body">
+                    You've uploaded enough sales history to train your demand forecasting
+                    model. Training takes a few minutes and can run in the background —
+                    you can keep working while it completes.
+                  </p>
+                  <button
+                    type="button"
+                    className="training-step-btn"
+                    onClick={handleStartTraining}
+                    disabled={isStarting}
+                  >
+                    {isStarting ? "Starting…" : "Start Training"}
+                  </button>
+                </div>
+              </div>
+            </div>
+
+            <div className="training-step-card">
+              <div className="training-step-number">2</div>
+              <div className="training-step-content">
+                <h4 className="training-step-title">Add Ingredient Recipes to Your Products</h4>
+                <p className="training-step-description">
+                  Your menu products have been automatically detected from your sales data.
+                  You can start adding ingredient recipes now, or while training runs.
+                </p>
+
+                <div className="training-products-detected">
+                  <div className="training-products-header">
+                    <h5 className="training-products-title">Products Detected from Your Sales Data</h5>
+                    <div className="training-products-summary">
+                      <p className="training-products-total">{totalProducts} products were found in your uploaded sales data.</p>
+                      <p className="training-products-missing">{productsWithoutRecipes} products need ingredient recipes added.</p>
+                    </div>
+                    <p className="training-products-note">
+                      Products without recipes will still be forecasted, but will not
+                      appear in the ingredient demand shopping list.
+                    </p>
+                  </div>
+
+                  <div className="training-products-table">
+                    <div className="training-products-table-header">
+                      <span>Product Name</span>
+                      <span>Action</span>
+                    </div>
+                    {productsNeedingRecipes.length > 0 ? (
+                      productsNeedingRecipes.map((product, index) => (
+                        <div className="training-products-table-row" key={index}>
+                          <span>{product.name}</span>
+                          <button
+                            className="training-products-add-btn"
+                            onClick={() => navigate("/inventory-management", { state: { product: product.name } })}
+                          >
+                            Add Recipe
+                          </button>
+                        </div>
+                      ))
+                    ) : (
+                      <div className="training-products-table-row">
+                        <span style={{ color: "#0F9918", fontWeight: 600 }}>All products have recipes added</span>
+                        <span style={{ color: "#0F9918" }}>Complete</span>
+                      </div>
+                    )}
+                    {productsWithoutRecipes > 3 && (
+                      <div className="training-products-table-row" style={{ fontStyle: "italic", color: "#6b7280" }}>
+                        <span>+ {productsWithoutRecipes - 3} more products needing recipes</span>
+                        <span></span>
+                      </div>
+                    )}
+                  </div>
+                </div>
+
+                <button
+                  className="training-step-btn training-step-btn-secondary"
+                  onClick={() => navigate("/inventory-management")}
+                >
+                  Go to Inventory Management
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      </main>
+    </div>
+  );
+};
+
+export default ReadyToTrain;
