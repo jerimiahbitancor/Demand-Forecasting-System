@@ -63,9 +63,7 @@ class VirusScanner {
       
       // Check file size
       const fileSizeMB = buffer.length / (1024 * 1024);
-      
-      // Random 1% chance of "infection" for simulation
-      const isRandomInfected = Math.random() < 0.01;
+
       const isDangerousExt = dangerousExts.includes(ext);
       const isTooLarge = fileSizeMB > 100;
       
@@ -84,7 +82,7 @@ class VirusScanner {
         // Binary files will fail here, that's fine
       }
       
-      const isClean = !isRandomInfected && !isDangerousExt && !isTooLarge && !isSuspicious;
+      const isClean = !isDangerousExt && !isTooLarge && !isSuspicious;
       
       return {
         isClean: isClean,

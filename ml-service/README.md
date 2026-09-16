@@ -158,6 +158,19 @@ Both `/train` and `/forecast` require the header:
 X-ML-Service-Secret: <same value as ML_SERVICE_SHARED_SECRET in .env>
 ```
 
+## Local diagnostic report (not part of the deployed service)
+
+`reports/generate_training_report.py` is a standalone, local-only script
+that imports the real `services/*` functions to print a table and render
+a plot for each stage of the training pipeline (preprocessing, outliers,
+split, feature engineering, feature importance, evaluation metrics,
+predictions), then assembles them into one self-contained HTML file at
+`reports/output/training_report.html`. It is never imported by `app.py`,
+never runs on Render, and needs `requirements-dev.txt` (matplotlib) on
+top of the usual dependencies. See `reports/README.md` for how to run it
+and what it does and doesn't do (by default it does NOT train a new
+model — see that file before assuming otherwise).
+
 ## Known simplifications (fine for a capstone, flag if a panelist asks)
 
 - Per-product metric breakdown is summarized into `model_metrics.notes`

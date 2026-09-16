@@ -1,5 +1,7 @@
 const { supabase, supabaseAdmin } = require('../config/supabase');
 const { generateOTP, sendOTPEmail, toPH, nowPH, toSafeISOString, getOtpExpiryTime, OTP_EXPIRATION_MINUTES } = require('../services/otpService');
+const { validatePassword } = require('../utils/passwordPolicy');
+const { isLockedOut, recordFailedAttempt, resetAttempts } = require('../utils/otpAttemptLimiter');
 
 // ============ SEND VERIFICATION CODE ============
 const sendCode = async (req, res) => {
@@ -68,6 +70,10 @@ const verifyCode = async (req, res) => {
 
   const normalizedEmail = email.trim().toLowerCase();
 
+  if (isLockedOut(normalizedEmail)) {
+    return res.status(429).json({ error: 'Too many incorrect attempts. Please request a new code and try again in a few minutes.' });
+  }
+
   try {
     const { data: user, error: userError } = await supabaseAdmin
       .from('user')
@@ -116,9 +122,12 @@ const verifyCode = async (req, res) => {
     const userCode = String(code).trim();
 
     if (dbCode !== userCode) {
-      console.log('Code mismatch:', { expected: dbCode, received: userCode });
+      console.log('Code mismatch for user_id:', resetRecord.user_id);
+      recordFailedAttempt(normalizedEmail);
       return res.status(401).json({ error: 'Invalid code' });
     }
+
+    resetAttempts(normalizedEmail);
 
     res.status(200).json({
       success: true,
@@ -138,8 +147,9 @@ const resetPassword = async (req, res) => {
     return res.status(400).json({ error: 'Email, code, and password are required' });
   }
 
-  if (password.length < 8) {
-    return res.status(400).json({ error: 'Password must be at least 8 characters' });
+  const passwordError = validatePassword(password);
+  if (passwordError) {
+    return res.status(400).json({ error: passwordError });
   }
 
   const normalizedEmail = email.trim().toLowerCase();

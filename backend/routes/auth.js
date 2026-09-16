@@ -5,6 +5,8 @@ const { supabase, supabaseAdmin } = require('../config/supabase');
 const { generateOTP, sendOTPEmail, storeOTP, toPH, nowPH, toSafeISOString, getOtpExpiryTime, OTP_EXPIRATION_MINUTES } = require('../services/otpService');
 const passwordResetController = require('../controllers/passwordResetController');
 const authenticate = require('../middleware/auth');
+const { validatePassword } = require('../utils/passwordPolicy');
+const { isLockedOut, recordFailedAttempt, resetAttempts } = require('../utils/otpAttemptLimiter');
 
 // ============================================
 // STEP 1: REGISTER (NO PASSWORD!)
@@ -84,6 +86,10 @@ router.post('/verify-otp', async (req, res) => {
   const normalizedEmail = email.trim().toLowerCase();
   const trimmedOtp = String(otp).trim();
 
+  if (isLockedOut(normalizedEmail)) {
+    return res.status(429).json({ error: 'Too many incorrect attempts. Please request a new code and try again in a few minutes.' });
+  }
+
   try {
     const { data: user, error: userError } = await supabaseAdmin
       .from('user')
@@ -112,6 +118,7 @@ router.post('/verify-otp', async (req, res) => {
       .single();
 
     if (otpError || !verification) {
+      recordFailedAttempt(normalizedEmail);
       return res.status(400).json({ error: 'Invalid verification code' });
     }
 
@@ -121,6 +128,8 @@ router.post('/verify-otp', async (req, res) => {
     if (expiresAt.isBefore(currentTime)) {
       return res.status(400).json({ error: 'Verification code has expired' });
     }
+
+    resetAttempts(normalizedEmail);
 
     // ✅ ONLY mark OTP as used (NOT verified_at - that doesn't exist!)
     const { error: updateError } = await supabaseAdmin
@@ -161,8 +170,9 @@ router.post('/create-password', async (req, res) => {
     return res.status(400).json({ error: 'User ID, email, and password are required' });
   }
 
-  if (password.length < 8) {
-    return res.status(400).json({ error: 'Password must be at least 8 characters' });
+  const passwordError = validatePassword(password);
+  if (passwordError) {
+    return res.status(400).json({ error: passwordError });
   }
 
   const normalizedEmail = email.trim().toLowerCase();
@@ -330,8 +340,7 @@ router.post('/resend-otp', async (req, res) => {
     // ✅ Use a proper future expiration timestamp
     const expiresAt = getOtpExpiryTime();
 
-    console.log('📧 New OTP:', otp);
-    console.log('⏰ Expires at (PH):', expiresAt.format());
+    console.log('⏰ New OTP issued, expires at (PH):', expiresAt.format());
 
     const { error: upsertError } = await supabaseAdmin
       .from('email_verifications')

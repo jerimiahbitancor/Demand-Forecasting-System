@@ -17,7 +17,18 @@ const API_URL = import.meta.env.VITE_API_URL || "http://localhost:5000/api";
 
 const ReadyToTrain = () => {
   const navigate = useNavigate();
-  const [uploadedMonths, setUploadedMonths] = useState(12);
+  // actual_months_uploaded/actual_days_uploaded count real distinct
+  // calendar days that have a sales row (see uploadService.js's
+  // getUploadStats) — the honest "how much sales data have I uploaded"
+  // number. This state is reached once months_uploaded/days_of_history
+  // (elapsed calendar time since the earliest sale date, matching
+  // ml-service's actual training gate) clears 12 months — which can
+  // happen well before 12 real months of data exist if the earliest
+  // upload is old relative to today. Tracking the real count here too
+  // means the owner isn't shown a bare "12/12 months" that doesn't match
+  // what they actually uploaded.
+  const [uploadedMonths, setUploadedMonths] = useState(0);
+  const [uploadedDays, setUploadedDays] = useState(0);
   const [totalMonthsNeeded] = useState(12);
   const [products, setProducts] = useState([]);
   const [totalProducts, setTotalProducts] = useState(0);
@@ -57,8 +68,10 @@ const ReadyToTrain = () => {
       try {
         const statsRes = await apiClient.get("/upload/stats/summary");
         if (!cancelled && statsRes.data.success) {
-          const months = statsRes.data.data.months_uploaded || 12;
+          const months = statsRes.data.data.actual_months_uploaded || 0;
+          const days = statsRes.data.data.actual_days_uploaded || 0;
           setUploadedMonths(Math.min(months, totalMonthsNeeded));
+          setUploadedDays(days);
         }
       } catch (err) {
         console.error("Error fetching upload stats:", err);
@@ -87,18 +100,27 @@ const ReadyToTrain = () => {
 
   const handleStartTraining = async () => {
     setIsStarting(true);
+    // This POST doesn't resolve until training finishes server-side —
+    // don't wait on it to navigate. Dashboard.jsx polls
+    // /upload/dashboard-state every 5s and will pick up
+    // 'training-in-progress' as soon as the in-flight flag flips, well
+    // before this promise itself settles.
+    //
+    // The toast used to be unconditional: "Training started" fired
+    // immediately, before the request even reached the server, so a
+    // same-instant rejection (e.g. the upload-not-finished 409) showed
+    // its own error toast stacked right on top of a "started" toast that
+    // was never true. Using one toast id for the whole lifecycle means
+    // there's only ever one message on screen, and it only ever claims
+    // "started" once the server has actually accepted the request.
+    const toastId = toast.loading("Starting training…");
     try {
-      // This POST doesn't resolve until training finishes server-side —
-      // don't wait on it to navigate. Dashboard.jsx polls
-      // /upload/dashboard-state every 5s and will pick up
-      // 'training-in-progress' as soon as the in-flight flag flips,
-      // well before this promise itself settles.
-      axios.post(`${API_URL}/ml/train`, {}, {
+      await axios.post(`${API_URL}/ml/train`, {}, {
         headers: { Authorization: `Bearer ${getAuthToken()}` },
-      }).catch((err) => {
-        toast.error(err.response?.data?.error || "Training failed to start");
       });
-      toast.success("Training started — this can take a few minutes.");
+      toast.success("Training completed successfully.", { id: toastId });
+    } catch (err) {
+      toast.error(err.response?.data?.error || "Training failed to start", { id: toastId });
     } finally {
       setIsStarting(false);
     }
@@ -162,8 +184,24 @@ const ReadyToTrain = () => {
                     <div style={{ display: "flex", alignItems: "flex-start", gap: "10px" }}>
                       <FaCheckCircle style={{ color: "#0F9918", fontSize: "18px", marginTop: "2px", flexShrink: 0 }} />
                       <p className="training-step-description1">
-                        Requirement met — {uploadedMonths} of {totalMonthsNeeded} months of data uploaded.
+                        Requirement met — it's been over {totalMonthsNeeded} months since your
+                        earliest uploaded sale date, so training is available.
                       </p>
+                    </div>
+
+                    <div className="training-data-progress-wrapper">
+                      <div className="training-data-progress-label">
+                        <span>Sales data actually uploaded ({uploadedDays} day{uploadedDays === 1 ? '' : 's'})</span>
+                        <span className="training-data-progress-text-complete">
+                          {uploadedMonths} / {totalMonthsNeeded} months
+                        </span>
+                      </div>
+                      <div className="training-data-progress-bar">
+                        <div
+                          className="training-data-progress-fill-complete"
+                          style={{ width: `${Math.min((uploadedMonths / totalMonthsNeeded) * 100, 100)}%` }}
+                        />
+                      </div>
                     </div>
                   </div>
                 </div>

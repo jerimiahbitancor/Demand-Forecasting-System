@@ -116,6 +116,7 @@ def generate_forecast(
                 "forecast_date": target_date.isoformat(),
                 "predicted_quantity": 0.0,
                 "model_version": f"{model_version}_closed",
+                "rolling_7": None,  # business-rule zero day, not a real trend value
             })
             continue  # do NOT feed this into recent_quantities — see docstring
 
@@ -132,6 +133,12 @@ def generate_forecast(
             "forecast_date": target_date.isoformat(),
             "predicted_quantity": round(predicted, 2),
             "model_version": model_version,
+            # Captured here (not discarded like before) so Express's
+            # Performance Ratio calculation can read the exact same
+            # rolling_7 this model was fed, instead of re-deriving its own
+            # rolling average from daily_sales and risking drift between
+            # the two. See backend/services/analyticsService.js.
+            "rolling_7": round(feature_row["rolling_7"], 2),
         })
 
         # feed this day's prediction back in as the next OPERATING day's

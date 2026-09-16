@@ -8,6 +8,16 @@ const { supabaseAdmin } = require('../config/supabase');
 
 const userIdOf = (req) => req.user?.user_id || req.user?.id || null;
 
+// mlService.isTrainingInFlight() only flips true once train() is actually
+// called, which happens after an `await` on the upload-status check below
+// — leaving a window where two near-simultaneous POST /train requests (a
+// double-click, or a retried request) could both pass that check before
+// either one calls train(), firing two concurrent training runs against
+// ml-service. This flag is set synchronously as the first line of the
+// handler, closing that window the same way the frontend's upload
+// re-entrancy guards do (see UploadData.jsx's *SubmittingRef).
+let trainRequestInFlight = false;
+
 function respondWithMlError(res, error, fallbackMessage) {
   console.error(fallbackMessage, error);
   const status = error instanceof mlService.MlServiceError ? error.status : 500;
@@ -27,6 +37,14 @@ function respondWithMlError(res, error, fallbackMessage) {
 // /train (see ml-service/app.py) since it needs to inspect the actual
 // pooled data, not just upload status.
 router.post('/train', authenticate, async (req, res) => {
+  if (trainRequestInFlight || mlService.isTrainingInFlight()) {
+    return res.status(409).json({
+      success: false,
+      error: 'Training is already in progress',
+    });
+  }
+  trainRequestInFlight = true;
+
   try {
     const { data: latestUpload, error } = await supabaseAdmin
       .from('uploads')
@@ -37,7 +55,18 @@ router.post('/train', authenticate, async (req, res) => {
 
     if (error) throw error;
 
-    if (latestUpload && latestUpload.status && latestUpload.status !== 'completed') {
+    // 'pending' is the only non-terminal value uploadService's pipeline
+    // ever writes to uploads.status — it's set when the row is first
+    // saved (saveUploadRecord) and flips to 'processed' or 'failed' once
+    // the pipeline actually finishes (routes/upload.js's
+    // updateUploadStatus calls). This check used to compare against
+    // 'completed', a value nothing ever writes, so it treated every
+    // finished upload — 'processed' included — as still in progress and
+    // permanently blocked training, even with a full, successfully
+    // uploaded year of data. Checking for 'pending' directly is what the
+    // guard actually means: block only while an upload is genuinely
+    // still being written, not forever afterward.
+    if (latestUpload && latestUpload.status === 'pending') {
       createNotification({
         userId: userIdOf(req),
         type: 'pending',
@@ -84,6 +113,8 @@ router.post('/train', authenticate, async (req, res) => {
       metadata: { kind: 'training', status: 'failed' },
     });
     respondWithMlError(res, error, 'Failed to trigger training');
+  } finally {
+    trainRequestInFlight = false;
   }
 });
 
