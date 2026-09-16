@@ -19,6 +19,8 @@ const unitsRoutes = require('./routes/units');
 const productCategoriesRoutes = require('./routes/productCategories');
 const businessDaysRoutes = require('./routes/businessDays');
 const mlRoutes = require('./routes/ml');
+const analyticsRoutes = require('./routes/analytics');
+const forecastSummaryRoutes = require('./routes/forecastSummary');
 const marketPriceRoutes = require('./routes/marketPrice');
 const auditRoutes = require('./routes/audit');
 
@@ -82,6 +84,8 @@ app.use('/api/units', unitsRoutes);
 app.use('/api/product-categories', productCategoriesRoutes);
 app.use('/api/business-days', businessDaysRoutes);
 app.use('/api/ml', mlRoutes);
+app.use('/api/analytics', analyticsRoutes);
+app.use('/api/forecast', forecastSummaryRoutes);
 app.use('/api/market-prices', marketPriceRoutes);
 app.use('/api/audit', auditRoutes);
 
