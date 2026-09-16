@@ -1,5 +1,7 @@
 // components/Forecasting.jsx
-import { useState } from "react";
+import { useState, useEffect, useMemo } from "react";
+import axios from "axios";
+import toast from "react-hot-toast";
 import { FiChevronDown, FiSearch, FiCalendar, FiInfo, FiZap, FiExternalLink } from "react-icons/fi";
 import GenerateReportModal from "../../components/Reports/GenerateReportModal.jsx";
 import { buildSalesForecastPDF, generateExcel } from "./../../../services/reportService.js";
@@ -13,70 +15,74 @@ import 'tippy.js/animations/scale.css';
 import InfoBanner from "./shared/InfoBanner.jsx";
 import "./shared/InfoBanner.css";
 import "./Forecasting.css";
+import { authService } from "../../../services/authService.js";
 
-// ---------------------------------------------------------------------
-// Mock data — replace with real API responses
-// ---------------------------------------------------------------------
-const accuracyHistory = [
-  78, 76, 80, 79, 83, 81, 85, 84, 88, 86, 89, 91, 90, 92.6,
-];
+const API_URL = import.meta.env.VITE_API_URL || "http://localhost:5000/api";
 
-const salesPrediction = {
-  weekLabel: "Week: June 20–26, 2026",
-  points: [
-    { label: "Mon", actual: 650, forecast: 700 },
-    { label: "Tue", actual: 1750, forecast: 1400 },
-    { label: "Wed", actual: 2100, forecast: 2000 },
-    { label: "Thu", actual: 2800, forecast: 2600 },
-    { label: "Fri", actual: 3900, forecast: 3300 },
-    { label: "Sat", actual: 4600, forecast: 3700 },
-    { label: "Sun", actual: 5300, forecast: 3900, future: true },
-  ],
-  rows: [
-    { date: "June 23, 2026", product: "Poppers & Rice", actualQty: 48, forecastQty: 45, actualRevenue: "₱2,400", forecastRevenue: "₱2,250", estCost: "₱2,025", estGrossProfit: "₱225" },
-    { date: "June 23, 2026", product: "Breaded Tonkatsu", actualQty: 32, forecastQty: 35, actualRevenue: "₱1,920", forecastRevenue: "₱2,100", estCost: "₱1,890", estGrossProfit: "₱210" },
-    { date: "June 23, 2026", product: "Chick & Fries", actualQty: 27, forecastQty: 28, actualRevenue: "₱1,350", forecastRevenue: "₱1,400", estCost: "₱1,260", estGrossProfit: "₱140" },
-    { date: "June 24, 2026", product: "Cheesy Tapa", actualQty: 22, forecastQty: 23, actualRevenue: "₱2,550", forecastRevenue: "₱2,800", estCost: "₱2,520", estGrossProfit: "₱280" },
-    { date: "June 24, 2026", product: "Poppers & Rice", actualQty: 52, forecastQty: 52, actualRevenue: "₱3,120", forecastRevenue: "₱3,000", estCost: "₱2,700", estGrossProfit: "₱300" },
-  ],
-};
+function formatPeso(value) {
+  if (value === null || value === undefined || Number.isNaN(Number(value))) return "—";
+  return `₱${Number(value).toLocaleString("en-PH", { maximumFractionDigits: 0 })}`;
+}
 
-const demandPrediction = {
-  weekLabel: "Week: June 20–26, 2026",
-  points: [
-    { label: "Mon", actual: 18, forecast: 20 },
-    { label: "Tue", actual: 22, forecast: 21 },
-    { label: "Wed", actual: 25, forecast: 24 },
-    { label: "Thu", actual: 30, forecast: 28 },
-    { label: "Fri", actual: 36, forecast: 34 },
-    { label: "Sat", actual: 40, forecast: 38 },
-    { label: "Sun", actual: 44, forecast: 45, future: true },
-  ],
-  rows: [
-    { date: "June 23, 2026", product: "Poppers & Rice", actualQty: 48, forecastQty: 45, unit: "servings" },
-    { date: "June 23, 2026", product: "Breaded Tonkatsu", actualQty: 32, forecastQty: 35, unit: "servings" },
-    { date: "June 23, 2026", product: "Chick & Fries", actualQty: 27, forecastQty: 28, unit: "servings" },
-    { date: "June 24, 2026", product: "Cheesy Tapa", actualQty: 22, forecastQty: 23, unit: "servings" },
-  ],
-};
+function formatDisplayDate(dateStr) {
+  if (!dateStr) return "—";
+  const d = new Date(dateStr);
+  if (Number.isNaN(d.getTime())) return dateStr;
+  return d.toLocaleDateString("en-US", { month: "long", day: "numeric", year: "numeric" });
+}
 
-const featureImportance = [
-  { label: "Is payday", value: 92 },
-  { label: "Holiday", value: 84 },
-  { label: "Day of Week", value: 76 },
-  { label: "Sales Lag (7 days)", value: 68 },
-  { label: "Sales Lag (1 day)", value: 45 },
-];
+function formatDisplayDateTime(dateStr) {
+  if (!dateStr) return "—";
+  const d = new Date(dateStr);
+  if (Number.isNaN(d.getTime())) return dateStr;
+  return `${d.toLocaleDateString("en-US", { month: "long", day: "numeric", year: "numeric" })} • ${d.toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" })}`;
+}
 
-const trainingInfo = {
-  modelStatus: "Trained",
-  lastTrained: "June 24, 2026 • 6:00 AM",
-  latestForecast: "June 29, 2026 • 8:00 AM",
-  trainingRecords: "1,248 rows (≈5 months)",
-  activeProducts: "14 menu items",
-  nextTraining: "—",
-  nextForecast: "Tomorrow, Aug 27, 2026 • 8:00 AM",
-};
+function shortDayLabel(dateStr) {
+  const d = new Date(dateStr);
+  return Number.isNaN(d.getTime()) ? dateStr : d.toLocaleDateString("en-US", { weekday: "short" });
+}
+
+// Shared by the live page view AND handleGenerateReport (which re-fetches
+// prediction rows for the report's own chosen date range rather than
+// reusing whatever range happens to be loaded on the page) — module-scope
+// so both call sites use the exact same transformation.
+function buildPredictionSet(predictionRows, revenueMode) {
+  const rows = predictionRows.map((r) => ({
+    date: formatDisplayDate(r.date),
+    rawDate: r.date,
+    product: r.product,
+    actualQty: r.actualQty ?? "—",
+    forecastQty: r.forecastQty,
+    actualRevenue: revenueMode ? formatPeso(r.actualRevenue) : undefined,
+    forecastRevenue: revenueMode ? formatPeso(r.forecastRevenue) : undefined,
+    estCost: revenueMode ? formatPeso(r.estCost) : undefined,
+    estGrossProfit: revenueMode ? formatPeso(r.estGrossProfit) : undefined,
+    unit: revenueMode ? undefined : "servings",
+  }));
+
+  const byDate = new Map();
+  for (const r of predictionRows) {
+    const bucket = byDate.get(r.date) || { date: r.date, actual: 0, forecast: 0, hasActual: false };
+    bucket.forecast += revenueMode ? Number(r.forecastRevenue || 0) : Number(r.forecastQty || 0);
+    if (r.actualQty !== null) {
+      bucket.actual += revenueMode ? Number(r.actualRevenue || 0) : Number(r.actualQty || 0);
+      bucket.hasActual = true;
+    }
+    byDate.set(r.date, bucket);
+  }
+  const today = new Date().toISOString().slice(0, 10);
+  const points = Array.from(byDate.values())
+    .sort((a, b) => a.date.localeCompare(b.date))
+    .map((pt) => ({
+      label: shortDayLabel(pt.date),
+      actual: pt.hasActual ? pt.actual : 0,
+      forecast: pt.forecast,
+      future: pt.date > today,
+    }));
+
+  return { points, rows };
+}
 
 // ---------------------------------------------------------------------
 // Tooltips
@@ -329,8 +335,6 @@ function LineChart({ points }) {
 // Main Component
 // ---------------------------------------------------------------------
 function Forecasting() {
-  const latestAccuracy = accuracyHistory[accuracyHistory.length - 1];
-  const errorRate = (100 - latestAccuracy).toFixed(1);
   const [mode, setMode] = useState("Sales");
   const [selectedRange, setSelectedRange] = useState([new Date(), new Date()]);
   const [isReportModalOpen, setIsReportModalOpen] = useState(false);
@@ -341,6 +345,76 @@ function Forecasting() {
   const [salesPage, setSalesPage] = useState(1);
   const ROWS_PER_PAGE = 5;
 
+  const [apiData, setApiData] = useState(null);
+  const [isLoading, setIsLoading] = useState(true);
+  const [loadError, setLoadError] = useState(null);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    async function fetchForecastingAnalytics() {
+      setIsLoading(true);
+      setLoadError(null);
+      try {
+        const headers = await authService.getAuthHeaders();
+        const response = await axios.get(`${API_URL}/analytics/forecasting`, { headers });
+        if (!cancelled) setApiData(response.data?.data || null);
+      } catch (err) {
+        console.error("Error fetching forecasting analytics:", err);
+        if (!cancelled) setLoadError(err.response?.data?.error || err.message || "Failed to load forecasting data");
+      } finally {
+        if (!cancelled) setIsLoading(false);
+      }
+    }
+
+    fetchForecastingAnalytics();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  // --- Derive the same shapes the JSX below already expects, so the
+  // render tree needs minimal changes from the old mock-data version. ---
+  const accuracyHistory = useMemo(
+    () => (apiData?.accuracy?.history || []).map((h) => h.accuracy).filter((v) => v !== null),
+    [apiData]
+  );
+  const latestAccuracy = apiData?.accuracy?.value ?? null;
+  const errorRate = apiData?.accuracy?.errorRate != null ? Number(apiData.accuracy.errorRate).toFixed(1) : null;
+  const accuracyTierLabel = apiData?.accuracy?.tier?.label || null;
+  // Lewis 1982 tier captions, matching the system module spec's table
+  // (Forecasting > 1.1 Forecast Accuracy) exactly — not hardcoded to
+  // always say "Excellent" regardless of the real number.
+  const TIER_CAPTIONS = {
+    Excellent: { css: "success", accuracy: "Excellent — reliable for planning", error: "Excellent — below 10% threshold" },
+    Good: { css: "success", accuracy: "Good — reliable with minor safety buffer recommended", error: "Good — minor safety buffer recommended" },
+    Fair: { css: "warning", accuracy: "Fair — use as rough guide, increase safety buffer", error: "Fair — increase safety buffer" },
+    Low: { css: "danger", accuracy: "Low — upload more sales data to improve", error: "Low — upload more sales data to improve" },
+  };
+  const tierInfo = accuracyTierLabel ? TIER_CAPTIONS[accuracyTierLabel] : null;
+  const accuracyCssSuffix = tierInfo?.css || "success";
+
+  const predictionRows = apiData?.prediction?.rows || [];
+  const salesPrediction = buildPredictionSet(predictionRows, true);
+  const demandPrediction = buildPredictionSet(predictionRows, false);
+
+  const featureImportance = (apiData?.modelInsights?.featureImportance || []).map((f) => ({
+    label: f.label,
+    value: Math.round(f.value * 10) / 10,
+  }));
+  const topFeature = featureImportance[0]?.label;
+
+  const trainingInfoData = apiData?.modelInsights?.trainingInfo;
+  const trainingInfo = {
+    modelStatus: trainingInfoData?.modelStatus || "Not Trained",
+    lastTrained: trainingInfoData?.lastTrained ? formatDisplayDate(trainingInfoData.lastTrained) : "—",
+    latestForecast: trainingInfoData?.latestForecastRun ? formatDisplayDateTime(trainingInfoData.latestForecastRun) : "—",
+    trainingRecords: trainingInfoData?.trainingRecords ?? "Not tracked per run",
+    activeProducts: trainingInfoData ? `${trainingInfoData.activeProducts} menu item${trainingInfoData.activeProducts === 1 ? "" : "s"}` : "—",
+    nextTraining: trainingInfoData?.nextTraining || "—",
+    nextForecast: trainingInfoData?.nextForecastRun ? formatDisplayDateTime(trainingInfoData.nextForecastRun) : "—",
+  };
+
   const availableTables = [
     { id: "sales", label: "Sales Forecast Table" },
     { id: "demand", label: "Demand Forecast Table" },
@@ -348,43 +422,75 @@ function Forecasting() {
   ];
 
   const handleGenerateReport = async ({ format, dateRange, selectedTableIds }) => {
+    // Re-fetch for the report's OWN chosen date range — the page's
+    // already-loaded data reflects whatever default range it mounted
+    // with, not necessarily what the owner picked in this modal.
+    const [from, to] = dateRange.map((d) => d.toISOString().slice(0, 10));
+    let reportPredictionRows;
+    try {
+      const headers = await authService.getAuthHeaders();
+      const response = await axios.get(`${API_URL}/analytics/forecasting`, { headers, params: { from, to } });
+      reportPredictionRows = response.data?.data?.prediction?.rows || [];
+    } catch (err) {
+      console.error("Error fetching report data:", err);
+      toast.error("Failed to load data for the selected date range.");
+      return;
+    }
+
+    if (reportPredictionRows.length === 0) {
+      toast.error("No data is available for the selected date range.");
+      return;
+    }
+
+    const reportSales = buildPredictionSet(reportPredictionRows, true);
+    const reportDemand = buildPredictionSet(reportPredictionRows, false);
+
+    const accuracyText = latestAccuracy !== null ? `${latestAccuracy.toFixed(1)}%` : "N/A";
+    const errorRateText = errorRate !== null ? `${errorRate}%` : "N/A";
     const metrics = [
-      { label: "Forecast Accuracy", value: `${latestAccuracy}%`, caption: "current model accuracy" },
-      { label: "Error Rate", value: `${errorRate}%`, caption: "average forecast error" },
-      { label: "Forecast Days", value: salesPrediction.points.length, caption: "tracked sales points" },
-      { label: "Demand Days", value: demandPrediction.points.length, caption: "tracked demand points" },
+      { label: "Forecast Accuracy", value: accuracyText, caption: "current model accuracy" },
+      { label: "Error Rate", value: errorRateText, caption: "average forecast error" },
+      { label: "Forecast Days", value: reportSales.points.length, caption: "tracked sales points" },
+      { label: "Demand Days", value: reportDemand.points.length, caption: "tracked demand points" },
     ];
 
-    if (format === "pdf") {
-      const doc = await buildSalesForecastPDF({
-        dateRange,
-        business: null,
-        metrics,
-        insightText: `The ${mode.toLowerCase()} forecast highlights the expected business movement for the selected period. Current model accuracy sits at ${latestAccuracy}% with an estimated error rate of ${errorRate}%.`,
-        disclaimer: "Disclaimer — Forecast values are estimates based on available history and may change as new sales data is uploaded.",
-      });
-      doc.save("sales-demand-forecast-report.pdf");
-    } else {
-      const sheetMap = {
-        sales: { sheetName: "Sales Forecast", rows: salesPrediction.rows.map((row) => ({ ...row })) },
-        demand: { sheetName: "Demand Forecast", rows: demandPrediction.rows.map((row) => ({ ...row })) },
-        model: {
-          sheetName: "Model Insights",
-          rows: [
-            {
-              ...trainingInfo,
-              featureImportance: featureImportance.map((item) => `${item.label}: ${item.value}%`).join(" | "),
-            },
-          ],
-        },
-      };
+    try {
+      if (format === "pdf") {
+        const doc = await buildSalesForecastPDF({
+          dateRange,
+          business: null,
+          metrics,
+          insightText: `The ${mode.toLowerCase()} forecast highlights the expected business movement for the selected period. Current model accuracy sits at ${accuracyText} with an estimated error rate of ${errorRateText}.`,
+          disclaimer: "Disclaimer — Forecast values are estimates based on available history and may change as new sales data is uploaded.",
+        });
+        doc.save("sales-demand-forecast-report.pdf");
+      } else {
+        const sheetMap = {
+          sales: { sheetName: "Sales Forecast", rows: reportSales.rows.map((row) => ({ ...row })) },
+          demand: { sheetName: "Demand Forecast", rows: reportDemand.rows.map((row) => ({ ...row })) },
+          model: {
+            sheetName: "Model Insights",
+            rows: [
+              {
+                ...trainingInfo,
+                featureImportance: featureImportance.map((item) => `${item.label}: ${item.value}%`).join(" | "),
+              },
+            ],
+          },
+        };
 
-      generateExcel(
-        Object.entries(sheetMap)
-          .filter(([id]) => selectedTableIds.includes(id))
-          .map(([, value]) => value),
-        "sales-demand-forecast-report.xlsx"
-      );
+        generateExcel(
+          Object.entries(sheetMap)
+            .filter(([id]) => selectedTableIds.includes(id))
+            .map(([, value]) => value),
+          "sales-demand-forecast-report.xlsx"
+        );
+      }
+      toast.success("Report generated successfully!");
+    } catch (err) {
+      console.error("Error building report:", err);
+      toast.error("Failed to generate report.");
+      return;
     }
 
     logAuditEvent(
@@ -406,6 +512,11 @@ function Forecasting() {
   return (
     <>
       <div className="analytics-col-main">
+        {loadError && (
+          <InfoBanner variant="info">
+            Couldn't load forecasting data: {loadError}
+          </InfoBanner>
+        )}
         {/* Forecast Accuracy */}
         <section className="analytics-card">
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '16px' }}>
@@ -436,44 +547,54 @@ function Forecasting() {
             </button>
           </div>
 
-          <div className="metric-pair">
-            <div className="metric-box">
-              <p className="metric-label">Forecast Accuracy</p>
-              <p className="metric-value metric-value--success">{latestAccuracy}%</p>
-              <p className="metric-caption metric-caption--success">
-                Excellent — reliable for planning
-              </p>
-            </div>
-            <div className="metric-box">
-              <p className="metric-label">Forecast error rate</p>
-              <p className="metric-value metric-value--success">{errorRate}%</p>
-              <p className="metric-caption metric-caption--success">
-                Excellent — below 10% threshold
-              </p>
-            </div>
-          </div>
-
-          {latestAccuracy < 80 && (
-            <div className="accuracy-warning-banner">
-              <span className="accuracy-warning-icon">⚠️</span>
-              <div>
-                <p className="accuracy-warning-title">Accuracy is below the reliable threshold.</p>
-                <p className="accuracy-warning-body">
-                  Possible reasons: fewer than 28 days of sales history (new product), sales data not uploaded recently, or an unusual event (holiday, closure, weather) affected recent sales.
-                </p>
-                <p className="accuracy-warning-body">
-                  <strong>What to do:</strong> Upload your most recent sales data to retrain the model.
-                </p>
+          {isLoading ? (
+            <p className="table-footnote">Loading forecast accuracy…</p>
+          ) : latestAccuracy === null ? (
+            <InfoBanner variant="info">
+              No trained model yet — forecast accuracy will appear here after the first training run.
+            </InfoBanner>
+          ) : (
+            <>
+              <div className="metric-pair">
+                <div className="metric-box">
+                  <p className="metric-label">Forecast Accuracy</p>
+                  <p className={`metric-value metric-value--${accuracyCssSuffix}`}>{latestAccuracy.toFixed(1)}%</p>
+                  <p className={`metric-caption metric-caption--${accuracyCssSuffix}`}>
+                    {tierInfo?.accuracy}
+                  </p>
+                </div>
+                <div className="metric-box">
+                  <p className="metric-label">Forecast error rate</p>
+                  <p className={`metric-value metric-value--${accuracyCssSuffix}`}>{errorRate}%</p>
+                  <p className={`metric-caption metric-caption--${accuracyCssSuffix}`}>
+                    {tierInfo?.error}
+                  </p>
+                </div>
               </div>
-            </div>
-          )}
 
-          <InfoBanner variant="info">
-            <strong>What is this metric?</strong> This percentage tells you how close your
-            forecasts are to real-world results on average. Your current error score of 7.4% means your
-            predictions are typically accurate to within {latestAccuracy}% of the actual
-            totals, whether the guess was slightly too high or too low.
-          </InfoBanner>
+              {latestAccuracy < 80 && (
+                <div className="accuracy-warning-banner">
+                  <span className="accuracy-warning-icon">⚠️</span>
+                  <div>
+                    <p className="accuracy-warning-title">Accuracy is below the reliable threshold.</p>
+                    <p className="accuracy-warning-body">
+                      Possible reasons: fewer than 28 days of sales history (new product), sales data not uploaded recently, or an unusual event (holiday, closure, weather) affected recent sales.
+                    </p>
+                    <p className="accuracy-warning-body">
+                      <strong>What to do:</strong> Upload your most recent sales data to retrain the model.
+                    </p>
+                  </div>
+                </div>
+              )}
+
+              <InfoBanner variant="info">
+                <strong>What is this metric?</strong> This percentage tells you how close your
+                forecasts are to real-world results on average. Your current error rate of {errorRate}% means your
+                predictions are typically accurate to within {latestAccuracy.toFixed(1)}% of the actual
+                totals, whether the guess was slightly too high or too low.
+              </InfoBanner>
+            </>
+          )}
 
           <div className="chart-block">
             <p className="chart-block-title">Accuracy over time</p>
@@ -659,19 +780,26 @@ function Forecasting() {
               What factors influence your forecasts the most?
             </p>
             <ul className="feature-list">
-              {featureImportance.map((f) => (
-                <li key={f.label} className="feature-row">
-                  <span>{f.label}</span>
-                  <span className="feature-value">{f.value}%</span>
+              {featureImportance.length === 0 ? (
+                <li className="feature-row">
+                  <span>Not available yet — appears after the next training run.</span>
                 </li>
-              ))}
+              ) : (
+                featureImportance.map((f) => (
+                  <li key={f.label} className="feature-row">
+                    <span>{f.label}</span>
+                    <span className="feature-value">{f.value}%</span>
+                  </li>
+                ))
+              )}
             </ul>
           </div>
 
-          <InfoBanner variant="tip" icon={<FiZap size={14} />}>
-            Day of Week has the strongest influence on sales. Paydays (15th and 30th) also
-            significantly boost demand.
-          </InfoBanner>
+          {topFeature && (
+            <InfoBanner variant="tip" icon={<FiZap size={14} />}>
+              {topFeature} has the strongest influence on sales.
+            </InfoBanner>
+          )}
 
           <div className="training-info">
             <p className="training-info-title">Training Information</p>
@@ -724,29 +852,33 @@ function Forecasting() {
         onClose={() => setIsForecastAccuracyOpen(false)}
         title="Forecast Accuracy — Full View"
       >
-        <div className="metric-pair">
-          <div className="metric-box">
-            <p className="metric-label">Forecast Accuracy</p>
-            <p className="metric-value metric-value--success">{latestAccuracy}%</p>
-            <p className="metric-caption metric-caption--success">
-              Excellent — reliable for planning
-            </p>
-          </div>
-          <div className="metric-box">
-            <p className="metric-label">Forecast error rate</p>
-            <p className="metric-value metric-value--success">{errorRate}%</p>
-            <p className="metric-caption metric-caption--success">
-              Excellent — below 10% threshold
-            </p>
-          </div>
-        </div>
+        {latestAccuracy === null ? (
+          <InfoBanner variant="info">
+            No trained model yet — forecast accuracy will appear here after the first training run.
+          </InfoBanner>
+        ) : (
+          <>
+            <div className="metric-pair">
+              <div className="metric-box">
+                <p className="metric-label">Forecast Accuracy</p>
+                <p className={`metric-value metric-value--${accuracyCssSuffix}`}>{latestAccuracy.toFixed(1)}%</p>
+                <p className={`metric-caption metric-caption--${accuracyCssSuffix}`}>{tierInfo?.accuracy}</p>
+              </div>
+              <div className="metric-box">
+                <p className="metric-label">Forecast error rate</p>
+                <p className={`metric-value metric-value--${accuracyCssSuffix}`}>{errorRate}%</p>
+                <p className={`metric-caption metric-caption--${accuracyCssSuffix}`}>{tierInfo?.error}</p>
+              </div>
+            </div>
 
-        <InfoBanner variant="info">
-          <strong>What is this metric?</strong> This percentage tells you how close your
-          forecasts are to real-world results on average. Your current error score of 7.4% means your
-          predictions are typically accurate to within {latestAccuracy}% of the actual
-          totals, whether the guess was slightly too high or too low.
-        </InfoBanner>
+            <InfoBanner variant="info">
+              <strong>What is this metric?</strong> This percentage tells you how close your
+              forecasts are to real-world results on average. Your current error rate of {errorRate}% means your
+              predictions are typically accurate to within {latestAccuracy.toFixed(1)}% of the actual
+              totals, whether the guess was slightly too high or too low.
+            </InfoBanner>
+          </>
+        )}
 
         <div className="chart-block">
           <p className="chart-block-title">Accuracy over time</p>
@@ -877,19 +1009,26 @@ function Forecasting() {
             What factors influence your forecasts the most?
           </p>
           <ul className="feature-list">
-            {featureImportance.map((f) => (
-              <li key={f.label} className="feature-row">
-                <span>{f.label}</span>
-                <span className="feature-value">{f.value}%</span>
+            {featureImportance.length === 0 ? (
+              <li className="feature-row">
+                <span>Not available yet — appears after the next training run.</span>
               </li>
-            ))}
+            ) : (
+              featureImportance.map((f) => (
+                <li key={f.label} className="feature-row">
+                  <span>{f.label}</span>
+                  <span className="feature-value">{f.value}%</span>
+                </li>
+              ))
+            )}
           </ul>
         </div>
 
-        <InfoBanner variant="tip" icon={<FiZap size={14} />}>
-          Day of Week has the strongest influence on sales. Paydays (15th and 30th) also
-          significantly boost demand.
-        </InfoBanner>
+        {topFeature && (
+          <InfoBanner variant="tip" icon={<FiZap size={14} />}>
+            {topFeature} has the strongest influence on sales.
+          </InfoBanner>
+        )}
 
         <div className="training-info">
           <p className="training-info-title">Training Information</p>

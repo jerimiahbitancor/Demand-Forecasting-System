@@ -142,10 +142,23 @@ def train_global_model(features_df: pd.DataFrame):
     aggregate_metrics = evaluate_predictions(y_test.values, predictions)
     per_product_metrics = evaluate_per_product(test_df, predictions)
 
+    # Native categorical support (enable_categorical=True) keeps product_id
+    # as ONE column, not one-hot expanded — so feature_importances_ lines
+    # up 1:1 with FEATURE_COLUMNS, no reconciliation needed. This is what
+    # powers Analytics > Forecasting > Model Insights; previously this was
+    # computed and immediately discarded.
+    feature_importance = {
+        col: float(score) for col, score in zip(FEATURE_COLUMNS, model.feature_importances_)
+    }
+
     version = new_model_version()
     save_model_to_storage(model, version)
 
-    metrics = {"aggregate": aggregate_metrics, "per_product": per_product_metrics}
+    metrics = {
+        "aggregate": aggregate_metrics,
+        "per_product": per_product_metrics,
+        "feature_importance": feature_importance,
+    }
     return model, metrics, version
 
 

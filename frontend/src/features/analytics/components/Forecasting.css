@@ -30,6 +30,14 @@
   color: var(--color-success);
 }
 
+.metric-value--warning {
+  color: var(--color-warning, #f59e0b);
+}
+
+.metric-value--danger {
+  color: var(--color-error, #ef4444);
+}
+
 .metric-caption {
   font-size: 11px;
   margin-top: 4px;
@@ -37,6 +45,14 @@
 
 .metric-caption--success {
   color: var(--color-success);
+}
+
+.metric-caption--warning {
+  color: var(--color-warning, #f59e0b);
+}
+
+.metric-caption--danger {
+  color: var(--color-error, #ef4444);
 }
 
 .chart-block {

@@ -1,6 +1,7 @@
 // services/uploadService.js
 const { supabase, isConfigured, supabaseAdmin } = require('../config/supabase');
 const mappingService = require('./mappingService');
+const mlService = require('./mlService');
 const { deriveProductStatus } = require('./productStatusService');
 const { PRODUCT_STATUS_NOTES } = require('./productStatusConstants');
 const { ensureProductCategories } = require('./productCategoryService');
@@ -1203,26 +1204,187 @@ class UploadService {
     };
   }
 
+  // model_metrics.evaluation_date only carries a date, so "days since
+  // trained" is measured in whole days. ~30-45 days was the range given
+  // for the retraining cadence (monthly, per CLAUDE.md); 45 gives a
+  // grace period past the 30-day cadence before flagging attention,
+  // rather than flagging the instant the cadence is technically due.
+  static RETRAINING_CADENCE_DAYS = 45;
+
+  async getLatestModelMetrics() {
+    if (!this.isSupabaseReady()) return null;
+    const { data, error } = await supabaseAdmin
+      .from('model_metrics')
+      .select('model_version, evaluation_date, mape')
+      .order('evaluation_date', { ascending: false })
+      .limit(1)
+      .maybeSingle();
+    if (error) {
+      console.warn('Could not fetch latest model_metrics:', error.message);
+      return null;
+    }
+    return data;
+  }
+
+  async hasUpcomingForecasts() {
+    if (!this.isSupabaseReady()) return false;
+    const today = new Date().toISOString().slice(0, 10);
+    const { count, error } = await supabaseAdmin
+      .from('forecasts')
+      .select('id', { count: 'exact', head: true })
+      .gte('forecast_date', today);
+    if (error) {
+      console.warn('Could not check forecasts existence:', error.message);
+      return false;
+    }
+    return (count || 0) > 0;
+  }
+
+  async getLatestForecastRun() {
+    if (!this.isSupabaseReady()) return null;
+    const { data, error } = await supabaseAdmin
+      .from('forecast_runs')
+      .select('run_at, stale_days, last_confirmed_date')
+      .order('run_at', { ascending: false })
+      .limit(1)
+      .maybeSingle();
+    if (error) {
+      console.warn('Could not fetch latest forecast_runs row:', error.message);
+      return null;
+    }
+    return data;
+  }
+
+  // "Unmapped" is derived live from product_ingredients (same rule
+  // CLAUDE.md documents for the Analytics module — no stored
+  // MAPPED/UNMAPPED column, to avoid a second source of truth).
+  async getUnmappedActiveProductInfo() {
+    const empty = { hasUnmapped: false, unmappedCount: 0, activeCount: 0 };
+    if (!this.isSupabaseReady()) return empty;
+
+    const { data: activeProducts, error: productsError } = await supabaseAdmin
+      .from('products')
+      .select('id')
+      .eq('status', 'active');
+    if (productsError) {
+      console.warn('Could not fetch active products for mapping check:', productsError.message);
+      return empty;
+    }
+    if (!activeProducts || activeProducts.length === 0) return empty;
+
+    const activeIds = activeProducts.map((p) => p.id);
+    const { data: mappedRows, error: mapError } = await supabaseAdmin
+      .from('product_ingredients')
+      .select('product_id')
+      .in('product_id', activeIds);
+    if (mapError) {
+      console.warn('Could not fetch product_ingredients for mapping check:', mapError.message);
+      return empty;
+    }
+
+    const mappedSet = new Set((mappedRows || []).map((r) => r.product_id));
+    const unmappedCount = activeIds.filter((id) => !mappedSet.has(id)).length;
+    return { hasUnmapped: unmappedCount > 0, unmappedCount, activeCount: activeIds.length };
+  }
+
+  // uploads.error_message is the existing column for this — populated
+  // if validateSalesData/processing flagged something on the most
+  // recent upload. If it's never actually been populated in practice,
+  // this signal will just always read null, same as it would for any
+  // upload that genuinely had no issues.
+  async getLastUploadDataQualityIssue() {
+    if (!this.isSupabaseReady()) return null;
+    const { data, error } = await supabaseAdmin
+      .from('uploads')
+      .select('error_message, upload_date')
+      .order('upload_date', { ascending: false })
+      .limit(1)
+      .maybeSingle();
+    if (error) {
+      console.warn('Could not fetch latest upload for data-quality check:', error.message);
+      return null;
+    }
+    return data?.error_message || null;
+  }
+
   async getDashboardState(userId = null) {
     const stats = await this.getUploadStats(userId);
     const progress = await this.getUploadProgress(userId);
 
-    let state = 'fully-operational';
     if (stats.total_uploads === 0 && stats.sales_records === 0) {
-      state = 'no-data';
-    } else if (stats.failed > 0) {
-      state = 'data-needs-attention';
-    } else if (progress.status === 'processing' || stats.pending > 0) {
-      state = 'training';
-    } else if ((stats.months_uploaded || 0) < 12) {
-      state = 'uploaded-insufficient';
+      return { state: 'no-data', stats, progress };
     }
 
-    return {
-      state,
-      stats,
-      progress
-    };
+    if ((stats.months_uploaded || 0) < 12) {
+      return { state: 'uploaded-insufficient', stats, progress };
+    }
+
+    // Actual training-in-flight signal (see mlService.isTrainingInFlight),
+    // not upload-processing status — those are different things that the
+    // old logic conflated (progress.status === 'processing' || stats.pending > 0).
+    if (mlService.isTrainingInFlight()) {
+      return { state: 'training-in-progress', stats, progress };
+    }
+
+    const latestModel = await this.getLatestModelMetrics();
+    if (!latestModel) {
+      return { state: 'ready-to-train', stats, progress };
+    }
+
+    const hasForecasts = await this.hasUpcomingForecasts();
+    if (!hasForecasts) {
+      // A model exists but no current forecasts yet (e.g. trained just
+      // now, first /forecast run hasn't landed). No dedicated state for
+      // this narrow window in the 7-state spec — training-in-progress
+      // is the closest fit, since the dashboard genuinely isn't usable
+      // yet for a different reason than "not trained at all".
+      return { state: 'training-in-progress', stats, progress };
+    }
+
+    // Model trained + forecasts exist — check the data-needs-attention
+    // OR before deciding forecasts-ready-recipes-pending vs
+    // fully-operational, since staleness/accuracy/retraining/data-quality
+    // issues can happen to an otherwise-complete dashboard.
+    const [forecastRun, dataQualityIssue] = await Promise.all([
+      this.getLatestForecastRun(),
+      this.getLastUploadDataQualityIssue(),
+    ]);
+
+    const staleDays = forecastRun?.stale_days || 0;
+    const isStale = staleDays > 0;
+    const accuracy = latestModel.mape != null
+      ? Math.max(0, Math.min(100, 100 - Number(latestModel.mape)))
+      : null;
+    const isLowAccuracy = accuracy !== null && accuracy < 70;
+    const daysSinceTraining = latestModel.evaluation_date
+      ? Math.floor((Date.now() - new Date(latestModel.evaluation_date).getTime()) / 86400000)
+      : null;
+    const needsRetraining = daysSinceTraining !== null && daysSinceTraining > UploadService.RETRAINING_CADENCE_DAYS;
+
+    if (isStale || isLowAccuracy || needsRetraining || dataQualityIssue) {
+      return {
+        state: 'data-needs-attention',
+        stats,
+        progress,
+        attention: {
+          isStale, staleDays, lastConfirmedDate: forecastRun?.last_confirmed_date || null,
+          isLowAccuracy, accuracy,
+          needsRetraining, daysSinceTraining,
+          dataQualityIssue,
+        },
+      };
+    }
+
+    const { hasUnmapped, unmappedCount, activeCount } = await this.getUnmappedActiveProductInfo();
+    if (hasUnmapped) {
+      return {
+        state: 'forecasts-ready-recipes-pending',
+        stats, progress,
+        mapping: { unmappedCount, activeCount },
+      };
+    }
+
+    return { state: 'fully-operational', stats, progress };
   }
 }
 

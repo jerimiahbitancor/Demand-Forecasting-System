@@ -3,10 +3,11 @@ import { useEffect, useState } from 'react';
 import axios from 'axios';
 import './Dashboard.css';
 
-// Import your 6 different state components
+// Import the 7 state components
 import FullyOperational from '../states/FullyOperational';
 import NoData from '../states/NoData.jsx';
 import UploadedInsufficient from '../states/UploadedInsufficient.jsx';
+import ReadyToTrain from '../states/ReadyToTrain.jsx';
 import TrainingInProgress from '../states/TrainingInProgress.jsx';
 import ForecastsReady from '../states/ForecastsReady.jsx';
 import DataNeedsAttention from '../states/DataNeedsAttention.jsx';
@@ -43,7 +44,9 @@ const Dashboard = () => {
         const stateMap = {
           'no-data': 'NoData',
           'uploaded-insufficient': 'UploadedInsufficient',
-          training: 'TrainingInProgress',
+          'ready-to-train': 'ReadyToTrain',
+          'training-in-progress': 'TrainingInProgress',
+          'forecasts-ready-recipes-pending': 'ForecastsReady',
           'data-needs-attention': 'DataNeedsAttention',
           'fully-operational': 'FullyOperational'
         };
@@ -94,6 +97,13 @@ const Dashboard = () => {
       color: '#eab308',
       description: 'Data uploaded but insufficient',
       backgroundColor: '#fffbeb'
+    },
+    ReadyToTrain: {
+      component: ReadyToTrain,
+      label: '🟢 Ready to Train',
+      color: '#0F9918',
+      description: 'Enough data uploaded — training not started yet',
+      backgroundColor: '#f0fdf4'
     },
     TrainingInProgress: {
       component: TrainingInProgress,

@@ -1,5 +1,7 @@
 // components/ProductPerformance.jsx
-import { useState } from "react";
+import { useState, useEffect } from "react";
+import axios from "axios";
+import toast from "react-hot-toast";
 import { FiChevronDown, FiSearch, FiCalendar, FiInfo, FiExternalLink } from "react-icons/fi";
 import GenerateReportModal from "../../components/Reports/GenerateReportModal.jsx";
 import { buildProductPerformancePDF, generateExcel } from "./../../../services/reportService.js";
@@ -13,42 +15,58 @@ import 'tippy.js/animations/scale.css';
 import InfoBanner from "./shared/InfoBanner.jsx";
 import "./shared/InfoBanner.css";
 import "./ProductPerformance.css";
+import { authService } from "../../../services/authService.js";
 
-// ---------------------------------------------------------------------
-// Mock data
-// ---------------------------------------------------------------------
-const demandRows = [
-  { product: "Poppers & Rice", date: "25-06-2026", forecastQty: 52, zone: "high", demandLevel: "High Demand", bottleneckIngredient: "Rice", bottleneckStatus: "Critical" },
-  { product: "Breaded Tonkatsu", date: "25-06-2026", forecastQty: 38, zone: "high", demandLevel: "Medium Demand", bottleneckIngredient: "Pork", bottleneckStatus: "Low" },
-  { product: "Chick & Fries", date: "25-06-2026", forecastQty: 44, zone: "medium", demandLevel: "High Demand", bottleneckIngredient: "Chicken", bottleneckStatus: "Normal" },
-  { product: "Cheesy Tapa", date: "25-06-2026", forecastQty: 18, zone: "low", demandLevel: "Low Demand", bottleneckIngredient: "Soy Sauce", bottleneckStatus: "Excess" },
-];
+const API_URL = import.meta.env.VITE_API_URL || "http://localhost:5000/api";
 
-const performanceRows = [
-  { rank: 1, product: "Poppers & Rice", qtySold: 48, revenue: "₱6,750", ratio: 1.55, actionSignal: "Keep on Menu — top performer" },
-  { rank: 2, product: "Breaded Tonkatsu", qtySold: 37, revenue: "₱5,700", ratio: 1.19, actionSignal: "Above average — maintain" },
-  { rank: 3, product: "Chick & Fries", qtySold: 29, revenue: "₱4,800", ratio: 0.94, actionSignal: "Near average — monitor" },
-  { rank: 4, product: "Cheesy Tapa", qtySold: 18, revenue: "₱1,800", ratio: 0.58, actionSignal: "Below average — consider promo or review" },
-];
+function formatPeso(value) {
+  if (value === null || value === undefined || Number.isNaN(Number(value))) return "—";
+  return `₱${Number(value).toLocaleString("en-PH", { maximumFractionDigits: 0 })}`;
+}
 
-const activeProducts = [
-  { product: "Breaded Tonkatsu", daysOnMenu: "6 months", forecastStatus: "Forecast Running" },
-  { product: "Poppers & Rice", daysOnMenu: "5 months", forecastStatus: "Forecast Running" },
-];
+function formatDDMMYYYY(dateStr) {
+  if (!dateStr) return "—";
+  const d = new Date(dateStr);
+  if (Number.isNaN(d.getTime())) return dateStr;
+  const dd = String(d.getDate()).padStart(2, "0");
+  const mm = String(d.getMonth() + 1).padStart(2, "0");
+  return `${dd}-${mm}-${d.getFullYear()}`;
+}
 
-const newProducts = [
-  { product: "Ice Sago", daysOnMenu: "12 days", forecastStatus: "Forecast in 16 days" },
-  { product: "Bulalo", daysOnMenu: "10 days", forecastStatus: "Forecast in 18 days" },
-];
+// High Demand -> high zone, Medium -> medium, Low -> low, unclassified
+// (no product_classifications row yet) falls back to "low" so the bar
+// still renders something rather than crashing on an unknown key.
+function zoneFromDemandLevel(demandLevel) {
+  if (demandLevel === "High Demand") return "high";
+  if (demandLevel === "Medium Demand") return "medium";
+  return "low";
+}
 
-const inactiveProducts = [
-  { product: "Bicol Express", lastSale: "25 days ago", forecastStatus: "Auto flagged in 3 days" },
-  { product: "Kaldereta", lastSale: "20 days ago", forecastStatus: "Auto flagged in 8 days" },
-];
+// Shared by the live page view AND handleGenerateReport (which re-fetches
+// for the report's own chosen date range) — module-scope so both call
+// sites use the exact same transformation.
+function buildDemandRows(apiRows) {
+  return (apiRows || []).map((r) => ({
+    product: r.product,
+    date: formatDDMMYYYY(r.date),
+    forecastQty: r.forecastQty,
+    zone: zoneFromDemandLevel(r.demandLevel),
+    demandLevel: r.demandLevel || "Unclassified",
+    bottleneckIngredient: r.bottleneckIngredient,
+    bottleneckStatus: r.bottleneckStatus,
+  }));
+}
 
-const archivedProducts = [
-  { product: "Halo Halo", lastSale: "3 months ago", forecastStatus: "Seasonal" },
-];
+function buildPerformanceRows(apiRows) {
+  return (apiRows || []).map((r) => ({
+    rank: r.rank,
+    product: r.product,
+    qtySold: r.quantitySold,
+    revenue: formatPeso(r.revenue),
+    ratio: r.performanceRatio ?? 0,
+    actionSignal: r.actionSignal,
+  }));
+}
 
 // ---------------------------------------------------------------------
 // Tooltips
@@ -237,7 +255,9 @@ function getActionSignal(demandLevel, bottleneckIngredient, bottleneckStatus) {
 // Main Component
 // ---------------------------------------------------------------------
 function ProductPerformance() {
-  const maxQty = Math.max(...demandRows.map((r) => r.forecastQty));
+  const [apiData, setApiData] = useState(null);
+  const [isLoading, setIsLoading] = useState(true);
+  const [loadError, setLoadError] = useState(null);
   const [selectedRange, setSelectedRange] = useState([new Date(), new Date()]);
   const [isReportModalOpen, setIsReportModalOpen] = useState(false);
   // Modal open states
@@ -262,6 +282,41 @@ function ProductPerformance() {
 
   const ROWS_PER_PAGE = 5;
 
+  useEffect(() => {
+    let cancelled = false;
+
+    async function fetchProductPerformance() {
+      setIsLoading(true);
+      setLoadError(null);
+      try {
+        const headers = await authService.getAuthHeaders();
+        const response = await axios.get(`${API_URL}/analytics/product-performance`, { headers });
+        if (!cancelled) setApiData(response.data?.data || null);
+      } catch (err) {
+        console.error("Error fetching product performance analytics:", err);
+        if (!cancelled) setLoadError(err.response?.data?.error || err.message || "Failed to load product performance data");
+      } finally {
+        if (!cancelled) setIsLoading(false);
+      }
+    }
+
+    fetchProductPerformance();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  // --- Derive the same shapes the JSX below already expects. ---
+  const demandRows = buildDemandRows(apiData?.demandClassification);
+  const maxQty = demandRows.length ? Math.max(...demandRows.map((r) => r.forecastQty)) : 1;
+  const performanceRows = buildPerformanceRows(apiData?.performanceRatio?.rows);
+
+  const statusCounts = apiData?.productStatus?.counts || { active: 0, new: 0, inactive: 0, archived: 0 };
+  const activeProducts = apiData?.productStatus?.active || [];
+  const newProducts = apiData?.productStatus?.new || [];
+  const inactiveProducts = apiData?.productStatus?.inactive || [];
+  const archivedProducts = apiData?.productStatus?.archived || [];
+
   const availableTables = [
     { id: "demand", label: "Demand Classification" },
     { id: "ratio", label: "Performance Ratio Analysis" },
@@ -271,17 +326,40 @@ function ProductPerformance() {
   // Note: selectedTableIds must be destructured here — the modal passes it
   // alongside format and dateRange, and the Excel branch below depends on it.
   const handleGenerateReport = async ({ format, dateRange, selectedTableIds }) => {
-    const topPerformers = performanceRows.filter((r) => r.ratio >= 1).slice(0, 2);
-    const needsReview = performanceRows.filter((r) => r.ratio < 1).slice(0, 2);
+    // Re-fetch for the report's OWN chosen date range — demand
+    // classification and performance ratio are both date-scoped on the
+    // backend; product status is always "now" regardless of the report
+    // period, so that part reuses the page's already-loaded values.
+    const [from, to] = dateRange.map((d) => d.toISOString().slice(0, 10));
+    let reportDemandRows, reportPerformanceRows;
+    try {
+      const headers = await authService.getAuthHeaders();
+      const response = await axios.get(`${API_URL}/analytics/product-performance`, { headers, params: { from, to } });
+      reportDemandRows = buildDemandRows(response.data?.data?.demandClassification);
+      reportPerformanceRows = buildPerformanceRows(response.data?.data?.performanceRatio?.rows);
+    } catch (err) {
+      console.error("Error fetching report data:", err);
+      toast.error("Failed to load data for the selected date range.");
+      return;
+    }
 
+    if (reportDemandRows.length === 0 && reportPerformanceRows.length === 0) {
+      toast.error("No data is available for the selected date range.");
+      return;
+    }
+
+    const topPerformers = reportPerformanceRows.filter((r) => r.ratio >= 1).slice(0, 2);
+    const needsReview = reportPerformanceRows.filter((r) => r.ratio < 1).slice(0, 2);
+
+    try {
     if (format === "pdf") {
       const doc = await buildProductPerformancePDF({
         dateRange,
         business: null, // wire to your business_profile fetch — see prior note
         metrics: [
           { label: "Active Products", value: activeProducts.length, caption: "menu products" },
-          { label: "High Demand", value: demandRows.filter(r => r.demandLevel === "High Demand").length, caption: "products" },
-          { label: "Below Average", value: performanceRows.filter(r => r.ratio < 1).length, valueColor: [15, 153, 24], caption: "products" },
+          { label: "High Demand", value: reportDemandRows.filter(r => r.demandLevel === "High Demand").length, caption: "products" },
+          { label: "Below Average", value: reportPerformanceRows.filter(r => r.ratio < 1).length, valueColor: [15, 153, 24], caption: "products" },
           { label: "New Products", value: newProducts.length, caption: "product" },
         ],
         statusBullets: [
@@ -289,15 +367,15 @@ function ProductPerformance() {
           `${newProducts.length} new (${newProducts[0]?.product}, forecast in ${newProducts[0]?.forecastStatus.match(/\d+/)?.[0]} days)`,
           `${inactiveProducts.length} inactive (${inactiveProducts[0]?.product}, last sale ${inactiveProducts[0]?.lastSale})`,
         ],
-        narrativeText: `${topPerformers[0]?.product} was the top performer this week. ${needsReview[0]?.product} underperformed and may need a promo or menu review.`,
-        topPerformers, needsReview, demandRows,
+        narrativeText: `${topPerformers[0]?.product || "—"} was the top performer this period. ${needsReview[0]?.product || "No products"} underperformed and may need a promo or menu review.`,
+        topPerformers, needsReview, demandRows: reportDemandRows,
         disclaimer: "Disclaimer \u2014 Performance ratio compares each product's sales against the store average across all active products.",
       });
       doc.save("product-performance-report.pdf");
     } else {
       const sheetMap = {
-        demand: { sheetName: "Demand Classification", rows: demandRows },
-        ratio: { sheetName: "Performance Ratio", rows: performanceRows },
+        demand: { sheetName: "Demand Classification", rows: reportDemandRows },
+        ratio: { sheetName: "Performance Ratio", rows: reportPerformanceRows },
         status: { sheetName: "Product Status", rows: [...activeProducts, ...newProducts, ...inactiveProducts] },
       };
       generateExcel(
@@ -310,6 +388,12 @@ function ProductPerformance() {
       'report_generated',
       `Generated the Product Performance report (${format === 'pdf' ? 'PDF' : 'Excel'})${formatAuditDateRange(dateRange) ? ` — ${formatAuditDateRange(dateRange)}` : ''}`
     );
+      toast.success("Report generated successfully!");
+    } catch (err) {
+      console.error("Error building report:", err);
+      toast.error("Failed to generate report.");
+      return;
+    }
     setIsReportModalOpen(false);
   };
 
@@ -348,6 +432,12 @@ function ProductPerformance() {
   return (
     <>
       <div className="analytics-col-main">
+        {loadError && (
+          <InfoBanner variant="info">
+            Couldn't load product performance data: {loadError}
+          </InfoBanner>
+        )}
+        {isLoading && !apiData && <p className="table-footnote">Loading product performance data…</p>}
         {/* Demand Classification */}
         <section className="analytics-card">
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '16px' }}>
@@ -560,7 +650,7 @@ function ProductPerformance() {
 
           <div className="status-group">
             <p className="status-group-title">Active Product</p>
-            <p className="status-group-subtitle">There are 50 menu items active</p>
+            <p className="status-group-subtitle">There {statusCounts.active === 1 ? "is" : "are"} {statusCounts.active} menu item{statusCounts.active === 1 ? "" : "s"} active</p>
             <table className="analytics-table analytics-table--compact">
               <thead>
                 <tr>
@@ -777,7 +867,7 @@ function ProductPerformance() {
 
         <div className="status-group">
           <p className="status-group-title">Active Product</p>
-          <p className="status-group-subtitle">There are 50 menu items active</p>
+          <p className="status-group-subtitle">There {statusCounts.active === 1 ? "is" : "are"} {statusCounts.active} menu item{statusCounts.active === 1 ? "" : "s"} active</p>
           <table className="analytics-table analytics-table--compact">
             <thead><tr><th>No.</th><th>Product</th><th>Days on Menu</th><th>Forecast Status</th></tr></thead>
             <tbody>{modalActiveProducts.map((row, i) => (

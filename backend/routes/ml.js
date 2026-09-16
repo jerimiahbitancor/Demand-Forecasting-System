@@ -129,4 +129,10 @@ router.get('/health', authenticate, async (req, res) => {
   res.json({ success: true, data: { up: isUp } });
 });
 
+// GET /api/ml/training-status — lets the Dashboard poll whether the
+// blocking POST /train call above is currently in flight.
+router.get('/training-status', authenticate, async (req, res) => {
+  res.json({ success: true, data: { isTraining: mlService.isTrainingInFlight() } });
+});
+
 module.exports = router;

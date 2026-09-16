@@ -17,8 +17,6 @@ const TrainingInProgress = () => {
   const [totalMonthsNeeded] = useState(12);
   const [isLoading, setIsLoading] = useState(false);
   const [hasData, setHasData] = useState(true);
-  const [trainingProgress, setTrainingProgress] = useState(60);
-  const [estimatedTime, setEstimatedTime] = useState("30 minutes");
   const [isTrainingComplete, setIsTrainingComplete] = useState(false);
   const [products, setProducts] = useState([]);
   const [productsWithRecipes, setProductsWithRecipes] = useState(3);
@@ -143,19 +141,21 @@ const TrainingInProgress = () => {
     }
   };
 
-  // Fetch training status
+  // Fetch training status. ml-service's /train is a single blocking HTTP
+  // call (no job queue), so there's no real incremental percentage or ETA
+  // to report — mlService.isTrainingInFlight() only knows "still running"
+  // vs "finished". The percentage bar below is intentionally left as a
+  // generic in-progress indicator, not a fabricated number. Once
+  // isTraining flips false, Dashboard.jsx's own 5s poll of
+  // /upload/dashboard-state will naturally move the owner to whichever
+  // state actually follows (forecasts-ready-recipes-pending,
+  // fully-operational, or data-needs-attention) — this component doesn't
+  // need to navigate anywhere itself.
   const fetchTrainingStatus = async () => {
     try {
-      const response = await apiClient.get("/training/status");
+      const response = await apiClient.get("/ml/training-status");
       if (response.data.success) {
-        const data = response.data.data;
-        setTrainingProgress(data.progress || 60);
-        setEstimatedTime(data.estimatedTime || "30 minutes");
-        setIsTrainingComplete(data.isComplete || false);
-        
-        if (data.isComplete) {
-          navigate('/forecasts-ready', { replace: true });
-        }
+        setIsTrainingComplete(!response.data.data.isTraining);
       }
     } catch (error) {
       console.error("Error fetching training status:", error);
@@ -332,15 +332,17 @@ const TrainingInProgress = () => {
                 </div>
                 <div className="training-model-progress">
                   <div className="training-model-progress-bar">
-                    <div 
-                      className="training-model-progress-fill"
-                      style={{ width: `${Math.min(trainingProgress, 100)}%` }}
+                    {/* ml-service's /train is one blocking call with no
+                        incremental progress to report, so this is an
+                        indeterminate indicator, not a real percentage. */}
+                    <div
+                      className={`training-model-progress-fill${isTrainingComplete ? "" : " training-model-progress-fill--indeterminate"}`}
+                      style={{ width: isTrainingComplete ? "100%" : "100%" }}
                     />
                   </div>
                   <div className="training-model-progress-info">
-                    <span className="training-model-progress-percent">{Math.round(trainingProgress)}%</span>
                     <span className="training-model-progress-time">
-                      {isTrainingComplete ? "Complete" : `Estimated Time: ${estimatedTime}`}
+                      {isTrainingComplete ? "Complete" : "Training in progress — this can take a few minutes"}
                     </span>
                   </div>
                 </div>
