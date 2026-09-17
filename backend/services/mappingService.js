@@ -75,6 +75,8 @@ class MappingService {
       const keys = [
         'products',
         'products_inactive',
+        'products_archived',
+        'products_all',
         'categories_active',
         'categories_inactive',
         'totalProducts'
@@ -99,7 +101,9 @@ class MappingService {
 
       const cacheKeys = {
         active: 'products',
-        inactive: 'products_inactive'
+        inactive: 'products_inactive',
+        archived: 'products_archived',
+        all: 'products_all'
       };
       const cacheKey = cacheKeys[status] || null;
       
@@ -139,6 +143,11 @@ class MappingService {
         query = query.eq('is_active', true);
       } else if (status === 'inactive') {
         query = query.eq('is_active', false);
+      } else if (status === 'archived') {
+        query = query.or('inactive_reason.ilike.archived%');
+      } else if (status === 'all') {
+        // "All products" shows everything EXCEPT archived ones.
+        query = query.not('status', 'eq', 'archived');
       }
 
       if (category && category !== 'All') {
@@ -166,6 +175,7 @@ class MappingService {
         is_active: item.is_active,
         is_archived: /^archived\b/i.test(item.inactive_reason || ''),
         created_at: item.created_at,
+        updated_at: item.updated_at,
         first_sold_date: item.first_sold_date,
         inactive_reason: item.inactive_reason,
         inactive_since: item.inactive_since,
@@ -316,6 +326,7 @@ class MappingService {
         is_active: data.is_active,
         is_archived: /^archived\b/i.test(data.inactive_reason || ''),
         created_at: data.created_at,
+        updated_at: data.updated_at,
         first_sold_date: data.first_sold_date,
         inactive_reason: data.inactive_reason,
         inactive_since: data.inactive_since,
@@ -443,6 +454,7 @@ class MappingService {
         serving_size_label: product.serving_size_label || 'serving',
         is_active: product.is_active,
         created_at: product.created_at,
+        updated_at: product.updated_at || product.created_at,
         product_ingredients: []
       };
 
@@ -498,6 +510,12 @@ class MappingService {
           : PRODUCT_DB_STATUS_BY_DERIVED.inactive;
       }
 
+      // Always stamp updated_at so the "Last Updated" column reflects any
+      // change, including ingredient-only edits (products.updated_at is
+      // also updated by the update_products_updated_at trigger when the
+      // column is present — stamping here makes the write deterministic).
+      updateData.updated_at = new Date().toISOString();
+
       const { data: product, error: productError } = await supabaseAdmin.from('products')
         .update(updateData)
         .eq('id', id)
@@ -552,6 +570,7 @@ class MappingService {
         serving_size_label: product.serving_size_label || 'serving',
         is_active: product.is_active,
         created_at: product.created_at,
+        updated_at: product.updated_at,
         product_ingredients: []
       };
 
@@ -677,7 +696,8 @@ class MappingService {
         name: product.name,
         is_active: false,
         inactive_reason: product.inactive_reason,
-        inactive_since: product.inactive_since
+        inactive_since: product.inactive_since,
+        updated_at: product.updated_at
       };
 
       return transformedData;
@@ -738,7 +758,8 @@ class MappingService {
         name: product.name,
         is_active: true,
         inactive_reason: null,
-        inactive_since: null
+        inactive_since: null,
+        updated_at: product.updated_at
       };
       
       return transformedData;

@@ -318,6 +318,59 @@
   font-size: 13px;
 }
 
+.product-ingredients-hover {
+  cursor: help;
+  color: #a31d1d;
+  background: #fef2f2;
+  font-weight: 600;
+}
+
+.product-ingredients-tooltip {
+  text-align: left;
+}
+
+.product-ingredients-tooltip strong {
+  display: block;
+  margin-bottom: 8px;
+  padding-bottom: 6px;
+  border-bottom: 1px solid rgba(255,255,255,0.15);
+}
+
+.product-ingredients-tooltip-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 3px 0;
+  font-size: 12.5px;
+}
+
+.product-ingredients-tooltip-row span:last-child {
+  color: #fbbf24;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+/* Bulk selection checkboxes */
+.inventory-checkbox-cell {
+  width: 38px;
+  padding: 0.5rem !important;
+  text-align: center;
+  vertical-align: middle;
+}
+
+.inventory-row-checkbox {
+  width: 16px;
+  height: 16px;
+  accent-color: #a31d1d;
+  cursor: pointer;
+  vertical-align: middle;
+}
+
+.inventory-row-checkbox:disabled {
+  cursor: not-allowed;
+  opacity: 0.35;
+}
+
 /* ============ PRICE CELL ============ */
 .price-cell {
   font-weight: 600;
@@ -455,6 +508,15 @@
 .product-action-btn.archive:hover {
   color: #d97706;
   background: #fef3c7;
+}
+
+.product-action-btn.restore {
+  color: #6b7280;
+}
+
+.product-action-btn.restore:hover {
+  color: #15803d;
+  background: #dcfce7;
 }
 
 /* ============ PAGINATION ============ */

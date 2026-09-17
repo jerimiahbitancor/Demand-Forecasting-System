@@ -607,7 +607,7 @@ const IngredientManagement = () => {
 
   const formatCurrency = (amount) => {
     if (amount === undefined || amount === null) return '₱ 0.00';
-    return `₱ ${parseFloat(amount).toFixed(2)}`;
+    return `₱ ${parseFloat(amount).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
   };
 
   const handleSort = (field) => {
@@ -1048,23 +1048,14 @@ const IngredientManagement = () => {
                           >
                             <FaHistory size={14} />
                           </button>
-                          {!isArchived ? (
-                            <button 
-                              className="inventory-action-btn archive"
-                              onClick={() => openArchiveModal(item)}
-                              title="Archive"
-                            >
-                              <FaArchive size={14} />
-                            </button>
-                          ) : (
-                            <button 
-                              className="inventory-action-btn restore"
-                              onClick={() => openRestoreModal(item)}
-                              title="Restore"
-                            >
-                              <FaUndo size={14} />
-                            </button>
-                          )}
+                          <button 
+                            className="inventory-action-btn archive"
+                            onClick={!isArchived ? () => openArchiveModal(item) : () => openRestoreModal(item)}
+                            title={isArchived ? 'Archived' : 'Archive'}
+                            disabled={isArchived}
+                          >
+                            <FaArchive size={14} />
+                          </button>
                         
                         </div>
                       </td>

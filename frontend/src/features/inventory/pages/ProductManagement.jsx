@@ -84,6 +84,8 @@ const ProductManagement = () => {
   const [isSaving, setIsSaving] = useState(false);
   const [isArchiving, setIsArchiving] = useState(false);
   const [lastUpdated, setLastUpdated] = useState(null);
+  const [selectedIds, setSelectedIds] = useState([]);
+  const [isBulkArchiveOpen, setIsBulkArchiveOpen] = useState(false);
   // Owner-configurable via Settings > Forecast Configuration (defaults
   // to 35%, the settled spec value — see forecast_config.food_cost_warning_threshold).
   const [foodCostThreshold, setFoodCostThreshold] = useState(35);
@@ -285,7 +287,7 @@ const ProductManagement = () => {
     try {
       setLoading(true);
       
-      const cacheSuffix = statusFilter === 'inactive' ? '_inactive' : '';
+      const cacheSuffix = statusFilter === 'inactive' ? '_inactive' : statusFilter === 'archived' ? '_archived' : statusFilter === 'all' ? '_all' : '';
       const storedData = sessionStorage.getItem(STORAGE_KEYS.MAPPING_DATA + cacheSuffix);
       const storedCategories = sessionStorage.getItem(STORAGE_KEYS.CATEGORIES + cacheSuffix);
       const storedTotal = sessionStorage.getItem(STORAGE_KEYS.TOTAL_PRODUCTS + cacheSuffix);
@@ -324,7 +326,7 @@ const ProductManagement = () => {
         setTotalProducts(data.length);
         updateStats(data);
         setLastUpdated(new Date());
-        const cacheSuffix = statusFilter === 'inactive' ? '_inactive' : '';
+        const cacheSuffix = statusFilter === 'inactive' ? '_inactive' : statusFilter === 'archived' ? '_archived' : statusFilter === 'all' ? '_all' : '';
         sessionStorage.setItem(STORAGE_KEYS.MAPPING_DATA + cacheSuffix, JSON.stringify(data));
         sessionStorage.setItem(STORAGE_KEYS.TOTAL_PRODUCTS + cacheSuffix, data.length.toString());
         sessionStorage.setItem(STORAGE_KEYS.LAST_FETCH + cacheSuffix, Date.now().toString());
@@ -340,7 +342,7 @@ const ProductManagement = () => {
       if (categoriesResponse.data.success) {
         const cats = categoriesResponse.data.data || ['All'];
         setCategories(cats);
-        const cacheSuffix = statusFilter === 'inactive' ? '_inactive' : '';
+        const cacheSuffix = statusFilter === 'inactive' ? '_inactive' : statusFilter === 'archived' ? '_archived' : statusFilter === 'all' ? '_all' : '';
         sessionStorage.setItem(STORAGE_KEYS.CATEGORIES + cacheSuffix, JSON.stringify(cats));
       }
 
@@ -350,7 +352,7 @@ const ProductManagement = () => {
           const productCategories = productCategoriesResponse.data.data || [];
           const productCategoryNames = ['All', ...productCategories.map((category) => category.name)];
           setCategories(productCategoryNames);
-          const cacheSuffix = statusFilter === 'inactive' ? '_inactive' : '';
+          const cacheSuffix = statusFilter === 'inactive' ? '_inactive' : statusFilter === 'archived' ? '_archived' : statusFilter === 'all' ? '_all' : '';
           sessionStorage.setItem(STORAGE_KEYS.CATEGORIES + cacheSuffix, JSON.stringify(productCategoryNames));
         }
       } catch (error) {
@@ -376,17 +378,17 @@ const ProductManagement = () => {
 
   // ============ EFFECTS ============
   useEffect(() => {
-    const cacheSuffix = statusFilter === 'inactive' ? '_inactive' : '';
+    const cacheSuffix = statusFilter === 'inactive' ? '_inactive' : statusFilter === 'archived' ? '_archived' : statusFilter === 'all' ? '_all' : '';
     sessionStorage.setItem(STORAGE_KEYS.MAPPING_DATA + cacheSuffix, JSON.stringify(mappingData));
   }, [mappingData, statusFilter]);
 
   useEffect(() => {
-    const cacheSuffix = statusFilter === 'inactive' ? '_inactive' : '';
+    const cacheSuffix = statusFilter === 'inactive' ? '_inactive' : statusFilter === 'archived' ? '_archived' : statusFilter === 'all' ? '_all' : '';
     sessionStorage.setItem(STORAGE_KEYS.CATEGORIES + cacheSuffix, JSON.stringify(categories));
   }, [categories, statusFilter]);
 
   useEffect(() => {
-    const cacheSuffix = statusFilter === 'inactive' ? '_inactive' : '';
+    const cacheSuffix = statusFilter === 'inactive' ? '_inactive' : statusFilter === 'archived' ? '_archived' : statusFilter === 'all' ? '_all' : '';
     sessionStorage.setItem(STORAGE_KEYS.TOTAL_PRODUCTS + cacheSuffix, totalProducts.toString());
   }, [totalProducts, statusFilter]);
 
@@ -628,6 +630,65 @@ const ProductManagement = () => {
     setIsProductDetailsModalOpen(true);
   };
 
+  // ============ BULK SELECTION HANDLERS ============
+  const toggleSelectItem = (id) => {
+    setSelectedIds((prev) =>
+      prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]
+    );
+  };
+
+  const toggleSelectAll = () => {
+    const selectableIds = currentData.filter((i) => {
+      const st = getStatusDetails(i);
+      return !st.isArchived;
+    }).map((i) => i.id);
+    const allSelected =
+      selectableIds.length > 0 &&
+      selectableIds.every((id) => selectedIds.includes(id));
+    setSelectedIds(allSelected ? [] : selectableIds);
+  };
+
+  const selectedNamesList = (() => {
+    const names = selectedIds
+      .map((id) => mappingData.find((i) => i.id === id)?.name)
+      .filter(Boolean);
+    if (names.length > 5) return `${names.slice(0, 5).join(', ')} and ${names.length - 5} more`;
+    return names.join(', ') || 'N/A';
+  })();
+
+  const handleBulkArchive = async () => {
+    const idsToArchive = selectedIds.filter((id) => {
+      const item = mappingData.find((i) => i.id === id);
+      if (!item) return false;
+      const st = getStatusDetails(item);
+      return !st.isArchived;
+    });
+    if (!idsToArchive.length) {
+      toast.error('No archivable products are selected to archive');
+      setIsBulkArchiveOpen(false);
+      return;
+    }
+
+    setIsArchiving(true);
+    let archived = 0;
+    try {
+      for (const id of idsToArchive) {
+        const response = await apiClient.post(`/mapping/products/${id}/archive`, {
+          reason: 'Archived by user'
+        });
+        if (response.data.success) archived += 1;
+      }
+      toast.success(`${archived} product(s) archived successfully!`);
+      setIsBulkArchiveOpen(false);
+      setSelectedIds([]);
+      await fetchData(true);
+    } catch (error) {
+      toast.error(error.response?.data?.error || 'Failed to archive selected products');
+    } finally {
+      setIsArchiving(false);
+    }
+  };
+
   const openRestoreModal = (product) => {
     setSelectedItem(product);
     setIsRestoreModalOpen(true);
@@ -804,8 +865,10 @@ const ProductManagement = () => {
     const price = product?.price || 0;
     const cogs = calculateProductCogs(product);
     const foodCostPercentage = cogs !== null && price > 0 ? (cogs / price) * 100 : null;
-    const isLowMargin = foodCostPercentage !== null && foodCostPercentage > foodCostThreshold;
-
+    const isLowMargin = foodCostPercentage !== null && foodCostPercentage > FOOD_COST_WARNING_THRESHOLD;
+    const warningThreshold = foodCostThreshold;
+    const isUnmapped = !hasIngredients;
+    
     const createdDate = new Date(product?.created_at);
     const daysOld = (Date.now() - createdDate.getTime()) / (1000 * 60 * 60 * 24);
     const isNew = lifecycleStatus === 'new' || (!lifecycleStatus && daysOld < 28);
@@ -921,6 +984,18 @@ const ProductManagement = () => {
   const startIndex = (currentPage - 1) * itemsPerPage;
   const currentData = getFilteredData.slice(startIndex, startIndex + itemsPerPage);
 
+  const allPageSelected =
+    currentData.filter((i) => {
+      const st = getStatusDetails(i);
+      return !st.isArchived;
+    }).length > 0 &&
+    currentData
+      .filter((i) => {
+        const st = getStatusDetails(i);
+        return !st.isArchived;
+      })
+      .every((i) => selectedIds.includes(i.id));
+
   const getPageNumbers = useMemo(() => {
     const pages = [];
     if (totalPages <= 7) {
@@ -947,7 +1022,7 @@ const ProductManagement = () => {
   // Format currency
   const formatCurrency = (amount) => {
     if (amount === undefined || amount === null) return '₱0.00';
-    return `₱${parseFloat(amount).toFixed(2)}`;
+    return `₱${parseFloat(amount).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
   };
 
   // Format date
@@ -1111,7 +1186,7 @@ const ProductManagement = () => {
                 </span>
               </Tippy>
             </div>
-            <p className="product-stat-card-value">₱ {productStats.avg_cogs.toFixed(2)}</p>
+            <p className="product-stat-card-value">₱ {productStats.avg_cogs.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</p>
             <p className="product-stat-card-change">Cost of Goods Sold</p>
           </div>
         </div>
@@ -1328,6 +1403,7 @@ const ProductManagement = () => {
             <option value="all">All products</option>
             <option value="active">Active products</option>
             <option value="inactive">Inactive products</option>
+            <option value="archived">Archived products</option>
           </select>
           <select 
             className="inventory-sort-select"
@@ -1352,6 +1428,24 @@ const ProductManagement = () => {
               </option>
             ))}
           </select>
+          {selectedIds.length > 0 && (
+            <>
+              <button 
+                className="btn-warning"
+                onClick={() => setIsBulkArchiveOpen(true)}
+                aria-label={`Archive ${selectedIds.length} selected product(s)`}
+              >
+                <FaArchive /> Archive Selected ({selectedIds.length})
+              </button>
+              <button 
+                className="btn-secondary"
+                onClick={() => setSelectedIds([])}
+                aria-label="Clear selection"
+              >
+                <FaTimes /> Clear
+              </button>
+            </>
+          )}
           <button 
             className="btn-primary"
             onClick={() => {
@@ -1376,6 +1470,15 @@ const ProductManagement = () => {
             <table className="product-table">
               <thead>
                 <tr>
+                  <th className="inventory-checkbox-cell">
+                    <input
+                      type="checkbox"
+                      className="inventory-row-checkbox"
+                      checked={allPageSelected}
+                      onChange={toggleSelectAll}
+                      aria-label="Select all products on this page"
+                    />
+                  </th>
                   <th>No.</th>
                   <th>Item Name</th>
                   <th>Category</th>
@@ -1400,23 +1503,50 @@ const ProductManagement = () => {
 
                   return (
                     <tr key={item.id}>
+                      <td className="inventory-checkbox-cell">
+                        <input
+                          type="checkbox"
+                          className="inventory-row-checkbox"
+                          checked={selectedIds.includes(item.id)}
+                          onChange={() => toggleSelectItem(item.id)}
+                          disabled={status.isArchived}
+                          aria-label={`Select ${item.name || 'product'}`}
+                        />
+                      </td>
                       <td>{startIndex + index + 1}</td>
                       <td className="product-item-name">{item.name}</td>
                       <td><span className="product-category-badge">{item.category || 'Uncategorized'}</span></td>
                       <td>{item.serving_size_label || '—'}</td>
                       <td className="ingredients-cell">
                         {item.product_ingredients && item.product_ingredients.length > 0 ? (
-                          <div className="ingredients-list">
-                            {item.product_ingredients.slice(0, 3).map((pi, i) => (
-                              <span key={i} className="ingredient-tag">
-                                {pi.ingredients?.name || 'Unknown'}
-                                {pi.quantity_per_serving && ` (${pi.quantity_per_serving}${pi.ingredients?.unit || ''})`}
-                              </span>
-                            ))}
-                            {item.product_ingredients.length > 3 && (
-                              <span className="ingredient-more">+{item.product_ingredients.length - 3} more</span>
-                            )}
-                          </div>
+                          <Tippy
+                            content={
+                              <div className="product-ingredients-tooltip">
+                                <strong>{item.name} — Ingredients</strong>
+                                {item.product_ingredients.map((pi, i) => (
+                                  <div key={i} className="product-ingredients-tooltip-row">
+                                    <span>{pi.ingredients?.name || 'Unknown'}</span>
+                                    <span>{pi.quantity_per_serving}{pi.ingredients?.unit || ''}</span>
+                                  </div>
+                                ))}
+                              </div>
+                            }
+                            placement="top"
+                            animation="scale"
+                            duration={200}
+                            theme="dark"
+                            arrow
+                            delay={[200, 0]}
+                            maxWidth={320}
+                            interactive
+                            trigger="mouseenter focus"
+                            appendTo={() => document.body}
+                            zIndex={100000}
+                          >
+                            <span className="ingredient-tag product-ingredients-hover">
+                              {item.product_ingredients.length} ingredient{item.product_ingredients.length !== 1 ? 's' : ''}
+                            </span>
+                          </Tippy>
                         ) : (
                           <span className="no-ingredients">No ingredients</span>
                         )}
@@ -1461,21 +1591,21 @@ const ProductManagement = () => {
                           >
                             <FaEdit size={14} />
                           </button>
-                          {status.isActive ? (
-                            <button 
-                              className="product-action-btn archive"
-                              onClick={() => handleArchive(item)}
-                              title="Archive"
-                            >
-                              <FaArchive size={14} />
-                            </button>
-                          ) : (
+                          {status.isArchived ? (
                             <button 
                               className="product-action-btn restore"
                               onClick={() => openRestoreModal(item)}
                               title="Restore Product"
                             >
                               <FaUndo size={14} />
+                            </button>
+                          ) : (
+                            <button 
+                              className="product-action-btn archive"
+                              onClick={() => handleArchive(item)}
+                              title="Archive"
+                            >
+                              <FaArchive size={14} />
                             </button>
                           )}
                         </div>
@@ -1936,6 +2066,44 @@ const ProductManagement = () => {
                 disabled={isArchiving}
               >
                 {isArchiving ? 'Archiving...' : <><FaArchive /> Archive</>}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ============ BULK ARCHIVE MODAL ============ */}
+      {isBulkArchiveOpen && (
+        <div className="modal-overlay" onClick={() => { if (!isArchiving) setIsBulkArchiveOpen(false); }}>
+          <div className="modal-content modal-md" onClick={(e) => e.stopPropagation()}>
+            <div className="modal-header">
+              <h3 className="modal-title">Archive Selected Products</h3>
+              <button className="modal-close-btn" onClick={() => { if (!isArchiving) setIsBulkArchiveOpen(false); }}>
+                <FaTimes />
+              </button>
+            </div>
+            <div className="modal-body">
+              <div className="confirmation-content">
+                <div className="confirmation-icon warning">
+                  <FaArchive size={32} />
+                </div>
+                <h4>Archive {selectedIds.length} selected product(s)?</h4>
+                <p>
+                  You are about to archive <strong>{selectedIds.length} product(s)</strong>.
+                  Archived products are hidden from the active list but can be restored later.
+                </p>
+                <div className="item-details">
+                  <p><strong>Selected:</strong> {selectedIds.length} product(s)</p>
+                  <p><strong>Products:</strong> {selectedNamesList}</p>
+                </div>
+              </div>
+            </div>
+            <div className="modal-footer">
+              <button className="btn-secondary" onClick={() => setIsBulkArchiveOpen(false)} disabled={isArchiving}>
+                Cancel
+              </button>
+              <button className="btn-warning" onClick={handleBulkArchive} disabled={isArchiving}>
+                {isArchiving ? 'Archiving...' : <><FaArchive /> Archive Products</>}
               </button>
             </div>
           </div>
