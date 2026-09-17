@@ -37,14 +37,39 @@ const auditRoutes = require('./routes/audit');
 const app = express();
 const PORT = process.env.PORT || 5000;
 
-// ============= SECURITY MIDDLEWARE =============
+// Render (and most PaaS hosts) sit behind a reverse proxy, so req.ip would
+// otherwise resolve to the proxy's address, not the real client — this
+// breaks express-rate-limit's per-IP keying. Trust exactly one hop.
+app.set('trust proxy', 1);
+
+// ============= SECURITY MIDDLEWARE =============+++++
 
 // Helmet - Secure HTTP headers
 app.use(helmet());
 
 // CORS - Configured for security
+// ALLOWED_ORIGINS is a comma-separated list of exact origins (the prod
+// domain, local dev). Falls back to the local Vite dev server.
+const allowedOrigins = (process.env.ALLOWED_ORIGINS || 'http://localhost:5173')
+  .split(',')
+  .map((origin) => origin.trim())
+  .filter(Boolean);
+
+// Vercel gives every preview deployment its own unique hashed subdomain
+// (e.g. demand-forecasting-system-<hash>-<team>.vercel.app), so a static
+// ALLOWED_ORIGINS entry can never match them. Allow any preview URL for
+// THIS project specifically, rather than any *.vercel.app site.
+const vercelPreviewPattern = /^https:\/\/demand-forecasting-system-[a-z0-9]+-[a-z0-9]+\.vercel\.app$/;
+
 app.use(cors({
-  origin: process.env.FRONTEND_URL || 'http://localhost:5173',
+  origin: (origin, callback) => {
+    // Same-origin / non-browser requests (curl, server-to-server) send no origin.
+    if (!origin || allowedOrigins.includes(origin) || vercelPreviewPattern.test(origin)) {
+      callback(null, true);
+    } else {
+      callback(new Error(`Not allowed by CORS: ${origin}`));
+    }
+  },
   credentials: true,
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH'],
   allowedHeaders: ['Content-Type', 'Authorization']

@@ -881,7 +881,6 @@ const ProductManagement = () => {
     const foodCostPercentage = cogs !== null && price > 0 ? (cogs / price) * 100 : null;
     const isLowMargin = foodCostPercentage !== null && foodCostPercentage > FOOD_COST_WARNING_THRESHOLD;
     const warningThreshold = foodCostThreshold;
-    const isUnmapped = !hasIngredients;
     
     const createdDate = new Date(product?.created_at);
     const daysOld = (Date.now() - createdDate.getTime()) / (1000 * 60 * 60 * 24);
