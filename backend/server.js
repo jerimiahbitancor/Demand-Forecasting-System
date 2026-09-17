@@ -42,7 +42,7 @@ const PORT = process.env.PORT || 5000;
 // breaks express-rate-limit's per-IP keying. Trust exactly one hop.
 app.set('trust proxy', 1);
 
-// ============= SECURITY MIDDLEWARE =============
+// ============= SECURITY MIDDLEWARE =============+++++
 
 // Helmet - Secure HTTP headers
 app.use(helmet());
