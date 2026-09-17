@@ -517,7 +517,7 @@ router.get('/categories', authenticate, async (req, res) => {
     const userId = req.user?.user_id || req.user?.id;
     const { forceRefresh, status } = req.query;
     const force = forceRefresh === 'true';
-    const effectiveStatus = status === 'inactive' ? 'inactive' : 'active';
+    const effectiveStatus = status === 'inactive' ? 'inactive' : status === 'archived' ? 'archived' : 'active';
     
     console.log(`Fetching categories for user: ${userId}${force ? ' (force refresh)' : ''} status=${effectiveStatus}`);
     

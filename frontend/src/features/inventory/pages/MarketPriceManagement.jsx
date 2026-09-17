@@ -44,6 +44,7 @@ import {
 } from 'recharts';
 import InventoryModal from '../components/InventoryModal';
 import MarketPriceModal from '../components/market modal/MarketPriceModal';
+import Swal from 'sweetalert2';
 
 const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:5000/api';
 
@@ -57,9 +58,11 @@ const DEFAULT_SOURCES = [
 
 const PROTECTED_SOURCE_KEYS = ["wet_market", "da_reference"];
 
-// Until the market_sources table is provisioned, deletions are tracked locally
-// so staff can remove built-in sources and have the columns disappear.
+// Until the market_sources table is provisioned, deletions and additions are
+// tracked locally so staff can remove/re-add built-in sources and have the
+// columns disappear/reappear without a backend write succeeding.
 const REMOVED_SOURCES_KEY = 'chefduo_removed_market_sources';
+const ADDED_SOURCES_KEY = 'chefduo_added_market_sources';
 
 const getRemovedSourceKeys = () => {
   try {
@@ -81,6 +84,56 @@ const removeSourceLocally = (key) => {
   }
 };
 
+const restoreSourceLocally = (key) => {
+  try {
+    localStorage.setItem(
+      REMOVED_SOURCES_KEY,
+      JSON.stringify(getRemovedSourceKeys().filter((k) => k !== key))
+    );
+  } catch {
+    // Storage unavailable; best effort only.
+  }
+};
+
+const getAddedSourceKeys = () => {
+  try {
+    const parsed = JSON.parse(localStorage.getItem(ADDED_SOURCES_KEY) || '[]');
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+};
+
+const storeAddedSource = (key, label, tooltip) => {
+  try {
+    const current = getAddedSourceKeys();
+    if (!current.some((s) => s.key === key)) {
+      current.push({ key, label, tooltip: tooltip || '' });
+      localStorage.setItem(ADDED_SOURCES_KEY, JSON.stringify(current));
+    }
+  } catch {
+    // Storage unavailable; best effort only.
+  }
+};
+
+const removeAddedSource = (key) => {
+  try {
+    localStorage.setItem(
+      ADDED_SOURCES_KEY,
+      JSON.stringify(getAddedSourceKeys().filter((s) => s.key !== key))
+    );
+  } catch {
+    // Storage unavailable; best effort only.
+  }
+};
+
+// Mirrors the backend's source-key normalization.
+const sourceKeyOf = (label) =>
+  String(label)
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '_')
+    .replace(/^_+|_+$/g, '');
+
 const LINE_PALETTE = [
   "#3b82f6", "#f59e0b", "#16a34a", "#8b5cf6", "#ef4444",
   "#06b6d4", "#ec4899", "#84cc16", "#7c3aed", "#f97316",
@@ -89,7 +142,7 @@ const LINE_PALETTE = [
 
 const formatCurrency = (amount) => {
   if (amount === undefined || amount === null) return '₱ 0.00';
-  return `₱ ${parseFloat(amount).toFixed(2)}`;
+  return `₱ ${parseFloat(amount).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 };
 
 // Client-side summary computation (used as a fallback; the server returns a
@@ -443,9 +496,13 @@ const MarketPriceManagement = () => {
     try {
       const response = await apiClient.get('/market-prices/sources');
       if (response.data.success) {
-        const loaded = (response.data.data || []).length ? response.data.data : DEFAULT_SOURCES;
+        const backend = (response.data.data || []).length ? response.data.data : DEFAULT_SOURCES;
+        const added = getAddedSourceKeys().map((s) => ({ key: s.key, label: s.label, tooltip: s.tooltip || '' }));
+        const merged = [...backend, ...added].filter(
+          (s, index, arr) => arr.findIndex((x) => x.key === s.key) === index
+        );
         const removed = getRemovedSourceKeys();
-        setSources(removed.length ? loaded.filter((s) => !removed.includes(s.key)) : loaded);
+        setSources(removed.length ? merged.filter((s) => !removed.includes(s.key)) : merged);
       }
     } catch (error) {
       console.error('Error fetching market sources:', error);
@@ -528,20 +585,50 @@ const MarketPriceManagement = () => {
       toast.error('Enter a name for the new market source');
       return;
     }
+    const tooltip = newSourceTooltip.trim() || undefined;
+    const key = sourceKeyOf(label);
+    const wasRemoved = getRemovedSourceKeys().includes(key);
     setSourceActionLoading(true);
     try {
-      const response = await apiClient.post('/market-prices/sources', {
-        label,
-        tooltip: newSourceTooltip.trim() || undefined,
-      });
-      if (response.data.success) {
-        toast.success(response.data.message || 'Source added');
-        setNewSourceLabel("");
-        setNewSourceTooltip("");
-        refreshAfterSourcesChanged();
+      let serverSucceeded = false;
+      let serverMessage = '';
+      let tableMissing = false;
+      let alreadyExists = false;
+      try {
+        const response = await apiClient.post('/market-prices/sources', { label, tooltip });
+        if (response.data.success) {
+          serverSucceeded = true;
+          serverMessage = response.data.message || 'Source added';
+        } else {
+          toast.error(response.data.error || 'Failed to add source');
+          return;
+        }
+      } catch (error) {
+        const msg = error.response?.data?.error || error.message || '';
+        alreadyExists = error.response?.status === 409;
+        tableMissing = /Could not find the table 'public\.market_sources'/.test(msg);
+        if (!alreadyExists && !tableMissing) {
+          toast.error(msg || 'Failed to add source');
+          return;
+        }
       }
-    } catch (error) {
-      toast.error(error.response?.data?.error || 'Failed to add source');
+
+      // Un-hide the source if it was previously removed (browser-local).
+      restoreSourceLocally(key);
+
+      if (serverSucceeded && !tableMissing) {
+        toast.success(serverMessage);
+      } else if (tableMissing) {
+        storeAddedSource(key, label, tooltip);
+        toast.success(`Source "${label}" added (browser-local)`);
+      } else if (wasRemoved) {
+        toast.success(`Source "${label}" added again`);
+      } else {
+        toast.info(`A market source named "${label}" already exists`);
+      }
+      setNewSourceLabel("");
+      setNewSourceTooltip("");
+      refreshAfterSourcesChanged();
     } finally {
       setSourceActionLoading(false);
     }
@@ -552,11 +639,22 @@ const MarketPriceManagement = () => {
       toast.error(`"${src.label}" is a required source and cannot be removed`);
       return;
     }
-    if (!window.confirm(`Remove market source "${src.label}"? Existing price records for it will stop appearing.`)) {
+    const confirmResult = await Swal.fire({
+      title: `Remove market source "${src.label}"?`,
+      text: 'Existing price records for it will stop appearing. You can add the source again later.',
+      icon: 'warning',
+      showCancelButton: true,
+      confirmButtonText: 'Yes, remove it',
+      cancelButtonText: 'Cancel',
+      confirmButtonColor: '#d33',
+      cancelButtonColor: '#6b7280',
+    });
+    if (!confirmResult.isConfirmed) {
       return;
     }
     setSourceActionLoading(true);
     try {
+      removeAddedSource(src.key);
       if (src.id) {
         const response = await apiClient.delete(`/market-prices/sources/${src.id}`);
         if (!response.data.success) {

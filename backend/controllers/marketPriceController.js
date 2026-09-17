@@ -725,9 +725,62 @@ const createSource = async (req, res) => {
       .replace(/^_+|_+$/g, '');
     if (!key) throw validationError('Source name must contain letters or numbers');
 
-    const sources = await getMarketSources({ force: true });
-    if (sources.some((s) => s.key === key)) {
-      return res.status(409).json({ success: false, error: `A market source named "${cleanLabel}" already exists` });
+    // Check ALL rows (active + soft-deleted) so a removed source can be
+    // re-added by reactivating its existing row instead of tripping the
+    // unique key constraint.
+    let existingRow = null;
+    let rowQueryError = null;
+    try {
+      const { data, error } = await supabaseAdmin
+        .from('market_sources')
+        .select('id, key, label, tooltip, display_order, is_active')
+        .eq('key', key)
+        .maybeSingle();
+      existingRow = data;
+      rowQueryError = error || null;
+    } catch (queryError) {
+      existingRow = null;
+    }
+
+    if (rowQueryError) {
+      // market_sources table not present yet — fall back to built-in defaults.
+      const fallbackSources = await getMarketSources({ force: true });
+      if (fallbackSources.some((s) => s.key === key)) {
+        const match = fallbackSources.find((s) => s.key === key);
+        const message = match.label === cleanLabel
+          ? `A market source named "${cleanLabel}" already exists`
+          : `A market source named "${cleanLabel}" already exists as "${match.label}"`;
+        return res.status(409).json({ success: false, error: message });
+      }
+    }
+
+    if (existingRow) {
+      if (existingRow.is_active !== false) {
+        const message = existingRow.label === cleanLabel
+          ? `A market source named "${cleanLabel}" already exists`
+          : `A market source named "${cleanLabel}" already exists as "${existingRow.label}"`;
+        return res.status(409).json({ success: false, error: message });
+      }
+
+      // Previously removed (soft-deleted) — reactivate it so it can be re-added.
+      const { data, error } = await supabaseAdmin
+        .from('market_sources')
+        .update({
+          label: cleanLabel,
+          tooltip: tooltip !== undefined && tooltip !== null ? String(tooltip).trim() || null : null,
+          is_active: true,
+          updated_at: new Date().toISOString()
+        })
+        .eq('id', existingRow.id)
+        .select()
+        .single();
+
+      if (error) throw error;
+
+      cachedSources = null;
+      await logAction('source_created', `Re-added market source "${cleanLabel}"`, actorOf(req));
+
+      return res.json({ success: true, data, message: `Added market source "${cleanLabel}" (re-added)` });
     }
 
     // Place the new source after the current last one.
