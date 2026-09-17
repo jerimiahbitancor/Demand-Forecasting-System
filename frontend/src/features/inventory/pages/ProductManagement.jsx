@@ -942,7 +942,7 @@ const ProductManagement = () => {
               ? 'No sales for 28+ days. Requires a recipe configuration. Excluded from forecasting until sales resume.'
               : 'No ingredient recipe configured. Included in forecasting but excluded from ingredient demand estimation, automatic stock deduction, and COGS/food cost calculation. Add a recipe using the Edit button.',
         });
-      } else if (isHighFoodCost) {
+      } else if (isLowMargin) {
         indicators.push({
           key: 'high-food-cost',
           label: 'HIGH FOOD COST',
