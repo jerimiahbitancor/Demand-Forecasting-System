@@ -871,7 +871,6 @@ const ProductManagement = () => {
   // SECONDARY indicators shown alongside the primary status. They are mutually
   // exclusive: High Food Cost requires a COGS calculation, and COGS requires a
   // recipe, so an unmapped product can never be flagged High Food Cost.
-  // ============ GET STATUS DETAILS ============ Hello
   const getStatusDetails = (product) => {
     const lifecycleStatus = product?.status || null;
     const isActive = lifecycleStatus ? lifecycleStatus === 'active' : product?.is_active === true;
