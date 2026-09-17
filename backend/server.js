@@ -209,6 +209,13 @@ const LOW_STOCK_REFRESH_MS = 6 * 60 * 60 * 1000;
 setTimeout(() => refreshLowStockNotifications().catch(() => {}), 15000);
 setInterval(() => refreshLowStockNotifications().catch(() => {}), LOW_STOCK_REFRESH_MS);
 
+// Warm recipe-unit conversion metadata (family, base factor, piece weights)
+// from the ingredient_units table so COGS, demand, and stock-deduction math
+// uses database-driven units instead of only the hardcoded fallbacks.
+const { supabaseAdmin } = require('./config/supabase');
+const { loadUnitMetadataFromDb } = require('./utils/recipeUnits');
+setTimeout(() => loadUnitMetadataFromDb(supabaseAdmin).catch(() => {}), 1000);
+
 app.listen(PORT, () => {
   console.log(`🚀 Server running on port ${PORT}`);
 });

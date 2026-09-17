@@ -19,6 +19,7 @@ import toast from 'react-hot-toast';
 import "./ProductManagement.css";
 import "../InventoryControls.css";
 import { useAuth } from "../../../context/AuthContext";
+import { normalizeRecipeQuantityToUnit, RECIPE_EXTRA_UNITS, RECIPE_VOLUME_UNITS, RECIPE_MASS_UNITS, recipeDensityFor, pieceWeightOf } from "../../../utils/recipeUnits";
 import Tippy from '@tippyjs/react';
 import 'tippy.js/dist/tippy.css';
 import 'tippy.js/animations/scale.css';
@@ -31,7 +32,19 @@ const calculateProductCogs = (product) => {
   if (!product?.product_ingredients?.length) return null;
   return product.product_ingredients.reduce((total, ingredient) => {
     const ingredientPrice = Number(ingredient.ingredients?.price) || 0;
-    const quantity = Number(ingredient.quantity_per_serving) || 0;
+    // The recipe's stored unit (ingredient.unit) may differ from the
+    // ingredient's stock/price unit (ingredient.ingredients.unit). Convert so
+    // "price x quantity" is always in the unit the price is quoted in.
+    const ingredientUnit = ingredient.ingredients?.unit || null;
+    const recipeUnit = ingredient.unit || ingredientUnit;
+    const gramsPerCup = recipeDensityFor(
+      ingredient.ingredients?.grams_per_cup,
+      ingredient.ingredients?.name
+    );
+    const pieceWeight = pieceWeightOf(ingredient.ingredients?.name, ingredient.unit || ingredientUnit);
+    const quantity = Number(
+      normalizeRecipeQuantityToUnit(ingredient.quantity_per_serving, recipeUnit, ingredientUnit, gramsPerCup, pieceWeight)
+    ) || 0;
     return total + ingredientPrice * quantity;
   }, 0);
 };
@@ -601,7 +614,7 @@ const ProductManagement = () => {
         ? product.product_ingredients.map(pi => ({
             name: pi.ingredients?.name || '',
             quantity: pi.quantity_per_serving?.toString() || '',
-            unit: pi.ingredients?.unit || 'kg',
+            unit: pi.unit || pi.ingredients?.unit || 'kg',
             inventory_item_id: pi.inventory_item_id || null
           }))
         : []
@@ -623,7 +636,7 @@ const ProductManagement = () => {
         ? product.product_ingredients.map(pi => ({
             name: pi.ingredients?.name || '',
             quantity: pi.quantity_per_serving?.toString() || '',
-            unit: pi.ingredients?.unit || 'kg',
+            unit: pi.unit || pi.ingredients?.unit || 'kg',
             inventory_item_id: pi.inventory_item_id || null
           }))
         : []
@@ -832,12 +845,19 @@ const ProductManagement = () => {
       return;
     }
 
+    const inventoryItem = inventoryItems.find(i => i.id === newIngredient.inventory_item_id) || null;
+    // Store the quantity exactly as typed, alongside the unit the user chose.
+    // Conversion to the ingredient's stock/price unit happens at read time
+    // (COGS here, ingredient demand in analyticsService, stock deductions in
+    // uploadService) so "1 cup" stays "1 cup" in the recipe.
+    const usedUnit = newIngredient.unit || inventoryItem?.unit || 'kg';
+
     setFormData({
       ...formData,
       ingredients: [...formData.ingredients, { 
         name: newIngredient.name.trim(),
-        quantity: newIngredient.quantity,
-        unit: newIngredient.unit,
+        quantity: parseFloat(newIngredient.quantity),
+        unit: usedUnit,
         inventory_item_id: newIngredient.inventory_item_id
       }]
     });
@@ -854,6 +874,37 @@ const ProductManagement = () => {
       setFormErrors({ ...formErrors, ingredients: "" });
     }
   };
+
+  // ============ LIVE INGREDIENT COST PREVIEW ============
+  // Recomputes automatically whenever the user picks an ingredient, types a
+  // quantity, or changes the unit: converted amount (into the ingredient's
+  // purchase unit), cost of the amount used, and a warning when a volume
+  // recipe unit needs a density that isn't set.
+  const costPreview = useMemo(() => {
+    const item = inventoryItems.find(i => i.id === newIngredient.inventory_item_id) || null;
+    if (!item) return null;
+    const qty = parseFloat(newIngredient.quantity);
+    if (!Number.isFinite(qty) || qty <= 0) return null;
+    const unitPrice = Number(item.price) || 0;
+    const gramsPerCup = recipeDensityFor(item.grams_per_cup, item.name);
+    const pieceWeight = pieceWeightOf(item.name, newIngredient.unit);
+    const converted = normalizeRecipeQuantityToUnit(qty, newIngredient.unit, item.unit, gramsPerCup, pieceWeight);
+    const from = String(newIngredient.unit || '').trim().toLowerCase();
+    const to = String(item.unit || '').trim().toLowerCase();
+    const volumeToMass = RECIPE_VOLUME_UNITS.has(from) && RECIPE_MASS_UNITS.has(to);
+    return {
+      name: item.name,
+      qty,
+      unit: newIngredient.unit,
+      stockUnit: item.unit,
+      converted,
+      cost: converted * unitPrice,
+      unitPrice,
+      gramsPerCup,
+      pieceWeight,
+      needsDensity: volumeToMass && !gramsPerCup
+    };
+  }, [inventoryItems, newIngredient.inventory_item_id, newIngredient.quantity, newIngredient.unit]);
 
   // ============ REMOVE INGREDIENT ============
   const handleRemoveIngredient = (index) => {
@@ -1551,11 +1602,7 @@ const ProductManagement = () => {
               <tbody>
                 {currentData.map((item, index) => {
                   const status = getStatusDetails(item);
-                  const totalIngredientCost = item.product_ingredients?.length ? item.product_ingredients.reduce((sum, pi) => {
-                    const price = pi.ingredients?.price || 0;
-                    const qty = pi.quantity_per_serving || 0;
-                    return sum + (price * qty);
-                  }, 0) : null;
+                  const totalIngredientCost = calculateProductCogs(item);
 
                   return (
                     <tr key={item.id}>
@@ -1582,7 +1629,7 @@ const ProductManagement = () => {
                                 {item.product_ingredients.map((pi, i) => (
                                   <div key={i} className="product-ingredients-tooltip-row">
                                     <span>{pi.ingredients?.name || 'Unknown'}</span>
-                                    <span>{pi.quantity_per_serving}{pi.ingredients?.unit || ''}</span>
+                                    <span>{pi.quantity_per_serving}{pi.unit || pi.ingredients?.unit || ''}</span>
                                   </div>
                                 ))}
                               </div>
@@ -1984,8 +2031,11 @@ const ProductManagement = () => {
                       value={newIngredient.unit}
                       onChange={(e) => setNewIngredient({...newIngredient, unit: e.target.value})}
                     >
-                      {ingredientUnits.map((unit) => (
-                        <option key={unit.id || unit.name} value={unit.name}>{unit.name}</option>
+                      {[...new Set([
+                        ...RECIPE_EXTRA_UNITS,
+                        ...ingredientUnits.map((unit) => unit.name)
+                      ])].map((unit) => (
+                        <option key={unit} value={unit}>{unit}</option>
                       ))}
                     </select>
                     <button 
@@ -1994,6 +2044,26 @@ const ProductManagement = () => {
                     >
                       <FaPlus /> Add
                     </button>
+                  </div>
+                )}
+
+                {costPreview && (
+                  <div className={`ingredient-cost-preview ${costPreview.needsDensity ? 'preview-warning' : ''}`}>
+                    {costPreview.needsDensity ? (
+                      <>
+                        <strong>{costPreview.name}:</strong> recipe uses a volume unit ({costPreview.unit}) but the ingredient is bought by weight ({costPreview.stockUnit}). Set <em>Grams per Cup</em> on the ingredient (flour ≈ 125) so the cup converts to {costPreview.stockUnit}.
+                      </>
+                    ) : (
+                      <>
+                        <strong>{costPreview.name}:</strong> {costPreview.qty} {costPreview.unit}
+                        {costPreview.stockUnit.toLowerCase() !== String(costPreview.unit).toLowerCase()
+                          ? ` = ${costPreview.converted} ${costPreview.stockUnit}`
+                          : ''}
+                        {' '}× ₱{Number(costPreview.unitPrice).toFixed(2)}/{costPreview.stockUnit} ≈ <strong>₱{Number(costPreview.cost).toFixed(2)}</strong> per serving
+                        {costPreview.gramsPerCup ? ` (density ${costPreview.gramsPerCup} g/cup)` : ''}
+                        {costPreview.pieceWeight ? ` (est ~${costPreview.pieceWeight} g/pc)` : ''}
+                      </>
+                    )}
                   </div>
                 )}
 

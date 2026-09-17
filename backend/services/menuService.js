@@ -1,6 +1,7 @@
 // services/menuService.js
 const { supabase, isConfigured, supabaseAdmin } = require('../config/supabase');
 const { PRODUCT_STATUS_NOTES, PRODUCT_DB_STATUS_BY_DERIVED } = require('./productStatusConstants');
+const { isMissingColumnError } = require('../utils/recipeUnits');
 
 class MenuService {
   constructor() {
@@ -563,12 +564,24 @@ isValidUserId(userId) {
         return;
       }
 
-      const { error } = await supabaseAdmin.from('product_ingredients')
+      let result = await supabaseAdmin.from('product_ingredients')
         .insert({
           product_id: data.product_id,
           ingredient_id: data.ingredient_id,
-          quantity_per_serving: data.quantity_per_serving || 1
+          quantity_per_serving: data.quantity_per_serving || 1,
+          unit: (data.unit && String(data.unit).trim()) || null
         });
+
+      if (result.error && isMissingColumnError(result.error)) {
+        result = await supabaseAdmin.from('product_ingredients')
+          .insert({
+            product_id: data.product_id,
+            ingredient_id: data.ingredient_id,
+            quantity_per_serving: data.quantity_per_serving || 1
+          });
+      }
+
+      const { error } = result;
 
       if (error) {
         if (error.code === '23505') {
@@ -596,6 +609,7 @@ isValidUserId(userId) {
           *,
           product_ingredients (
             quantity_per_serving,
+            unit,
             ingredients (
               id,
               name,
@@ -605,7 +619,25 @@ isValidUserId(userId) {
         `)
         .order('name');
 
-      const { data, error } = await query;
+      let result = await query;
+      if (result.error && isMissingColumnError(result.error)) {
+        query = supabaseAdmin.from('products')
+          .select(`
+            *,
+            product_ingredients (
+              quantity_per_serving,
+              ingredients (
+                id,
+                name,
+                unit
+              )
+            )
+          `)
+          .order('name');
+        result = await query;
+      }
+
+      const { data, error } = result;
       if (error) throw error;
       return data;
     } catch (error) {
@@ -625,6 +657,7 @@ isValidUserId(userId) {
           *,
           product_ingredients (
             quantity_per_serving,
+            unit,
             ingredients (
               id,
               name,
@@ -635,7 +668,26 @@ isValidUserId(userId) {
         .ilike('category', category)
         .order('name');
 
-      const { data, error } = await query;
+      let result = await query;
+      if (result.error && isMissingColumnError(result.error)) {
+        query = supabaseAdmin.from('products')
+          .select(`
+            *,
+            product_ingredients (
+              quantity_per_serving,
+              ingredients (
+                id,
+                name,
+                unit
+              )
+            )
+          `)
+          .ilike('category', category)
+          .order('name');
+        result = await query;
+      }
+
+      const { data, error } = result;
       if (error) throw error;
       return data;
     } catch (error) {

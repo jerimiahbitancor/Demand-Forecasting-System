@@ -2,6 +2,7 @@
 const { supabase, isConfigured, supabaseAdmin } = require('../config/supabase');
 const { deriveProductStatus } = require('./productStatusService');
 const { PRODUCT_DB_STATUS_BY_DERIVED } = require('./productStatusConstants');
+const { isMissingColumnError } = require('../utils/recipeUnits');
 
 class MappingService {
   constructor() {
@@ -219,19 +220,43 @@ class MappingService {
       // Fetch all product ingredients in one query instead of one query per product.
       if (transformedData.length > 0) {
         const productIds = transformedData.map(product => product.id);
-        const { data: ingredientsData, error: ingredientsError } = await supabaseAdmin
+        let ingredientsResult = await supabaseAdmin
           .from('product_ingredients')
           .select(`
             product_id,
             quantity_per_serving,
+            unit,
             ingredients!inner (
               id,
               name,
               unit,
-              price
+              price,
+              grams_per_cup
             )
           `)
           .in('product_id', productIds);
+
+        // Migration 008 adds product_ingredients.unit. Until it runs, fall
+        // back to the previous schema and treat every quantity as being in
+        // the ingredient's own unit.
+        if (ingredientsResult.error && isMissingColumnError(ingredientsResult.error)) {
+          ingredientsResult = await supabaseAdmin
+            .from('product_ingredients')
+            .select(`
+              product_id,
+              quantity_per_serving,
+              ingredients!inner (
+                id,
+                name,
+                unit,
+                price,
+                grams_per_cup
+              )
+            `)
+            .in('product_id', productIds);
+        }
+
+        const { data: ingredientsData, error: ingredientsError } = ingredientsResult;
 
         if (!ingredientsError && ingredientsData) {
           const ingredientsByProduct = new Map();
@@ -241,11 +266,14 @@ class MappingService {
             productIngredients.push({
               id: pi.ingredients?.id,
               quantity_per_serving: pi.quantity_per_serving,
+              unit: pi.unit || pi.ingredients?.unit || null,
+              grams_per_cup: pi.ingredients?.grams_per_cup ?? null,
               ingredients: {
                 id: pi.ingredients?.id,
                 name: pi.ingredients?.name,
                 unit: pi.ingredients?.unit,
-                price: pi.ingredients?.price
+                price: pi.ingredients?.price,
+                grams_per_cup: pi.ingredients?.grams_per_cup ?? null
               }
             });
             ingredientsByProduct.set(pi.product_id, productIngredients);
@@ -334,28 +362,51 @@ class MappingService {
       };
 
       // Fetch ingredients
-      const { data: ingredientsData, error: ingredientsError } = await supabaseAdmin
+      let ingredientsResult = await supabaseAdmin
         .from('product_ingredients')
         .select(`
           quantity_per_serving,
+          unit,
           ingredients!inner (
             id,
             name,
             unit,
-            price
+            price,
+            grams_per_cup
           )
         `)
         .eq('product_id', id);
+
+      if (ingredientsResult.error && isMissingColumnError(ingredientsResult.error)) {
+        ingredientsResult = await supabaseAdmin
+          .from('product_ingredients')
+          .select(`
+            quantity_per_serving,
+            ingredients!inner (
+              id,
+              name,
+              unit,
+              price,
+              grams_per_cup
+            )
+          `)
+          .eq('product_id', id);
+      }
+
+      const { data: ingredientsData, error: ingredientsError } = ingredientsResult;
 
       if (!ingredientsError && ingredientsData) {
         transformedData.product_ingredients = ingredientsData.map(pi => ({
           id: pi.ingredients?.id,
           quantity_per_serving: pi.quantity_per_serving,
+          unit: pi.unit || pi.ingredients?.unit || null,
+          grams_per_cup: pi.ingredients?.grams_per_cup ?? null,
           ingredients: {
             id: pi.ingredients?.id,
             name: pi.ingredients?.name,
             unit: pi.ingredients?.unit,
-            price: pi.ingredients?.price
+            price: pi.ingredients?.price,
+            grams_per_cup: pi.ingredients?.grams_per_cup ?? null
           }
         }));
       }
@@ -417,7 +468,7 @@ class MappingService {
           // Find the inventory item by name
           const { data: inventoryItem, error: inventoryError } = await supabaseAdmin
             .from('ingredients')
-            .select('id')
+            .select('id, unit')
             .ilike('name', ingredient.name)
             .maybeSingle();
 
@@ -427,16 +478,20 @@ class MappingService {
           }
 
           if (inventoryItem) {
-            const { error: piError } = await supabaseAdmin
-              .from('product_ingredients')
-              .insert({
-                product_id: product.id,
-                ingredient_id: inventoryItem.id,
-                quantity_per_serving: parseFloat(ingredient.quantity) || 1
-              });
+            const piRow = {
+              product_id: product.id,
+              ingredient_id: inventoryItem.id,
+              quantity_per_serving: parseFloat(ingredient.quantity) || 1,
+              unit: (ingredient.unit && String(ingredient.unit).trim()) || inventoryItem.unit || 'kg'
+            };
+            let piResult = await supabaseAdmin.from('product_ingredients').insert(piRow);
+            if (piResult.error && isMissingColumnError(piResult.error)) {
+              const { unit, ...piRowNoUnit } = piRow;
+              piResult = await supabaseAdmin.from('product_ingredients').insert(piRowNoUnit);
+            }
 
-            if (piError) {
-              console.error('Error adding ingredient to product:', piError);
+            if (piResult.error) {
+              console.error('Error adding ingredient to product:', piResult.error);
             }
           } else {
             console.warn(`Inventory item "${ingredient.name}" not found, skipping`);
@@ -555,7 +610,7 @@ class MappingService {
         for (const ingredient of productData.ingredients) {
           const { data: inventoryItem, error: inventoryError } = await supabaseAdmin
             .from('ingredients')
-            .select('id')
+            .select('id, unit')
             .ilike('name', ingredient.name)
             .maybeSingle();
 
@@ -565,13 +620,17 @@ class MappingService {
           }
 
           if (inventoryItem) {
-            await supabaseAdmin
-              .from('product_ingredients')
-              .insert({
-                product_id: id,
-                ingredient_id: inventoryItem.id,
-                quantity_per_serving: parseFloat(ingredient.quantity) || 1
-              });
+            const piRow = {
+              product_id: id,
+              ingredient_id: inventoryItem.id,
+              quantity_per_serving: parseFloat(ingredient.quantity) || 1,
+              unit: (ingredient.unit && String(ingredient.unit).trim()) || inventoryItem.unit || 'kg'
+            };
+            let piResult = await supabaseAdmin.from('product_ingredients').insert(piRow);
+            if (piResult.error && isMissingColumnError(piResult.error)) {
+              const { unit, ...piRowNoUnit } = piRow;
+              piResult = await supabaseAdmin.from('product_ingredients').insert(piRowNoUnit);
+            }
           }
         }
       }
