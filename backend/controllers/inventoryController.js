@@ -297,6 +297,11 @@ const createInventoryItem = async (req, res) => {
       updated_by: userId
     };
 
+    if (req.body.grams_per_cup !== undefined && req.body.grams_per_cup !== null) {
+      const g = parseFloat(req.body.grams_per_cup);
+      insertData.grams_per_cup = Number.isFinite(g) && g > 0 ? g : null;
+    }
+
     console.log('📦 Insert data:', insertData);
 
     const { data, error } = await supabaseAdmin
@@ -352,8 +357,6 @@ const updateInventoryItem = async (req, res) => {
     } = req.body;
 
     console.log('📝 Updating inventory item:', { id, name, category, quantity, price });
-
-    // Get current item
     const { data: currentItem, error: fetchError } = await supabaseAdmin
       .from('ingredients')
       .select('*')

@@ -15,6 +15,7 @@ const timezone = require('dayjs/plugin/timezone');
 dayjs.extend(utc);
 dayjs.extend(timezone);
 const PH_TZ = 'Asia/Manila';
+const { normalizeRecipeQuantityToUnit, pieceWeightOf, isMissingColumnError } = require('../utils/recipeUnits');
 
 // Critical <50%, Low <100%, Normal 100-200%, Excess >200% of forecasted
 // demand — locked thresholds, matches ml-service/services/business_logic.py's
@@ -115,14 +116,42 @@ async function getSafetyBufferPercentage() {
 // product_id -> [{ ingredientId, name, category, unit, unitCost, currentStock, qtyPerServing }]
 // Mirrors ml-service/services/data_loader.py's get_recipe_and_stock().
 async function getRecipeMap() {
-  const { data, error } = await supabaseAdmin
+  // Query with the recipe-unit column. If migration 008 hasn't been applied
+  // yet (column product_ingredients.unit missing), fall back to the previous
+  // schema: every quantity is already in the ingredient's own unit, so no
+  // conversion is needed.
+  const primary = await supabaseAdmin
     .from('product_ingredients')
-    .select('product_id, quantity_per_serving, ingredients!inner(id, name, category, unit, price, quantity)');
-  if (error) throw error;
+    .select('product_id, unit, quantity_per_serving, ingredients!inner(id, name, category, unit, price, quantity, grams_per_cup)');
+  let data = primary.data;
+  if (primary.error && isMissingColumnError(primary.error)) {
+    const fallback = await supabaseAdmin
+      .from('product_ingredients')
+      .select('product_id, quantity_per_serving, ingredients!inner(id, name, category, unit, price, quantity, grams_per_cup)');
+    if (fallback.error) throw fallback.error;
+    data = fallback.data;
+  } else if (primary.error) {
+    throw primary.error;
+  }
 
   const map = new Map();
   for (const row of data || []) {
     const ingredient = row.ingredients;
+    // The recipe's stored unit (row.unit) may differ from the ingredient's
+    // stock unit (ingredient.unit). Normalise to the ingredient's unit so
+    // every downstream quantity (demand, stock deduction, COGS) is in the
+    // same unit the price and stock are quoted in. grams_per_cup lets a
+    // volume recipe unit (e.g. cup) convert into a mass stock unit (kg), and
+    // piece units (e.g. pcs of potato) convert into mass via a per-piece weight.
+    const normalizedPerServing = 'unit' in row
+      ? normalizeRecipeQuantityToUnit(
+          row.quantity_per_serving,
+          row.unit || ingredient.unit,
+          ingredient.unit,
+          ingredient.grams_per_cup,
+          pieceWeightOf(ingredient.name, row.unit || ingredient.unit)
+        )
+      : Number(row.quantity_per_serving) || 0;
     const entry = {
       ingredientId: ingredient.id,
       name: ingredient.name,
@@ -138,9 +167,9 @@ async function getRecipeMap() {
       unit: ingredient.unit,
       unitCost: Number(ingredient.price) || 0,
       currentStock: Number(ingredient.quantity) || 0,
-      qtyPerServing: Number(row.quantity_per_serving) || 0,
+      qtyPerServing: Number(normalizedPerServing) || 0,
     };
-    if (!map.has(row.product_id)) map.set(row.product_id, []);
+if (!map.has(row.product_id)) map.set(row.product_id, []);
     map.get(row.product_id).push(entry);
   }
   return map;

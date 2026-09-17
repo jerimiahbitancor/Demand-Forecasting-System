@@ -1,14 +1,49 @@
 const { supabaseAdmin } = require('../config/supabase');
 const { logAction } = require('../services/auditService');
+const { isMissingColumnError, setUnitMetadata } = require('../utils/recipeUnits');
 
 const actorOf = (req) => req.user?.name || req.user?.email || null;
+
+// Refresh the in-memory unit-conversion metadata used by recipe costing.
+const refreshUnitMetadata = async () => {
+  try {
+    const { data, error } = await supabaseAdmin
+      .from('ingredient_units')
+      .select('name, family, base_factor, is_piece, piece_weight_grams, aliases, is_active')
+      .eq('is_active', true);
+    if (error) {
+      if (isMissingColumnError(error) || /ingredient_units/.test(String(error.message))) return;
+      throw error;
+    }
+    setUnitMetadata(data && data.length ? data : []);
+  } catch (error) {
+    console.error('Error refreshing unit conversion metadata:', error.message);
+  }
+};
 
 const getUnits = async (req, res) => {
   try {
     const { data, error } = await supabaseAdmin
       .from('ingredient_units')
-      .select('id, name, created_at, updated_at')
+      .select('id, name, family, base_factor, is_piece, piece_weight_grams, aliases, is_active, created_at, updated_at')
       .order('name');
+
+    if (error && isMissingColumnError(error)) {
+      const fallback = await supabaseAdmin
+        .from('ingredient_units')
+        .select('id, name, created_at, updated_at')
+        .order('name');
+      if (fallback.error) throw fallback.error;
+      return res.json({ success: true, data: (fallback.data || []).map((u) => ({
+        ...u,
+        family: null,
+        base_factor: null,
+        is_piece: false,
+        piece_weight_grams: null,
+        aliases: [],
+        is_active: true,
+      })) });
+    }
 
     if (error) throw error;
     res.json({ success: true, data: data || [] });

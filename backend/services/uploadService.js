@@ -10,6 +10,7 @@ const timezone = require('dayjs/plugin/timezone');
 dayjs.extend(utc);
 dayjs.extend(timezone);
 const PH_TZ = 'Asia/Manila';
+const { normalizeRecipeQuantityToUnit, pieceWeightOf, isMissingColumnError } = require('../utils/recipeUnits');
 
 class UploadService {
   constructor() {
@@ -599,18 +600,34 @@ class UploadService {
         (productRows || []).filter((product) => product.is_active === true).map((product) => product.id)
       );
       if (activeProductIds.size > 0) {
-        const { data: recipeRows, error: recipeError } = await supabaseAdmin
+        let recipeResult = await supabaseAdmin
           .from('product_ingredients')
-          .select('product_id, ingredient_id, quantity_per_serving')
+          .select('product_id, ingredient_id, quantity_per_serving, unit, ingredients!inner(name, unit, grams_per_cup)')
           .in('product_id', [...activeProductIds]);
 
+          if (recipeResult.error && isMissingColumnError(recipeResult.error)) {
+            recipeResult = await supabaseAdmin
+              .from('product_ingredients')
+              .select('product_id, ingredient_id, quantity_per_serving, ingredients!inner(name, unit, grams_per_cup)')
+              .in('product_id', [...activeProductIds]);
+          }
+
+          const { data: recipeRows, error: recipeError } = recipeResult;
           if (recipeError) throw recipeError;
 
           const deductions = new Map();
           for (const sale of dailySalesRows) {
             if (!activeProductIds.has(sale.product_id)) continue;
             for (const recipe of (recipeRows || []).filter((row) => row.product_id === sale.product_id)) {
-              const amount = Number(recipe.quantity_per_serving) * Number(sale.quantity_sold);
+              const ingredientUnit = recipe.ingredients?.unit || recipe.unit || null;
+              const perServing = normalizeRecipeQuantityToUnit(
+                recipe.quantity_per_serving,
+                recipe.unit,
+                ingredientUnit,
+                recipe.ingredients?.grams_per_cup,
+                pieceWeightOf(recipe.ingredients?.name, recipe.unit)
+              );
+              const amount = Number(perServing) * Number(sale.quantity_sold);
               if (!Number.isFinite(amount) || amount <= 0) continue;
               deductions.set(recipe.ingredient_id, (deductions.get(recipe.ingredient_id) || 0) + amount);
             }

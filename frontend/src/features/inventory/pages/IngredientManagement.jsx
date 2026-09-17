@@ -94,7 +94,8 @@ const IngredientManagement = () => {
     price: '',
     batch: '',
     min_stock: '',
-    market_price: ''
+    market_price: '',
+    grams_per_cup: ''
   });
 
   const [restockData, setRestockData] = useState({
@@ -395,7 +396,8 @@ const IngredientManagement = () => {
         quantity: parseFloat(formData.quantity),
         price: parseFloat(formData.price),
         market_price: parseFloat(formData.market_price) || 0,
-        min_stock: parseFloat(formData.min_stock) || 0
+        min_stock: parseFloat(formData.min_stock) || 0,
+        grams_per_cup: formData.grams_per_cup ? parseFloat(formData.grams_per_cup) : null
       });
 
       if (response.data.success) {
@@ -422,7 +424,8 @@ const IngredientManagement = () => {
         quantity: parseFloat(formData.quantity),
         price: parseFloat(formData.price),
         market_price: parseFloat(formData.market_price) || 0,
-        min_stock: parseFloat(formData.min_stock) || 0
+        min_stock: parseFloat(formData.min_stock) || 0,
+        grams_per_cup: formData.grams_per_cup ? parseFloat(formData.grams_per_cup) : null
       });
 
       if (response.data.success) {
@@ -604,7 +607,8 @@ const IngredientManagement = () => {
       price: '',
       batch: '',
       min_stock: '',
-      market_price: ''
+      market_price: '',
+      grams_per_cup: ''
     });
     setFormErrors({});
   };
@@ -619,7 +623,8 @@ const IngredientManagement = () => {
       price: item.price?.toString() || '',
       batch: item.batch || '',
       min_stock: item.min_stock?.toString() || '',
-      market_price: item.market_price?.toString() || ''
+      market_price: item.market_price?.toString() || '',
+      grams_per_cup: item.grams_per_cup?.toString() || ''
     });
     setIsEditModalOpen(true);
   };
@@ -1355,6 +1360,20 @@ const IngredientManagement = () => {
                   {formErrors.price && <span className="form-error">{formErrors.price}</span>}
                 </div>
 
+                <div className="form-group">
+                  <label className="form-label">Grams per Cup (optional)</label>
+                  <input
+                    type="number"
+                    className="form-input"
+                    value={formData.grams_per_cup}
+                    onChange={(e) => setFormData({...formData, grams_per_cup: e.target.value})}
+                    placeholder="e.g. 125 for all-purpose flour"
+                    min="0"
+                    step="0.1"
+                  />
+                  <span className="form-hint">Weight of 1 cup (~250 mL) of this ingredient in grams, so recipe cups/tbsp/tsp convert to kg/g when pricing. Only needed when the recipe unit differs from the stock unit.</span>
+                </div>
+
                
 
                 
@@ -1495,6 +1514,20 @@ const IngredientManagement = () => {
                     min="0"
                     step="0.01"
                   />
+                </div>
+
+                <div className="form-group">
+                  <label className="form-label">Grams per Cup (optional)</label>
+                  <input
+                    type="number"
+                    className="form-input"
+                    value={formData.grams_per_cup}
+                    onChange={(e) => setFormData({...formData, grams_per_cup: e.target.value})}
+                    placeholder="e.g. 125 for all-purpose flour"
+                    min="0"
+                    step="0.1"
+                  />
+                  <span className="form-hint">Weight of 1 cup (~250 mL) of this ingredient in grams, so recipe cups/tbsp/tsp convert to kg/g when pricing. Only needed when the recipe unit differs from the stock unit.</span>
                 </div>
 
                 

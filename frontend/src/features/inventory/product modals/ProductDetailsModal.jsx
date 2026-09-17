@@ -1,5 +1,7 @@
+import { useState } from 'react';
 import { FaArchive, FaEye, FaTimes, FaUndo } from 'react-icons/fa';
 import InventoryModal from '../components/InventoryModal';
+import { normalizeRecipeQuantityToUnit, recipeDensityFor, pieceWeightOf } from '../../../utils/recipeUnits';
 import './ProductDetailsModal.css';
 
 const ProductDetailsModal = ({
@@ -44,15 +46,42 @@ const ProductDetailsModal = ({
   const badgeClass = classForBadge(computedStatus?.className);
   const secondaryIndicators = computedStatus?.indicators || [];
   const ingredients = product.product_ingredients || [];
-  const totalCogs = ingredients.length === 0 ? null : ingredients.reduce((total, ingredient) => {
+  const computedRows = ingredients.map((ingredient) => {
     const unitPrice = Number(ingredient.ingredients?.price ?? ingredient.price) || 0;
-    const quantity = Number(ingredient.quantity_per_serving ?? ingredient.quantity) || 0;
-    return total + unitPrice * quantity;
-  }, 0);
+    const ingredientUnit = ingredient.ingredients?.unit || null;
+    const recipeUnit = ingredient.unit || ingredientUnit;
+    const stockName = ingredient.ingredients?.name || ingredient.name || '';
+    const gramsPerCup = recipeDensityFor(ingredient.ingredients?.grams_per_cup, stockName);
+    const pieceWeight = pieceWeightOf(stockName, recipeUnit);
+    const converted = Number(normalizeRecipeQuantityToUnit(
+      ingredient.quantity_per_serving ?? ingredient.quantity,
+      recipeUnit,
+      ingredientUnit,
+      gramsPerCup,
+      pieceWeight
+    )) || 0;
+    return {
+      id: ingredient.id || ingredient.inventory_item_id || null,
+      name: stockName || 'Unknown ingredient',
+      recipeQty: Number(ingredient.quantity_per_serving ?? ingredient.quantity) || 0,
+      recipeUnit,
+      stockUnit: ingredientUnit || recipeUnit || '—',
+      gramsPerCup,
+      converted,
+      unitPrice,
+      cost: converted * unitPrice
+    };
+  });
+  const totalCogs = ingredients.length === 0 ? null : computedRows.reduce((sum, r) => sum + r.cost, 0);
 
   const foodCostPercentage = totalCogs !== null && (product.price || 0) > 0
     ? (totalCogs / product.price) * 100
     : null;
+
+  const [markupPercent, setMarkupPercent] = useState(30);
+  const suggestedSellingPrice = totalCogs === null
+    ? null
+    : totalCogs * (1 + markupPercent / 100);
 
   let forecastNote = 'Excluded from forecasting until activated.';
   if (isActive && hasIngredients) {
@@ -141,7 +170,7 @@ const ProductDetailsModal = ({
                     <td>{index + 1}</td>
                     <td>{ingredient.ingredients?.name || ingredient.name || 'Unknown ingredient'}</td>
                     <td>{ingredient.quantity_per_serving ?? ingredient.quantity ?? 0}</td>
-                    <td>{ingredient.ingredients?.unit || ingredient.unit || '—'}</td>
+                    <td>{ingredient.unit || ingredient.ingredients?.unit || '—'}</td>
                   </tr>
                 ))
               )}
