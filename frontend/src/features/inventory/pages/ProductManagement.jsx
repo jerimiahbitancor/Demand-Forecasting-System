@@ -852,7 +852,7 @@ const ProductManagement = () => {
     }
   };
 
-  // ============ GET STATUS DETAILS ============
+  // ============ GET STATUS DETAILS ============ Hello
   const getStatusDetails = (product) => {
     const lifecycleStatus = product?.status || null;
     const isActive = lifecycleStatus ? lifecycleStatus === 'active' : product?.is_active === true;
