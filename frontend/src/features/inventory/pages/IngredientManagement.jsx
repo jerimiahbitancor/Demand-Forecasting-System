@@ -160,43 +160,98 @@ const IngredientManagement = () => {
   }, [getToken]);
 
   // ============ GET STOCK STATUS ============
+  // Backend returns a forecast-based stock_status per row (Critical <50% of
+  // today's forecasted demand, Low <100%, Normal 100-200%, Excess >200%,
+  // No Forecast for ingredients with no recipe/forecast). Prefer it; the
+  // fallback below only applies when the backend hasn't attached one.
   const getStockStatus = useCallback((item) => {
-    if (!item || item.is_archived) {
-      return { 
-        label: 'Archived', 
+    if (!item) {
+      return { label: 'No Forecast', className: 'status-no-forecast', color: '#9ca3af', hint: '' };
+    }
+
+    if (item.stock_status === 'Archived' || item.is_archived) {
+      return {
+        label: 'Archived',
         className: 'status-archived',
-        color: '#6b7280'
+        color: '#6b7280',
+        hint: 'This ingredient is archived and is no longer used in active stock levels.'
       };
     }
+
+    if (item.stock_status) {
+      switch (item.stock_status) {
+        case 'Critical Stock':
+          return {
+            label: 'Critical Stock',
+            className: 'status-critical',
+            color: '#dc2626',
+            hint: `Quantity is below 50% of today's forecasted need${item.forecasted_need ? ` (${Math.round(item.forecasted_need * 10) / 10})` : ''}. Prioritize restocking immediately.`
+          };
+        case 'Low Stock':
+          return {
+            label: 'Low Stock',
+            className: 'status-low',
+            color: '#f59e0b',
+            hint: `Quantity is below today's forecasted need${item.forecasted_need ? ` (${Math.round(item.forecasted_need * 10) / 10})` : ''}. Consider restocking soon.`
+          };
+        case 'Excess Stock':
+          return {
+            label: 'Excess Stock',
+            className: 'status-excess',
+            color: '#3b82f6',
+            hint: `Quantity is more than 2x today's forecasted need${item.forecasted_need ? ` (${Math.round(item.forecasted_need * 10) / 10})` : ''}. Excess stock ties up capital and storage space.`
+          };
+        case 'Normal Stock':
+          return {
+            label: 'Normal Stock',
+            className: 'status-normal',
+            color: '#16a34a',
+            hint: `Quantity is within 100–200% of today's forecasted need${item.forecasted_need ? ` (${Math.round(item.forecasted_need * 10) / 10})` : ''}.`
+          };
+        default:
+          return {
+            label: 'No Forecast',
+            className: 'status-no-forecast',
+            color: '#9ca3af',
+            hint: 'Because the system doesn\'t know which dish uses this ingredient or has no forecast yet, it can\'t estimate the daily need, so it appears as "No Forecast".'
+          };
+      }
+    }
+
     if (item.quantity === 0) {
-      return { 
-        label: 'Critical Stock', 
+      return {
+        label: 'Critical Stock',
         className: 'status-critical',
-        color: '#dc2626'
+        color: '#dc2626',
+        hint: 'This ingredient is out of stock. Restock as soon as possible to avoid shortages.'
       };
     } else if (item.quantity <= (item.min_stock || 0) * 0.5) {
-      return { 
-        label: 'Critical Stock', 
+      return {
+        label: 'Critical Stock',
         className: 'status-critical',
-        color: '#dc2626'
+        color: '#dc2626',
+        hint: `Quantity is at or below 50% of the minimum stock level (${item.min_stock || 0}). Prioritize restocking immediately.`
       };
     } else if (item.quantity <= (item.min_stock || 0)) {
-      return { 
-        label: 'Low Stock', 
+      return {
+        label: 'Low Stock',
         className: 'status-low',
-        color: '#f59e0b'
+        color: '#f59e0b',
+        hint: 'Quantity is below the minimum stock level. Consider restocking soon.'
       };
     } else if (item.quantity >= (item.min_stock || 0) * 3) {
-      return { 
-        label: 'Excess Stock', 
+      return {
+        label: 'Excess Stock',
         className: 'status-excess',
-        color: '#3b82f6'
+        color: '#3b82f6',
+        hint: 'Quantity exceeds the maximum stock level (3x the minimum). Excess stock ties up capital and storage space.'
       };
     } else {
-      return { 
-        label: 'Normal Stock', 
+      return {
+        label: 'Normal Stock',
         className: 'status-normal',
-        color: '#16a34a'
+        color: '#16a34a',
+        hint: 'Quantity is within the healthy range between minimum and maximum stock levels.'
       };
     }
   }, []);
@@ -859,6 +914,7 @@ const IngredientManagement = () => {
             <option value="Low Stock">Low Stock</option>
             <option value="Critical Stock">Critical Stock</option>
             <option value="Excess Stock">Excess Stock</option>
+            <option value="No Forecast">No Forecast</option>
             <option value="archived">Archived</option>
           </select>
 
@@ -1015,10 +1071,16 @@ const IngredientManagement = () => {
                       </td>
                       <td>{formatDate(item.updated_at || item.created_at)}</td>
                       <td>
-                        <span className={`inventory-stock-status ${status.className}`}>
-                          <span className="inventory-status-dot" style={{ backgroundColor: status.color }}></span>
-                          {status.label}
-                        </span>
+                        <Tippy
+                          content={<div className="inventory-status-tooltip">{status.hint}</div>}
+                          placement="top"
+                          theme="dark"
+                        >
+                          <span className={`inventory-stock-status ${status.className}`}>
+                            <span className="inventory-status-dot" style={{ backgroundColor: status.color }}></span>
+                            {status.label}
+                          </span>
+                        </Tippy>
                       </td>
                       <td>
                         <div className="inventory-action-buttons">
@@ -1768,9 +1830,15 @@ const IngredientManagement = () => {
                 <div className="view-details">
                   <div className="detail-header">
                     <h3>{selectedItem.name || 'Unnamed'}</h3>
-                    <span className={`status-badge ${getStockStatus(selectedItem).className}`}>
-                      {getStockStatus(selectedItem).label}
-                    </span>
+                    <Tippy
+                      content={<div className="inventory-status-tooltip">{getStockStatus(selectedItem).hint}</div>}
+                      placement="top"
+                      theme="dark"
+                    >
+                      <span className={`status-badge ${getStockStatus(selectedItem).className}`}>
+                        {getStockStatus(selectedItem).label}
+                      </span>
+                    </Tippy>
                   </div>
 
                   <div className="detail-grid">

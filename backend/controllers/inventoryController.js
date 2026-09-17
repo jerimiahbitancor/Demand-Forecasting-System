@@ -1,6 +1,7 @@
 // controllers/inventoryController.js
 const { supabaseAdmin } = require('../config/supabase');
 const { logAction } = require('../services/auditService');
+const analyticsService = require('../services/analyticsService');
 
 const actorOf = (req) => req.user?.name || req.user?.email || null;
 
@@ -47,7 +48,7 @@ const getInventoryItems = async (req, res) => {
     // Get all items for summary stats (without pagination)
     let summaryQuery = supabaseAdmin
       .from('ingredients')
-      .select('quantity, price, min_stock, category, is_archived');
+      .select('id, quantity, price, min_stock, category, is_archived');
 
     if (includeArchived) {
       summaryQuery = summaryQuery.eq('is_archived', true);
@@ -77,6 +78,25 @@ const getInventoryItems = async (req, res) => {
     const { data: summaryData, error: summaryError } = await summaryQuery;
     if (summaryError) throw summaryError;
 
+    // ---- Forecast-based stock status ----
+    // The settled spec classifies stock by comparing current quantity
+    // against the day's FORECASTED demand (Critical <50%, Low <100%,
+    // Normal 100-200%, Excess >200%), not against the static min_stock
+    // reorder point. min_stock thresholds made nearly every well-stocked
+    // ingredient read as "Excess Stock" (e.g. qty 25, min_stock 5:
+    // 25 >= 5*3 -> Excess). Compute the same forecasted need the
+    // Analytics > Ingredient Demand view uses, and derive status from it.
+    const dailyNeeds = await analyticsService.getIngredientDailyNeeds();
+
+    const statusFor = (item) => {
+      if (item.is_archived) return 'Archived';
+      // Out of stock is always urgent, regardless of whether a forecast exists.
+      if ((Number(item.quantity) || 0) === 0) return 'Critical Stock';
+      const need = dailyNeeds.get(item.id) || 0;
+      const status = analyticsService.computeStockStatus(Number(item.quantity) || 0, need);
+      return status === 'No Forecast' ? 'No Forecast' : `${status} Stock`;
+    };
+
     const totalItems = summaryData?.length || 0;
     const totalStockValue = (summaryData || []).reduce((sum, item) => {
       const quantity = Number(item.quantity) || 0;
@@ -84,25 +104,16 @@ const getInventoryItems = async (req, res) => {
       return sum + (quantity * price);
     }, 0);
     const lowStockAlerts = (summaryData || []).filter((item) => {
-      const quantity = Number(item.quantity) || 0;
-      const minStock = Number(item.min_stock) || 0;
-      return quantity <= minStock && quantity > 0;
+      const s = statusFor(item);
+      return s === 'Low Stock' || s === 'Critical Stock';
     }).length;
     const outOfStockItems = (summaryData || []).filter((item) => (Number(item.quantity) || 0) === 0).length;
     const stockCounts = (summaryData || []).reduce((counts, item) => {
-      const quantity = Number(item.quantity) || 0;
-      const minStock = Number(item.min_stock) || 0;
-
-      if (quantity === 0 || quantity <= minStock * 0.5) {
-        counts.criticalStock++;
-      } else if (quantity <= minStock) {
-        counts.lowStock++;
-      } else if (quantity >= minStock * 3) {
-        counts.excessStock++;
-      } else {
-        counts.normalStock++;
-      }
-
+      const s = statusFor(item);
+      if (s === 'Critical Stock') counts.criticalStock++;
+      else if (s === 'Low Stock') counts.lowStock++;
+      else if (s === 'Excess Stock') counts.excessStock++;
+      else if (s === 'Normal Stock') counts.normalStock++;
       return counts;
     }, { excessStock: 0, normalStock: 0, lowStock: 0, criticalStock: 0 });
 
@@ -153,15 +164,7 @@ const getInventoryItems = async (req, res) => {
 
     const filteredData = status && status !== 'All'
       ? (queriedData || []).filter((item) => {
-          const quantity = Number(item.quantity) || 0;
-          const minStock = Number(item.min_stock) || 0;
-          const itemStatus = quantity === 0 || quantity <= minStock * 0.5
-            ? 'Critical Stock'
-            : quantity <= minStock
-              ? 'Low Stock'
-              : quantity >= minStock * 3
-                ? 'Excess Stock'
-                : 'Normal Stock';
+          const itemStatus = statusFor(item);
           return itemStatus === status;
         })
       : (queriedData || []);
@@ -208,6 +211,8 @@ const getInventoryItems = async (req, res) => {
 
     const data = (paginatedData || []).map((item) => ({
       ...item,
+      forecasted_need: dailyNeeds.get(item.id) || 0,
+      stock_status: statusFor(item),
       avg_market_price: avgMap[item.id] !== undefined ? avgMap[item.id] : null
     }));
 

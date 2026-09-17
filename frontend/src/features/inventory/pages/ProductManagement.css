@@ -262,6 +262,25 @@
   overflow-wrap: break-word;
 }
 
+/* Give the Status column (and fixed-width helper columns) explicit widths so
+   status + secondary indicator badges have room to breathe. */
+.product-table th:nth-child(1),
+.product-table td:nth-child(1) { width: 38px; }
+
+.product-table th:nth-child(2),
+.product-table td:nth-child(2) { width: 46px; }
+
+.product-table th:nth-child(9),
+.product-table td:nth-child(9) { width: 220px; }
+
+.product-table th:nth-child(10),
+.product-table td:nth-child(10),
+.product-table th:nth-child(11),
+.product-table td:nth-child(11) { width: 112px; }
+
+.product-table th:nth-child(12),
+.product-table td:nth-child(12) { width: 120px; }
+
 .product-table tbody tr:hover {
   background: #faf8f7;
 }
@@ -379,27 +398,42 @@
 
 /* ============ STATUS BADGES ============ */
 .status-pill-group {
-  display: inline-flex;
+  display: flex;
   align-items: center;
-  gap: 6px;
+  justify-content: center;
+  flex-wrap: wrap;
+  gap: 4px 6px;
+  min-width: 0;
 }
 
 /* Product Status - Like Inventory Stock Status */
 .product-status-badge {
   display: inline-flex;
   align-items: center;
-  gap: 6px;
-  padding: 4px 12px;
+  gap: 5px;
+  padding: 3px 10px;
   border-radius: 20px;
-  font-size: 12px;
+  font-size: 11.5px;
   font-weight: 600;
+  line-height: 1.4;
+  white-space: nowrap;
 }
 
 .product-status-dot {
-  width: 8px;
-  height: 8px;
+  width: 7px;
+  height: 7px;
   border-radius: 50%;
   display: inline-block;
+  flex-shrink: 0;
+}
+
+/* Secondary indicators (UNMAPPED / HIGH FOOD COST) render as smaller chips
+   next to the primary status so the status column stays scannable. */
+.product-status-badge.product-status-indicator {
+  padding: 2px 8px;
+  font-size: 10.5px;
+  letter-spacing: 0.02em;
+  box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.07);
 }
 
 /* Unmapped - Gray */

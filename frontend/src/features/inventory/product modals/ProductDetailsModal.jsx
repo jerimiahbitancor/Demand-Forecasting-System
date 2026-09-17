@@ -25,14 +25,12 @@ const ProductDetailsModal = ({
   const statusLabel = computedStatus?.label
     || (isArchived
       ? 'ARCHIVED'
-      : isUnmapped
-        ? 'UNMAPPED'
-        : isActive
-          ? 'ACTIVE'
-          : product.status === 'new'
-            ? 'INACTIVE (NEW)'
-            : 'INACTIVE (DISCONTINUED)');
-  const badgeClass = (computedStatus?.className && {
+      : isActive
+        ? 'ACTIVE'
+        : product.status === 'new'
+          ? 'INACTIVE (NEW)'
+          : 'INACTIVE (DISCONTINUED)');
+  const classForBadge = (className) => (className && {
     'status-active': 'active',
     'status-archived': 'archived',
     'status-unmapped': 'unmapped',
@@ -40,9 +38,11 @@ const ProductDetailsModal = ({
     'status-discontinued': 'discontinued',
     'status-inactive': 'inactive',
     'status-inactive-new': 'inactive-new',
-  }[computedStatus.className]) || (
-    isArchived ? 'archived' : isUnmapped ? 'unmapped' : isActive ? 'active' : 'archived'
+  }[className]) || (
+    isArchived ? 'archived' : isUnmapped ? 'unmapped' : isActive ? 'active' : 'inactive'
   );
+  const badgeClass = classForBadge(computedStatus?.className);
+  const secondaryIndicators = computedStatus?.indicators || [];
   const ingredients = product.product_ingredients || [];
   const totalCogs = ingredients.length === 0 ? null : ingredients.reduce((total, ingredient) => {
     const unitPrice = Number(ingredient.ingredients?.price ?? ingredient.price) || 0;
@@ -73,9 +73,19 @@ const ProductDetailsModal = ({
         <div>
           <div className="product-details-title-row">
             <h3>{product.name || 'Unnamed product'}</h3>
-            <span className={`product-details-status ${badgeClass}`}>
-              {statusLabel}
-            </span>
+            <div className="product-details-badges">
+              <span className={`product-details-status ${badgeClass}`}>
+                {statusLabel}
+              </span>
+              {secondaryIndicators.map((indicator) => (
+                <span
+                  key={indicator.key}
+                  className={`product-details-status ${classForBadge(indicator.className)}`}
+                >
+                  {indicator.label}
+                </span>
+              ))}
+            </div>
           </div>
           <p>{product.category || 'Uncategorized'}{product.serving_size_label ? ` | ${product.serving_size_label}` : ''}</p>
           <p style={{ fontSize: 12, color: '#6b7280', marginTop: 4 }}>{forecastNote}</p>

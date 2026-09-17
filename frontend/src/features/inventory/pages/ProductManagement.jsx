@@ -48,6 +48,19 @@ const STORAGE_KEYS = {
   LAST_FETCH: 'mapping_last_fetch'
 };
 
+// Granular client-side filters (new/discontinued/unmapped/high-food-cost) all
+// fetch the same "all products (excluding archived)" dataset from the API,
+// then apply their own derived-status filter on the client.
+const apiStatusForFilter = (filter) =>
+  filter === 'active' ? 'active'
+    : filter === 'archived' ? 'archived'
+      : 'all';
+
+const cacheSuffixForFilter = (filter) => {
+  const api = apiStatusForFilter(filter);
+  return api === 'all' ? '_all' : `_${api}`;
+};
+
 const ProductManagement = () => {
   const { getToken } = useAuth();
 
@@ -287,7 +300,7 @@ const ProductManagement = () => {
     try {
       setLoading(true);
       
-      const cacheSuffix = statusFilter === 'inactive' ? '_inactive' : statusFilter === 'archived' ? '_archived' : statusFilter === 'all' ? '_all' : '';
+      const cacheSuffix = cacheSuffixForFilter(statusFilter);
       const storedData = sessionStorage.getItem(STORAGE_KEYS.MAPPING_DATA + cacheSuffix);
       const storedCategories = sessionStorage.getItem(STORAGE_KEYS.CATEGORIES + cacheSuffix);
       const storedTotal = sessionStorage.getItem(STORAGE_KEYS.TOTAL_PRODUCTS + cacheSuffix);
@@ -312,7 +325,7 @@ const ProductManagement = () => {
 
       const productsResponse = await apiClient.get('/mapping/products', {
         params: {
-          status: statusFilter,
+          status: apiStatusForFilter(statusFilter),
           category: selectedCategory === 'All' ? null : selectedCategory,
           search: searchTerm || null,
           forceRefresh: 'true'
@@ -326,7 +339,7 @@ const ProductManagement = () => {
         setTotalProducts(data.length);
         updateStats(data);
         setLastUpdated(new Date());
-        const cacheSuffix = statusFilter === 'inactive' ? '_inactive' : statusFilter === 'archived' ? '_archived' : statusFilter === 'all' ? '_all' : '';
+        const cacheSuffix = cacheSuffixForFilter(statusFilter);
         sessionStorage.setItem(STORAGE_KEYS.MAPPING_DATA + cacheSuffix, JSON.stringify(data));
         sessionStorage.setItem(STORAGE_KEYS.TOTAL_PRODUCTS + cacheSuffix, data.length.toString());
         sessionStorage.setItem(STORAGE_KEYS.LAST_FETCH + cacheSuffix, Date.now().toString());
@@ -334,7 +347,7 @@ const ProductManagement = () => {
 
       const categoriesResponse = await apiClient.get('/mapping/categories', {
         params: {
-          status: statusFilter,
+          status: apiStatusForFilter(statusFilter),
           forceRefresh: 'true'
         }
       });
@@ -342,7 +355,7 @@ const ProductManagement = () => {
       if (categoriesResponse.data.success) {
         const cats = categoriesResponse.data.data || ['All'];
         setCategories(cats);
-        const cacheSuffix = statusFilter === 'inactive' ? '_inactive' : statusFilter === 'archived' ? '_archived' : statusFilter === 'all' ? '_all' : '';
+        const cacheSuffix = cacheSuffixForFilter(statusFilter);
         sessionStorage.setItem(STORAGE_KEYS.CATEGORIES + cacheSuffix, JSON.stringify(cats));
       }
 
@@ -352,7 +365,7 @@ const ProductManagement = () => {
           const productCategories = productCategoriesResponse.data.data || [];
           const productCategoryNames = ['All', ...productCategories.map((category) => category.name)];
           setCategories(productCategoryNames);
-          const cacheSuffix = statusFilter === 'inactive' ? '_inactive' : statusFilter === 'archived' ? '_archived' : statusFilter === 'all' ? '_all' : '';
+          const cacheSuffix = cacheSuffixForFilter(statusFilter);
           sessionStorage.setItem(STORAGE_KEYS.CATEGORIES + cacheSuffix, JSON.stringify(productCategoryNames));
         }
       } catch (error) {
@@ -378,17 +391,17 @@ const ProductManagement = () => {
 
   // ============ EFFECTS ============
   useEffect(() => {
-    const cacheSuffix = statusFilter === 'inactive' ? '_inactive' : statusFilter === 'archived' ? '_archived' : statusFilter === 'all' ? '_all' : '';
+    const cacheSuffix = cacheSuffixForFilter(statusFilter);
     sessionStorage.setItem(STORAGE_KEYS.MAPPING_DATA + cacheSuffix, JSON.stringify(mappingData));
   }, [mappingData, statusFilter]);
 
   useEffect(() => {
-    const cacheSuffix = statusFilter === 'inactive' ? '_inactive' : statusFilter === 'archived' ? '_archived' : statusFilter === 'all' ? '_all' : '';
+    const cacheSuffix = cacheSuffixForFilter(statusFilter);
     sessionStorage.setItem(STORAGE_KEYS.CATEGORIES + cacheSuffix, JSON.stringify(categories));
   }, [categories, statusFilter]);
 
   useEffect(() => {
-    const cacheSuffix = statusFilter === 'inactive' ? '_inactive' : statusFilter === 'archived' ? '_archived' : statusFilter === 'all' ? '_all' : '';
+    const cacheSuffix = cacheSuffixForFilter(statusFilter);
     sessionStorage.setItem(STORAGE_KEYS.TOTAL_PRODUCTS + cacheSuffix, totalProducts.toString());
   }, [totalProducts, statusFilter]);
 
@@ -853,8 +866,11 @@ const ProductManagement = () => {
   };
 
   // ============ GET STATUS DETAILS ============
-  const FOOD_COST_WARNING_THRESHOLD = 30;
-
+  // Primary status comes from the product lifecycle (Active / Inactive (New) /
+  // Inactive (Discontinued) / Archived). Unmapped and High Food Cost are
+  // SECONDARY indicators shown alongside the primary status. They are mutually
+  // exclusive: High Food Cost requires a COGS calculation, and COGS requires a
+  // recipe, so an unmapped product can never be flagged High Food Cost.
   const getStatusDetails = (product) => {
     const lifecycleStatus = product?.status || null;
     const isActive = lifecycleStatus ? lifecycleStatus === 'active' : product?.is_active === true;
@@ -862,68 +878,86 @@ const ProductManagement = () => {
       && product.product_ingredients.length > 0;
     const isArchived = lifecycleStatus === 'archived' || product?.is_archived === true
       || /^archived\b/i.test(product?.inactive_reason || '');
-    
+
     const price = product?.price || 0;
     const cogs = calculateProductCogs(product);
     const foodCostPercentage = cogs !== null && price > 0 ? (cogs / price) * 100 : null;
-    const isLowMargin = foodCostPercentage !== null && foodCostPercentage > FOOD_COST_WARNING_THRESHOLD;
-    const warningThreshold = foodCostThreshold;
-    const isUnmapped = !hasIngredients;
-    
+    const isMapped = hasIngredients;
+    const isUnmapped = !isMapped;
+    const isHighFoodCost = isMapped && foodCostPercentage !== null
+      && foodCostPercentage > foodCostThreshold;
+
     const createdDate = new Date(product?.created_at);
     const daysOld = (Date.now() - createdDate.getTime()) / (1000 * 60 * 60 * 24);
     const isNew = lifecycleStatus === 'new' || (!lifecycleStatus && daysOld < 28);
     const isDiscontinued = lifecycleStatus === 'inactive' || (!lifecycleStatus && !isActive && daysOld > 28);
-    
+
     let label = 'Active';
     let className = 'status-active';
     let dotColor = '#16a34a';
     let tooltip = 'Included in forecasting, ingredient demand estimation, automatic stock deduction, and COGS/food cost calculation.';
-    
+
     if (isArchived) {
       label = 'Archived';
       className = 'status-archived';
       dotColor = '#6b7280';
       tooltip = 'Removed from the active product list. Excluded from forecasting and ingredient demand estimation. Historical data is retained. Can be restored by the owner.';
-    } else if (isUnmapped) {
-      label = 'Unmapped';
-      className = 'status-unmapped';
-      dotColor = '#9ca3af';
-      if (!isActive && isNew) {
-        tooltip = 'Requires a recipe and at least 28 days of sales data before forecasting is available.';
-      } else if (!isActive && isDiscontinued) {
-        tooltip = 'No sales for 28+ days. Requires a recipe. Excluded from forecasting until sales resume.';
-      } else {
-        tooltip = 'No ingredient recipe configured. Included in forecasting but excluded from ingredient demand estimation, automatic stock deduction, and COGS/food cost calculation. Add a recipe using the Edit button.';
-      }
-    } else if (isLowMargin && hasIngredients) {
-      label = 'High Food Cost';
-      className = 'status-low-margin';
-      dotColor = '#ec4899';
-      tooltip = 'COGS and food cost are calculated. Food cost exceeds the warning threshold. Consider adjusting price or reducing ingredient costs.';
-      tooltip = `This product's Food Cost Percentage is above ${foodCostThreshold}%. Consider adjusting price or reducing ingredient costs.`;
-    } else if (!isActive && isDiscontinued) {
-      label = 'Discontinued';
+    } else if (isDiscontinued) {
+      label = 'INACTIVE (DISCONTINUED)';
       className = 'status-discontinued';
       dotColor = '#dc2626';
-      tooltip = 'No sales for 28+ days. Excluded from forecasting and automatic stock deduction until sales resume. Historical data is retained.';
-    } else if (!isActive && isNew) {
+      tooltip = 'No sales recorded in the last 28 days. Excluded from active forecasting until sales activity resumes. Historical sales data is retained.';
+    } else if (isNew) {
       label = 'INACTIVE (NEW)';
       className = 'status-inactive-new';
       dotColor = '#f59e0b';
-      if (hasIngredients) {
-        tooltip = 'New product. COGS and food cost are calculated. Forecasting will be available after 28 days of sales data.';
-      } else {
-        tooltip = 'New product. Requires a recipe and at least 28 days of sales data before forecasting is available.';
-      }
-    } else if (!isActive) {
-      label = 'INACTIVE';
-      className = 'status-inactive';
-      dotColor = '#6b7280';
-      tooltip = 'Product is inactive. Excluded from forecasting until reactivated.';
+      tooltip = hasIngredients
+        ? 'New product with a recipe. COGS and Food Cost Percentage are calculated. Forecasting becomes available after the required 28-day minimum sales history is reached.'
+        : 'New product. Requires a recipe configuration and the 28-day minimum sales history before forecasting is available.';
     }
 
-    return { label, className, dotColor, tooltip, isActive, isArchived, isUnmapped, isLowMargin, isNew, isDiscontinued };
+    const indicators = [];
+    if (!isArchived) {
+      if (isUnmapped) {
+        indicators.push({
+          key: 'unmapped',
+          label: 'UNMAPPED',
+          className: 'status-unmapped',
+          dotColor: '#9ca3af',
+          tooltip: isNew
+            ? 'Requires a recipe configuration and at least 28 days of sales data before forecasting is available.'
+            : isDiscontinued
+              ? 'No sales for 28+ days. Requires a recipe configuration. Excluded from forecasting until sales resume.'
+              : 'No ingredient recipe configured. Included in forecasting but excluded from ingredient demand estimation, automatic stock deduction, and COGS/food cost calculation. Add a recipe using the Edit button.',
+        });
+      } else if (isHighFoodCost) {
+        indicators.push({
+          key: 'high-food-cost',
+          label: 'HIGH FOOD COST',
+          className: 'status-low-margin',
+          dotColor: '#ec4899',
+          tooltip: `This product's Food Cost Percentage (${foodCostPercentage.toFixed(1)}%) is above the ${foodCostThreshold}% warning threshold. COGS and Food Cost Percentage are calculated from the recipe. Consider reviewing the selling price, recipe, portion size, or ingredient costs.`,
+        });
+      }
+    }
+
+    return {
+      label,
+      className,
+      dotColor,
+      tooltip,
+      isActive,
+      isArchived,
+      isUnmapped,
+      isMapped,
+      isHighFoodCost,
+      hasIngredients,
+      cogs,
+      foodCostPercentage,
+      isNew,
+      isDiscontinued,
+      indicators,
+    };
   };
 
   // ============ SORT OPTIONS ============
@@ -955,6 +989,21 @@ const ProductManagement = () => {
       filtered = filtered.filter(item => item.category === selectedCategory);
     }
 
+    if (statusFilter === 'new' || statusFilter === 'discontinued'
+      || statusFilter === 'unmapped' || statusFilter === 'high-food-cost') {
+      filtered = filtered.filter((item) => {
+        const st = getStatusDetails(item);
+        if (st.isArchived) return false;
+        switch (statusFilter) {
+          case 'new': return st.isNew;
+          case 'discontinued': return st.isDiscontinued;
+          case 'unmapped': return st.isUnmapped;
+          case 'high-food-cost': return st.isHighFoodCost;
+          default: return true;
+        }
+      });
+    }
+
     switch(sortBy) {
       case 'Price: Low to High':
         filtered.sort((a, b) => (a.price || 0) - (b.price || 0));
@@ -978,7 +1027,7 @@ const ProductManagement = () => {
     }
 
     return filtered;
-  }, [mappingData, searchTerm, selectedCategory, sortBy]);
+  }, [mappingData, searchTerm, selectedCategory, sortBy, statusFilter, foodCostThreshold]);
 
   // ============ PAGINATION ============
   const itemsPerPage = 10;
@@ -1044,6 +1093,7 @@ const ProductManagement = () => {
 
   // ============ STOCK LEGEND ============
   const stockLegend = [
+    { label: 'Archived', color: '#6b7280' },
     { label: 'Unmapped', color: '#9ca3af' },
     { label: 'High Food Cost', color: '#ec4899' },
     { label: 'Active', color: '#16a34a' },
@@ -1052,9 +1102,10 @@ const ProductManagement = () => {
   ];
 
   const highFoodCostItems = mappingData.filter(item => {
+    const st = getStatusDetails(item);
     const price = Number(item.price) || 0;
     const cogs = calculateProductCogs(item);
-    return cogs !== null && price > 0 && (cogs / price) * 100 > foodCostThreshold;
+    return !st.isArchived && cogs !== null && price > 0 && (cogs / price) * 100 > foodCostThreshold;
   });
 
   // Get sample data for tooltip
@@ -1403,8 +1454,11 @@ const ProductManagement = () => {
             }}
           >
             <option value="all">All products</option>
-            <option value="active">Active products</option>
-            <option value="inactive">Inactive products</option>
+            <option value="active">Active</option>
+            <option value="new">Inactive (New)</option>
+            <option value="discontinued">Inactive (Discontinued)</option>
+            <option value="unmapped">Unmapped</option>
+            <option value="high-food-cost">High Food Cost</option>
             <option value="archived">Archived products</option>
           </select>
           <select 
@@ -1573,6 +1627,25 @@ const ProductManagement = () => {
                               {status.label}
                             </span>
                           </Tippy>
+                          {status.indicators.map((indicator) => (
+                            <Tippy
+                              key={indicator.key}
+                              content={indicator.tooltip}
+                              placement="top"
+                              animation="scale"
+                              duration={200}
+                              theme="dark"
+                              arrow
+                              trigger="mouseenter focus"
+                              appendTo={() => document.body}
+                              zIndex={100000}
+                            >
+                              <span className={`product-status-badge product-status-indicator ${indicator.className}`} tabIndex={0} style={{ cursor: 'help' }}>
+                                <span className="product-status-dot" style={{ backgroundColor: indicator.dotColor }}></span>
+                                {indicator.label}
+                              </span>
+                            </Tippy>
+                          ))}
                         </div>
                       </td>
                       <td>{formatDate(item.created_at)}</td>

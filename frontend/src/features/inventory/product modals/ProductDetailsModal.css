@@ -24,6 +24,13 @@
   flex-wrap: wrap;
 }
 
+.product-details-badges {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
 .product-details-title-row h3 {
   margin: 0;
   color: #1f2937;
