@@ -14,6 +14,12 @@ const UploadedInsufficient = () => {
   const [progressPercentage, setProgressPercentage] = useState(20); // Set to 20%
   const [dataProgress, setDataProgress] = useState(0);
   const [uploadedMonths, setUploadedMonths] = useState(0);
+  // Actual distinct calendar days with real sales data — a plain, honest
+  // count of what's actually been uploaded (see uploadService.js's
+  // getUploadStats: actual_days_uploaded), shown alongside the months
+  // figure so "0 months" doesn't read as "nothing happened" when a few
+  // real days of data do exist.
+  const [uploadedDays, setUploadedDays] = useState(0);
   const [totalMonthsNeeded] = useState(12);
   const [isLoading, setIsLoading] = useState(true);
   const [hasData, setHasData] = useState(false);
@@ -95,20 +101,24 @@ const UploadedInsufficient = () => {
         
         const totalRows = data.sales_records || data.total_rows || 0;
         const totalUploads = data.total_uploads || 0;
-        const monthsUploaded = data.months_uploaded || 0;
-        
-        let months = monthsUploaded;
-        if (months === 0 && totalUploads > 0) {
-          months = Math.min(totalUploads, totalMonthsNeeded);
-        }
-        
-        if (totalRows > 0 && months === 0) {
-          months = 1;
-        }
-        
+        // actual_months_uploaded/actual_days_uploaded count real distinct
+        // calendar days that have an actual sales row (see
+        // uploadService.js's getUploadStats) — the honest "how much have
+        // I uploaded" number. This is deliberately NOT months_uploaded/
+        // days_of_history, which measure elapsed calendar time since the
+        // earliest sale date purely to match ml-service's training gate;
+        // that number can read "12/12 months" from a handful of rows
+        // dated over a year ago, which is accurate for "would training
+        // be allowed" but not for "how much data did I actually upload."
+        // No "at least 1 month" or "1 month per upload" fallback: a
+        // single day of data is genuinely 0/12 months, not 1.
+        const months = data.actual_months_uploaded || 0;
+        const days = data.actual_days_uploaded || 0;
+
         setUploadedMonths(months);
+        setUploadedDays(days);
         setHasData(totalRows > 0 || totalUploads > 0);
-        
+
         const progressPercent = (months / totalMonthsNeeded) * 100;
         setDataProgress(Math.min(progressPercent, 100));
 
@@ -330,7 +340,7 @@ const UploadedInsufficient = () => {
 
                   <div className="insufficient-data-progress-wrapper">
                     <div className="insufficient-data-progress-label">
-                      <span>Historical Data</span>
+                      <span>Historical Data{hasData ? ` (${uploadedDays} day${uploadedDays === 1 ? '' : 's'} of sales data uploaded)` : ''}</span>
                       <span className="insufficient-data-progress-text">
                         {getMonths()} / {totalMonthsNeeded} months
                       </span>

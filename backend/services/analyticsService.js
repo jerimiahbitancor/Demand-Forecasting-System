@@ -9,6 +9,12 @@
 // display, since ml-service never exposes an HTTP API of its own for
 // Express to call read-only.
 const { supabaseAdmin } = require('../config/supabase');
+const dayjs = require('dayjs');
+const utc = require('dayjs/plugin/utc');
+const timezone = require('dayjs/plugin/timezone');
+dayjs.extend(utc);
+dayjs.extend(timezone);
+const PH_TZ = 'Asia/Manila';
 
 // Critical <50%, Low <100%, Normal 100-200%, Excess >200% of forecasted
 // demand — locked thresholds, matches ml-service/services/business_logic.py's
@@ -59,23 +65,29 @@ const FEATURE_LABELS = {
   is_weekend: 'Weekend',
   is_holiday: 'Holiday',
   is_payday: 'Payday',
-  lag_1: 'Sales Lag (1 day)',
-  lag_7: 'Sales Lag (7 days)',
+  lag_1: "Yesterday's Sales",
+  lag_7: 'Sales From Last Week (Same Day)',
   rolling_7: 'Rolling Average (7 days)',
   rolling_14: 'Rolling Average (14 days)',
 };
 
+// The business operates on PH local time (see otpService.js/uploadService.js),
+// but this file used to derive "today" via `new Date().toISOString().slice(0,10)`
+// — the UTC calendar date. Render's server clock runs in UTC, so anywhere
+// from midnight to ~7:59 AM PH time, the UTC date is still the *previous*
+// day: "today's forecast" / "yesterday's sales" would silently read one
+// business day stale during that window. Anchoring on dayjs().tz(PH_TZ)
+// instead makes every date-only value in this file agree with the
+// business's actual calendar day.
 function toDateOnly(d) {
-  return d.toISOString().slice(0, 10);
+  return dayjs(d).tz(PH_TZ).format('YYYY-MM-DD');
 }
 
 function defaultDateRange(daysBack = 30, daysForward = 7) {
-  const today = new Date();
-  const from = new Date(today);
-  from.setDate(from.getDate() - daysBack);
-  const to = new Date(today);
-  to.setDate(to.getDate() + daysForward);
-  return { from: toDateOnly(from), to: toDateOnly(to), today: toDateOnly(today) };
+  const today = dayjs().tz(PH_TZ);
+  const from = today.subtract(daysBack, 'day');
+  const to = today.add(daysForward, 'day');
+  return { from: from.format('YYYY-MM-DD'), to: to.format('YYYY-MM-DD'), today: today.format('YYYY-MM-DD') };
 }
 
 // Next daily 9:00 AM forecast-refresh run, per the system module doc's
@@ -363,7 +375,9 @@ async function getProductPerformanceAnalytics({ from, to } = {}) {
     .filter(Boolean)
     .sort((a, b) => a.date.localeCompare(b.date) || a.product.localeCompare(b.product));
 
-  // --- Performance Ratio (actual_qty summed over range ÷ store average) ---
+  // --- Performance Ratio ---
+  // Quantity Sold / Revenue columns are still real actual sales summed
+  // over the range (unchanged).
   const { data: salesRows, error: salesError } = await supabaseAdmin
     .from('daily_sales')
     .select('product_id, quantity_sold')
@@ -375,16 +389,65 @@ async function getProductPerformanceAnalytics({ from, to } = {}) {
   for (const row of salesRows || []) {
     qtyByProduct.set(row.product_id, (qtyByProduct.get(row.product_id) || 0) + row.quantity_sold);
   }
-  const qtyValues = Array.from(qtyByProduct.values());
-  const rollingAvgQtyAllProducts = qtyValues.length
-    ? qtyValues.reduce((sum, v) => sum + v, 0) / qtyValues.length
-    : 0;
+
+  // Performance Ratio itself (Business Logic Doc v6, 2.2) = the
+  // product's own rolling_7 ÷ the average of every ACTIVE product's own
+  // rolling_7 on that same day — never a pooled raw-quantity total, and
+  // never each product's own historical average. rolling_7 is read
+  // straight from forecasts.rolling_7 (written by ml-service's
+  // /forecast run — see forecast_service.py + migration 007) instead of
+  // recomputed here, so this can never drift from what the model itself
+  // used. Rows written before that migration shipped have rolling_7 =
+  // null and are excluded below, not treated as 0.
+  const activeProductIds = new Set(products.filter((p) => p.status === 'active').map((p) => p.id));
+
+  const { data: rollingRows, error: rollingError } = await supabaseAdmin
+    .from('forecasts')
+    .select('product_id, forecast_date, rolling_7')
+    .gte('forecast_date', rangeFrom)
+    .lte('forecast_date', rangeTo)
+    .not('rolling_7', 'is', null);
+  if (rollingError) throw rollingError;
+
+  // forecast_date -> [{ productId, rolling7 }] for active products only
+  const rollingByDate = new Map();
+  for (const row of rollingRows || []) {
+    if (!activeProductIds.has(row.product_id)) continue;
+    const bucket = rollingByDate.get(row.forecast_date) || [];
+    bucket.push({ productId: row.product_id, rolling7: Number(row.rolling_7) });
+    rollingByDate.set(row.forecast_date, bucket);
+  }
+
+  // productId -> list of that product's daily ratios (own rolling_7 ÷
+  // that day's active-product average rolling_7), one entry per day in
+  // range that had data for it.
+  const dailyRatiosByProduct = new Map();
+  const dailyStoreAverages = [];
+  for (const entries of rollingByDate.values()) {
+    const storeAvgRolling7 = entries.reduce((sum, e) => sum + e.rolling7, 0) / entries.length;
+    if (storeAvgRolling7 <= 0) continue;
+    dailyStoreAverages.push(storeAvgRolling7);
+    for (const { productId, rolling7 } of entries) {
+      const list = dailyRatiosByProduct.get(productId) || [];
+      list.push(rolling7 / storeAvgRolling7);
+      dailyRatiosByProduct.set(productId, list);
+    }
+  }
+  const storeAverageRolling7 = dailyStoreAverages.length
+    ? dailyStoreAverages.reduce((sum, v) => sum + v, 0) / dailyStoreAverages.length
+    : null;
+
+  function averagePerformanceRatio(productId) {
+    const ratios = dailyRatiosByProduct.get(productId);
+    if (!ratios || !ratios.length) return null;
+    return ratios.reduce((sum, r) => sum + r, 0) / ratios.length;
+  }
 
   const performanceRows = Array.from(qtyByProduct.entries())
     .map(([productId, qty]) => {
       const product = productById.get(productId);
       if (!product) return null;
-      const ratio = rollingAvgQtyAllProducts > 0 ? qty / rollingAvgQtyAllProducts : null;
+      const ratio = averagePerformanceRatio(productId);
       let actionSignal = 'Insufficient data';
       if (ratio !== null) {
         if (ratio > 1.2) actionSignal = 'Keep on Menu — top performer';
@@ -468,7 +531,11 @@ async function getProductPerformanceAnalytics({ from, to } = {}) {
     demandClassification: demandRows,
     performanceRatio: {
       rows: performanceRows,
-      storeAverageQty: rollingAvgQtyAllProducts,
+      // Average, across days in range, of the active-product rolling_7
+      // average — a display figure only; each row's own ratio is
+      // computed per-day against that day's own store average, not
+      // against this single summary number.
+      storeAverageRolling7,
       range: { from: rangeFrom, to: rangeTo },
     },
     productStatus: {
@@ -639,7 +706,7 @@ async function getIngredientDemandAnalytics({ date, weekStart } = {}) {
 // ---------------------------------------------------------------------
 async function getForecastSummary() {
   const today = defaultDateRange().today;
-  const yesterday = toDateOnly(new Date(Date.now() - 86400000));
+  const yesterday = dayjs().tz(PH_TZ).subtract(1, 'day').format('YYYY-MM-DD');
   const safetyBufferPct = await getSafetyBufferPercentage();
   const bufferMultiplier = 1 + safetyBufferPct / 100;
 

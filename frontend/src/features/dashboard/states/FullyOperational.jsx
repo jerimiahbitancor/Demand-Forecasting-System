@@ -1,6 +1,6 @@
 // states/FullyOperational.jsx
 import { useState, useEffect } from "react";
-import { FaArrowUp, FaInfoCircle, FaCalendarAlt } from "react-icons/fa";
+import { FaArrowUp, FaArrowDown, FaInfoCircle, FaCalendarAlt } from "react-icons/fa";
 import Tippy from "@tippyjs/react";
 import "tippy.js/dist/tippy.css";
 import "tippy.js/animations/scale.css";
@@ -34,7 +34,8 @@ const FullyOperational = () => {
   const [dashboardData, setDashboardData] = useState({
     predictedSales: 0,
     actualSales: 0,
-    forecastAccuracy: 0,
+    forecastAccuracy: null,
+    forecastAccuracyTier: null,
     stockAlert: 0,
     salesTrend: 0,
     accuracyTrend: 0,
@@ -65,14 +66,13 @@ const FullyOperational = () => {
     return days[date.getDay()];
   };
 
-  // Get dynamic comparison message
-  const getComparisonMessage = (predictedSales) => {
-    const today = new Date();
-    const dayOfWeek = getDayOfWeek(today);
-    // Random percentage between 5-20% for demo
-    const percentage = Math.floor(Math.random() * 15) + 5;
-    const isAbove = Math.random() > 0.5;
-    return `${isAbove ? '+' : '-'}${percentage}% ${isAbove ? 'above' : 'below'} typical ${dayOfWeek}`;
+  // Was a fabricated random +/-% "vs typical <weekday>" comparison —
+  // there's no real per-weekday baseline available from any endpoint yet,
+  // so rather than keep inventing a number next to the now-real predicted
+  // sales figure, this just names which day the forecast is for.
+  const getComparisonMessage = () => {
+    const dayOfWeek = getDayOfWeek(new Date());
+    return `Forecast for ${dayOfWeek}`;
   };
 
   const generateChartData = (period) => {
@@ -129,51 +129,54 @@ const FullyOperational = () => {
       didOpen: () => Swal.showLoading()
     });
 
-    const statsResponse = await apiClient.get('/upload/stats/summary');
+    // GET /api/forecast/summary was purpose-built for this exact KPI row
+    // (see analyticsService.js's getForecastSummary) but the frontend was
+    // never wired to it — predictedSales/actualSales/forecastAccuracy/
+    // stockAlert were all fabricated from Math.random() and unrelated
+    // upload-count arithmetic instead. This call replaces that with the
+    // real numbers; the chart/best-sellers/ingredients panels below are
+    // NOT part of this fix (see the comment above generateChartData) —
+    // they still render placeholder data.
+    const summaryResponse = await apiClient.get('/forecast/summary');
     Swal.close();
 
-    if (statsResponse.data.success) {
-      const stats = statsResponse.data.data;
-      const totalRows = stats.total_rows || 0;
-      const totalUploads = stats.total_uploads || 0;
-      const predictedSales = Math.round((totalRows || 100) * 1.2 * 100);
-      const actualSales = Math.round((totalRows || 100) * 100);
-      const forecastAccuracy = Math.min(95, 70 + (totalUploads || 0) * 0.5);
-      const stockAlert = Math.min(15, 3 + (totalUploads || 0) * 0.2);
+    if (summaryResponse.data.success) {
+      const summary = summaryResponse.data.data;
+      const predictedSales = Math.round(summary.predictedSalesToday || 0);
+      const actualSales = Math.round(summary.actualSalesYesterday || 0);
+      const accuracyValue = summary.forecastAccuracy?.value;
+      const forecastAccuracy = accuracyValue != null ? Math.round(accuracyValue) : null;
+      const forecastAccuracyTier = summary.forecastAccuracy?.tier || null;
+      const stockAlerts = summary.stockAlerts || { Critical: 0, Low: 0, Normal: 0, Excess: 0 };
+      const stockAlert = (stockAlerts.Critical || 0) + (stockAlerts.Low || 0);
+
+      // These three panels are still placeholder/mock data — real sourcing
+      // needs the Performance Ratio evaluation-date default decided first
+      // (see CLAUDE.md's "Still needs my decision" note) and a chart-range
+      // endpoint choice this pass didn't make. Left as-is on purpose
+      // rather than silently wiring to a guessed default.
       const chartData = generateChartData(selectedPeriod);
-
-      let bestSellers = [];
-      try {
-        const productsResponse = await apiClient.get('/mapping/products', { params: { limit: 10 } });
-        if (productsResponse.data.success && productsResponse.data.data.length > 0) {
-          bestSellers = productsResponse.data.data.map((p, i) => ({
-            name: p.name || `Product ${i + 1}`,
-            sold: Math.floor(Math.random() * 200) + 50,
-            ratio: (0.6 + Math.random() * 0.8).toFixed(1)
-          })).sort((a, b) => b.sold - a.sold).slice(0, 10);
-        } else {
-          bestSellers = getDefaultBestSellers();
-        }
-      } catch (e) {
-        bestSellers = getDefaultBestSellers();
-      }
-
+      const bestSellers = getDefaultBestSellers();
       const ingredients = generateIngredients();
-
-      // Calculate stock breakdown dynamically
-      const stockBreakdown = calculateStockBreakdown(ingredients);
+      const stockBreakdown = [
+        { count: stockAlerts.Critical || 0, label: 'Critical', color: '#ef4444' },
+        { count: stockAlerts.Low || 0, label: 'Low', color: '#eab308' },
+        { count: stockAlerts.Normal || 0, label: 'Normal', color: '#22c55e' },
+        { count: stockAlerts.Excess || 0, label: 'Excess', color: '#3b82f6' }
+      ];
 
       setDashboardData({
         predictedSales,
         actualSales,
-        forecastAccuracy: Math.round(forecastAccuracy),
-        stockAlert: Math.round(stockAlert),
-        salesTrend: Math.round((predictedSales - actualSales) / (actualSales || 1) * 100),
-        accuracyTrend: Math.round((forecastAccuracy - 70) / 10),
+        forecastAccuracy,
+        forecastAccuracyTier,
+        stockAlert,
+        salesTrend: actualSales ? Math.round((predictedSales - actualSales) / actualSales * 100) : 0,
+        accuracyTrend: 0,
         bestSellers,
         ingredients,
         chartData,
-        stockBreakdown // Add this
+        stockBreakdown
       });
     }
   } catch (error) {
@@ -182,60 +185,35 @@ const FullyOperational = () => {
     Swal.fire({
       icon: 'error',
       title: 'Failed to load dashboard',
-      text: 'Using fallback data. Please try again later.',
+      text: 'Could not load forecast summary. Please try again later.',
       confirmButtonColor: '#7A0101'
     });
-    
+
     const ingredients = generateIngredients();
-    const stockBreakdown = calculateStockBreakdown(ingredients);
-    
+
     setDashboardData({
-      predictedSales: 45000,
-      actualSales: 50000,
-      forecastAccuracy: 92,
-      salesTrend: 12,
-      accuracyTrend: 2,
+      predictedSales: 0,
+      actualSales: 0,
+      forecastAccuracy: null,
+      forecastAccuracyTier: null,
+      stockAlert: 0,
+      salesTrend: 0,
+      accuracyTrend: 0,
       bestSellers: getDefaultBestSellers(),
       ingredients,
       chartData: generateChartData(selectedPeriod),
-      stockBreakdown // Add this
+      stockBreakdown: [
+        { count: 0, label: 'Critical', color: '#ef4444' },
+        { count: 0, label: 'Low', color: '#eab308' },
+        { count: 0, label: 'Normal', color: '#22c55e' },
+        { count: 0, label: 'Excess', color: '#3b82f6' }
+      ]
     });
   } finally {
     setLoading(false);
   }
 };
 
-const calculateStockBreakdown = (ingredients) => {
-  const urgentCount = ingredients.filter(item => item.status === 'urgent').length;
-  const lowCount = ingredients.filter(item => item.status === 'low').length;
-  const okCount = ingredients.filter(item => item.status === 'ok').length;
-  
-  const criticalCount = urgentCount > 3 ? Math.floor(urgentCount * 0.6) : urgentCount;
-  const highCount = urgentCount - criticalCount;
-  
-  return [
-    { 
-      count: criticalCount || 2, 
-      label: 'Critical', 
-      color: '#ef4444' 
-    },
-    { 
-      count: highCount + lowCount || 3, 
-      label: 'High', 
-      color: '#eab308' 
-    },
-    { 
-      count: okCount * 2 + 48 || 48, 
-      label: 'Medium', 
-      color: '#22c55e' 
-    },
-    { 
-      count: Math.floor(okCount / 2) || 3, 
-      label: 'Low', 
-      color: '#3b82f6' 
-    }
-  ];
-};
   useEffect(() => {
     fetchDashboardData();
   }, [selectedPeriod]);
@@ -286,12 +264,15 @@ const calculateStockBreakdown = (ingredients) => {
     }
   };
 
-  // Get color based on stock alert number
+  // Get color based on stock alert number (count of Critical + Low
+  // ingredients from the real /api/forecast/summary stockAlerts breakdown
+  // — a small integer, not the 0-100-ish scale these thresholds were
+  // originally tuned for back when the value itself was fabricated).
   const getStockAlertColor = (value) => {
-    if (value >= 40) return '#ef4444'; // Red
-    if (value >= 30) return '#eab308'; // Yellow
-    if (value >= 20) return '#22c55e'; // Green
-    return '#3b82f6'; // Blue
+    if (value >= 10) return '#ef4444'; // Red — many ingredients need attention
+    if (value >= 5) return '#eab308'; // Yellow
+    if (value >= 1) return '#22c55e'; // Green
+    return '#3b82f6'; // Blue — none
   };
 
   // Tooltips
@@ -497,7 +478,7 @@ const calculateStockBreakdown = (ingredients) => {
     );
   }
 
-  const comparisonMessage = getComparisonMessage(dashboardData.predictedSales);
+  const comparisonMessage = getComparisonMessage();
   const stockColor = getStockAlertColor(dashboardData.stockAlert);
 
   return (
@@ -559,9 +540,9 @@ const calculateStockBreakdown = (ingredients) => {
             </div>
             <div className="metric-value-group">
               <span className="metric-value">{formatCurrency(dashboardData.predictedSales)}</span>
-              <div className="badge-success">
-                <FaArrowUp className="badge-icon" />
-                +{Math.abs(dashboardData.salesTrend)}%
+              <div className={dashboardData.salesTrend >= 0 ? 'badge-success' : 'badge-danger'}>
+                {dashboardData.salesTrend >= 0 ? <FaArrowUp className="badge-icon" /> : <FaArrowDown className="badge-icon" />}
+                {dashboardData.salesTrend >= 0 ? '+' : ''}{dashboardData.salesTrend}%
               </div>
             </div>
             <p className="metric-subtext">{comparisonMessage}</p>
@@ -590,13 +571,15 @@ const calculateStockBreakdown = (ingredients) => {
               </Tippy>
             </div>
             <div className="metric-value-group">
-              <span className="metric-value text-green">{dashboardData.forecastAccuracy}%</span>
-              <div className="badge-success">
-                <FaArrowUp className="badge-icon" />
-                +{Math.abs(dashboardData.accuracyTrend)}%
-              </div>
+              <span className="metric-value text-green">
+                {dashboardData.forecastAccuracy != null ? `${dashboardData.forecastAccuracy}%` : '—'}
+              </span>
             </div>
-            <p className="metric-subtext small">Based on recent uploads</p>
+            <p className="metric-subtext small">
+              {dashboardData.forecastAccuracy != null
+                ? `${dashboardData.forecastAccuracyTier || ''} — based on the latest trained model`
+                : 'No trained model yet'}
+            </p>
           </div>
 
           {/* 4. Stock Alert */}

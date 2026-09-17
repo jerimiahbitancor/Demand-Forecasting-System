@@ -148,6 +148,17 @@ def train():
             }), 422
 
     active_ids = get_active_products()["id"].astype(int).tolist()
+    if not active_ids:
+        return jsonify({
+            "status": "failed",
+            "reason": (
+                "no products are currently classified as active — the "
+                "28-day activity window (products.status) is evaluated "
+                "against today's real date, not the latest uploaded sale "
+                "date, so historical data that stops more than 28 days "
+                "before today will show zero active products"
+            ),
+        }), 422
 
     pooled_frames = []
     skipped = []

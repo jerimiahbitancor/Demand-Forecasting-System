@@ -65,12 +65,24 @@ router.post(
   virusScan,
   validateUploadData,
   async (req, res) => {
+    // Declared here, not inside the try block below, so the catch block
+    // (which references it to mark a failed pipeline as 'failed') can
+    // actually see it — a `let` declared inside `try { }` is scoped to
+    // that block only and is NOT visible in the matching `catch { }`.
+    // With it stuck inside the try, any error thrown after
+    // saveUploadRecord() succeeded caused a ReferenceError inside the
+    // catch handler itself, which meant no response was ever sent to the
+    // client (the request just hung until timeout) and the
+    // updateUploadStatus(uploadId, 'failed', ...) call never ran, so the
+    // upload stayed 'pending' and kept blocking retries via
+    // checkDuplicateUpload for a full hour.
+    let uploadId = null;
     try {
       const { fileType } = req.body;
       const file = req.file;
-      
+
       const userId = req.user?.user_id || req.user?.id || null;
-      
+
       if (!file) {
         return res.status(400).json({ error: 'No file uploaded' });
       }
@@ -96,8 +108,9 @@ router.post(
           console.log('Duplicate upload detected:', file.originalname);
           return res.status(409).json({
             success: false,
-            error: 'Duplicate upload detected',
-            message: 'This file has already been uploaded recently. Please wait before uploading again.'
+            error: 'Duplicate upload',
+            duplicate: true,
+            message: 'This file has already been uploaded and processed. Re-uploading it would create duplicate sales records, so it was skipped — no action needed.'
           });
         }
       } catch (dupError) {
@@ -119,7 +132,6 @@ router.post(
       console.log('File processed:', processedData.rowCount, 'rows');
 
       let result;
-      let uploadId = null;
 
       if (fileType === 'menu') {
         uploadService.markUploadProcessing(file.originalname, numericId);
@@ -267,6 +279,11 @@ router.post(
             metadata: { kind: 'upload', type: 'sales', filename: file.originalname },
           });
 
+          // Only now has the full pipeline actually completed — this is
+          // what makes the row count as a real duplicate for future
+          // uploads of the same filename (see checkDuplicateUpload).
+          await uploadService.updateUploadStatus(uploadId, 'processed');
+
           return res.status(201).json({
             success: true,
             message: 'Sales data uploaded successfully',
@@ -281,17 +298,31 @@ router.post(
 
     } catch (error) {
       console.error('Upload error:', error);
-      
+
       if (req.file) {
         const userId = req.user?.user_id || req.user?.id || null;
         const numericId = await uploadService.getNumericUserId(userId);
         uploadService.markUploadComplete(req.file.originalname, numericId || userId);
       }
-      
+
+      // uploadId is only set once saveUploadRecord() succeeded — if the
+      // pipeline failed after that (product sync, daily_sales insert,
+      // reconciliation), the row must be marked 'failed', not left at
+      // 'pending' forever pretending the upload is still queued.
+      if (uploadId) {
+        try {
+          await uploadService.updateUploadStatus(uploadId, 'failed', error.message);
+        } catch (statusError) {
+          console.error('Error marking upload as failed:', statusError);
+        }
+      }
+
       if (error.message && error.message.includes('Duplicate upload')) {
         return res.status(409).json({
           success: false,
-          error: 'Duplicate upload detected',
+          error: 'Duplicate upload',
+          duplicate: true,
+          message: 'This file has already been uploaded and processed. Re-uploading it would create duplicate sales records, so it was skipped — no action needed.',
           details: error.message
         });
       }
@@ -322,14 +353,33 @@ router.post(
       }
       
       if (error.message && error.message.includes('already been uploaded')) {
-        return res.status(409).json({ 
+        return res.status(409).json({
           success: false,
           error: 'Duplicate upload',
-          details: error.message 
+          duplicate: true,
+          message: 'This file has already been uploaded and processed. Re-uploading it would create duplicate sales records, so it was skipped — no action needed.',
+          details: error.message
         });
       }
-      
-      res.status(500).json({ 
+
+      // Postgres unique violation on daily_sales(product_id, sale_date) —
+      // a genuine data conflict (this date was already uploaded for this
+      // product), never transient. Returning a plain 500 here makes the
+      // frontend's withTransientRetry retry it twice, pointlessly, since
+      // the conflicting row never goes away. A clean 409 with a
+      // `message` field matches the shape the frontend's 409 handler
+      // already reads (see UploadData.jsx's `underlying.response?.data?.message`).
+      if (error.code === '23505' && /daily_sales/i.test(error.message || error.details || '')) {
+        return res.status(409).json({
+          success: false,
+          error: 'Duplicate sales data',
+          duplicate: true,
+          message: 'Some rows in this file duplicate dates already uploaded for the same product. Please remove or correct those rows before re-uploading.',
+          details: error.message
+        });
+      }
+
+      res.status(500).json({
         success: false,
         error: 'Failed to process upload',
         details: error.message 

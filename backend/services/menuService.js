@@ -1,7 +1,6 @@
 // services/menuService.js
 const { supabase, isConfigured, supabaseAdmin } = require('../config/supabase');
-const { PRODUCT_STATUS_NOTES } = require('./productStatusConstants');
-const { ensureProductCategory } = require('./productCategoryService');
+const { PRODUCT_STATUS_NOTES, PRODUCT_DB_STATUS_BY_DERIVED } = require('./productStatusConstants');
 
 class MenuService {
   constructor() {
@@ -425,12 +424,14 @@ isValidUserId(userId) {
         return Math.floor(Math.random() * 1000) + 1;
       }
 
+      // is_active is GENERATED from status (428C9 if written directly) —
+      // write status instead.
       const insertData = {
         name: productData.name,
         price: productData.price,
         category: productData.category || 'Uncategorized',
         serving_size_label: productData.serving_size_label || null,
-        is_active: productData.is_active !== undefined ? productData.is_active : false,
+        status: productData.is_active === true ? PRODUCT_DB_STATUS_BY_DERIVED.active : PRODUCT_DB_STATUS_BY_DERIVED.new,
         inactive_reason: productData.is_active === true ? null : PRODUCT_STATUS_NOTES.NEW_PRODUCT,
         inactive_since: productData.is_active === true ? null : this.formatDate(new Date()),
         first_sold_date: productData.first_sold_date || null

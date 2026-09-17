@@ -3,8 +3,13 @@ const { supabase, isConfigured, supabaseAdmin } = require('../config/supabase');
 const mappingService = require('./mappingService');
 const mlService = require('./mlService');
 const { deriveProductStatus } = require('./productStatusService');
-const { PRODUCT_STATUS_NOTES } = require('./productStatusConstants');
-const { ensureProductCategories } = require('./productCategoryService');
+const { PRODUCT_STATUS_NOTES, PRODUCT_DB_STATUS_BY_DERIVED } = require('./productStatusConstants');
+const dayjs = require('dayjs');
+const utc = require('dayjs/plugin/utc');
+const timezone = require('dayjs/plugin/timezone');
+dayjs.extend(utc);
+dayjs.extend(timezone);
+const PH_TZ = 'Asia/Manila';
 
 class UploadService {
   constructor() {
@@ -89,10 +94,19 @@ class UploadService {
     console.log(`Cleared processing: ${key}`);
   }
 
+  // uploads.upload_date is `timestamp without time zone` — Postgres
+  // stores whatever local date/time digits it's given and ignores any
+  // zone marker on the input. The old version of this method added 8h
+  // to the real UTC instant and then called .toISOString(), which
+  // happened to produce the right PH wall-clock digits followed by a
+  // "Z" — technically correct only because that trailing "Z" then gets
+  // silently discarded by the column type. That's an accident waiting
+  // to break (e.g. if this string is ever read back with a UTC-aware
+  // parser, or the column type changes). Building the string explicitly
+  // in Asia/Manila with no zone suffix says what it means instead of
+  // relying on that coincidence.
   getCurrentDatePhilippines() {
-    const now = new Date();
-    const phTime = new Date(now.getTime() + (8 * 60 * 60 * 1000));
-    return phTime.toISOString();
+    return dayjs().tz(PH_TZ).format('YYYY-MM-DDTHH:mm:ss.SSS');
   }
 
   getCurrentDatePhilippinesDisplay() {
@@ -163,8 +177,11 @@ class UploadService {
       }
 
       if (!this.isSupabaseReady()) {
+        // Only a genuinely-completed upload should block a retry — a row
+        // left at 'pending' or 'failed' by a pipeline that threw partway
+        // through was never actually saved, so it shouldn't count.
         const existing = this.memoryStore.uploads.find(
-          u => u.filename === filename && u.user_id === numericId
+          u => u.filename === filename && u.user_id === numericId && u.status === 'processed'
         );
         return !!existing;
       }
@@ -176,6 +193,7 @@ class UploadService {
         .select('id, filename, upload_date')
         .eq('filename', filename)
         .eq('user_id', numericId)
+        .eq('status', 'processed')
         .gte('upload_date', oneHourAgo.toISOString())
         .limit(1);
 
@@ -337,44 +355,55 @@ class UploadService {
         console.log('[PRODUCT DISCOVERY] Existing:', false);
         console.log('[PRODUCT DISCOVERY] Creating product:', JSON.stringify(productName));
 
-        try {
-          const insertedProduct = await mappingService.createProduct({
-            name: productName,
-            price: 0,
-            category: 'Uncategorized',
-            serving_size_label: 'serving',
-            ingredients: [],
-            user_id: numericId
-          });
+        // INSERT ... ON CONFLICT (name) DO NOTHING, not mappingService
+        // .createProduct() wrapped in try/catch for a 23505. Several
+        // files upload concurrently (UPLOAD_CONCURRENCY in
+        // UploadData.jsx), each running its own syncProductsFromSales —
+        // two files can both see the same new product name as "not yet
+        // existing" in their own `existingByName` snapshot above (taken
+        // at the top of this call) and race to create it. That's not a
+        // bug, just an inherent TOCTOU gap in "check, then create" under
+        // concurrency — but a plain insert makes the race's loser throw a
+        // real exception that then has to be caught and logged as an
+        // "Error creating product" console.error, which reads like a
+        // real failure even though the outcome (the product exists,
+        // exactly once, name still unique) is completely correct. ON
+        // CONFLICT DO NOTHING lets Postgres resolve the race silently:
+        // the loser's statement just returns no row instead of throwing.
+        // (mappingService.createProduct() is intentionally NOT reused
+        // here — its throw-on-duplicate behavior is exactly right for a
+        // person manually adding a product from the UI, just not for
+        // this auto-discovery path.)
+        const { data: insertedProduct, error: insertError } = await supabaseAdmin
+          .from('products')
+          .upsert(
+            {
+              name: productName,
+              price: 0,
+              category: 'Uncategorized',
+              serving_size_label: 'serving',
+              status: PRODUCT_DB_STATUS_BY_DERIVED.new
+            },
+            { onConflict: 'name', ignoreDuplicates: true }
+          )
+          .select('id, name, price, category, is_active, created_at')
+          .maybeSingle();
 
-          console.log('[PRODUCT DISCOVERY] Created product:', JSON.stringify(insertedProduct, null, 2));
-
-          const { data: persistedProduct, error: persistedProductError } = await supabaseAdmin
-            .from('products')
-            .select('id, name, price, category, is_active, created_at')
-            .eq('id', insertedProduct?.id)
-            .maybeSingle();
-
-          if (persistedProductError) {
-            throw persistedProductError;
-          }
-
-          if (!persistedProduct) {
-            throw new Error(`Product insert returned no persisted row for "${productName}"`);
-          }
-
-          console.log('[PRODUCT DISCOVERY] Verified public.products row:', JSON.stringify(persistedProduct, null, 2));
-
-          if (insertedProduct) {
-            created.push(productName);
-            existingByName.set(productName.trim().toLowerCase(), insertedProduct);
-          }
-        } catch (insertError) {
-          if (insertError?.code === '23505' || /already exists/i.test(insertError?.message || '')) {
-            existing.push(productName);
-            continue;
-          }
+        if (insertError) {
           throw insertError;
+        }
+
+        if (insertedProduct) {
+          console.log('[PRODUCT DISCOVERY] Created product:', JSON.stringify(insertedProduct, null, 2));
+          created.push(productName);
+          existingByName.set(productName.trim().toLowerCase(), insertedProduct);
+          mappingService.clearSession(numericId);
+        } else {
+          // Conflict resolved by ON CONFLICT DO NOTHING — this name
+          // already exists (most likely created moments ago by a
+          // concurrent request processing another file in this batch).
+          console.log('[PRODUCT DISCOVERY] Already created by a concurrent request:', JSON.stringify(productName));
+          existing.push(productName);
         }
       }
 
@@ -426,11 +455,26 @@ class UploadService {
         throw productsError;
       }
 
+      const currentCategoryByProductId = new Map();
       for (const product of products || []) {
         productIdByName.set(String(product.name).trim().toLowerCase(), product.id);
+        currentCategoryByProductId.set(product.id, product.category);
       }
 
-      const dailySalesRows = [];
+      // Keyed by `${productId}|${saleDate}`, not just pushed one entry per
+      // CSV row. daily_sales is UNIQUE on (product_id, sale_date), but a
+      // single day's export can legitimately list the same product on more
+      // than one row — e.g. an add-on/modifier item split across two
+      // category rows, or a product whose category changed mid-period so
+      // Loyverse's per-category grouping emits it twice. Pushing one insert
+      // row per CSV row in that case makes the whole batch INSERT fail with
+      // a Postgres 23505 the moment two rows collide — not because of any
+      // earlier upload, but because of duplicate rows within this exact
+      // file, on every single attempt. Summing quantity_sold for matching
+      // (product_id, sale_date) pairs before the insert fixes that: it
+      // mirrors how Loyverse's own "Items sold" figure is already a net
+      // aggregate, not a per-line-item count.
+      const dailySalesByKey = new Map();
       for (const row of rows) {
         const rawProductName = this.getColumnValueByNames(row, ['Item name', 'Item Name', 'Product', 'Product name']);
         const productName = this.normalizeProductName(rawProductName);
@@ -447,23 +491,33 @@ class UploadService {
         const quantity = parseFloat(this.getColumnValueByNames(row, ['Items sold', 'Items Sold', 'Quantity', 'Units sold']) || 0);
         const category = this.getColumnValueByNames(row, ['Category', 'Category Name'])?.toString()?.trim() || 'Uncategorized';
         const saleDate = this.getSaleDateValue(row, fallbackDate);
+        // A missing/blank/non-numeric "Items sold" value must become a
+        // real 0, never a fabricated 1 — the ML pipeline treats an
+        // explicit zero-quantity row as legitimate "sold nothing that
+        // day" signal (see feature_engineering.py's closed-day docstring).
+        // Silently inventing a sale of 1 here would corrupt training data.
+        const normalizedQuantity = Number.isFinite(quantity) ? Math.max(0, Math.round(quantity)) : 0;
 
-        dailySalesRows.push({
-          product_id: productId,
-          sale_date: saleDate,
-          // A missing/blank/non-numeric "Items sold" value must become a
-          // real 0, never a fabricated 1 — the ML pipeline treats an
-          // explicit zero-quantity row as legitimate "sold nothing that
-          // day" signal (see feature_engineering.py's closed-day docstring).
-          // Silently inventing a sale of 1 here would corrupt training data.
-          quantity_sold: Number.isFinite(quantity) ? Math.max(0, Math.round(quantity)) : 0,
-          upload_id: uploadId || null
-        });
+        const key = `${productId}|${saleDate}`;
+        const existingRow = dailySalesByKey.get(key);
+        if (existingRow) {
+          existingRow.quantity_sold += normalizedQuantity;
+        } else {
+          dailySalesByKey.set(key, {
+            product_id: productId,
+            sale_date: saleDate,
+            quantity_sold: normalizedQuantity,
+            upload_id: uploadId || null
+          });
+        }
+
         if (!categoryByProductId.has(productId)) {
           categoryByProductId.set(productId, category);
         }
         productIds.add(productId);
       }
+
+      const dailySalesRows = [...dailySalesByKey.values()];
 
       if (dailySalesRows.length > 0) {
         const { error: saleInsertError } = await supabaseAdmin
@@ -475,149 +529,206 @@ class UploadService {
         }
       }
 
-      for (const [productId, category] of categoryByProductId) {
-        const { error: categoryUpdateError } = await supabaseAdmin
-          .from('products')
-          .update({ category: category || 'Uncategorized' })
-          .eq('id', productId)
-          .eq('category', 'Uncategorized');
-
-        if (categoryUpdateError) {
-          throw categoryUpdateError;
-        }
-      }
-
-      // Persist discovered categories into the product_categories config
-      // table so they appear in Settings → Forecast Config (non-fatal).
-      try {
-        const registered = await ensureProductCategories([...categoryByProductId.values()]);
-        if (registered.length > 0) {
-          console.log(`✅ Registered ${registered.length} product categor${registered.length === 1 ? 'y' : 'ies'} from sales upload: ${registered.map((c) => c.name).join(', ')}`);
-        }
-      } catch (categoryRegisterError) {
-        console.error('Failed to register categories from sales upload:', categoryRegisterError);
-      }
-
+      // Everything from here on is best-effort. daily_sales already has
+      // this file's rows safely committed at this point — that's the part
+      // that actually matters for training data, and it's what
+      // checkDuplicateUpload/the unique constraint protect. If anything
+      // below throws (a stale product_ingredients row pointing at a
+      // deleted ingredient, a transient Supabase hiccup, etc.), the OLD
+      // behavior let it propagate all the way up to routes/upload.js's
+      // catch, which marks the whole upload 'failed' — even though the
+      // sales data is already in. A retry of the exact same file would
+      // then hit a false "duplicate" 23505 on data that's already
+      // correctly there, with no way to actually finish the upload. So
+      // category backfill, stock deduction, and status reconciliation are
+      // now caught here and turned into warnings instead of aborting the
+      // whole request.
       let productsUpdated = 0;
-      const selectedProductIds = [...productIds];
-      if (selectedProductIds.length === 0) {
-        return { productsDetected, productsUpdated: 0, warnings };
-      }
+      try {
+        // Skip products that don't need a change (still in memory from the
+        // `products` fetch above, no extra query) — was one UPDATE per
+        // product every upload even when category was already set.
+        //
+        // This used to be a single batched .upsert(rows, {onConflict:
+        // 'id'}) instead of a per-row loop — faster, but wrong tool: under
+        // concurrent uploads (several files in the same UPLOAD_CONCURRENCY
+        // batch touching overlapping products), that upsert was observed
+        // to occasionally take the INSERT branch instead of UPDATE for a
+        // product id that demonstrably already existed — id=1459 ("Add
+        // Chili") failed with "null value in column name violates
+        // not-null constraint" moments after being confirmed to exist in
+        // the same request. Since this list only ever contains ids for
+        // rows already confirmed to exist (currentCategoryByProductId
+        // comes from the same fetch as productIdByName), a plain .update()
+        // is both correct and structurally unable to insert a bad stub
+        // row the way upsert's conflict path apparently could here.
+        for (const [productId, category] of categoryByProductId) {
+          const normalizedCategory = category || 'Uncategorized';
+          const currentCategory = currentCategoryByProductId.get(productId);
+          if (currentCategory === 'Uncategorized' && normalizedCategory !== 'Uncategorized') {
+            const { error: categoryUpdateError } = await supabaseAdmin
+              .from('products')
+              .update({ category: normalizedCategory })
+              .eq('id', productId);
 
-      const { data: productRows, error: productFetchError } = await supabaseAdmin.from('products')
-        .select('id, created_at, first_sold_date, is_active, inactive_reason, inactive_since')
-        .in('id', selectedProductIds);
-      const { data: salesRows, error: salesFetchError } = await supabaseAdmin.from('daily_sales')
-        .select('product_id, sale_date')
-        .in('product_id', selectedProductIds)
-        .order('sale_date', { ascending: true });
-
-      if (productFetchError || salesFetchError) {
-        throw productFetchError || salesFetchError;
-      }
-
-      // Re-derive each product's lifecycle status from the freshest sales
-      // dates BEFORE any stock deduction, so the "product status and recipe"
-      // rule is enforced with current data:
-      //   ACTIVE  + mapped recipe -> deduct stock
-      //   INACTIVE (NEW)/DISCONTINUED/ARCHIVED -> never deduct
-      const salesByProductId = new Map();
-      for (const sale of salesRows || []) {
-        const dates = salesByProductId.get(sale.product_id) || [];
-        dates.push(sale.sale_date);
-        salesByProductId.set(sale.product_id, dates);
-      }
-
-      const statusByProductId = new Map();
-      for (const product of productRows || []) {
-        const productSales = salesByProductId.get(product.id) || [];
-        const firstSoldDate = productSales[0] || product.first_sold_date || null;
-        const lastSoldDate = productSales[productSales.length - 1] || firstSoldDate || null;
-        const status = deriveProductStatus({
-          firstSoldDate: firstSoldDate || null,
-          lastSoldDate: lastSoldDate || null,
-          createdAt: product.created_at || null,
-          isActive: Boolean(product.is_active),
-          inactiveReason: product.inactive_reason
-        });
-        statusByProductId.set(product.id, { status, firstSoldDate, lastSoldDate });
-      }
-
-      // Only products freshly derived as ACTIVE with a mapped recipe deduct.
-      const activeProductIds = new Set(
-        [...statusByProductId.entries()]
-          .filter(([, { status }]) => status.status === 'active')
-          .map(([id]) => id)
-      );
-      if (activeProductIds.size > 0) {
-        const { data: recipeRows, error: recipeError } = await supabaseAdmin
-          .from('product_ingredients')
-          .select('product_id, ingredient_id, quantity_per_serving')
-          .in('product_id', [...activeProductIds]);
-
-        if (recipeError) throw recipeError;
-
-        const deductions = new Map();
-        for (const sale of dailySalesRows) {
-          if (!activeProductIds.has(sale.product_id)) continue;
-          for (const recipe of (recipeRows || []).filter((row) => row.product_id === sale.product_id)) {
-            const amount = Number(recipe.quantity_per_serving) * Number(sale.quantity_sold);
-            if (!Number.isFinite(amount) || amount <= 0) continue;
-            deductions.set(recipe.ingredient_id, (deductions.get(recipe.ingredient_id) || 0) + amount);
+            if (categoryUpdateError) {
+              throw categoryUpdateError;
+            }
           }
         }
 
-        for (const [ingredientId, deduction] of deductions) {
-          const { data: ingredient, error: ingredientError } = await supabaseAdmin
-            .from('ingredients')
-            .select('quantity')
-            .eq('id', ingredientId)
-            .single();
-
-          if (ingredientError) throw ingredientError;
-
-          const previousQuantity = Number(ingredient.quantity) || 0;
-          const newQuantity = Math.max(0, previousQuantity - deduction);
-          const { error: updateIngredientError } = await supabaseAdmin
-            .from('ingredients')
-            .update({ quantity: newQuantity, updated_by: numericId })
-            .eq('id', ingredientId);
-
-          if (updateIngredientError) throw updateIngredientError;
-
-          const { error: transactionError } = await supabaseAdmin
-            .from('inventory_transactions')
-            .insert({
-              ingredient_id: ingredientId,
-              transaction_type: 'sale',
-              quantity: -deduction,
-              previous_quantity: previousQuantity,
-              new_quantity: newQuantity,
-              reason: 'Automatic deduction from active mapped product sales',
-              created_by: numericId
-            });
-
-          if (transactionError) throw transactionError;
+        const selectedProductIds = [...productIds];
+        if (selectedProductIds.length === 0) {
+          return { productsDetected, productsUpdated: 0, warnings };
         }
-      }
 
-      for (const product of productRows || []) {
-        const { status, firstSoldDate, lastSoldDate } = statusByProductId.get(product.id) || {};
+        const { data: productRows, error: productFetchError } = await supabaseAdmin.from('products')
+          .select('id, created_at, first_sold_date, is_active, inactive_reason, inactive_since, status')
+          .in('id', selectedProductIds);
+        const { data: salesRows, error: salesFetchError } = await supabaseAdmin.from('daily_sales')
+          .select('product_id, sale_date')
+          .in('product_id', selectedProductIds)
+          .order('sale_date', { ascending: true });
 
-        const { error: updateError } = await supabaseAdmin.from('products')
-          .update({
-            first_sold_date: firstSoldDate ? firstSoldDate.slice(0, 10) : null,
-            is_active: status.isActive,
-            inactive_reason: status.isArchived
-              ? (product.inactive_reason || status.note)
-              : (status.isActive ? null : (status.note || null)),
-            inactive_since: status.isActive ? null : (product.inactive_since || new Date().toISOString().slice(0, 10))
-          })
-          .eq('id', product.id);
+        if (productFetchError || salesFetchError) {
+          throw productFetchError || salesFetchError;
+        }
 
-        if (!updateError) {
+        // Only active products with a mapped recipe deduct stock automatically.
+        const activeProductIds = new Set(
+          (productRows || []).filter((product) => product.is_active === true).map((product) => product.id)
+        );
+        if (activeProductIds.size > 0) {
+          const { data: recipeRows, error: recipeError } = await supabaseAdmin
+            .from('product_ingredients')
+            .select('product_id, ingredient_id, quantity_per_serving')
+            .in('product_id', [...activeProductIds]);
+
+          if (recipeError) throw recipeError;
+
+          const deductions = new Map();
+          for (const sale of dailySalesRows) {
+            if (!activeProductIds.has(sale.product_id)) continue;
+            for (const recipe of (recipeRows || []).filter((row) => row.product_id === sale.product_id)) {
+              const amount = Number(recipe.quantity_per_serving) * Number(sale.quantity_sold);
+              if (!Number.isFinite(amount) || amount <= 0) continue;
+              deductions.set(recipe.ingredient_id, (deductions.get(recipe.ingredient_id) || 0) + amount);
+            }
+          }
+
+          for (const [ingredientId, deduction] of deductions) {
+            // Was SELECT quantity, then compute new = max(0, old - deduction)
+            // in JS, then UPDATE — two round trips wide open to a lost
+            // update: two concurrent uploads deducting the same ingredient
+            // can both read the same starting quantity before either write
+            // lands, so the second UPDATE clobbers the first instead of
+            // stacking. deduct_ingredient_stock() (migrations/
+            // 001_add_deduct_ingredient_stock_function.sql) does the read,
+            // clamp, and write as one atomic statement in Postgres, so
+            // concurrent callers serialize on the row instead of racing.
+            const { data: deductionResult, error: deductionError } = await supabaseAdmin
+              .rpc('deduct_ingredient_stock', {
+                p_ingredient_id: ingredientId,
+                p_deduction: deduction,
+                p_updated_by: numericId
+              });
+
+            if (deductionError) throw deductionError;
+
+            const deductionRow = Array.isArray(deductionResult) ? deductionResult[0] : deductionResult;
+            if (!deductionRow) {
+              throw new Error(`Ingredient ${ingredientId} not found while deducting stock`);
+            }
+
+            const previousQuantity = Number(deductionRow.previous_quantity) || 0;
+            const newQuantity = Number(deductionRow.new_quantity) || 0;
+
+            const { error: transactionError } = await supabaseAdmin
+              .from('inventory_transactions')
+              .insert({
+                ingredient_id: ingredientId,
+                transaction_type: 'sale',
+                quantity: -deduction,
+                previous_quantity: previousQuantity,
+                new_quantity: newQuantity,
+                reason: 'Automatic deduction from active mapped product sales',
+                created_by: numericId
+              });
+
+            if (transactionError) throw transactionError;
+          }
+        }
+
+        const salesByProductId = new Map();
+        for (const sale of salesRows || []) {
+          const dates = salesByProductId.get(sale.product_id) || [];
+          dates.push(sale.sale_date);
+          salesByProductId.set(sale.product_id, dates);
+        }
+
+        // Skip products whose status doesn't actually change (the common
+        // case) — a no-op check against fields already in memory from
+        // productRows above. (productsUpdated means "products whose status
+        // actually changed," not "products touched" — a more accurate
+        // number for the upload summary shown to the owner.)
+        //
+        // Per-row .update(), not a batched .upsert(rows, {onConflict:
+        // 'id'}) — see the matching comment on the category-backfill step
+        // above for why: that exact upsert pattern was observed to take
+        // the INSERT branch under concurrent uploads for a product id that
+        // demonstrably already existed, violating a NOT NULL constraint on
+        // a column this payload never intended to set. Every id here comes
+        // from productRows, fetched earlier in this same function, so a
+        // plain update is correct and can't hit that failure mode.
+        for (const product of productRows || []) {
+          const productSales = salesByProductId.get(product.id) || [];
+
+          const firstSoldDate = productSales[0] || product.first_sold_date || null;
+          const lastSoldDate = productSales[productSales.length - 1] || firstSoldDate || null;
+          const status = deriveProductStatus({
+            firstSoldDate: firstSoldDate || null,
+            lastSoldDate: lastSoldDate || null,
+            createdAt: product.created_at || null,
+            isActive: Boolean(product.is_active),
+            inactiveReason: product.inactive_reason
+          });
+
+          // is_active is a GENERATED column (derived from status) — writing
+          // it directly throws Postgres error 428C9. deriveProductStatus()
+          // returns a short display code ('active'/'new'/'inactive'/
+          // 'archived') that doesn't match the products.status DB enum, so
+          // translate through the shared map before writing.
+          const dbStatus = PRODUCT_DB_STATUS_BY_DERIVED[status.status];
+
+          const nextFirstSoldDate = firstSoldDate ? firstSoldDate.slice(0, 10) : null;
+          const nextInactiveReason = status.note || null;
+          const nextInactiveSince = status.isActive
+            ? null
+            : (product.inactive_since || new Date().toISOString().slice(0, 10));
+
+          const unchanged = (product.first_sold_date || null) === nextFirstSoldDate
+            && product.status === dbStatus
+            && (product.inactive_reason || null) === nextInactiveReason
+            && (product.inactive_since || null) === nextInactiveSince;
+
+          if (unchanged) continue;
+
+          const { error: statusUpdateError } = await supabaseAdmin
+            .from('products')
+            .update({
+              first_sold_date: nextFirstSoldDate,
+              status: dbStatus,
+              inactive_reason: nextInactiveReason,
+              inactive_since: nextInactiveSince
+            })
+            .eq('id', product.id);
+
+          if (statusUpdateError) throw statusUpdateError;
           productsUpdated += 1;
         }
+      } catch (postInsertError) {
+        console.error('Sales data was saved, but follow-up processing (category backfill / stock deduction / status reconciliation) failed:', postInsertError);
+        warnings.push(`Sales data was saved, but some follow-up processing did not complete: ${postInsertError.message}`);
       }
 
       return {
@@ -787,15 +898,17 @@ class UploadService {
     };
   }
 
-  async saveUploadRecord(fileData, processedData, userId = null) {
-    let filename = fileData.originalName || fileData.filename;
-    let numericId = null;
-    
+  // numericId must be the already-resolved numeric user id — the caller
+  // (routes/upload.js) already calls getNumericUserId() and
+  // checkDuplicateUpload() once before deciding to process the file at
+  // all, so redoing both here was the exact same two Supabase queries
+  // firing twice per upload request for no reason.
+  async saveUploadRecord(fileData, processedData, numericId) {
+    const filename = fileData.originalName || fileData.filename;
+
     try {
-      numericId = await this.getNumericUserId(userId);
-      
-      console.log('Saving upload - userId:', userId, 'numericId:', numericId);
-      
+      console.log('Saving upload - numericId:', numericId);
+
       if (!numericId) {
         console.error('User not found in custom users table.');
         throw new Error('User not found. Please login again.');
@@ -805,12 +918,6 @@ class UploadService {
       if (this.isUploadProcessing(filename, numericId)) {
         console.log(`Stale processing lock found for ${filename}, clearing...`);
         this.clearProcessing(filename, numericId);
-      }
-
-      const isDuplicate = await this.checkDuplicateUpload(filename, numericId);
-      if (isDuplicate) {
-        console.log(`Duplicate upload detected: ${filename}`);
-        throw new Error('Duplicate upload detected. This file has already been uploaded recently.');
       }
 
       this.markUploadProcessing(filename, numericId);
@@ -832,12 +939,11 @@ class UploadService {
         console.log('  Errors:', validation.errors);
       }
 
-      let status = 'processed';
-      if (!validation.isValid) {
-        status = 'failed';
-      } else if (validation.invalidRows > 0) {
-        status = 'pending';
-      }
+      // 'processed' means the full pipeline (product sync, daily_sales
+      // insert, status reconciliation) actually completed — set below by
+      // routes/upload.js via updateUploadStatus() once that's true. This
+      // row existing only means validation passed and it's queued to run.
+      const status = validation.isValid ? 'pending' : 'failed';
 
       const insertData = {
         filename: filename,
@@ -892,11 +998,6 @@ class UploadService {
       // Always clear processing lock on error
       if (filename && numericId) {
         this.clearProcessing(filename, numericId);
-      } else if (filename && userId) {
-        const numId = await this.getNumericUserId(userId);
-        if (numId) {
-          this.clearProcessing(filename, numId);
-        }
       }
       console.error('Error saving upload record:', error);
       throw error;
@@ -1085,7 +1186,10 @@ class UploadService {
           pending: filtered.filter((upload) => upload.status === 'pending').length,
           failed: filtered.filter((upload) => upload.status === 'failed').length,
           sales_records: filtered.reduce((sum, upload) => sum + (upload.row_count || 0), 0),
-          months_uploaded: Math.min(filtered.length, 12),
+          days_of_history: 0,
+          months_uploaded: 0,
+          actual_days_uploaded: 0,
+          actual_months_uploaded: 0,
           menu_items: this.memoryStore.products.length,
           last_sync: filtered[filtered.length - 1]?.upload_date || null
         };
@@ -1104,14 +1208,30 @@ class UploadService {
 
       if (uploadError) throw uploadError;
 
-      const uploadedMonths = new Set(
-        uploads
-          .map((upload) => this.extractDateFromFilename(upload.filename || ''))
-          .filter(Boolean)
-          .map((date) => date.slice(0, 7))
-      );
       const uploadIds = uploads.map((upload) => upload.id).filter(Boolean);
 
+      // Two different numbers, deliberately kept separate:
+      //
+      // - days_of_history/months_uploaded ("elapsed calendar time since
+      //   the earliest sale date") mirrors ml-service/app.py's actual
+      //   first-training gate exactly, so the "ready to train"/
+      //   "insufficient data" dashboard state can never drift from
+      //   whether a real /train call would actually be allowed to run.
+      //   This is intentionally tolerant of closed days — a business
+      //   that's open Mon-Fri only will still reach 365 here after a
+      //   calendar year, same as ml-service's own gate.
+      //
+      // - actual_days_uploaded/actual_months_uploaded ("how many distinct
+      //   calendar days actually have a real sales row") is what gets
+      //   shown to the owner as "how much sales data have I uploaded" —
+      //   uploading a handful of sample rows from over a year ago would
+      //   otherwise make days_of_history alone look like "12/12 months
+      //   met" the instant today's real clock has drifted far enough past
+      //   that old date, even though almost no data actually exists. The
+      //   owner needs an honest count of what's actually been uploaded to
+      //   track progress by, independent of the gate.
+      let earliestSaleDate = null;
+      let distinctSaleDays = 0;
       if (uploadIds.length > 0) {
         try {
           const { data: salesDates = [], error: salesDatesError } = await supabaseAdmin
@@ -1121,16 +1241,23 @@ class UploadService {
 
           if (salesDatesError) throw salesDatesError;
 
-          const months = new Set(
-            salesDates
-              .map((sale) => String(sale.sale_date || '').slice(0, 7))
-              .filter(Boolean)
+          const distinctDates = new Set(
+            salesDates.map((sale) => sale.sale_date).filter(Boolean)
           );
-          months.forEach((month) => uploadedMonths.add(month));
+          distinctSaleDays = distinctDates.size;
+          if (distinctDates.size > 0) {
+            earliestSaleDate = [...distinctDates].sort()[0];
+          }
         } catch (salesDatesError) {
-          console.warn('Could not calculate uploaded months:', salesDatesError.message);
+          console.warn('Could not calculate sales date coverage:', salesDatesError.message);
         }
       }
+
+      const daysOfHistory = earliestSaleDate
+        ? Math.max(0, dayjs().tz(PH_TZ).diff(dayjs(earliestSaleDate), 'day'))
+        : 0;
+      const monthsUploaded = Math.min(Math.floor(daysOfHistory / 30), 12);
+      const actualMonthsUploaded = Math.min(Math.floor(distinctSaleDays / 30), 12);
 
       let menuQuery = supabaseAdmin.from('products')
         .select('*', { count: 'exact', head: true });
@@ -1152,7 +1279,10 @@ class UploadService {
         pending: uploads.filter((upload) => upload.status === 'pending').length,
         failed: uploads.filter((upload) => upload.status === 'failed').length,
         sales_records: uploads.reduce((sum, upload) => sum + (upload.row_count || 0), 0),
-        months_uploaded: Math.min(uploadedMonths.size || uploads.length, 12),
+        days_of_history: daysOfHistory,
+        months_uploaded: monthsUploaded,
+        actual_days_uploaded: distinctSaleDays,
+        actual_months_uploaded: actualMonthsUploaded,
         menu_items: menuItemsCount || 0,
         last_sync: uploads[uploads.length - 1]?.upload_date || new Date().toISOString()
       };
@@ -1315,7 +1445,12 @@ class UploadService {
       return { state: 'no-data', stats, progress };
     }
 
-    if ((stats.months_uploaded || 0) < 12) {
+    // Matches ml-service/app.py's actual first-training gate exactly
+    // (days since earliest sale date >= 365) — months_uploaded is a
+    // display-only derivative of the same days_of_history number, so
+    // gating on the day count directly instead of the rounded-down
+    // months figure avoids the two ever disagreeing.
+    if ((stats.days_of_history || 0) < 365) {
       return { state: 'uploaded-insufficient', stats, progress };
     }
 

@@ -1,0 +1,8 @@
+# Dev-only dependencies — never installed on Render, never referenced by
+# app.py or anything under services/. Currently just matplotlib, needed
+# by reports/generate_training_report.py to render the local diagnostic
+# HTML report. Install on top of requirements.txt:
+#
+#   pip install -r requirements.txt -r requirements-dev.txt
+#
+matplotlib==3.9.2

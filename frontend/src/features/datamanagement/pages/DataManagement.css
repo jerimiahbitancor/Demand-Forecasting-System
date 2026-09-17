@@ -447,6 +447,16 @@
   color: #16a34a;
 }
 
+.file-status.duplicate {
+  background-color: #fef3c7;
+  color: #b45309;
+}
+
+.file-status.error {
+  background-color: #fee2e2;
+  color: #dc2626;
+}
+
 .remove-file-btn {
   color: #9ca3af;
   background: none;
@@ -491,6 +501,12 @@
   background-color: #fef2f2;
   color: #dc2626;
   border: 1px solid #fecaca;
+}
+
+.upload-status.warning {
+  background-color: #fffbeb;
+  color: #b45309;
+  border: 1px solid #fde68a;
 }
 
 .spinner {

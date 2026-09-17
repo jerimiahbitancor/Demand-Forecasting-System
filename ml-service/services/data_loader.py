@@ -31,7 +31,13 @@ def get_active_products():
         .eq("is_active", True)
         .execute()
     )
-    return pd.DataFrame(response.data)
+    # Explicit columns so an empty result (zero active products) still
+    # yields a DataFrame with an "id" column instead of one with no
+    # columns at all — callers doing get_active_products()["id"] would
+    # otherwise crash with an unhandled KeyError instead of just getting
+    # an empty list of ids.
+    columns = ["id", "name", "price", "is_active", "status", "first_sold_date"]
+    return pd.DataFrame(response.data, columns=columns)
 
 
 def get_training_eligible_products(min_observations: int) -> list:
