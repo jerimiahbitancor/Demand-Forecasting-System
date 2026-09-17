@@ -514,13 +514,29 @@ class MappingService {
       // change, including ingredient-only edits (products.updated_at is
       // also updated by the update_products_updated_at trigger when the
       // column is present — stamping here makes the write deterministic).
+      // If the column hasn't been added yet (migration
+      // 008_add_products_updated_at.sql), PostgREST rejects the write with
+      // 42703 — retry once without the stamp so edits still succeed.
       updateData.updated_at = new Date().toISOString();
 
-      const { data: product, error: productError } = await supabaseAdmin.from('products')
+      let { data: product, error: productError } = await supabaseAdmin.from('products')
         .update(updateData)
         .eq('id', id)
         .select()
         .maybeSingle();
+
+      if (productError && (productError.code === '42703' || productError.code === 'PGRST204')) {
+        console.warn('products.updated_at column missing — retrying update without updated_at; apply migration 008_add_products_updated_at.sql');
+        const retryData = { ...updateData };
+        delete retryData.updated_at;
+        const retry = await supabaseAdmin.from('products')
+          .update(retryData)
+          .eq('id', id)
+          .select()
+          .maybeSingle();
+        product = retry.data;
+        productError = retry.error;
+      }
 
       if (productError) {
         console.error('Error updating product:', productError);

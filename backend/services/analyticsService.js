@@ -577,6 +577,40 @@ function startOfWeekMonday(dateStr) {
   return d;
 }
 
+// ---------------------------------------------------------------------
+// 6. Ingredient stock status (forecast-based)
+// ---------------------------------------------------------------------
+
+// ingredientId -> forecasted units needed on the given date (safety buffer
+// included). Only ingredients that appear in an active recipe get a need;
+// unmapped ones stay out of the map and read as 'No Forecast'.
+// This is the SAME basis the Ingredient Management table uses for its
+// per-row status (see inventoryController.js), so the table, the legend,
+// and Analytics > Ingredient Demand always agree.
+async function getIngredientDailyNeeds(date) {
+  const safetyBufferPct = await getSafetyBufferPercentage();
+  const bufferMultiplier = 1 + safetyBufferPct / 100;
+  const targetDate = date || defaultDateRange().today;
+
+  const { data: forecastRows, error } = await supabaseAdmin
+    .from('forecasts')
+    .select('product_id, predicted_quantity')
+    .eq('forecast_date', targetDate);
+  if (error) throw error;
+
+  const recipeMap = await getRecipeMap();
+
+  const needs = new Map();
+  for (const f of forecastRows || []) {
+    const items = recipeMap.get(f.product_id) || [];
+    for (const item of items) {
+      const add = Number(f.predicted_quantity) * item.qtyPerServing * bufferMultiplier;
+      needs.set(item.ingredientId, (needs.get(item.ingredientId) || 0) + add);
+    }
+  }
+  return needs;
+}
+
 async function getIngredientDemandAnalytics({ date, weekStart } = {}) {
   const safetyBufferPct = await getSafetyBufferPercentage();
   const bufferMultiplier = 1 + safetyBufferPct / 100;
@@ -785,6 +819,7 @@ async function getForecastSummary() {
 
 module.exports = {
   computeStockStatus,
+  getIngredientDailyNeeds,
   accuracyFromMape,
   accuracyTier,
   getForecastingAnalytics,
