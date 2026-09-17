@@ -873,7 +873,6 @@ const ProductManagement = () => {
     const isActive = lifecycleStatus ? lifecycleStatus === 'active' : product?.is_active === true;
     const hasIngredients = Array.isArray(product?.product_ingredients)
       && product.product_ingredients.length > 0;
-    const isUnmapped = !hasIngredients;
     const isArchived = lifecycleStatus === 'archived' || product?.is_archived === true
       || /^archived\b/i.test(product?.inactive_reason || '');
 
