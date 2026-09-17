@@ -866,23 +866,27 @@ const ProductManagement = () => {
   };
 
   // ============ GET STATUS DETAILS ============
-  const FOOD_COST_WARNING_THRESHOLD = 30;
-
+  // Primary status comes from the product lifecycle (Active / Inactive (New) /
+  // Inactive (Discontinued) / Archived). Unmapped and High Food Cost are
+  // SECONDARY indicators shown alongside the primary status. They are mutually
+  // exclusive: High Food Cost requires a COGS calculation, and COGS requires a
+  // recipe, so an unmapped product can never be flagged High Food Cost.
   const getStatusDetails = (product) => {
     const lifecycleStatus = product?.status || null;
     const isActive = lifecycleStatus ? lifecycleStatus === 'active' : product?.is_active === true;
     const hasIngredients = Array.isArray(product?.product_ingredients)
       && product.product_ingredients.length > 0;
-    const isUnmapped = !hasIngredients;
     const isArchived = lifecycleStatus === 'archived' || product?.is_archived === true
       || /^archived\b/i.test(product?.inactive_reason || '');
 
     const price = product?.price || 0;
     const cogs = calculateProductCogs(product);
     const foodCostPercentage = cogs !== null && price > 0 ? (cogs / price) * 100 : null;
-    const isLowMargin = foodCostPercentage !== null && foodCostPercentage > FOOD_COST_WARNING_THRESHOLD;
-    const warningThreshold = foodCostThreshold;
-    
+    const isMapped = hasIngredients;
+    const isUnmapped = !isMapped;
+    const isHighFoodCost = isMapped && foodCostPercentage !== null
+      && foodCostPercentage > foodCostThreshold;
+
     const createdDate = new Date(product?.created_at);
     const daysOld = (Date.now() - createdDate.getTime()) / (1000 * 60 * 60 * 24);
     const isNew = lifecycleStatus === 'new' || (!lifecycleStatus && daysOld < 28);
@@ -898,24 +902,8 @@ const ProductManagement = () => {
       className = 'status-archived';
       dotColor = '#6b7280';
       tooltip = 'Removed from the active product list. Excluded from forecasting and ingredient demand estimation. Historical data is retained. Can be restored by the owner.';
-    } else if (isUnmapped) {
-      label = 'Unmapped';
-      className = 'status-unmapped';
-      dotColor = '#9ca3af';
-      if (!isActive && isNew) {
-        tooltip = 'Requires a recipe and at least 28 days of sales data before forecasting is available.';
-      } else if (!isActive && isDiscontinued) {
-        tooltip = 'No sales for 28+ days. Requires a recipe. Excluded from forecasting until sales resume.';
-      } else {
-        tooltip = 'No ingredient recipe configured. Included in forecasting but excluded from ingredient demand estimation, automatic stock deduction, and COGS/food cost calculation. Add a recipe using the Edit button.';
-      }
-    } else if (isLowMargin && hasIngredients) {
-      label = 'High Food Cost';
-      className = 'status-low-margin';
-      dotColor = '#ec4899';
-      tooltip = `This product's Food Cost Percentage is above ${foodCostThreshold}%. Consider adjusting price or reducing ingredient costs.`;
-    } else if (!isActive && isDiscontinued) {
-      label = 'Discontinued';
+    } else if (isDiscontinued) {
+      label = 'INACTIVE (DISCONTINUED)';
       className = 'status-discontinued';
       dotColor = '#dc2626';
       tooltip = 'No sales recorded in the last 28 days. Excluded from active forecasting until sales activity resumes. Historical sales data is retained.';
