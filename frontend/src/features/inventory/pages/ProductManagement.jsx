@@ -853,13 +853,12 @@ const ProductManagement = () => {
   };
 
   // ============ GET STATUS DETAILS ============
-  const FOOD_COST_WARNING_THRESHOLD = 30;
-
   const getStatusDetails = (product) => {
     const lifecycleStatus = product?.status || null;
     const isActive = lifecycleStatus ? lifecycleStatus === 'active' : product?.is_active === true;
     const hasIngredients = Array.isArray(product?.product_ingredients)
       && product.product_ingredients.length > 0;
+    const isUnmapped = !hasIngredients;
     const isArchived = lifecycleStatus === 'archived' || product?.is_archived === true
       || /^archived\b/i.test(product?.inactive_reason || '');
     
@@ -900,7 +899,6 @@ const ProductManagement = () => {
       label = 'High Food Cost';
       className = 'status-low-margin';
       dotColor = '#ec4899';
-      tooltip = 'COGS and food cost are calculated. Food cost exceeds the warning threshold. Consider adjusting price or reducing ingredient costs.';
       tooltip = `This product's Food Cost Percentage is above ${foodCostThreshold}%. Consider adjusting price or reducing ingredient costs.`;
     } else if (!isActive && isDiscontinued) {
       label = 'Discontinued';

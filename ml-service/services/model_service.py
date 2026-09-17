@@ -96,7 +96,7 @@ def chronological_split(df: pd.DataFrame, train_fraction: float = 0.8):
     return df.iloc[:split_idx], df.iloc[split_idx:]
 
 
-def train_global_model(features_df: pd.DataFrame):
+def train_global_model(features_df: pd.DataFrame, persist: bool = True, feature_columns: list = None):
     """
     Trains the single global XGBoost regressor.
 
@@ -107,7 +107,18 @@ def train_global_model(features_df: pd.DataFrame):
 
     Returns (model, metrics, version) where metrics contains both the
     aggregate scores and a per-product breakdown.
+
+    persist and feature_columns are report/diagnostic-only additions —
+    every production call site (app.py's /train) omits both and gets
+    byte-for-byte today's behavior. persist=False skips the Supabase
+    Storage upload (still returns a version label, just doesn't write
+    it anywhere) — for ablation/fold runs a diagnostic report trains
+    that must never become a candidate for /forecast to load.
+    feature_columns lets a caller train on a subset of FEATURE_COLUMNS
+    (e.g. a rolling-features-removed ablation) without duplicating this
+    function.
     """
+    columns = feature_columns if feature_columns is not None else FEATURE_COLUMNS
     train_df, test_df = chronological_split(features_df)
     log_stage("train split", train_df, extra={"train_fraction": 0.8})
     log_stage("test split", test_df, extra={
@@ -121,8 +132,8 @@ def train_global_model(features_df: pd.DataFrame):
             "history across active products to train reliably yet."
         )
 
-    X_train, y_train = train_df[FEATURE_COLUMNS], train_df["quantity_sold"]
-    X_test, y_test = test_df[FEATURE_COLUMNS], test_df["quantity_sold"]
+    X_train, y_train = train_df[columns], train_df["quantity_sold"]
+    X_test, y_test = test_df[columns], test_df["quantity_sold"]
 
     model = xgb.XGBRegressor(
         n_estimators=200,          # more trees than the per-product version,
@@ -148,11 +159,12 @@ def train_global_model(features_df: pd.DataFrame):
     # powers Analytics > Forecasting > Model Insights; previously this was
     # computed and immediately discarded.
     feature_importance = {
-        col: float(score) for col, score in zip(FEATURE_COLUMNS, model.feature_importances_)
+        col: float(score) for col, score in zip(columns, model.feature_importances_)
     }
 
     version = new_model_version()
-    save_model_to_storage(model, version)
+    if persist:
+        save_model_to_storage(model, version)
 
     metrics = {
         "aggregate": aggregate_metrics,

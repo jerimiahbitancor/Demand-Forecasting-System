@@ -232,3 +232,38 @@ def get_safety_buffer_percentage() -> float:
     if response.data:
         return float(response.data[0]["safety_buffer_percentage"])
     return 15.0
+
+
+def get_forecast_runs_history(limit: int = 90) -> pd.DataFrame:
+    """
+    Most recent forecast_runs rows, newest first, for correlating
+    forecast staleness against realized accuracy over time. Read-only —
+    this service never writes to forecast_runs itself outside of
+    supabase_writer.write_forecast_run().
+    """
+    response = (
+        supabase.table("forecast_runs")
+        .select("run_at, run_type, model_version, last_confirmed_date, stale_days")
+        .order("run_at", desc=True)
+        .limit(limit)
+        .execute()
+    )
+    columns = ["run_at", "run_type", "model_version", "last_confirmed_date", "stale_days"]
+    return pd.DataFrame(response.data, columns=columns)
+
+
+def get_model_metrics_history(limit: int = 20) -> pd.DataFrame:
+    """
+    Most recent model_metrics rows, newest first, for comparing
+    the current model's aggregate metrics against prior training runs
+    over time.
+    """
+    response = (
+        supabase.table("model_metrics")
+        .select("model_version, evaluation_date, mape, mae, rmse, notes, feature_importance")
+        .order("evaluation_date", desc=True)
+        .limit(limit)
+        .execute()
+    )
+    columns = ["model_version", "evaluation_date", "mape", "mae", "rmse", "notes", "feature_importance"]
+    return pd.DataFrame(response.data, columns=columns)
