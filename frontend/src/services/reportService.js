@@ -607,6 +607,24 @@ export async function buildGroceryListPDF({
 // Analytics reports. `rows` is already human-readable from the page:
 //   { date, action, performedBy, details }
 // ---------------------------------------------------------------------
+
+// Display-only cleanup for audit details so cells stay short and line up in
+// the PDF. Ingredient names sometimes carry the unit in parentheses, e.g.
+// "hi (Grams (g))" — that suffix is dropped when it precedes a colon. Each
+// item after the colon is then put on its own line so an extra source/market
+// always lands on a fresh, aligned row instead of widening the cell.
+function tidyAuditDetails(text) {
+  return String(text || '')
+    .replace(/\(([^()]*)\)(?=\s*:)/g, (match, inner) =>
+      inner.trim().length > 1 ? '' : match
+    )
+    .replace(/\s+:/g, ':')
+    .replace(/:\s*/, ':\n')
+    .replace(/,\s*/g, ',\n')
+    .replace(/\s{2,}/g, ' ')
+    .trim();
+}
+
 export async function buildAuditLogsPDF({ dateRangeLabel, business, rows }) {
   const doc = new jsPDF({ unit: 'mm', format: 'a4' });
   const logoDataUrl = await loadLogoBase64();
@@ -623,15 +641,19 @@ export async function buildAuditLogsPDF({ dateRangeLabel, business, rows }) {
 
   drawTable(doc, y, {
     head: ['No.', 'Date & Time', 'Action', 'Performed By', 'Details'],
-    body: rows.map((r, i) => [i + 1, r.date, r.action, r.performedBy, r.details]),
+    body: rows.map((r, i) => [i + 1, r.date, r.action, r.performedBy, tidyAuditDetails(r.details)]),
     columnStyles: {
-      0: { cellWidth: 10, halign: 'center' },
-      1: { cellWidth: 34 },
-      2: { cellWidth: 33 },
-      3: { cellWidth: 30 },
-      4: { cellWidth: 180 - 10 - 34 - 33 - 30 },
+      0: { cellWidth: 9, halign: 'center', valign: 'middle' },
+      1: { cellWidth: 32, halign: 'left', valign: 'middle' },
+      2: { cellWidth: 32, halign: 'left', valign: 'middle' },
+      3: { cellWidth: 27, halign: 'left', valign: 'middle' },
+      4: { cellWidth: 180 - 9 - 32 - 32 - 27, halign: 'left', valign: 'middle' },
     },
-    tableStyles: { fontSize: 6.5, cellPadding: 2, lineHeight: 1.25 },
+    tableStyles: {
+      fontSize: 6.8,
+      cellPadding: { top: 1.8, right: 2.5, bottom: 1.8, left: 2.5 },
+      lineHeight: 1.3,
+    },
   });
 
   addFooterToAllPages(doc);

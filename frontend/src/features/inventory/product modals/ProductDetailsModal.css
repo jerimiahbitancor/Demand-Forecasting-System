@@ -49,6 +49,31 @@
   color: #166534;
 }
 
+.product-details-status.unmapped {
+  background: #f3f4f6;
+  color: #6b7280;
+}
+
+.product-details-status.low-margin {
+  background: #fce7f3;
+  color: #ec4899;
+}
+
+.product-details-status.discontinued {
+  background: #fee2e2;
+  color: #dc2626;
+}
+
+.product-details-status.inactive {
+  background: #f3f4f6;
+  color: #6b7280;
+}
+
+.product-details-status.inactive-new {
+  background: #fef3c7;
+  color: #b45309;
+}
+
 .product-details-status.archived {
   background: #f3f4f6;
   color: #4b5563;
