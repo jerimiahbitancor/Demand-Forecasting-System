@@ -792,24 +792,20 @@ const ProductManagement = () => {
   };
 
   // ============ GET STATUS DETAILS ============
-  const FOOD_COST_WARNING_THRESHOLD = 30;
-
   const getStatusDetails = (product) => {
     const lifecycleStatus = product?.status || null;
     const isActive = lifecycleStatus ? lifecycleStatus === 'active' : product?.is_active === true;
     const hasIngredients = Array.isArray(product?.product_ingredients)
       && product.product_ingredients.length > 0;
+    const isUnmapped = !hasIngredients;
     const isArchived = lifecycleStatus === 'archived' || product?.is_archived === true
       || /^archived\b/i.test(product?.inactive_reason || '');
     
     const price = product?.price || 0;
     const cogs = calculateProductCogs(product);
     const foodCostPercentage = cogs !== null && price > 0 ? (cogs / price) * 100 : null;
-    const isLowMargin = foodCostPercentage !== null && foodCostPercentage > FOOD_COST_WARNING_THRESHOLD;
-    const warningThreshold = foodCostThreshold;
-    const isLowMargin = foodCostPercentage !== null && foodCostPercentage > warningThreshold;
-    const isUnmapped = !hasIngredients;
-    
+    const isLowMargin = foodCostPercentage !== null && foodCostPercentage > foodCostThreshold;
+
     const createdDate = new Date(product?.created_at);
     const daysOld = (Date.now() - createdDate.getTime()) / (1000 * 60 * 60 * 24);
     const isNew = lifecycleStatus === 'new' || (!lifecycleStatus && daysOld < 28);
@@ -840,7 +836,6 @@ const ProductManagement = () => {
       label = 'High Food Cost';
       className = 'status-low-margin';
       dotColor = '#ec4899';
-      tooltip = 'COGS and food cost are calculated. Food cost exceeds the warning threshold. Consider adjusting price or reducing ingredient costs.';
       tooltip = `This product's Food Cost Percentage is above ${foodCostThreshold}%. Consider adjusting price or reducing ingredient costs.`;
     } else if (!isActive && isDiscontinued) {
       label = 'Discontinued';

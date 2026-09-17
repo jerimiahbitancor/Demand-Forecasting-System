@@ -10,6 +10,8 @@ import "../states/statescss/TrainingInProgress.css";
 import { useNavigate } from "react-router-dom";
 import axios from "axios";
 import toast from "react-hot-toast";
+import Swal from 'sweetalert2';
+import '../../../utils/swalTheme.css';
 import trainingImage from "../../../assets/images/Rene.png";
 import { FaCheckCircle } from "react-icons/fa";
 
@@ -99,6 +101,37 @@ const ReadyToTrain = () => {
   }, []);
 
   const handleStartTraining = async () => {
+    // Fires on every click — first-time training and every retrain alike.
+    // No "seen it once" / session-storage skip: the owner must
+    // acknowledge reviewing their product list before every run, not
+    // just the first.
+    const formatConfirmTimestamp = (date) => {
+      const dd = String(date.getDate()).padStart(2, "0");
+      const mm = String(date.getMonth() + 1).padStart(2, "0");
+      const yyyy = date.getFullYear();
+      const hh = String(date.getHours()).padStart(2, "0");
+      const min = String(date.getMinutes()).padStart(2, "0");
+      return `${dd}/${mm}/${yyyy} | ${hh}:${min}`;
+    };
+
+    const confirmation = await Swal.fire({
+      title: "Confirm training start",
+      text: `Training will start now (${formatConfirmTimestamp(new Date())}). ` +
+            "Make sure every product in Inventory Management is something you " +
+            "actually sell. Anything else should be archived — archived " +
+            "products are excluded from training and forecasting.",
+      icon: "question",
+      showCancelButton: true,
+      confirmButtonText: "Confirm and start training",
+      cancelButtonText: "Let me check first",
+      confirmButtonColor: "#7A0101",
+    });
+
+    if (!confirmation.isConfirmed) {
+      navigate("/inventory-management");
+      return;
+    }
+
     setIsStarting(true);
     // This POST doesn't resolve until training finishes server-side —
     // don't wait on it to navigate. Dashboard.jsx polls
@@ -212,6 +245,32 @@ const ReadyToTrain = () => {
                     You've uploaded enough sales history to train your demand forecasting
                     model. Training takes a few minutes and can run in the background —
                     you can keep working while it completes.
+                  </p>
+                  <p
+                    className="ready-to-train-body"
+                    style={{ color: "#92400e", fontWeight: 500 }}
+                  >
+                    ⚠️ Before you train: Make sure the products in{" "}
+                    <button
+                      type="button"
+                      onClick={() => navigate("/inventory-management")}
+                      style={{
+                        background: "none",
+                        border: "none",
+                        padding: 0,
+                        font: "inherit",
+                        fontWeight: 700,
+                        color: "#7A0101",
+                        textDecoration: "underline",
+                        cursor: "pointer",
+                      }}
+                    >
+                      Inventory Management
+                    </button>{" "}
+                    are the menu items you actually sell. Sales data uploads can include
+                    rows that aren't real menu items — archive anything that doesn't
+                    belong before starting, since archived products are excluded from
+                    training and forecasting.
                   </p>
                   <button
                     type="button"

@@ -125,38 +125,28 @@ const authenticate = async (req, res, next) => {
           customUserId = userData.id;
           console.log('Custom user found:', customUserId);
         } else {
+          // A valid Supabase Auth JWT with no matching `user` row means
+          // this auth_id was never linked through the app's own
+          // OTP-verified registration flow (routes/auth.js's
+          // /create-password sets `user.auth_id` explicitly, before the
+          // frontend ever calls an authenticated endpoint) — e.g. a
+          // second Supabase Auth account created directly via the
+          // dashboard or admin API, bypassing the single-owner-account
+          // model. This used to silently INSERT a new `user` row here,
+          // which is exactly the bypass: reject instead, and let a real
+          // registration (or an admin fixing the auth_id link) be the
+          // only way to get a `user` row.
           console.log('No custom user found for auth_id:', authId);
-          // Try to create user if not exists
-          try {
-            const { data: newUser, error: insertError } = await supabaseAdmin
-              .from('user')
-              .insert({
-                auth_id: authId,
-                email: user.email,
-                name: user.user_metadata?.full_name || user.user_metadata?.name || user.email?.split('@')[0] || 'User',
-                // The JWT doesn't carry email_confirmed_at (that's a
-                // Supabase Auth user-object field, not a token claim). By
-                // the time a session reaches this app at all, the user
-                // already went through this project's own OTP-verified
-                // registration flow, so treat that as sufficient rather
-                // than re-deriving a confirmation flag that isn't here.
-                is_verified: true,
-                verified_at: new Date().toISOString()
-              })
-              .select()
-              .single();
-
-            if (!insertError && newUser) {
-              customUserId = newUser.id;
-              customUser = newUser;
-              console.log('Created custom user:', customUserId);
-            }
-          } catch (createError) {
-            console.error('Error creating custom user:', createError);
-          }
         }
       } catch (err) {
         console.error('Error fetching custom user:', err);
+      }
+
+      if (!customUserId) {
+        return res.status(403).json({
+          success: false,
+          error: 'No account is linked to this login. Please complete registration or contact support.'
+        });
       }
 
       setCachedCustomUser(authId, { customUser, customUserId });
