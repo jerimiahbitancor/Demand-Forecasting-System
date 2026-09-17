@@ -13,6 +13,7 @@ import {
   FaChevronDown,
   FaEye,
   FaUndo,
+  FaCheck,
 } from "react-icons/fa";
 import axios from 'axios';
 import toast from 'react-hot-toast';
@@ -153,6 +154,17 @@ const ProductManagement = () => {
     unit: "",
     inventory_item_id: null
   });
+
+  // ============ INLINE INGREDIENT EDITING ============
+  const [editingIngredientIndex, setEditingIngredientIndex] = useState(null);
+  const [draftIngredient, setDraftIngredient] = useState(null);
+
+  const availableIngredientUnits = useMemo(() => [
+    ...new Set([
+      ...RECIPE_EXTRA_UNITS,
+      ...ingredientUnits.map((unit) => unit.name)
+    ])
+  ], [ingredientUnits]);
 
   const [formErrors, setFormErrors] = useState({
     productName: "",
@@ -605,6 +617,8 @@ const ProductManagement = () => {
     setIsViewMode(true);
     setIsEditMode(false);
     setEditingId(product.id);
+    setEditingIngredientIndex(null);
+    setDraftIngredient(null);
     setFormData({
       productName: product.name || '',
       price: product.price?.toString() || '',
@@ -627,6 +641,8 @@ const ProductManagement = () => {
     setIsEditMode(true);
     setIsViewMode(false);
     setEditingId(product.id);
+    setEditingIngredientIndex(null);
+    setDraftIngredient(null);
     setFormData({
       productName: product.name || '',
       price: product.price?.toString() || '',
@@ -794,6 +810,8 @@ const ProductManagement = () => {
     });
     setSearchIngredient("");
     setShowIngredientDropdown(false);
+    setEditingIngredientIndex(null);
+    setDraftIngredient(null);
     setFormErrors({ productName: "", price: "", category: "", ingredients: "" });
     setIsEditMode(false);
     setIsViewMode(false);
@@ -911,7 +929,73 @@ const ProductManagement = () => {
     const updatedIngredients = formData.ingredients.filter((_, i) => i !== index);
     setFormData({ ...formData, ingredients: updatedIngredients });
     
+    if (editingIngredientIndex === index) {
+      setEditingIngredientIndex(null);
+      setDraftIngredient(null);
+    }
+    
     if (formErrors.ingredients && updatedIngredients.length > 0) {
+      setFormErrors({ ...formErrors, ingredients: "" });
+    }
+  };
+
+  // ============ INLINE EDIT INGREDIENT ============
+  const startEditingIngredient = (index) => {
+    setEditingIngredientIndex(index);
+    setDraftIngredient({ ...formData.ingredients[index] });
+  };
+
+  const handleDraftIngredientChange = (field, value) => {
+    setDraftIngredient(prev => ({ ...prev, [field]: value }));
+  };
+
+  const cancelIngredientEdit = () => {
+    setEditingIngredientIndex(null);
+    setDraftIngredient(null);
+  };
+
+  const confirmIngredientEdit = (index) => {
+    if (!draftIngredient) return;
+
+    const name = String(draftIngredient.name || '').trim();
+    const quantity = parseFloat(draftIngredient.quantity);
+
+    if (!name) {
+      toast.error('Ingredient name is required');
+      return;
+    }
+
+    if (draftIngredient.quantity === undefined || draftIngredient.quantity === null || draftIngredient.quantity === '') {
+      toast.error('Ingredient quantity is required');
+      return;
+    }
+
+    if (isNaN(quantity) || quantity <= 0) {
+      toast.error('Quantity must be a valid number greater than 0');
+      return;
+    }
+
+    const duplicate = formData.ingredients.some((existing, i) =>
+      i !== index && String(existing.name || '').toLowerCase() === name.toLowerCase()
+    );
+
+    if (duplicate) {
+      toast.error('This ingredient already exists in the list');
+      return;
+    }
+
+    const updatedIngredients = [...formData.ingredients];
+    updatedIngredients[index] = {
+      ...draftIngredient,
+      name,
+      quantity: parseFloat(draftIngredient.quantity)
+    };
+
+    setFormData({ ...formData, ingredients: updatedIngredients });
+    setEditingIngredientIndex(null);
+    setDraftIngredient(null);
+
+    if (formErrors.ingredients) {
       setFormErrors({ ...formErrors, ingredients: "" });
     }
   };
@@ -1586,7 +1670,7 @@ const ProductManagement = () => {
                       aria-label="Select all products on this page"
                     />
                   </th>
-                  <th>No.</th>
+                  <th>#</th>
                   <th>Item Name</th>
                   <th>Category</th>
                   <th>Modifier</th>
@@ -2031,10 +2115,7 @@ const ProductManagement = () => {
                       value={newIngredient.unit}
                       onChange={(e) => setNewIngredient({...newIngredient, unit: e.target.value})}
                     >
-                      {[...new Set([
-                        ...RECIPE_EXTRA_UNITS,
-                        ...ingredientUnits.map((unit) => unit.name)
-                      ])].map((unit) => (
+                      {availableIngredientUnits.map((unit) => (
                         <option key={unit} value={unit}>{unit}</option>
                       ))}
                     </select>
@@ -2086,24 +2167,94 @@ const ProductManagement = () => {
                         </tr>
                       ) : (
                         formData.ingredients.map((ing, index) => (
-                          <tr key={index}>
+                          <tr key={index} className={editingIngredientIndex === index ? 'editing-ingredient-row' : ''}>
                             <td>
-                              {ing.name}
-                              {ing.inventory_item_id && (
-                                <span className="ingredient-id-tag">(ID: {ing.inventory_item_id})</span>
+                              {editingIngredientIndex === index && draftIngredient ? (
+                                <input
+                                  type="text"
+                                  className="form-input ingredient-edit-input"
+                                  value={draftIngredient.name || ''}
+                                  onChange={(e) => handleDraftIngredientChange('name', e.target.value)}
+                                  placeholder="Ingredient name"
+                                />
+                              ) : (
+                                <>
+                                  {ing.name}
+                                  {ing.inventory_item_id && (
+                                    <span className="ingredient-id-tag">(ID: {ing.inventory_item_id})</span>
+                                  )}
+                                </>
                               )}
                             </td>
-                            <td>{ing.quantity}</td>
-                            <td>{ing.unit}</td>
+                            <td>
+                              {editingIngredientIndex === index && draftIngredient ? (
+                                <input
+                                  type="number"
+                                  className="form-input ingredient-edit-input"
+                                  value={draftIngredient.quantity}
+                                  onChange={(e) => handleDraftIngredientChange('quantity', e.target.value)}
+                                  placeholder="Quantity"
+                                  step="0.001"
+                                  min="0.001"
+                                />
+                              ) : (
+                                ing.quantity
+                              )}
+                            </td>
+                            <td>
+                              {editingIngredientIndex === index && draftIngredient ? (
+                                <select
+                                  className="ingredient-edit-select"
+                                  value={draftIngredient.unit || ''}
+                                  onChange={(e) => handleDraftIngredientChange('unit', e.target.value)}
+                                >
+                                  {availableIngredientUnits.map((unit) => (
+                                    <option key={unit} value={unit}>{unit}</option>
+                                  ))}
+                                </select>
+                              ) : (
+                                ing.unit
+                              )}
+                            </td>
                             {!isViewMode && (
                               <td>
-                                <button 
-                                  className="action-btn remove-ingredient"
-                                  onClick={() => handleRemoveIngredient(index)}
-                                  title="Remove ingredient"
-                                >
-                                  <FaTrash size={16} />
-                                </button>
+                                <div className="ingredient-row-actions">
+                                  {editingIngredientIndex === index ? (
+                                    <>
+                                      <button
+                                        className="action-btn ingredient-edit-btn confirm"
+                                        onClick={() => confirmIngredientEdit(index)}
+                                        title="Save ingredient edit"
+                                      >
+                                        <FaCheck size={16} />
+                                      </button>
+                                      <button
+                                        className="action-btn ingredient-edit-btn cancel"
+                                        onClick={cancelIngredientEdit}
+                                        title="Cancel edit"
+                                      >
+                                        <FaTimes size={16} />
+                                      </button>
+                                    </>
+                                  ) : (
+                                    <>
+                                      <button
+                                        className="action-btn ingredient-edit-btn"
+                                        onClick={() => startEditingIngredient(index)}
+                                        title="Edit ingredient"
+                                      >
+                                        <FaEdit size={16} />
+                                      </button>
+                                      <button
+                                        className="action-btn remove-ingredient"
+                                        onClick={() => handleRemoveIngredient(index)}
+                                        title="Remove ingredient"
+                                      >
+                                        <FaTrash size={16} />
+                                      </button>
+                                    </>
+                                  )}
+                                </div>
                               </td>
                             )}
                           </tr>
