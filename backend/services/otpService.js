@@ -1,14 +1,13 @@
 // services/otpService.js
 const { supabase, supabaseAdmin } = require('../config/supabase');
 const nodemailer = require('nodemailer');
-const { Resend } = require('resend');
 const dayjs = require('dayjs');
 const utc = require('dayjs/plugin/utc');
 const timezone = require('dayjs/plugin/timezone');
 dayjs.extend(utc);
 dayjs.extend(timezone);
 const PH_TZ = 'Asia/Manila';
-const OTP_EXPIRATION_MINUTES = 5;
+const OTP_EXPIRATION_MINUTES = 1;
 
 const nowPH = () => dayjs().tz(PH_TZ);
 const toPH = (dbTimestamp) => {
@@ -39,126 +38,104 @@ const generateOTP = () => {
   return Math.floor(100000 + Math.random() * 900000).toString();
 };
 
-// Configure email transporter — explicit host/port (not the 'gmail' service
-// shortcut) so timeouts and connection reuse are visible and controllable.
-// Defaults to Gmail's SMTPS port (465); override via EMAIL_HOST/EMAIL_PORT/
-// EMAIL_SECURE if switching providers later.
-let cachedTransporter = null;
-
+// Configure email transporter
 const createTransporter = () => {
-  if (cachedTransporter) return cachedTransporter;
-
-  const port = Number(process.env.EMAIL_PORT) || 465;
-
-  cachedTransporter = nodemailer.createTransport({
-    host: process.env.EMAIL_HOST || 'smtp.gmail.com',
-    port,
-    secure: process.env.EMAIL_SECURE ? process.env.EMAIL_SECURE === 'true' : port === 465,
+  if (process.env.EMAIL_SERVICE === 'gmail') {
+    return nodemailer.createTransport({
+      service: 'gmail',
+      auth: {
+        user: process.env.EMAIL_USER,
+        pass: process.env.EMAIL_PASSWORD
+      }
+    });
+  }
+  
+  return nodemailer.createTransport({
+    host: process.env.EMAIL_HOST,
+    port: process.env.EMAIL_PORT,
+    secure: process.env.EMAIL_SECURE === 'true',
     auth: {
       user: process.env.EMAIL_USER,
       pass: process.env.EMAIL_PASSWORD
-    },
-    pool: true,
-    maxConnections: 3,
-    connectionTimeout: 10000,
-    greetingTimeout: 10000,
-    socketTimeout: 15000
+    }
   });
-
-  return cachedTransporter;
-};
-
-const OTP_EMAIL_TEMPLATES = {
-  verification: {
-    subject: 'Verify Your ChefDuo Account',
-    title: 'Welcome to ChefDuo!',
-    message: 'Thank you for registering. Please verify your email address by entering the OTP code below:',
-    footer: 'If you didn\'t create an account with ChefDuo, please ignore this email.'
-  },
-  reset: {
-    subject: 'Password Reset Code - ChefDuo',
-    title: 'Password Reset Request',
-    message: 'We received a request to reset your password. Use the code below to proceed:',
-    footer: 'If you didn\'t request a password reset, please ignore this email or contact support.'
-  }
-};
-
-const buildOtpEmailHtml = (template, otp) => `
-  <!DOCTYPE html>
-  <html>
-  <head>
-    <style>
-      body { font-family: Arial, sans-serif; line-height: 1.6; color: #333; }
-      .container { max-width: 600px; margin: 0 auto; padding: 20px; }
-      .header { background: #bb0114; color: white; padding: 20px; text-align: center; }
-      .content { padding: 30px; background: #f9f9f9; }
-      .otp-box {
-        background: white;
-        padding: 20px;
-        text-align: center;
-        font-size: 32px;
-        letter-spacing: 5px;
-        font-weight: bold;
-        border-radius: 8px;
-        margin: 20px 0;
-        border: 2px dashed #bb0114;
-      }
-      .footer { text-align: center; padding: 20px; font-size: 12px; color: #666; }
-    </style>
-  </head>
-  <body>
-    <div class="container">
-      <div class="header">
-        <h1>ChefDuo Demand Forecasting</h1>
-      </div>
-      <div class="content">
-        <h2>${template.title}</h2>
-        <p>${template.message}</p>
-        <div class="otp-box">${otp}</div>
-        <p><strong>This code will expire in ${OTP_EXPIRATION_MINUTES} minute${OTP_EXPIRATION_MINUTES === 1 ? '' : 's'}.</strong></p>
-        <p>${template.footer}</p>
-      </div>
-      <div class="footer">
-        <p>© ${new Date().getFullYear()} ChefDuo Demand Forecasting. All rights reserved.</p>
-        <p>This is an automated message, please do not reply.</p>
-      </div>
-    </div>
-  </body>
-  </html>
-`;
-
-// Resend (HTTP API, no SMTP handshake) is used in prod when RESEND_API_KEY
-// is set — faster and doesn't get flagged as "suspicious sign-in" the way
-// Gmail SMTP from a cloud IP does. Falls back to Gmail SMTP (nodemailer)
-// when it isn't, so local dev keeps working unchanged.
-let cachedResendClient = null;
-const getResendClient = () => {
-  if (!process.env.RESEND_API_KEY) return null;
-  if (!cachedResendClient) cachedResendClient = new Resend(process.env.RESEND_API_KEY);
-  return cachedResendClient;
 };
 
 // Send OTP Email
 const sendOTPEmail = async (email, otp, type) => {
-  const template = OTP_EMAIL_TEMPLATES[type] || OTP_EMAIL_TEMPLATES.verification;
-  const html = buildOtpEmailHtml(template, otp);
-  const from = process.env.EMAIL_FROM || process.env.EMAIL_USER;
-
   try {
-    const resend = getResendClient();
-
-    if (resend) {
-      const { error } = await resend.emails.send({ from, to: email, subject: template.subject, html });
-      if (error) throw new Error(error.message || JSON.stringify(error));
-      return { success: true };
-    }
-
     const transporter = createTransporter();
-    await transporter.sendMail({ from, to: email, subject: template.subject, html });
+    
+    const templates = {
+      verification: {
+        subject: 'Verify Your ChefDuo Account',
+        title: 'Welcome to ChefDuo!',
+        message: 'Thank you for registering. Please verify your email address by entering the OTP code below:',
+        footer: 'If you didn\'t create an account with ChefDuo, please ignore this email.'
+      },
+      reset: {
+        subject: 'Password Reset Code - ChefDuo',
+        title: 'Password Reset Request',
+        message: 'We received a request to reset your password. Use the code below to proceed:',
+        footer: 'If you didn\'t request a password reset, please ignore this email or contact support.'
+      }
+    };
+
+    const template = templates[type] || templates.verification;
+
+    const mailOptions = {
+      from: process.env.EMAIL_FROM,
+      to: email,
+      subject: template.subject,
+      html: `
+        <!DOCTYPE html>
+        <html>
+        <head>
+          <style>
+            body { font-family: Arial, sans-serif; line-height: 1.6; color: #333; }
+            .container { max-width: 600px; margin: 0 auto; padding: 20px; }
+            .header { background: #bb0114; color: white; padding: 20px; text-align: center; }
+            .content { padding: 30px; background: #f9f9f9; }
+            .otp-box { 
+              background: white; 
+              padding: 20px; 
+              text-align: center; 
+              font-size: 32px; 
+              letter-spacing: 5px; 
+              font-weight: bold;
+              border-radius: 8px;
+              margin: 20px 0;
+              border: 2px dashed #bb0114;
+            }
+            .footer { text-align: center; padding: 20px; font-size: 12px; color: #666; }
+          </style>
+        </head>
+        <body>
+          <div class="container">
+            <div class="header">
+              <h1>ChefDuo Demand Forecasting</h1>
+            </div>
+            <div class="content">
+              <h2>${template.title}</h2>
+              <p>${template.message}</p>
+              <div class="otp-box">${otp}</div>
+              <p><strong>This code will expire in 1 minute.</strong></p>
+              <p>${template.footer}</p>
+            </div>
+            <div class="footer">
+              <p>© ${new Date().getFullYear()} ChefDuo Demand Forecasting. All rights reserved.</p>
+              <p>This is an automated message, please do not reply.</p>
+            </div>
+          </div>
+        </body>
+        </html>
+      `
+    };
+
+    await transporter.sendMail(mailOptions);
     return { success: true };
 
   } catch (error) {
-    console.error('❌ sendOTPEmail failed:', error);
     throw new Error('Failed to send email: ' + error.message);
   }
 };
