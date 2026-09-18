@@ -110,15 +110,14 @@ const RestockModal = ({
             </label>
             <div className="quantity-input-wrapper">
               <input
-                type="number"
+                type="text"
+                inputMode="decimal"
                 className="form-input"
                 value={data.quantity}
                 onChange={(event) =>
                   onChange({ ...data, quantity: event.target.value })
                 }
-                placeholder=""
-                min="0.01"
-                step="0.01"
+                placeholder="Qty (e.g. 1/2)"
               />
             </div>
           </div>

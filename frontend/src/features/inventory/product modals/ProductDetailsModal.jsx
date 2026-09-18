@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { FaArchive, FaEye, FaTimes, FaUndo } from 'react-icons/fa';
 import InventoryModal from '../components/InventoryModal';
-import { normalizeRecipeQuantityToUnit, recipeDensityFor, pieceWeightOf } from '../../../utils/recipeUnits';
+import { normalizeRecipeQuantityToUnit, recipeDensityFor, pieceWeightOf, parseRecipeQuantity } from '../../../utils/recipeUnits';
 import './ProductDetailsModal.css';
 
 const ProductDetailsModal = ({
@@ -63,7 +63,7 @@ const ProductDetailsModal = ({
     return {
       id: ingredient.id || ingredient.inventory_item_id || null,
       name: stockName || 'Unknown ingredient',
-      recipeQty: Number(ingredient.quantity_per_serving ?? ingredient.quantity) || 0,
+      recipeQty: parseRecipeQuantity(ingredient.quantity_per_serving ?? ingredient.quantity) || 0,
       recipeUnit,
       stockUnit: ingredientUnit || recipeUnit || '—',
       gramsPerCup,

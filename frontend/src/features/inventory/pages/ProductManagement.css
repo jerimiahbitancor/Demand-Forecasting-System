@@ -1111,6 +1111,34 @@
   gap: 4px;
 }
 
+.ingredient-cost-cell {
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+
+.ingredients-total-row {
+  background: #f8f9fa;
+  border-top: 2px solid #e8e0dd;
+}
+
+.ingredients-total-row:hover {
+  background: #f8f9fa !important;
+}
+
+.ingredients-total-row td {
+  font-weight: 600;
+  color: #1C2632;
+}
+
+.ingredients-total-row td:last-child {
+  text-align: right;
+}
+
+.ingredients-total-value {
+  color: #4f46e5;
+  font-variant-numeric: tabular-nums;
+}
+
 .ingredient-edit-btn {
   background: #e0e7ff;
   color: #4f46e5;

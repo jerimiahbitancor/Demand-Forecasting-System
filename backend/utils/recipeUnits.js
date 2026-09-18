@@ -149,6 +149,32 @@ function roundTo(value, places = 4) {
   return Math.round((value + Number.EPSILON) * factor) / factor;
 }
 
+// Parse a recipe-style quantity into a number: "1/2" -> 0.5, "1 1/2" -> 1.5,
+// "0.75" -> 0.75. product_ingredients.quantity_per_serving is a free-text
+// column, so stored values may be fractions, mixed numbers, or decimals.
+// Returns NaN for unparseable input.
+function parseRecipeQuantity(value) {
+  if (value === undefined || value === null || value === '') return NaN;
+  const trimmed = String(value).trim();
+  if (!trimmed) return NaN;
+
+  const mixed = trimmed.match(/^(-?\d+(?:\.\d+)?)\s+([+-]?\d+)\s*\/\s*(\d+)$/);
+  if (mixed) {
+    const den = parseInt(mixed[3], 10);
+    if (den === 0) return NaN;
+    return parseFloat(mixed[1]) + parseInt(mixed[2], 10) / den;
+  }
+
+  const fraction = trimmed.match(/^(-?\d+)\s*\/\s*(\d+)$/);
+  if (fraction) {
+    const den = parseInt(fraction[2], 10);
+    if (den === 0) return NaN;
+    return parseInt(fraction[1], 10) / den;
+  }
+
+  return parseFloat(trimmed);
+}
+
 // Convert `quantity` expressed in `fromUnit` into `toUnit`. Same-family units
 // convert; unrecognised or cross-family units are left as-is.
 //
@@ -162,7 +188,7 @@ function roundTo(value, places = 4) {
 // piece is weighed at `pieceWeightGrams`. Without a piece weight the quantity
 // passes through unchanged.
 function normalizeRecipeQuantityToUnit(quantity, fromUnit, toUnit, gramsPerCup, pieceWeightGrams) {
-  const qty = Number(quantity);
+  const qty = parseRecipeQuantity(quantity);
   if (!Number.isFinite(qty) || qty <= 0) return qty || 0;
   const from = String(fromUnit || '').trim().toLowerCase();
   const to = String(toUnit || '').trim().toLowerCase();
@@ -241,6 +267,7 @@ async function loadUnitMetadataFromDb(client) {
 
 module.exports = {
   normalizeRecipeQuantityToUnit,
+  parseRecipeQuantity,
   pieceWeightOf,
   setUnitMetadata,
   loadUnitMetadataFromDb,
