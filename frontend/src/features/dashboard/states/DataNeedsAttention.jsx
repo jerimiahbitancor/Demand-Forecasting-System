@@ -1,15 +1,88 @@
 // states/DataNeedsAttention.jsx
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { FaCalendarAlt } from "react-icons/fa";
 import Navbar from "../../components/Navbar/Navbar";
 import "../states/statescss/DataNeedsAttention.css";
 import { useNavigate } from "react-router-dom";
 import { RiErrorWarningLine } from "react-icons/ri";
+import axios from "axios";
+import toast from "react-hot-toast";
+import Swal from "sweetalert2";
+import "../../../utils/swalTheme.css";
+
+const API_URL = import.meta.env.VITE_API_URL || "http://localhost:5000/api";
+
+const getAuthToken = () => sessionStorage.getItem("access_token") || localStorage.getItem("token");
 
 const DataNeedsAttention = () => {
   const navigate = useNavigate();
   const [showCalendar, setShowCalendar] = useState(false);
   const [selectedDate, setSelectedDate] = useState(new Date());
+  const [attention, setAttention] = useState(null);
+  const [isLoading, setIsLoading] = useState(true);
+  const [isRetraining, setIsRetraining] = useState(false);
+
+  // This state is only reachable when the backend's getDashboardState()
+  // already computed real reasons (isStale/isLowAccuracy/needsRetraining/
+  // dataQualityIssue — see backend/services/uploadService.js) — this used
+  // to be a fully hardcoded card list ("45 days ago", "68%", etc.) that
+  // never matched what actually triggered the state, including a top
+  // banner describing the UNRELATED "insufficient data" scenario. Fetching
+  // the real dashboard-state response here is what makes every number
+  // below true.
+  useEffect(() => {
+    let cancelled = false;
+    async function loadAttention() {
+      setIsLoading(true);
+      try {
+        const token = getAuthToken();
+        const response = await axios.get(`${API_URL}/upload/dashboard-state`, {
+          headers: token ? { Authorization: `Bearer ${token}` } : undefined,
+        });
+        if (!cancelled) setAttention(response.data?.data?.attention || null);
+      } catch (err) {
+        console.error("Error fetching dashboard attention reasons:", err);
+      } finally {
+        if (!cancelled) setIsLoading(false);
+      }
+    }
+    loadAttention();
+    return () => { cancelled = true; };
+  }, []);
+
+  // Same Swal-confirm -> single-toast-id lifecycle pattern as
+  // ReadyToTrain.jsx's handleStartTraining — the one existing way to
+  // trigger POST /api/ml/train. Before this, retraining was only reachable
+  // from the "no model yet" dashboard state; once a model exists and
+  // accuracy drops or retraining is overdue, there was no button anywhere
+  // that actually retrained — only ones that navigated to Upload Sales Data.
+  const handleRetrain = async () => {
+    const confirmation = await Swal.fire({
+      title: "Retrain the forecasting model?",
+      text: "This retrains the model on all sales data currently uploaded. It can take a " +
+            "few minutes. Make sure the products in Inventory Management reflect what you " +
+            "actually sell before retraining — archived items are excluded automatically.",
+      icon: "question",
+      showCancelButton: true,
+      confirmButtonText: "Retrain now",
+      cancelButtonText: "Cancel",
+      confirmButtonColor: "#7A0101",
+    });
+    if (!confirmation.isConfirmed) return;
+
+    setIsRetraining(true);
+    const toastId = toast.loading("Retraining model…");
+    try {
+      await axios.post(`${API_URL}/ml/train`, {}, {
+        headers: { Authorization: `Bearer ${getAuthToken()}` },
+      });
+      toast.success("Retraining completed successfully.", { id: toastId });
+    } catch (err) {
+      toast.error(err.response?.data?.error || "Retraining failed to start", { id: toastId });
+    } finally {
+      setIsRetraining(false);
+    }
+  };
 
   const formatDate = (date) => {
     const months = [
@@ -132,6 +205,66 @@ const DataNeedsAttention = () => {
     );
   };
 
+  // Built only from real attention flags — a reason only appears here if
+  // backend/services/uploadService.js's getDashboardState() actually found
+  // it true. "Model Needs Retraining" and "Low Forecast Accuracy" both
+  // offer Retrain Model, since retraining (not re-uploading data that's
+  // already there) is the real remedy for both.
+  const daysSinceTrainingLabel = attention?.daysSinceTraining != null
+    ? `${attention.daysSinceTraining} day${attention.daysSinceTraining === 1 ? "" : "s"}`
+    : "an unknown number of days";
+  const staleDaysLabel = attention?.staleDays != null
+    ? `${attention.staleDays} day${attention.staleDays === 1 ? "" : "s"}`
+    : "some days";
+
+  const issues = [];
+  if (attention?.isStale) {
+    issues.push({
+      key: "stale",
+      title: "Stale Sales Data",
+      text: `Your most recent confirmed sales data is ${staleDaysLabel} behind today` +
+            (attention.lastConfirmedDate ? ` (as of ${attention.lastConfirmedDate})` : "") +
+            ". Upload recent sales data to keep your forecasts accurate.",
+      actionLabel: "Upload Sales Data",
+      onAction: handleUploadData,
+      primary: false,
+    });
+  }
+  if (attention?.needsRetraining) {
+    issues.push({
+      key: "retraining",
+      title: "Model Needs Retraining",
+      text: `Your forecasting model was last trained ${daysSinceTrainingLabel} ago. ` +
+            "Retrain it on your current sales data to keep forecasts up to date.",
+      actionLabel: isRetraining ? "Retraining…" : "Retrain Model",
+      onAction: handleRetrain,
+      disabled: isRetraining,
+      primary: true,
+    });
+  }
+  if (attention?.isLowAccuracy) {
+    issues.push({
+      key: "accuracy",
+      title: "Low Forecast Accuracy",
+      text: `Your current forecast accuracy is ${attention.accuracy?.toFixed(1)}%, below the ` +
+            "70% reliable threshold. Retraining on your latest uploaded sales data may help.",
+      actionLabel: isRetraining ? "Retraining…" : "Retrain Model",
+      onAction: handleRetrain,
+      disabled: isRetraining,
+      primary: true,
+    });
+  }
+  if (attention?.dataQualityIssue) {
+    issues.push({
+      key: "data-quality",
+      title: "Data Quality Issue",
+      text: `An issue was detected in your uploaded sales data: ${attention.dataQualityIssue}. Review your upload history for details.`,
+      actionLabel: "Go to Data Management",
+      onAction: handleGoToDataManagement,
+      primary: false,
+    });
+  }
+
   return (
     <div className="data-attention-container">
       <Navbar />
@@ -183,85 +316,33 @@ const DataNeedsAttention = () => {
                 <RiErrorWarningLine  className="data-attention-issue-warning-icon" />
               </div>
               <p className="data-attention-issue-text">
-                You've uploaded sales data, but the system needs at least 12 months of history before demand forecasting can activate. Your data is outdated consider uploading recent data.
+                {isLoading
+                  ? "Checking what needs your attention…"
+                  : issues.length > 0
+                    ? `${issues.length} issue${issues.length === 1 ? "" : "s"} need${issues.length === 1 ? "s" : ""} your attention below.`
+                    : "The issue that triggered this view has since cleared — this page will update shortly."}
               </p>
             </div>
           </div>
-          {/* Issue 2: Stale Sales Data */}
-          <div className="data-attention-issue-card">
-            <div className="data-attention-issue-number">1</div>
-            <div className="data-attention-issue-body">
-              <div className="data-attention-issue-content">
-                <h4 className="data-attention-issue-title">Stale Sales Data</h4>
-                <p className="data-attention-issue-text">
-                  Your last upload was 45 days ago. Upload recent sales data to keep your forecasts accurate.
-                </p>
-              </div>
-              <button 
-                className="data-attention-issue-btn data-attention-issue-btn-secondary"
-                onClick={handleUploadData}
-              >
-                Upload Sales Data
-              </button>
-            </div>
-          </div>
 
-          {/* Issue 3: Model Needs Retraining */}
-          <div className="data-attention-issue-card">
-            <div className="data-attention-issue-number">2</div>
-            <div className="data-attention-issue-body">
-              <div className="data-attention-issue-content">
-                <h4 className="data-attention-issue-title">Model Needs Retraining</h4>
-                <p className="data-attention-issue-text">
-                  Your forecasting model has not been updated recently. Upload new sales data to trigger automatic retraining.
-                </p>
+          {!isLoading && issues.map((issue, index) => (
+            <div className="data-attention-issue-card" key={issue.key}>
+              <div className="data-attention-issue-number">{index + 1}</div>
+              <div className="data-attention-issue-body">
+                <div className="data-attention-issue-content">
+                  <h4 className="data-attention-issue-title">{issue.title}</h4>
+                  <p className="data-attention-issue-text">{issue.text}</p>
+                </div>
+                <button
+                  className={`data-attention-issue-btn ${issue.primary ? "" : "data-attention-issue-btn-secondary"}`}
+                  onClick={issue.onAction}
+                  disabled={issue.disabled}
+                >
+                  {issue.actionLabel}
+                </button>
               </div>
-              <button 
-                className="data-attention-issue-btn data-attention-issue-btn-secondary"
-                onClick={handleUploadData}
-              >
-                Upload Sales Data
-              </button>
             </div>
-          </div>
-
-          {/* Issue 4: Low Forecast Accuracy */}
-          <div className="data-attention-issue-card">
-            <div className="data-attention-issue-number">3</div>
-            <div className="data-attention-issue-body">
-              <div className="data-attention-issue-content">
-                <h4 className="data-attention-issue-title">Low Forecast Accuracy</h4>
-                <p className="data-attention-issue-text">
-                  Your current forecast accuracy score is 68%, which is below the recommended threshold. Uploading more historical data may improve accuracy.
-                </p>
-              </div>
-              <button 
-                className="data-attention-issue-btn data-attention-issue-btn-secondary"
-                onClick={handleUploadData}
-              >
-                Upload Sales Data
-              </button>
-            </div>
-          </div>
-
-          {/* Issue 5: Data Quality Issue */}
-          <div className="data-attention-issue-card">
-            <div className="data-attention-issue-number">4</div>
-            <div className="data-attention-issue-body">
-              <div className="data-attention-issue-content">
-                <h4 className="data-attention-issue-title">Data Quality Issue</h4>
-                <p className="data-attention-issue-text">
-                  An issue was detected in your uploaded sales data. Review your upload history for errors.
-                </p>
-              </div>
-              <button 
-                className="data-attention-issue-btn data-attention-issue-btn-secondary"
-                onClick={handleGoToDataManagement}
-              >
-                Go to Data Management
-              </button>
-            </div>
-          </div>
+          ))}
         </div>
       </main>
     </div>
