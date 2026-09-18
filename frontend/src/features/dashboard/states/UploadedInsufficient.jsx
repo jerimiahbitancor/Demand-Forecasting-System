@@ -23,6 +23,15 @@ const UploadedInsufficient = () => {
   const [totalMonthsNeeded] = useState(12);
   const [isLoading, setIsLoading] = useState(true);
   const [hasData, setHasData] = useState(false);
+  // Why this screen is still showing — 'elapsed' (fewer than 12 calendar
+  // months have passed since the earliest sale date), 'coverage' (12
+  // months have passed, but real sales rows don't cover enough of that
+  // span — too many gap days), or 'both'. See uploadService.js's
+  // getDashboardState() — this used to be a single elapsed-time check, so
+  // "why am I still here" couldn't be answered accurately once coverage
+  // became its own requirement.
+  const [insufficientReason, setInsufficientReason] = useState(null);
+  const [coverageRatio, setCoverageRatio] = useState(null);
   const [products, setProducts] = useState([]);
   const isMountedRef = useRef(true);
 
@@ -95,10 +104,12 @@ const UploadedInsufficient = () => {
       const statusResponse = await apiClient.get("/upload/dashboard-state");
       
       if (statusResponse.data.success) {
-        const { state, stats: data } = statusResponse.data.data;
+        const { state, stats: data, insufficientReason: reason } = statusResponse.data.data;
         console.log("Data status response:", data);
         setProgressPercentage(20);
-        
+        setInsufficientReason(reason || null);
+        setCoverageRatio(data.coverage_ratio ?? null);
+
         const totalRows = data.sales_records || data.total_rows || 0;
         const totalUploads = data.total_uploads || 0;
         // actual_months_uploaded/actual_days_uploaded count real distinct
@@ -326,11 +337,27 @@ const UploadedInsufficient = () => {
                         {isLoading ? (
                           "Loading data status..."
                         ) : hasData ? (
-                          <>
-                            You've uploaded sales data, but the system needs at
-                            least {totalMonthsNeeded} months of history before
-                            demand forecasting can activate.
-                          </>
+                          insufficientReason === 'coverage' ? (
+                            <>
+                              It's been over {totalMonthsNeeded} months since your earliest
+                              uploaded sale date, but too many of those days are missing
+                              real sales rows{coverageRatio != null ? ` (only ${Math.round(coverageRatio * 100)}% of that span is covered)` : ""}.
+                              Upload the missing dates to reach reliable coverage.
+                            </>
+                          ) : insufficientReason === 'both' ? (
+                            <>
+                              You've uploaded sales data, but the system needs at
+                              least {totalMonthsNeeded} months of history — and most of those
+                              days need real sales rows, not just gaps — before demand
+                              forecasting can activate.
+                            </>
+                          ) : (
+                            <>
+                              You've uploaded sales data, but the system needs at
+                              least {totalMonthsNeeded} months of history before
+                              demand forecasting can activate.
+                            </>
+                          )
                         ) : (
                           "Upload your sales data to get started with forecasting."
                         )}

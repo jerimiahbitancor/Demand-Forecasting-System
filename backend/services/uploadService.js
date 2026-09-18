@@ -1343,6 +1343,21 @@ class UploadService {
   // rather than flagging the instant the cadence is technically due.
   static RETRAINING_CADENCE_DAYS = 45;
 
+  // getDashboardState()'s "ready to train" gate used to check ONLY
+  // days_of_history (elapsed calendar time since the earliest sale date)
+  // >= 365 — deliberately tolerant of closed days, matching ml-service's
+  // own first-training gate exactly. But that alone can't distinguish a
+  // genuine, mostly-complete year of real data from a sparse/old sample
+  // that happens to span >365 elapsed days (e.g. a handful of rows dated
+  // over a year ago) — the exact scenario actual_days_uploaded/
+  // actual_months_uploaded were built to call out, except that number was
+  // previously display-only and never actually gated anything. 0.8 means
+  // real sales data must exist for at least 80% of the elapsed span —
+  // generous enough for normal closed days (weekends, holidays, the
+  // Mon-Fri schedule change) without letting a token amount of old data
+  // alone unlock training.
+  static MIN_COVERAGE_RATIO = 0.8;
+
   async getLatestModelMetrics() {
     if (!this.isSupabaseReady()) return null;
     const { data, error } = await supabaseAdmin
@@ -1471,13 +1486,33 @@ class UploadService {
       return { state: 'no-data', stats, progress };
     }
 
-    // Matches ml-service/app.py's actual first-training gate exactly
-    // (days since earliest sale date >= 365) — months_uploaded is a
-    // display-only derivative of the same days_of_history number, so
-    // gating on the day count directly instead of the rounded-down
-    // months figure avoids the two ever disagreeing.
-    if ((stats.days_of_history || 0) < 365) {
-      return { state: 'uploaded-insufficient', stats, progress };
+    // Two conditions, both required:
+    // 1) days_of_history >= 365 — matches ml-service/app.py's actual
+    //    first-training gate exactly (elapsed calendar time since the
+    //    earliest sale date), tolerant of closed days by design.
+    // 2) actual sales-day coverage over that same span is >= 80% — closes
+    //    the gap (1) alone leaves open: a sparse/old sample could clear
+    //    365 elapsed days on a handful of real rows. See
+    //    MIN_COVERAGE_RATIO's comment above for why 80%, not 100%.
+    const daysOfHistory = stats.days_of_history || 0;
+    const coverageRatio = daysOfHistory > 0
+      ? (stats.actual_days_uploaded || 0) / daysOfHistory
+      : 0;
+    stats.coverage_ratio = Math.round(coverageRatio * 1000) / 1000;
+
+    const elapsedInsufficient = daysOfHistory < 365;
+    const coverageInsufficient = coverageRatio < UploadService.MIN_COVERAGE_RATIO;
+    if (elapsedInsufficient || coverageInsufficient) {
+      // Tells the frontend WHY it's still insufficient, instead of always
+      // pointing the owner at "upload more" when the real blocker might be
+      // that a lot of already-uploaded days are legitimately missing sales
+      // rows (closed days, gaps) rather than too little elapsed time.
+      const insufficientReason = elapsedInsufficient && coverageInsufficient
+        ? 'both'
+        : elapsedInsufficient
+          ? 'elapsed'
+          : 'coverage';
+      return { state: 'uploaded-insufficient', stats, progress, insufficientReason };
     }
 
     // Actual training-in-flight signal (see mlService.isTrainingInFlight),
