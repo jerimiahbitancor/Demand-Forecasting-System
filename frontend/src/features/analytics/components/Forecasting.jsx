@@ -1,7 +1,9 @@
 // components/Forecasting.jsx
-import { useState, useEffect, useMemo } from "react";
+import { useState, useEffect, useMemo, useCallback } from "react";
 import axios from "axios";
 import toast from "react-hot-toast";
+import Swal from "sweetalert2";
+import "../../../utils/swalTheme.css";
 import { FiChevronDown, FiSearch, FiCalendar, FiInfo, FiZap, FiExternalLink } from "react-icons/fi";
 import GenerateReportModal from "../../components/Reports/GenerateReportModal.jsx";
 import { buildSalesForecastPDF, generateExcel } from "./../../../services/reportService.js";
@@ -174,7 +176,7 @@ const tooltips = {
       </strong>
       This shows what factors most influence your forecasts — like whether it's a payday, a weekend, or based on recent sales trends. It also shows when your forecast model was last updated.
       <br/><br/>
-      Forecasts update automatically whenever you upload new sales data — there's no need to manually refresh.
+      Forecasts refresh automatically on a schedule (daily and weekly), or you can generate one on demand.
       <br/><br/>
       <span style={{ color: '#94a3b8', fontSize: '12px' }}>
         Feature importance derived from XGBoost gain-based scoring
@@ -348,30 +350,80 @@ function Forecasting() {
   const [apiData, setApiData] = useState(null);
   const [isLoading, setIsLoading] = useState(true);
   const [loadError, setLoadError] = useState(null);
+  const [isGeneratingForecast, setIsGeneratingForecast] = useState(false);
 
-  useEffect(() => {
-    let cancelled = false;
-
-    async function fetchForecastingAnalytics() {
+  // Pulled out of the mount-only effect below so handleGenerateForecast can
+  // call it again after a manual forecast run completes, to refresh this
+  // page's tables/charts with the rows that run just wrote.
+  const fetchForecastingAnalytics = useCallback(async ({ silent = false } = {}) => {
+    if (!silent) {
       setIsLoading(true);
       setLoadError(null);
-      try {
-        const headers = await authService.getAuthHeaders();
-        const response = await axios.get(`${API_URL}/analytics/forecasting`, { headers });
-        if (!cancelled) setApiData(response.data?.data || null);
-      } catch (err) {
-        console.error("Error fetching forecasting analytics:", err);
-        if (!cancelled) setLoadError(err.response?.data?.error || err.message || "Failed to load forecasting data");
-      } finally {
-        if (!cancelled) setIsLoading(false);
-      }
     }
-
-    fetchForecastingAnalytics();
-    return () => {
-      cancelled = true;
-    };
+    try {
+      const headers = await authService.getAuthHeaders();
+      const response = await axios.get(`${API_URL}/analytics/forecasting`, { headers });
+      setApiData(response.data?.data || null);
+    } catch (err) {
+      console.error("Error fetching forecasting analytics:", err);
+      if (!silent) setLoadError(err.response?.data?.error || err.message || "Failed to load forecasting data");
+    } finally {
+      if (!silent) setIsLoading(false);
+    }
   }, []);
+
+  useEffect(() => {
+    fetchForecastingAnalytics();
+  }, [fetchForecastingAnalytics]);
+
+  // Manual "Generate Forecast" trigger — same POST /api/ml/forecast that a
+  // scheduled cron job (backend/jobs/forecastScheduler.js) also calls, just
+  // owner-initiated instead of on a timer. Training and forecasting stay
+  // separate pipelines: this never touches /ml/train. Mirrors
+  // ReadyToTrain.jsx's Start Training pattern — a Swal confirmation, then a
+  // single toast id carried through loading -> success/error so the message
+  // never claims success before the server actually confirms it.
+  const handleGenerateForecast = async () => {
+    const confirmation = await Swal.fire({
+      title: "Generate forecast now?",
+      text: "This runs a manual 7-day forecast refresh using the current trained model — " +
+            "the same weekly-style run the scheduled Monday 9:00 AM job performs. It does not " +
+            "retrain the model, only re-forecasts with it.",
+      icon: "question",
+      showCancelButton: true,
+      confirmButtonText: "Generate forecast",
+      cancelButtonText: "Cancel",
+      confirmButtonColor: "#7A0101",
+    });
+
+    if (!confirmation.isConfirmed) return;
+
+    setIsGeneratingForecast(true);
+    const toastId = toast.loading("Generating forecast…");
+    try {
+      const headers = await authService.getAuthHeaders();
+      const response = await axios.post(
+        `${API_URL}/ml/forecast`,
+        { horizonDays: 7 },
+        { headers }
+      );
+      const forecastedCount = (response.data?.data?.results || []).filter(
+        (r) => r.status === "forecasted"
+      ).length;
+      toast.success(
+        forecastedCount
+          ? `Forecast generated for ${forecastedCount} product${forecastedCount === 1 ? "" : "s"}.`
+          : "Forecast generated.",
+        { id: toastId }
+      );
+      // Refresh this page's charts/tables with the rows the run just wrote.
+      await fetchForecastingAnalytics({ silent: true });
+    } catch (err) {
+      toast.error(err.response?.data?.error || "Failed to generate forecast", { id: toastId });
+    } finally {
+      setIsGeneratingForecast(false);
+    }
+  };
 
   // --- Derive the same shapes the JSX below already expects, so the
   // render tree needs minimal changes from the old mock-data version. ---
@@ -718,6 +770,14 @@ function Forecasting() {
         <button type="button" className="btn-generate-report" onClick={() => setIsReportModalOpen(true)}>
           Generate Report
         </button>
+        <button
+          type="button"
+          className="btn-generate-forecast"
+          onClick={handleGenerateForecast}
+          disabled={isGeneratingForecast}
+        >
+          {isGeneratingForecast ? "Generating…" : "Generate Forecast"}
+        </button>
 
         <section className="analytics-card">
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '16px' }}>
@@ -749,13 +809,14 @@ function Forecasting() {
           </div>
 
           <InfoBanner variant="info">
-            Forecasts are automatically updated each time you upload new sales data. No
-            manual reforecast needed.
+            Forecasts refresh automatically on a schedule — no need to upload sales data
+            just to get a new forecast. You can also generate one on demand with the
+            Generate Forecast button.
           </InfoBanner>
 
           <InfoBanner variant="info">
-            Daily forecasts run every morning at 8:00 AM. A full 7-day weekly forecast is
-            generated every Monday at 8:00 AM.
+            Daily forecasts run every morning at 9:00 AM. A full 7-day weekly forecast is
+            generated every Monday at 9:00 AM.
           </InfoBanner>
 
           <div className="feature-importance">
@@ -978,13 +1039,14 @@ function Forecasting() {
         title="Model Insights — Full View"
       >
         <InfoBanner variant="info">
-          Forecasts are automatically updated each time you upload new sales data. No
-          manual reforecast needed.
+          Forecasts refresh automatically on a schedule — no need to upload sales data
+          just to get a new forecast. You can also generate one on demand with the
+          Generate Forecast button.
         </InfoBanner>
 
         <InfoBanner variant="info">
-          Daily forecasts run every morning at 8:00 AM. A full 7-day weekly forecast is
-          generated every Monday at 8:00 AM.
+          Daily forecasts run every morning at 9:00 AM. A full 7-day weekly forecast is
+          generated every Monday at 9:00 AM.
         </InfoBanner>
 
         <div className="feature-importance">
