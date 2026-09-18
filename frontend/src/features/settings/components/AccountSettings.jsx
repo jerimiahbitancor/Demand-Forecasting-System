@@ -380,7 +380,7 @@ function AccountSettings() {
               <div className="timer-text">{canResend ? 'You can resend now.' : `Resend in ${timer}s`}</div>
             </div>
           </div>
-          <div className="modal-actions">
+          <div className="modal-actions1">
             <button className="btn-secondary" type="button" onClick={closeModal}>
               Cancel
             </button>

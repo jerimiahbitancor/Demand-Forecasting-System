@@ -7,7 +7,7 @@ const timezone = require('dayjs/plugin/timezone');
 dayjs.extend(utc);
 dayjs.extend(timezone);
 const PH_TZ = 'Asia/Manila';
-const OTP_EXPIRATION_MINUTES = 1;
+const OTP_EXPIRATION_MINUTES = 5;
 
 const nowPH = () => dayjs().tz(PH_TZ);
 const toPH = (dbTimestamp) => {
@@ -38,27 +38,33 @@ const generateOTP = () => {
   return Math.floor(100000 + Math.random() * 900000).toString();
 };
 
-// Configure email transporter
+// Configure email transporter — explicit host/port (not the 'gmail' service
+// shortcut) so timeouts and connection reuse are visible and controllable.
+// Defaults to Gmail's SMTPS port (465); override via EMAIL_HOST/EMAIL_PORT/
+// EMAIL_SECURE if switching providers later.
+let cachedTransporter = null;
+
 const createTransporter = () => {
-  if (process.env.EMAIL_SERVICE === 'gmail') {
-    return nodemailer.createTransport({
-      service: 'gmail',
-      auth: {
-        user: process.env.EMAIL_USER,
-        pass: process.env.EMAIL_PASSWORD
-      }
-    });
-  }
-  
-  return nodemailer.createTransport({
-    host: process.env.EMAIL_HOST,
-    port: process.env.EMAIL_PORT,
-    secure: process.env.EMAIL_SECURE === 'true',
+  if (cachedTransporter) return cachedTransporter;
+
+  const port = Number(process.env.EMAIL_PORT) || 465;
+
+  cachedTransporter = nodemailer.createTransport({
+    host: process.env.EMAIL_HOST || 'smtp.gmail.com',
+    port,
+    secure: process.env.EMAIL_SECURE ? process.env.EMAIL_SECURE === 'true' : port === 465,
     auth: {
       user: process.env.EMAIL_USER,
       pass: process.env.EMAIL_PASSWORD
-    }
+    },
+    pool: true,
+    maxConnections: 3,
+    connectionTimeout: 10000,
+    greetingTimeout: 10000,
+    socketTimeout: 15000
   });
+
+  return cachedTransporter;
 };
 
 // Send OTP Email
@@ -84,7 +90,7 @@ const sendOTPEmail = async (email, otp, type) => {
     const template = templates[type] || templates.verification;
 
     const mailOptions = {
-      from: process.env.EMAIL_FROM,
+      from: process.env.EMAIL_FROM || process.env.EMAIL_USER,
       to: email,
       subject: template.subject,
       html: `
@@ -136,6 +142,7 @@ const sendOTPEmail = async (email, otp, type) => {
     return { success: true };
 
   } catch (error) {
+    console.error('❌ sendOTPEmail failed:', error);
     throw new Error('Failed to send email: ' + error.message);
   }
 };

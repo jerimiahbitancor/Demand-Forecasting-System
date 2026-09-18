@@ -430,12 +430,12 @@
     line-height: 1.7;
   }
 
-  .modal-actions {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 12px;
+  .modal-actions1 {
+    flex-wrap: nowrap;
     justify-content: flex-end;
+    gap: 12px;
     margin-top: 10px;
+    display: flex;
   }
 
   .modal-actions .btn-primary,
