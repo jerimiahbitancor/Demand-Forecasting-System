@@ -1555,20 +1555,15 @@ class UploadService {
       return { state: 'ready-to-train', stats, progress };
     }
 
-    const hasForecasts = await this.hasUpcomingForecasts();
-    if (!hasForecasts) {
-      // A model exists but no current forecasts yet (e.g. trained just
-      // now, first /forecast run hasn't landed). No dedicated state for
-      // this narrow window in the 7-state spec — training-in-progress
-      // is the closest fit, since the dashboard genuinely isn't usable
-      // yet for a different reason than "not trained at all".
-      return { state: 'training-in-progress', stats, progress };
-    }
-
-    // Model trained + forecasts exist — check the data-needs-attention
-    // OR before deciding forecasts-ready-recipes-pending vs
-    // fully-operational, since staleness/accuracy/retraining/data-quality
-    // issues can happen to an otherwise-complete dashboard.
+    // Model-quality checks that only need the model/uploads — available
+    // immediately once a model exists, independent of whether a forecast
+    // run has happened yet. This used to run AFTER the hasForecasts check
+    // below, which meant a genuinely bad model (e.g. 38% accuracy) stayed
+    // hidden behind "Training in Progress" indefinitely until someone
+    // generated a forecast — a freshly-trained model with a real problem
+    // should surface immediately, not wait on an unrelated step. isStale
+    // is the one exception: it's inherently about forecast_runs.stale_days,
+    // so it's still 0/false until a forecast run actually exists.
     const [forecastRun, dataQualityIssue] = await Promise.all([
       this.getLatestForecastRun(),
       this.getLastUploadDataQualityIssue(),
@@ -1597,6 +1592,17 @@ class UploadService {
           dataQualityIssue,
         },
       };
+    }
+
+    const hasForecasts = await this.hasUpcomingForecasts();
+    if (!hasForecasts) {
+      // Model is trained AND healthy (none of the checks above tripped) —
+      // just no current forecasts yet (e.g. trained just now, first
+      // /forecast run hasn't landed). No dedicated state for this narrow
+      // window in the 7-state spec — training-in-progress is the closest
+      // fit, since the dashboard genuinely isn't usable yet for a
+      // different reason than "not trained at all".
+      return { state: 'training-in-progress', stats, progress };
     }
 
     const { hasUnmapped, unmappedCount, activeCount } = await this.getUnmappedActiveProductInfo();
