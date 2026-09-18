@@ -31,7 +31,11 @@ const UploadedInsufficient = () => {
   // "why am I still here" couldn't be answered accurately once coverage
   // became its own requirement.
   const [insufficientReason, setInsufficientReason] = useState(null);
-  const [coverageRatio, setCoverageRatio] = useState(null);
+  // A full real year of sale-day rows (365, or 366 across a leap day) —
+  // see uploadService.js's MIN_ACTUAL_SALE_DAYS. Deliberately a hard row
+  // count, not a percentage, so the message can say exactly how many more
+  // real days are needed.
+  const [requiredActualDays, setRequiredActualDays] = useState(365);
   const [products, setProducts] = useState([]);
   const isMountedRef = useRef(true);
 
@@ -108,7 +112,7 @@ const UploadedInsufficient = () => {
         console.log("Data status response:", data);
         setProgressPercentage(20);
         setInsufficientReason(reason || null);
-        setCoverageRatio(data.coverage_ratio ?? null);
+        setRequiredActualDays(data.required_actual_days || 365);
 
         const totalRows = data.sales_records || data.total_rows || 0;
         const totalUploads = data.total_uploads || 0;
@@ -340,16 +344,17 @@ const UploadedInsufficient = () => {
                           insufficientReason === 'coverage' ? (
                             <>
                               It's been over {totalMonthsNeeded} months since your earliest
-                              uploaded sale date, but too many of those days are missing
-                              real sales rows{coverageRatio != null ? ` (only ${Math.round(coverageRatio * 100)}% of that span is covered)` : ""}.
-                              Upload the missing dates to reach reliable coverage.
+                              uploaded sale date, but the system requires {requiredActualDays} real
+                              days of sales data, not just elapsed time — you're missing{" "}
+                              {Math.max(requiredActualDays - uploadedDays, 0)} more day{Math.max(requiredActualDays - uploadedDays, 0) === 1 ? "" : "s"}.
+                              Upload the missing dates to close the gap.
                             </>
                           ) : insufficientReason === 'both' ? (
                             <>
-                              You've uploaded sales data, but the system needs at
-                              least {totalMonthsNeeded} months of history — and most of those
-                              days need real sales rows, not just gaps — before demand
-                              forecasting can activate.
+                              You've uploaded sales data, but the system needs at least{" "}
+                              {requiredActualDays} real days of sales data spanning at
+                              least {totalMonthsNeeded} months before demand forecasting
+                              can activate.
                             </>
                           ) : (
                             <>

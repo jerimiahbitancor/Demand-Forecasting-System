@@ -218,8 +218,8 @@ const ReadyToTrain = () => {
                       <FaCheckCircle style={{ color: "#0F9918", fontSize: "18px", marginTop: "2px", flexShrink: 0 }} />
                       <p className="training-step-description1">
                         Requirement met — it's been over {totalMonthsNeeded} months since your
-                        earliest uploaded sale date, and real sales data covers enough of that
-                        span, so training is available.
+                        earliest uploaded sale date, and you've uploaded a full real year of
+                        sales data ({uploadedDays} days), so training is available.
                       </p>
                     </div>
 
