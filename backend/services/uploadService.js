@@ -1221,16 +1221,31 @@ class UploadService {
       let distinctSaleDays = 0;
       if (uploadIds.length > 0) {
         try {
-          const { data: salesDates = [], error: salesDatesError } = await supabaseAdmin
-            .from('daily_sales')
-            .select('sale_date, upload_id')
-            .in('upload_id', uploadIds);
+          // PostgREST/Supabase silently caps a single .select() at 1000
+          // rows — with a real account's daily_sales easily running into
+          // the tens of thousands of rows, an unpaginated query here was
+          // truncated to whatever the first 1000 rows happened to be,
+          // collapsing a genuine 400+ distinct sale dates down to ~22 and
+          // making a fully-uploaded year look almost empty. Page through
+          // with .range() until a page comes back short of PAGE_SIZE.
+          const PAGE_SIZE = 1000;
+          const distinctDates = new Set();
+          let offset = 0;
+          for (;;) {
+            const { data: page = [], error: pageError } = await supabaseAdmin
+              .from('daily_sales')
+              .select('sale_date')
+              .in('upload_id', uploadIds)
+              .range(offset, offset + PAGE_SIZE - 1);
 
-          if (salesDatesError) throw salesDatesError;
+            if (pageError) throw pageError;
+            for (const row of page) {
+              if (row.sale_date) distinctDates.add(row.sale_date);
+            }
+            if (page.length < PAGE_SIZE) break;
+            offset += PAGE_SIZE;
+          }
 
-          const distinctDates = new Set(
-            salesDates.map((sale) => sale.sale_date).filter(Boolean)
-          );
           distinctSaleDays = distinctDates.size;
           if (distinctDates.size > 0) {
             earliestSaleDate = [...distinctDates].sort()[0];
@@ -1404,11 +1419,17 @@ class UploadService {
     return { hasUnmapped: unmappedCount > 0, unmappedCount, activeCount: activeIds.length };
   }
 
-  // uploads.error_message is the existing column for this — populated
-  // if validateSalesData/processing flagged something on the most
-  // recent upload. If it's never actually been populated in practice,
-  // this signal will just always read null, same as it would for any
-  // upload that genuinely had no issues.
+  // uploads.error_message is NOT a "problem happened" flag — saveUploadRecord
+  // (above) JSON-stringifies a {validRows, invalidRows, errors,
+  // philippinesTime, filenameDate} metadata blob into it on EVERY upload,
+  // success or not; updateUploadStatus adds its own `error` key on top of
+  // that same blob only when something real actually failed. Treating mere
+  // non-null-ness as "an issue was detected" (the old behavior here) meant
+  // this was true for essentially every upload ever made, including a
+  // completely clean one (validRows: 50, invalidRows: 0, errors: []) —
+  // which is exactly what surfaced a permanent, false "Data Quality Issue"
+  // card on the Dashboard. Only report something when the parsed metadata
+  // actually says there was a problem.
   async getLastUploadDataQualityIssue() {
     if (!this.isSupabaseReady()) return null;
     const { data, error } = await supabaseAdmin
@@ -1421,7 +1442,25 @@ class UploadService {
       console.warn('Could not fetch latest upload for data-quality check:', error.message);
       return null;
     }
-    return data?.error_message || null;
+    if (!data?.error_message) return null;
+
+    let metadata;
+    try {
+      metadata = JSON.parse(data.error_message);
+    } catch (parseError) {
+      // Not JSON — some older/other code path stored a plain string
+      // directly. Treat it as a real message rather than silently dropping it.
+      return data.error_message;
+    }
+
+    if (metadata.error) return metadata.error;
+    if (Number(metadata.invalidRows) > 0) {
+      return `${metadata.invalidRows} row(s) failed validation on the last upload.`;
+    }
+    if (Array.isArray(metadata.errors) && metadata.errors.length > 0) {
+      return metadata.errors[0];
+    }
+    return null;
   }
 
   async getDashboardState(userId = null) {
