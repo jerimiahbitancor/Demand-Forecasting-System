@@ -1,6 +1,5 @@
 // services/otpService.js
 const { supabase, supabaseAdmin } = require('../config/supabase');
-const nodemailer = require('nodemailer');
 const dayjs = require('dayjs');
 const utc = require('dayjs/plugin/utc');
 const timezone = require('dayjs/plugin/timezone');
@@ -38,34 +37,55 @@ const generateOTP = () => {
   return Math.floor(100000 + Math.random() * 900000).toString();
 };
 
-// Configure email transporter
-const createTransporter = () => {
-  if (process.env.EMAIL_SERVICE === 'gmail') {
-    return nodemailer.createTransport({
-      service: 'gmail',
-      auth: {
-        user: process.env.EMAIL_USER,
-        pass: process.env.EMAIL_PASSWORD
-      }
-    });
+// ✅ Brevo HTTP API config (replaces nodemailer/SMTP transporter)
+const BREVO_API_URL = 'https://api.brevo.com/v3/smtp/email';
+
+const sendViaBrevo = async ({ to, subject, htmlContent }) => {
+  if (!process.env.BREVO_API_KEY) {
+    throw new Error('BREVO_API_KEY is not set');
   }
-  
-  return nodemailer.createTransport({
-    host: process.env.EMAIL_HOST,
-    port: process.env.EMAIL_PORT,
-    secure: process.env.EMAIL_SECURE === 'true',
-    auth: {
-      user: process.env.EMAIL_USER,
-      pass: process.env.EMAIL_PASSWORD
-    }
+  if (!process.env.BREVO_SENDER_EMAIL) {
+    throw new Error('BREVO_SENDER_EMAIL is not set');
+  }
+
+  const response = await fetch(BREVO_API_URL, {
+    method: 'POST',
+    headers: {
+      accept: 'application/json',
+      'api-key': process.env.BREVO_API_KEY,
+      'content-type': 'application/json',
+    },
+    body: JSON.stringify({
+      sender: {
+        name: process.env.BREVO_SENDER_NAME || 'ChefDuo',
+        email: process.env.BREVO_SENDER_EMAIL,
+      },
+      to: [{ email: to }],
+      subject,
+      htmlContent,
+    }),
   });
+
+  if (!response.ok) {
+    let errorBody = {};
+    try {
+      errorBody = await response.json();
+    } catch (_) {
+      // ignore parse failure, fall back to status text below
+    }
+    // Note: do not log the API key or full request body here (PII/secrets logging
+    // is already flagged elsewhere in this backend as a bug to avoid repeating).
+    throw new Error(
+      `Brevo send failed (${response.status} ${response.statusText}): ${JSON.stringify(errorBody)}`
+    );
+  }
+
+  return response.json(); // { messageId: "..." }
 };
 
 // Send OTP Email
 const sendOTPEmail = async (email, otp, type) => {
   try {
-    const transporter = createTransporter();
-    
     const templates = {
       verification: {
         subject: 'Verify Your ChefDuo Account',
@@ -83,56 +103,56 @@ const sendOTPEmail = async (email, otp, type) => {
 
     const template = templates[type] || templates.verification;
 
-    const mailOptions = {
-      from: process.env.EMAIL_FROM,
+    const htmlContent = `
+      <!DOCTYPE html>
+      <html>
+      <head>
+        <style>
+          body { font-family: Arial, sans-serif; line-height: 1.6; color: #333; }
+          .container { max-width: 600px; margin: 0 auto; padding: 20px; }
+          .header { background: #bb0114; color: white; padding: 20px; text-align: center; }
+          .content { padding: 30px; background: #f9f9f9; }
+          .otp-box { 
+            background: white; 
+            padding: 20px; 
+            text-align: center; 
+            font-size: 32px; 
+            letter-spacing: 5px; 
+            font-weight: bold;
+            border-radius: 8px;
+            margin: 20px 0;
+            border: 2px dashed #bb0114;
+          }
+          .footer { text-align: center; padding: 20px; font-size: 12px; color: #666; }
+        </style>
+      </head>
+      <body>
+        <div class="container">
+          <div class="header">
+            <h1>ChefDuo Demand Forecasting</h1>
+          </div>
+          <div class="content">
+            <h2>${template.title}</h2>
+            <p>${template.message}</p>
+            <div class="otp-box">${otp}</div>
+            <p><strong>This code will expire in 1 minute.</strong></p>
+            <p>${template.footer}</p>
+          </div>
+          <div class="footer">
+            <p>© ${new Date().getFullYear()} ChefDuo Demand Forecasting. All rights reserved.</p>
+            <p>This is an automated message, please do not reply.</p>
+          </div>
+        </div>
+      </body>
+      </html>
+    `;
+
+    await sendViaBrevo({
       to: email,
       subject: template.subject,
-      html: `
-        <!DOCTYPE html>
-        <html>
-        <head>
-          <style>
-            body { font-family: Arial, sans-serif; line-height: 1.6; color: #333; }
-            .container { max-width: 600px; margin: 0 auto; padding: 20px; }
-            .header { background: #bb0114; color: white; padding: 20px; text-align: center; }
-            .content { padding: 30px; background: #f9f9f9; }
-            .otp-box { 
-              background: white; 
-              padding: 20px; 
-              text-align: center; 
-              font-size: 32px; 
-              letter-spacing: 5px; 
-              font-weight: bold;
-              border-radius: 8px;
-              margin: 20px 0;
-              border: 2px dashed #bb0114;
-            }
-            .footer { text-align: center; padding: 20px; font-size: 12px; color: #666; }
-          </style>
-        </head>
-        <body>
-          <div class="container">
-            <div class="header">
-              <h1>ChefDuo Demand Forecasting</h1>
-            </div>
-            <div class="content">
-              <h2>${template.title}</h2>
-              <p>${template.message}</p>
-              <div class="otp-box">${otp}</div>
-              <p><strong>This code will expire in 1 minute.</strong></p>
-              <p>${template.footer}</p>
-            </div>
-            <div class="footer">
-              <p>© ${new Date().getFullYear()} ChefDuo Demand Forecasting. All rights reserved.</p>
-              <p>This is an automated message, please do not reply.</p>
-            </div>
-          </div>
-        </body>
-        </html>
-      `
-    };
+      htmlContent,
+    });
 
-    await transporter.sendMail(mailOptions);
     return { success: true };
 
   } catch (error) {
