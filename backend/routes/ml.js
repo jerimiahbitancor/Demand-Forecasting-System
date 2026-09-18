@@ -121,9 +121,11 @@ router.post('/train', authenticate, async (req, res) => {
 // POST /api/ml/forecast — { horizonDays: 1 | 7 }. 1 for the daily
 // refresh (today only), 7 for the weekly Monday run (this week,
 // Mon-Sun) — see generate_forecast()'s docstring in forecast_service.py
-// for exactly what each does. Intended callers: a scheduled job for
-// the real 8AM/Monday runs, and this same route for an owner-triggered
-// manual refresh.
+// for exactly what each does. Two callers: jobs/forecastScheduler.js's
+// real 9:00 AM daily / Monday 9:00 AM weekly cron jobs (Asia/Manila,
+// registered from server.js — those call mlService.forecast() directly,
+// not this HTTP route), and this route itself for the owner-triggered
+// manual "Generate Forecast" refresh on the Analytics page.
 router.post('/forecast', authenticate, async (req, res) => {
   try {
     const { horizonDays, runType } = req.body || {};
