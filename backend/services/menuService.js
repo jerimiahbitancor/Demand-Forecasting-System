@@ -308,7 +308,7 @@ isValidUserId(userId) {
 
         const productName = row[productNameCol]?.trim();
         const ingredientsStr = row[ingredientsCol]?.trim();
-        const quantity = parseFloat(row[quantityCol]);
+        const quantity = String(row[quantityCol] ?? '').trim();
         const unit = row[unitCol]?.trim();
         const price = parseFloat(row[priceCol]);
         const category = categoryCol ? row[categoryCol]?.trim() : 'Uncategorized';
@@ -356,7 +356,7 @@ isValidUserId(userId) {
                 await this.insertProductIngredient({
                   product_id: productId,
                   ingredient_id: ingredientId,
-                  quantity_per_serving: quantity || 1
+                  quantity_per_serving: quantity || '1'
                 });
                 productIngredientRelations++;
               }
@@ -568,7 +568,7 @@ isValidUserId(userId) {
         .insert({
           product_id: data.product_id,
           ingredient_id: data.ingredient_id,
-          quantity_per_serving: data.quantity_per_serving || 1,
+          quantity_per_serving: String(data.quantity_per_serving ?? '').trim() || '1',
           unit: (data.unit && String(data.unit).trim()) || null
         });
 
@@ -577,7 +577,7 @@ isValidUserId(userId) {
           .insert({
             product_id: data.product_id,
             ingredient_id: data.ingredient_id,
-            quantity_per_serving: data.quantity_per_serving || 1
+            quantity_per_serving: String(data.quantity_per_serving ?? '').trim() || '1'
           });
       }
 

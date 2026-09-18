@@ -20,7 +20,7 @@ import toast from 'react-hot-toast';
 import "./ProductManagement.css";
 import "../InventoryControls.css";
 import { useAuth } from "../../../context/AuthContext";
-import { normalizeRecipeQuantityToUnit, RECIPE_EXTRA_UNITS, RECIPE_VOLUME_UNITS, RECIPE_MASS_UNITS, recipeDensityFor, pieceWeightOf } from "../../../utils/recipeUnits";
+import { normalizeRecipeQuantityToUnit, RECIPE_EXTRA_UNITS, RECIPE_VOLUME_UNITS, RECIPE_MASS_UNITS, recipeDensityFor, pieceWeightOf, priceRecipeIngredient, parseRecipeQuantity } from "../../../utils/recipeUnits";
 import Tippy from '@tippyjs/react';
 import 'tippy.js/dist/tippy.css';
 import 'tippy.js/animations/scale.css';
@@ -539,7 +539,7 @@ const ProductManagement = () => {
     } else {
       formData.ingredients.forEach((ingredient) => {
         const name = ingredient.name?.trim();
-        const quantity = parseFloat(ingredient.quantity);
+        const quantity = parseRecipeQuantity(ingredient.quantity);
 
         if (!name) {
           errors.ingredients = "All ingredients must have a name.";
@@ -581,7 +581,7 @@ const ProductManagement = () => {
         serving_size_label: formData.servingSize || 'serving',
         ingredients: formData.ingredients.map(ing => ({
           name: ing.name.trim(),
-          quantity: parseFloat(ing.quantity) || 1,
+          quantity: String(ing.quantity ?? '').trim() || '1',
           unit: ing.unit || 'kg'
         }))
       };
@@ -849,7 +849,8 @@ const ProductManagement = () => {
       return;
     }
     
-    if (isNaN(parseFloat(newIngredient.quantity)) || parseFloat(newIngredient.quantity) <= 0) {
+    const addQuantity = parseRecipeQuantity(newIngredient.quantity);
+    if (isNaN(addQuantity) || addQuantity <= 0) {
       toast.error('Quantity must be a valid number greater than 0');
       return;
     }
@@ -874,7 +875,7 @@ const ProductManagement = () => {
       ...formData,
       ingredients: [...formData.ingredients, { 
         name: newIngredient.name.trim(),
-        quantity: parseFloat(newIngredient.quantity),
+        quantity: newIngredient.quantity.trim(),
         unit: usedUnit,
         inventory_item_id: newIngredient.inventory_item_id
       }]
@@ -901,7 +902,7 @@ const ProductManagement = () => {
   const costPreview = useMemo(() => {
     const item = inventoryItems.find(i => i.id === newIngredient.inventory_item_id) || null;
     if (!item) return null;
-    const qty = parseFloat(newIngredient.quantity);
+    const qty = parseRecipeQuantity(newIngredient.quantity);
     if (!Number.isFinite(qty) || qty <= 0) return null;
     const unitPrice = Number(item.price) || 0;
     const gramsPerCup = recipeDensityFor(item.grams_per_cup, item.name);
@@ -923,6 +924,37 @@ const ProductManagement = () => {
       needsDensity: volumeToMass && !gramsPerCup
     };
   }, [inventoryItems, newIngredient.inventory_item_id, newIngredient.quantity, newIngredient.unit]);
+
+  // ============ PER-INGREDIENT COST (TABLE) ============
+  // Cost of each added ingredient, using the same conversion math as the live
+  // preview and the COGS calculation. When the ingredient has no matching
+  // inventory item (no recorded price) its cost shows as N/A.
+  const ingredientRowCost = useCallback((ing) => {
+    if (!ing) return null;
+    const item = inventoryItems.find(i => i.id === ing.inventory_item_id)
+      || inventoryItems.find(i =>
+        String(i.name || '').trim().toLowerCase() === String(ing.name || '').trim().toLowerCase()
+      );
+    if (!item) return null;
+    const unitPrice = Number(item.price) || 0;
+    const qty = parseRecipeQuantity(ing.quantity);
+    if (!Number.isFinite(qty) || qty <= 0) return null;
+    const { cost } = priceRecipeIngredient({
+      quantity: qty,
+      recipeUnit: ing.unit || item.unit,
+      stockUnit: item.unit,
+      price: unitPrice,
+      gramsPerCup: item.grams_per_cup,
+      ingredientName: item.name
+    });
+    return Number.isFinite(cost) && cost > 0 ? cost : null;
+  }, [inventoryItems]);
+
+  const totalIngredientCost = useMemo(() => {
+    const costs = formData.ingredients.map(ingredientRowCost);
+    const known = costs.filter((c) => c !== null);
+    return known.length > 0 ? known.reduce((sum, c) => sum + c, 0) : null;
+  }, [formData.ingredients, ingredientRowCost]);
 
   // ============ REMOVE INGREDIENT ============
   const handleRemoveIngredient = (index) => {
@@ -958,7 +990,7 @@ const ProductManagement = () => {
     if (!draftIngredient) return;
 
     const name = String(draftIngredient.name || '').trim();
-    const quantity = parseFloat(draftIngredient.quantity);
+    const quantity = parseRecipeQuantity(draftIngredient.quantity);
 
     if (!name) {
       toast.error('Ingredient name is required');
@@ -988,7 +1020,7 @@ const ProductManagement = () => {
     updatedIngredients[index] = {
       ...draftIngredient,
       name,
-      quantity: parseFloat(draftIngredient.quantity)
+      quantity: String(draftIngredient.quantity).trim()
     };
 
     setFormData({ ...formData, ingredients: updatedIngredients });
@@ -2102,13 +2134,12 @@ const ProductManagement = () => {
                       )}
                     </div>
                     <input
-                      type="number"
-                      placeholder="Qty"
+                      type="text"
+                      inputMode="decimal"
+                      placeholder="Qty (e.g. 1/2)"
                       className="ingredient-qty-input"
                       value={newIngredient.quantity}
                       onChange={(e) => setNewIngredient({...newIngredient, quantity: e.target.value})}
-                      step="0.001"
-                      min="0.001"
                     />
                     <select 
                       className="ingredient-unit-select"
@@ -2155,18 +2186,24 @@ const ProductManagement = () => {
                         <th>Ingredient Name</th>
                         <th>Quantity</th>
                         <th>Unit</th>
+                        <th>Cost</th>
                         {!isViewMode && <th>Action</th>}
                       </tr>
                     </thead>
                     <tbody>
                       {formData.ingredients.length === 0 ? (
                         <tr>
-                          <td colSpan={isViewMode ? 3 : 4} className="empty-row">
+                          <td colSpan={isViewMode ? 4 : 5} className="empty-row">
                             No ingredients added yet
                           </td>
                         </tr>
                       ) : (
-                        formData.ingredients.map((ing, index) => (
+                        formData.ingredients.map((ing, index) => {
+                          const activeIngredient = editingIngredientIndex === index && draftIngredient
+                            ? draftIngredient
+                            : ing;
+                          const rowCost = ingredientRowCost(activeIngredient);
+                          return (
                           <tr key={index} className={editingIngredientIndex === index ? 'editing-ingredient-row' : ''}>
                             <td>
                               {editingIngredientIndex === index && draftIngredient ? (
@@ -2189,13 +2226,12 @@ const ProductManagement = () => {
                             <td>
                               {editingIngredientIndex === index && draftIngredient ? (
                                 <input
-                                  type="number"
+                                  type="text"
+                                  inputMode="decimal"
                                   className="form-input ingredient-edit-input"
                                   value={draftIngredient.quantity}
                                   onChange={(e) => handleDraftIngredientChange('quantity', e.target.value)}
-                                  placeholder="Quantity"
-                                  step="0.001"
-                                  min="0.001"
+                                  placeholder="Quantity (e.g. 1/2)"
                                 />
                               ) : (
                                 ing.quantity
@@ -2215,6 +2251,9 @@ const ProductManagement = () => {
                               ) : (
                                 ing.unit
                               )}
+                            </td>
+                            <td className="ingredient-cost-cell">
+                              {rowCost !== null ? formatCurrency(rowCost) : '—'}
                             </td>
                             {!isViewMode && (
                               <td>
@@ -2258,7 +2297,17 @@ const ProductManagement = () => {
                               </td>
                             )}
                           </tr>
-                        ))
+                          );
+                        })
+                      )}
+                      {formData.ingredients.length > 0 && (
+                        <tr className="ingredients-total-row">
+                          <td colSpan={3}><strong>Total Ingredient Cost</strong></td>
+                          <td><strong className="ingredients-total-value">
+                            {totalIngredientCost !== null ? formatCurrency(totalIngredientCost) : '—'}
+                          </strong></td>
+                          {!isViewMode && <td></td>}
+                        </tr>
                       )}
                     </tbody>
                   </table>

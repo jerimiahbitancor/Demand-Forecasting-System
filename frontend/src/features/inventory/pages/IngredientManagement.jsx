@@ -23,6 +23,7 @@ import {
 import axios from 'axios';
 import toast from 'react-hot-toast';
 import { useAuth } from "../../../context/AuthContext";
+import { parseRecipeQuantity } from "../../../utils/recipeUnits";
 import Tippy from '@tippyjs/react';
 import 'tippy.js/dist/tippy.css';
 import 'tippy.js/animations/scale.css';
@@ -393,10 +394,10 @@ const IngredientManagement = () => {
     try {
       const response = await apiClient.post('/inventory/items', {
         ...formData,
-        quantity: parseFloat(formData.quantity),
+        quantity: parseRecipeQuantity(formData.quantity),
         price: parseFloat(formData.price),
         market_price: parseFloat(formData.market_price) || 0,
-        min_stock: parseFloat(formData.min_stock) || 0,
+        min_stock: parseRecipeQuantity(formData.min_stock) || 0,
         grams_per_cup: formData.grams_per_cup ? parseFloat(formData.grams_per_cup) : null
       });
 
@@ -421,10 +422,10 @@ const IngredientManagement = () => {
     try {
       const response = await apiClient.put(`/inventory/items/${selectedItem.id}`, {
         ...formData,
-        quantity: parseFloat(formData.quantity),
+        quantity: parseRecipeQuantity(formData.quantity),
         price: parseFloat(formData.price),
         market_price: parseFloat(formData.market_price) || 0,
-        min_stock: parseFloat(formData.min_stock) || 0,
+        min_stock: parseRecipeQuantity(formData.min_stock) || 0,
         grams_per_cup: formData.grams_per_cup ? parseFloat(formData.grams_per_cup) : null
       });
 
@@ -458,7 +459,8 @@ const IngredientManagement = () => {
   };
 
   const handleRestock = async () => {
-    if (!restockData.quantity || parseFloat(restockData.quantity) <= 0) {
+    const restockQty = parseRecipeQuantity(restockData.quantity);
+    if (!Number.isFinite(restockQty) || restockQty <= 0) {
       toast.error('Please enter a valid quantity');
       return;
     }
@@ -466,7 +468,7 @@ const IngredientManagement = () => {
     setIsSubmitting(true);
     try {
       const response = await apiClient.post(`/inventory/items/${selectedItem.id}/restock`, {
-        quantity: parseFloat(restockData.quantity),
+        quantity: restockQty,
         reason: restockData.reason,
         notes: restockData.notes
       });
@@ -585,7 +587,7 @@ const IngredientManagement = () => {
     }
     if (!formData.quantity || formData.quantity === '') {
       errors.quantity = 'Quantity is required';
-    } else if (isNaN(parseFloat(formData.quantity)) || parseFloat(formData.quantity) < 0) {
+    } else if (!Number.isFinite(parseRecipeQuantity(formData.quantity)) || parseRecipeQuantity(formData.quantity) < 0) {
       errors.quantity = 'Quantity must be a valid number';
     }
     if (!formData.price || formData.price === '') {

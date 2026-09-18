@@ -77,6 +77,32 @@ const EditIngredientModal = ({
 						{formErrors.price && <span className="form-error">{formErrors.price}</span>}
 					</div>
 
+					<div className="form-group">
+						<label className="form-label">Quantity <span className="required-star">*</span></label>
+						<input
+							type="text"
+							inputMode="decimal"
+							className={`form-input ${formErrors.quantity ? "error" : ""}`}
+							value={formData.quantity}
+							onChange={(event) => update("quantity", event.target.value)}
+							placeholder="Qty (e.g. 1/2)"
+						/>
+						{formErrors.quantity && <span className="form-error">{formErrors.quantity}</span>}
+					</div>
+
+					<div className="form-group">
+						<label className="form-label">Market Price</label>
+						<input
+							type="number"
+							className="form-input"
+							value={formData.market_price}
+							onChange={(event) => update("market_price", event.target.value)}
+							placeholder="0.00"
+							min="0"
+							step="0.01"
+						/>
+					</div>
+
 
 					
 					

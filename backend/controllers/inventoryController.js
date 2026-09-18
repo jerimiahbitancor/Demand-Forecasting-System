@@ -2,6 +2,7 @@
 const { supabaseAdmin } = require('../config/supabase');
 const { logAction } = require('../services/auditService');
 const analyticsService = require('../services/analyticsService');
+const { parseRecipeQuantity } = require('../utils/recipeUnits');
 
 const actorOf = (req) => req.user?.name || req.user?.email || null;
 
@@ -282,17 +283,26 @@ const createInventoryItem = async (req, res) => {
       });
     }
 
+    const parsedQuantity = parseRecipeQuantity(quantity);
+    if (!Number.isFinite(parsedQuantity) || parsedQuantity < 0) {
+      return res.status(400).json({
+        success: false,
+        error: 'Quantity must be a valid number greater than or equal to 0'
+      });
+    }
+
     // Get user ID directly from req.user.id
     const userId = getUserIdFromAuth(req);
     console.log('👤 User ID:', userId);
 
+    const parsedMinStock = parseRecipeQuantity(min_stock);
     const insertData = {
       name: name.trim(),
       category: category.trim(),
       unit: unit || 'pcs',
-      quantity: parseFloat(quantity),
+      quantity: parsedQuantity,
       price: parseFloat(price),
-      min_stock: min_stock ? parseFloat(min_stock) : 0,
+      min_stock: Number.isFinite(parsedMinStock) ? (parsedMinStock || 0) : 0,
       created_by: userId,
       updated_by: userId
     };
@@ -320,9 +330,9 @@ const createInventoryItem = async (req, res) => {
       .insert([{
         ingredient_id: data.id,
         transaction_type: 'restock',
-        quantity: parseFloat(quantity),
+        quantity: parsedQuantity,
         previous_quantity: 0,
-        new_quantity: parseFloat(quantity),
+        new_quantity: parsedQuantity,
         reason: 'Initial stock',
         notes: 'Item created',
         created_by: userId
@@ -380,9 +390,15 @@ const updateInventoryItem = async (req, res) => {
     if (name !== undefined && name !== null) updateData.name = name.trim();
     if (category !== undefined && category !== null) updateData.category = category.trim();
     if (unit !== undefined && unit !== null) updateData.unit = unit;
-    if (quantity !== undefined && quantity !== null) updateData.quantity = parseFloat(quantity);
+    if (quantity !== undefined && quantity !== null) {
+      const parsedQty = parseRecipeQuantity(quantity);
+      if (Number.isFinite(parsedQty) && parsedQty >= 0) updateData.quantity = parsedQty;
+    }
     if (price !== undefined && price !== null) updateData.price = parseFloat(price);
-    if (min_stock !== undefined && min_stock !== null) updateData.min_stock = parseFloat(min_stock) || 0;
+    if (min_stock !== undefined && min_stock !== null) {
+      const parsedMin = parseRecipeQuantity(min_stock);
+      updateData.min_stock = Number.isFinite(parsedMin) ? (parsedMin || 0) : 0;
+    }
 
     console.log('📦 Update data:', updateData);
 
@@ -400,15 +416,15 @@ const updateInventoryItem = async (req, res) => {
     }
 
     // Log transaction if quantity changed
-    if (quantity !== undefined && parseFloat(quantity) !== currentItem.quantity) {
+    if (quantity !== undefined && parseRecipeQuantity(quantity) !== currentItem.quantity) {
       await supabaseAdmin
         .from('inventory_transactions')
         .insert([{
           ingredient_id: id,
           transaction_type: 'adjustment',
-          quantity: parseFloat(quantity) - currentItem.quantity,
+          quantity: parseRecipeQuantity(quantity) - currentItem.quantity,
           previous_quantity: currentItem.quantity,
-          new_quantity: parseFloat(quantity),
+          new_quantity: parseRecipeQuantity(quantity),
           reason: 'Stock adjustment',
           notes: 'Updated via edit',
           created_by: userId
@@ -582,7 +598,8 @@ const restockInventoryItem = async (req, res) => {
 
     console.log('📦 Restocking inventory item:', { id, quantity });
 
-    if (!quantity || parseFloat(quantity) <= 0) {
+    const restockQuantity = parseRecipeQuantity(quantity);
+    if (!Number.isFinite(restockQuantity) || restockQuantity <= 0) {
       return res.status(400).json({
         success: false,
         error: 'Valid quantity is required'
@@ -602,7 +619,7 @@ const restockInventoryItem = async (req, res) => {
     const userId = getUserIdFromAuth(req);
     console.log('👤 User ID:', userId);
     
-    const newQuantity = currentItem.quantity + parseFloat(quantity);
+    const newQuantity = currentItem.quantity + restockQuantity;
 
     const { data, error } = await supabaseAdmin
       .from('ingredients')
@@ -621,7 +638,7 @@ const restockInventoryItem = async (req, res) => {
       .insert([{
         ingredient_id: id,
         transaction_type: 'restock',
-        quantity: parseFloat(quantity),
+        quantity: restockQuantity,
         previous_quantity: currentItem.quantity,
         new_quantity: newQuantity,
         reason: reason || 'Restock',
@@ -631,7 +648,7 @@ const restockInventoryItem = async (req, res) => {
 
     await logAction(
       'item_restocked',
-      `Restocked ingredient "${currentItem.name}" by ${parseFloat(quantity)} ${currentItem.unit || ''}`,
+      `Restocked ingredient "${currentItem.name}" by ${restockQuantity} ${currentItem.unit || ''}`,
       actorOf(req)
     );
 

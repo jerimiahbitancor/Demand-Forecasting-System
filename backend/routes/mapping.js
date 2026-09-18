@@ -308,7 +308,7 @@ router.post('/products', authenticate, async (req, res) => {
       serving_size_label: serving_size_label?.trim() || null,
       ingredients: ingredients.map(ing => ({
         name: ing.name.trim(),
-        quantity: parseFloat(ing.quantity) || 1,
+        quantity: String(ing.quantity ?? '').trim() || '1',
         unit: ing.unit || 'kg'
       })),
       user_id: userId
@@ -404,7 +404,7 @@ router.put('/products/:id', authenticate, async (req, res) => {
     if (ingredients !== undefined) {
       payload.ingredients = ingredients.map(ing => ({
         name: ing.name.trim(),
-        quantity: parseFloat(ing.quantity) || 1,
+        quantity: String(ing.quantity ?? '').trim() || '1',
         unit: ing.unit || 'kg'
       }));
     }

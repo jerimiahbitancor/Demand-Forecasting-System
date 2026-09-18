@@ -15,7 +15,7 @@ const timezone = require('dayjs/plugin/timezone');
 dayjs.extend(utc);
 dayjs.extend(timezone);
 const PH_TZ = 'Asia/Manila';
-const { normalizeRecipeQuantityToUnit, pieceWeightOf, isMissingColumnError } = require('../utils/recipeUnits');
+const { normalizeRecipeQuantityToUnit, parseRecipeQuantity, pieceWeightOf, isMissingColumnError } = require('../utils/recipeUnits');
 
 // Critical <50%, Low <100%, Normal 100-200%, Excess >200% of forecasted
 // demand — locked thresholds, matches ml-service/services/business_logic.py's
@@ -151,7 +151,7 @@ async function getRecipeMap() {
           ingredient.grams_per_cup,
           pieceWeightOf(ingredient.name, row.unit || ingredient.unit)
         )
-      : Number(row.quantity_per_serving) || 0;
+      : parseRecipeQuantity(row.quantity_per_serving) || 0;
     const entry = {
       ingredientId: ingredient.id,
       name: ingredient.name,

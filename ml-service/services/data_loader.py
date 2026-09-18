@@ -8,6 +8,7 @@ daily_sales, product_ingredients/ingredients, and forecast_config.
 It never writes to any of them (see supabase_writer.py for the tables
 this service IS allowed to write to).
 """
+import math
 import re
 import pandas as pd
 from config import supabase
@@ -94,13 +95,41 @@ def _piece_weight_for(ingredient_name, piece_unit=None):
     return None
 
 
-def _normalize_recipe_quantity(quantity, from_unit, to_unit, grams_per_cup=None, ingredient_name=None):
+def _parse_recipe_quantity(value):
+    """Parse a recipe-style quantity into a float: "1/2" -> 0.5,
+    "1 1/2" -> 1.5, "0.75" -> 0.75. quantity_per_serving is a free-text
+    column, so stored values may be fractions, mixed numbers, or decimals.
+    Returns NaN for unparseable input."""
+    if value is None:
+        return float("nan")
+    text = str(value).strip()
+    if not text:
+        return float("nan")
+
+    mixed = re.match(r"^(-?\d+(?:\.\d+)?)\s+([+-]?\d+)\s*/\s*(\d+)$", text)
+    if mixed:
+        den = int(mixed.group(3))
+        if den == 0:
+            return float("nan")
+        return float(mixed.group(1)) + int(mixed.group(2)) / den
+
+    fraction = re.match(r"^(-?\d+)\s*/\s*(\d+)$", text)
+    if fraction:
+        den = int(fraction.group(2))
+        if den == 0:
+            return float("nan")
+        return int(fraction.group(1)) / den
+
     try:
-        qty = float(quantity)
-    except (TypeError, ValueError):
+        return float(text)
+    except ValueError:
+        return float("nan")
+
+
+def _normalize_recipe_quantity(quantity, from_unit, to_unit, grams_per_cup=None, ingredient_name=None):
+    qty = _parse_recipe_quantity(quantity)
+    if not math.isfinite(qty) or qty <= 0:
         return 0.0
-    if qty <= 0:
-        return qty
     from_key = (from_unit or "").strip().lower()
     to_key = (to_unit or "").strip().lower()
     from_factor = _RECIPE_UNIT_BASE_FACTOR.get(from_key)

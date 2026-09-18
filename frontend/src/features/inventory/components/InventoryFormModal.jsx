@@ -89,13 +89,12 @@ const InventoryFormModal = ({
               <span className="required-star">*</span>
             </label>
             <input
-              type="number"
+              type="text"
+              inputMode="decimal"
               className={`form-input ${formErrors.quantity ? "error" : ""}`}
               value={formData.quantity}
               onChange={(event) => update("quantity", event.target.value)}
-              placeholder="0"
-              min="0"
-              step="0.01"
+              placeholder="Qty (e.g. 1/2)"
             />
             {formErrors.quantity && (
               <span className="form-error">{formErrors.quantity}</span>
