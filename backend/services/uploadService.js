@@ -1177,6 +1177,7 @@ class UploadService {
           months_uploaded: 0,
           actual_days_uploaded: 0,
           actual_months_uploaded: 0,
+          earliest_sale_date: null,
           menu_items: this.memoryStore.products.length,
           last_sync: filtered[filtered.length - 1]?.upload_date || null
         };
@@ -1285,6 +1286,7 @@ class UploadService {
         months_uploaded: monthsUploaded,
         actual_days_uploaded: distinctSaleDays,
         actual_months_uploaded: actualMonthsUploaded,
+        earliest_sale_date: earliestSaleDate,
         menu_items: menuItemsCount || 0,
         last_sync: uploads[uploads.length - 1]?.upload_date || new Date().toISOString()
       };
@@ -1342,6 +1344,43 @@ class UploadService {
   // grace period past the 30-day cadence before flagging attention,
   // rather than flagging the instant the cadence is technically due.
   static RETRAINING_CADENCE_DAYS = 45;
+
+  // getDashboardState()'s "ready to train" gate used to check ONLY
+  // days_of_history (elapsed calendar time since the earliest sale date)
+  // >= 365 — deliberately tolerant of closed days, matching ml-service's
+  // own first-training gate exactly. But that alone can't distinguish a
+  // genuine, mostly-complete year of real data from a sparse/old sample
+  // that happens to span >365 elapsed days (e.g. a handful of rows dated
+  // over a year ago) — the exact scenario actual_days_uploaded/
+  // actual_months_uploaded were built to call out, except that number was
+  // previously display-only and never actually gated anything.
+  //
+  // Deliberately strict, by request: a full 365 real sale-day rows must
+  // actually exist (366 in a span that crosses a leap day) — not a
+  // percentage of the elapsed span. This is meant to push toward
+  // uploading more real history before training unlocks, not just to
+  // tolerate the closed days that happen along the way.
+  static MIN_ACTUAL_SALE_DAYS = 365;
+
+  // True if [from, today] contains a Feb 29 — the one case where a real
+  // "full year" of daily rows is 366, not 365. dayjs silently rolls a
+  // non-leap-year "Feb 29" over into March 1 instead of marking it
+  // invalid, so the leap-year check has to be done arithmetically, not by
+  // just trying to construct the date and seeing if it parses.
+  spanIncludesLeapDay(fromDateStr) {
+    if (!fromDateStr) return false;
+    const isLeapYear = (year) => (year % 4 === 0 && year % 100 !== 0) || year % 400 === 0;
+    const from = dayjs(fromDateStr).tz(PH_TZ);
+    const today = dayjs().tz(PH_TZ);
+    for (let year = from.year(); year <= today.year(); year++) {
+      if (!isLeapYear(year)) continue;
+      const feb29 = dayjs.tz(`${year}-02-29`, PH_TZ);
+      if (!feb29.isBefore(from, 'day') && !feb29.isAfter(today, 'day')) {
+        return true;
+      }
+    }
+    return false;
+  }
 
   async getLatestModelMetrics() {
     if (!this.isSupabaseReady()) return null;
@@ -1471,13 +1510,37 @@ class UploadService {
       return { state: 'no-data', stats, progress };
     }
 
-    // Matches ml-service/app.py's actual first-training gate exactly
-    // (days since earliest sale date >= 365) — months_uploaded is a
-    // display-only derivative of the same days_of_history number, so
-    // gating on the day count directly instead of the rounded-down
-    // months figure avoids the two ever disagreeing.
-    if ((stats.days_of_history || 0) < 365) {
-      return { state: 'uploaded-insufficient', stats, progress };
+    // Two conditions, both required:
+    // 1) days_of_history >= 365 — matches ml-service/app.py's actual
+    //    first-training gate exactly (elapsed calendar time since the
+    //    earliest sale date), tolerant of closed days by design.
+    // 2) actual_days_uploaded >= a full real year of sale-day rows (365,
+    //    or 366 if the span crosses a leap day) — closes the gap (1)
+    //    alone leaves open: a sparse/old sample could clear 365 elapsed
+    //    days on a handful of real rows. Deliberately strict (a hard row
+    //    count, not a percentage of the elapsed span) — the point is to
+    //    push toward uploading a genuinely complete year, not just to
+    //    tolerate the closed days along the way. See
+    //    MIN_ACTUAL_SALE_DAYS's comment above.
+    const daysOfHistory = stats.days_of_history || 0;
+    const requiredActualDays = this.spanIncludesLeapDay(stats.earliest_sale_date)
+      ? UploadService.MIN_ACTUAL_SALE_DAYS + 1
+      : UploadService.MIN_ACTUAL_SALE_DAYS;
+    stats.required_actual_days = requiredActualDays;
+
+    const elapsedInsufficient = daysOfHistory < 365;
+    const coverageInsufficient = (stats.actual_days_uploaded || 0) < requiredActualDays;
+    if (elapsedInsufficient || coverageInsufficient) {
+      // Tells the frontend WHY it's still insufficient, instead of always
+      // pointing the owner at "upload more" when the real blocker might be
+      // that a lot of already-uploaded days are legitimately missing sales
+      // rows (closed days, gaps) rather than too little elapsed time.
+      const insufficientReason = elapsedInsufficient && coverageInsufficient
+        ? 'both'
+        : elapsedInsufficient
+          ? 'elapsed'
+          : 'coverage';
+      return { state: 'uploaded-insufficient', stats, progress, insufficientReason };
     }
 
     // Actual training-in-flight signal (see mlService.isTrainingInFlight),
