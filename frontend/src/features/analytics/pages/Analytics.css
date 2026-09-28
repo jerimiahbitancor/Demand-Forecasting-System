@@ -166,6 +166,32 @@
   color: var(--color-white);
 }
 
+/* Manual "Generate Forecast" trigger — filled, to read as the primary
+   action distinct from the outlined Generate Report button above it. */
+.btn-generate-forecast {
+  width: 100%;
+  padding: 14px;
+  margin-top: 12px;
+  background-color: var(--color-red-primary);
+  color: var(--color-white);
+  border: 1.5px solid var(--color-red-primary);
+  border-radius: 10px;
+  font-weight: 700;
+  font-size: 14px;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.btn-generate-forecast:hover:not(:disabled) {
+  background-color: #5c0101;
+  border-color: #5c0101;
+}
+
+.btn-generate-forecast:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
 /* Generic filter row (week picker / search / dropdown) used in every tab */
 .analytics-filter-row {
   display: flex;

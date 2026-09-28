@@ -268,7 +268,12 @@
 .product-table td:nth-child(1) { width: 38px; }
 
 .product-table th:nth-child(2),
-.product-table td:nth-child(2) { width: 46px; }
+.product-table td:nth-child(2) {
+  width: 46px;
+  text-align: center;
+  padding-left: 8px;
+  padding-right: 8px;
+}
 
 .product-table th:nth-child(9),
 .product-table td:nth-child(9) { width: 220px; }

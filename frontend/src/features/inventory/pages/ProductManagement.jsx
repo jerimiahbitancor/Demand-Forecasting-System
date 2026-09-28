@@ -66,9 +66,8 @@ const STORAGE_KEYS = {
 // fetch the same "all products (excluding archived)" dataset from the API,
 // then apply their own derived-status filter on the client.
 const apiStatusForFilter = (filter) =>
-  filter === 'active' ? 'active'
-    : filter === 'archived' ? 'archived'
-      : 'all';
+  filter === 'archived' ? 'archived'
+    : 'all';
 
 const cacheSuffixForFilter = (filter) => {
   const api = apiStatusForFilter(filter);
@@ -1156,12 +1155,13 @@ const ProductManagement = () => {
       filtered = filtered.filter(item => item.category === selectedCategory);
     }
 
-    if (statusFilter === 'new' || statusFilter === 'discontinued'
+    if (statusFilter === 'active' || statusFilter === 'new' || statusFilter === 'discontinued'
       || statusFilter === 'unmapped' || statusFilter === 'high-food-cost') {
       filtered = filtered.filter((item) => {
         const st = getStatusDetails(item);
         if (st.isArchived) return false;
         switch (statusFilter) {
+          case 'active': return st.isActive;
           case 'new': return st.isNew;
           case 'discontinued': return st.isDiscontinued;
           case 'unmapped': return st.isUnmapped;

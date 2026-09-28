@@ -6,8 +6,10 @@ import Tippy from '@tippyjs/react';
 import 'tippy.js/dist/tippy.css';
 import 'tippy.js/animations/scale.css';
 import { FiEdit2, FiInfo, FiPlus, FiTrash, FiX } from 'react-icons/fi';
+import { FaArrowLeft, FaArrowRight } from 'react-icons/fa';
 import { useAuth } from '../../../context/AuthContext';
 import './ForecastConfig.css';
+import '../../inventory/pages/Inventory.css';
 
 const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:5000/api';
 
@@ -26,6 +28,7 @@ function ForecastConfig() {
   const [unitTab, setUnitTab] = useState('ingredient');
   const [categoryData, setCategoryData] = useState({ ingredient: [], product: [] });
   const [unitData, setUnitData] = useState({ ingredient: [] });
+  const [managementPage, setManagementPage] = useState({});
   const [managementDialog, setManagementDialog] = useState(null);
   const [managementValue, setManagementValue] = useState('');
   const [deleteDialog, setDeleteDialog] = useState(null);
@@ -178,7 +181,18 @@ function ForecastConfig() {
     return 'Product Management';
   };
 
-  const renderManagementCard = (type, title, subtitle, activeTab, setActiveTab, data, columnLabel, tabs = [['ingredient', 'Ingredient Management'], ['product', 'Product Management']]) => (
+  const renderManagementCard = (type, title, subtitle, activeTab, setActiveTab, data, columnLabel, tabs = [['ingredient', 'Ingredient Management'], ['product', 'Product Management']], pageSize = null) => {
+    const items = data[activeTab] || [];
+    const totalItems = items.length;
+    const enablePagination = pageSize > 0 && totalItems > pageSize;
+    const totalPages = enablePagination ? Math.max(1, Math.ceil(totalItems / pageSize)) : 1;
+    const currentPage = enablePagination ? Math.min(managementPage[type] || 1, totalPages) : 1;
+    const pageItems = enablePagination ? items.slice((currentPage - 1) * pageSize, currentPage * pageSize) : items;
+    const goToPage = (page) => {
+      setManagementPage((prev) => ({ ...prev, [type]: page }));
+    };
+
+    return (
     <article className="fc-card fc-management-card">
       <div className="fc-management-header">
         <div>
@@ -200,7 +214,7 @@ function ForecastConfig() {
         <table className="fc-management-table">
           <thead><tr><th>{columnLabel}</th><th>Actions</th></tr></thead>
           <tbody>
-            {data[activeTab].map((item) => (
+            {pageItems.map((item) => (
               <tr key={item.id || item.name}>
                 <td>{item.name || item}</td>
                 <td>
@@ -211,12 +225,64 @@ function ForecastConfig() {
                 </td>
               </tr>
             ))}
-            {Array.from({ length: Math.max(0, 4 - data[activeTab].length) }).map((_, index) => <tr className="fc-empty-row" key={`empty-${index}`}><td></td><td></td></tr>)}
+            {Array.from({ length: Math.max(0, 4 - pageItems.length) }).map((_, index) => <tr className="fc-empty-row" key={`empty-${index}`}><td></td><td></td></tr>)}
           </tbody>
         </table>
       </div>
+      {totalPages > 1 && (
+        <div className="inventory-pagination">
+          <span className="inventory-pagination-info">
+            Showing {(currentPage - 1) * pageSize + 1}–
+            {Math.min(currentPage * pageSize, totalItems)} of {totalItems} items
+          </span>
+          <div className="inventory-pagination-controls">
+            <button
+              className="inventory-pagination-btn"
+              onClick={() => goToPage(Math.max(currentPage - 1, 1))}
+              disabled={currentPage === 1}
+            >
+              <FaArrowLeft /> Previous
+            </button>
+            <div className="inventory-pagination-numbers">
+              {Array.from({ length: Math.min(5, totalPages) }, (_, i) => {
+                let pageNumber;
+                if (totalPages <= 5) {
+                  pageNumber = i + 1;
+                } else if (currentPage <= 3) {
+                  pageNumber = i + 1;
+                } else if (currentPage >= totalPages - 2) {
+                  pageNumber = totalPages - 4 + i;
+                } else {
+                  pageNumber = currentPage - 2 + i;
+                }
+                if (pageNumber > 0 && pageNumber <= totalPages) {
+                  return (
+                    <button
+                      key={pageNumber}
+                      className={`inventory-pagination-number ${currentPage === pageNumber ? 'active' : ''}`}
+                      onClick={() => goToPage(pageNumber)}
+                    >
+                      {pageNumber}
+                    </button>
+                  );
+                }
+                return null;
+              })}
+            </div>
+            <button
+              className="inventory-pagination-btn"
+              onClick={() => goToPage(Math.min(currentPage + 1, totalPages))}
+              disabled={currentPage === totalPages}
+            >
+              Next <FaArrowRight />
+            </button>
+          </div>
+          <div className="inventory-pagination-anchor" aria-hidden="true"></div>
+        </div>
+      )}
     </article>
   );
+  };
 
   return (
     <section className="fc-root">
@@ -416,8 +482,8 @@ function ForecastConfig() {
           <button type="button" className="fc-save" onClick={handleSaveThresholds}>SAVE CONFIGURATION</button>
         </div>
 
-        {renderManagementCard('category', 'Category', 'Used for Product Management and  inventory Management ', categoryTab, setCategoryTab, categoryData, 'Category')}
-        {renderManagementCard('unit', 'Units', 'Use in inventory Management', unitTab, setUnitTab, unitData, 'Unit', [['ingredient', 'Ingredient Management']])}
+        {renderManagementCard('category', 'Category', 'Used for Product Management and  inventory Management ', categoryTab, setCategoryTab, categoryData, 'Category', [['ingredient', 'Ingredient Management'], ['product', 'Product Management']], null)}
+        {renderManagementCard('unit', 'Units', 'Use in inventory Management', unitTab, setUnitTab, unitData, 'Unit', [['ingredient', 'Ingredient Management']], 10)}
       </div>
       {managementDialog && (
         <div className="fc-dialog-backdrop" role="presentation" onMouseDown={() => setManagementDialog(null)}>

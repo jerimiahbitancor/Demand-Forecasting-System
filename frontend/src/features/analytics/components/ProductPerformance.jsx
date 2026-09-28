@@ -273,12 +273,20 @@ function ProductPerformance() {
   const [inactiveStatusPage, setInactiveStatusPage] = useState(1);
   const [archivedStatusPage, setArchivedStatusPage] = useState(1);
 
+  // Pagination — horizontal bar charts (5 bars each)
+  const [demandChartPage, setDemandChartPage] = useState(1);
+  const [ratioChartPage, setRatioChartPage] = useState(1);
+
   const [modalDemandPage, setModalDemandPage] = useState(1);
   const [modalRatioPage, setModalRatioPage] = useState(1);
   const [modalActiveStatusPage, setModalActiveStatusPage] = useState(1);
   const [modalNewStatusPage, setModalNewStatusPage] = useState(1);
   const [modalInactiveStatusPage, setModalInactiveStatusPage] = useState(1);
   const [modalArchivedStatusPage, setModalArchivedStatusPage] = useState(1);
+
+  // Pagination — modal bar charts (10 bars each)
+  const [modalDemandChartPage, setModalDemandChartPage] = useState(1);
+  const [modalRatioChartPage, setModalRatioChartPage] = useState(1);
 
   const ROWS_PER_PAGE = 5;
 
@@ -409,6 +417,17 @@ function ProductPerformance() {
     (ratioPage - 1) * ROWS_PER_PAGE, ratioPage * ROWS_PER_PAGE
   );
 
+  // Bar chart pagination — 5 bars per page in the panel
+  const totalDemandChartPages = Math.max(1, Math.ceil(demandRows.length / ROWS_PER_PAGE));
+  const paginatedDemandChartRows = demandRows.slice(
+    (demandChartPage - 1) * ROWS_PER_PAGE, demandChartPage * ROWS_PER_PAGE
+  );
+
+  const totalRatioChartPages = Math.max(1, Math.ceil(performanceRows.length / ROWS_PER_PAGE));
+  const paginatedRatioChartRows = performanceRows.slice(
+    (ratioChartPage - 1) * ROWS_PER_PAGE, ratioChartPage * ROWS_PER_PAGE
+  );
+
   const paginatedActiveProducts = activeProducts.slice(
     (activeStatusPage - 1) * ROWS_PER_PAGE, activeStatusPage * ROWS_PER_PAGE
   );
@@ -424,6 +443,8 @@ function ProductPerformance() {
 
   const modalDemandRows = demandRows.slice((modalDemandPage - 1) * 10, modalDemandPage * 10);
   const modalRatioRows = performanceRows.slice((modalRatioPage - 1) * 10, modalRatioPage * 10);
+  const modalDemandChartRows = demandRows.slice((modalDemandChartPage - 1) * 10, modalDemandChartPage * 10);
+  const modalRatioChartRows = performanceRows.slice((modalRatioChartPage - 1) * 10, modalRatioChartPage * 10);
   const modalActiveProducts = activeProducts.slice((modalActiveStatusPage - 1) * 10, modalActiveStatusPage * 10);
   const modalNewProducts = newProducts.slice((modalNewStatusPage - 1) * 10, modalNewStatusPage * 10);
   const modalInactiveProducts = inactiveProducts.slice((modalInactiveStatusPage - 1) * 10, modalInactiveStatusPage * 10);
@@ -476,7 +497,7 @@ function ProductPerformance() {
           </p>
 
           <div className="demand-bar-chart">
-            {demandRows.map((row) => (
+            {paginatedDemandChartRows.map((row) => (
               <DemandBar
                 key={row.product}
                 label={row.product}
@@ -486,6 +507,8 @@ function ProductPerformance() {
               />
             ))}
           </div>
+
+          <Pagination currentPage={demandChartPage} totalPages={totalDemandChartPages} onPageChange={setDemandChartPage} />
 
           <div className="chart-legend">
             <span className="legend-item"><span className="legend-swatch legend-swatch--low" /> Low Zone</span>
@@ -564,7 +587,7 @@ function ProductPerformance() {
           </p>
 
           <div className="ratio-bar-chart">
-            {performanceRows.map((row) => (
+            {paginatedRatioChartRows.map((row) => (
               <RatioBar key={row.product} label={row.product} ratio={row.ratio} />
             ))}
             <div className="ratio-bar-axis">
@@ -573,6 +596,8 @@ function ProductPerformance() {
               <span>Above Average →</span>
             </div>
           </div>
+
+          <Pagination currentPage={ratioChartPage} totalPages={totalRatioChartPages} onPageChange={setRatioChartPage} />
 
           <div className="chart-legend">
             <span className="legend-item"><span className="legend-swatch legend-swatch--above" /> Above Average (ratio &gt; 1.0)</span>
@@ -775,10 +800,15 @@ function ProductPerformance() {
         title="Demand Classification — Full View"
       >
         <div className="demand-bar-chart">
-          {demandRows.map((row) => (
+          {modalDemandChartRows.map((row) => (
             <DemandBar key={row.product} label={row.product} qty={row.forecastQty} maxQty={maxQty} zone={row.zone} />
           ))}
         </div>
+        <Pagination
+          currentPage={modalDemandChartPage}
+          totalPages={Math.max(1, Math.ceil(demandRows.length / 10))}
+          onPageChange={setModalDemandChartPage}
+        />
         <div className="chart-legend">
           <span className="legend-item"><span className="legend-swatch legend-swatch--low" /> Low Zone</span>
           <span className="legend-item"><span className="legend-swatch legend-swatch--medium" /> Medium Zone</span>
@@ -816,7 +846,7 @@ function ProductPerformance() {
         title="Product Performance Ratio Analysis — Full View"
       >
         <div className="ratio-bar-chart">
-          {performanceRows.map((row) => (
+          {modalRatioChartRows.map((row) => (
             <RatioBar key={row.product} label={row.product} ratio={row.ratio} />
           ))}
           <div className="ratio-bar-axis">
@@ -825,6 +855,11 @@ function ProductPerformance() {
             <span>Above Average →</span>
           </div>
         </div>
+        <Pagination
+          currentPage={modalRatioChartPage}
+          totalPages={Math.max(1, Math.ceil(performanceRows.length / 10))}
+          onPageChange={setModalRatioChartPage}
+        />
         <div className="chart-legend">
           <span className="legend-item"><span className="legend-swatch legend-swatch--above" /> Above Average (ratio &gt; 1.0)</span>
           <span className="legend-item"><span className="legend-swatch legend-swatch--below" /> Below Average (ratio &lt; 1.0)</span>

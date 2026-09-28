@@ -216,6 +216,12 @@ const { supabaseAdmin } = require('./config/supabase');
 const { loadUnitMetadataFromDb } = require('./utils/recipeUnits');
 setTimeout(() => loadUnitMetadataFromDb(supabaseAdmin).catch(() => {}), 1000);
 
+// Real scheduled forecast refresh (daily 9:00 AM, weekly Monday 9:00 AM,
+// both Asia/Manila) — see jobs/forecastScheduler.js for why this calls
+// mlService.forecast() directly instead of training auto-triggering it.
+const { registerForecastJobs } = require('./jobs/forecastScheduler');
+registerForecastJobs();
+
 app.listen(PORT, () => {
   console.log(`🚀 Server running on port ${PORT}`);
 });

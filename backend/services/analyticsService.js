@@ -91,16 +91,21 @@ function defaultDateRange(daysBack = 30, daysForward = 7) {
   return { from: from.format('YYYY-MM-DD'), to: to.format('YYYY-MM-DD'), today: today.format('YYYY-MM-DD') };
 }
 
-// Next daily 9:00 AM forecast-refresh run, per the system module doc's
-// "Daily forecast refresh: Every day, 9:00 AM" schedule note.
-// NOTE: CLAUDE.md's project instructions say 8:00 AM for this same job —
-// the two documents disagree on the hour. Using 9:00 AM here (the more
-// detailed, more recently-dated spec) but this needs a real answer from
-// the project owner before a cron job actually gets scheduled on either.
-function nextDailyForecastRun(now = new Date()) {
-  const next = new Date(now);
-  next.setHours(9, 0, 0, 0);
-  if (next <= now) next.setDate(next.getDate() + 1);
+// Next daily 9:00 AM Asia/Manila forecast-refresh run — matches the real
+// cron job registered in jobs/forecastScheduler.js ('0 9 * * *', timezone
+// Asia/Manila). 9:00 AM is the confirmed, locked schedule (see CLAUDE.md);
+// an earlier 8:00 AM figure in some older comments/docs was a mistake.
+//
+// This used to compute "9:00 AM" against the server's own local clock via
+// plain Date.setHours() — fine in PH-local dev, but wrong once deployed to
+// Render, which runs in UTC: setHours(9) there means 9:00 AM UTC (5:00 PM
+// PH), not 9:00 AM PH, so the displayed "next forecast" time didn't match
+// when the cron job actually fires. Anchored on dayjs().tz(PH_TZ) instead,
+// same pattern as toDateOnly()/defaultDateRange() above.
+function nextDailyForecastRun(now = dayjs().tz(PH_TZ)) {
+  const nowPh = dayjs(now).tz(PH_TZ);
+  let next = nowPh.hour(9).minute(0).second(0).millisecond(0);
+  if (!next.isAfter(nowPh)) next = next.add(1, 'day');
   return next.toISOString();
 }
 
