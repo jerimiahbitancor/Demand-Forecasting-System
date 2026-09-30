@@ -1,0 +1,140 @@
+{
+  "_about": "Shared cases for the first-use history rule. Read by BOTH ml-service/tests/test_history_gate.py (Python) and backend/tests/historyGate.test.js (JS). Each side expands the date specs the same way: sales = every date in sales_ranges plus sales_dates, minus sales_exclude, minus every date in sales_exclude_ranges, minus Sundays if sales_exclude_sundays; closed = closed_dates plus every date in closed_ranges plus every Sunday in closed_sundays_in. Expected numbers are hand-computed, not copied from the code under test. A case with only 'passes' and 'insufficient_reason' in 'expect' is still fully cross-checked between the two languages.",
+  "cases": [
+    {
+      "name": "span_364_fails",
+      "sales_ranges": [["2025-07-10", "2026-07-08"]],
+      "expect": {
+        "passes": false, "insufficient_reason": "span",
+        "first_sale_date": "2025-07-10", "last_sale_date": "2026-07-08",
+        "span_days": 364, "open_days": 364, "closed_days": 0, "unconfirmed_days": 0
+      }
+    },
+    {
+      "name": "span_365_passes",
+      "sales_ranges": [["2025-07-10", "2026-07-09"]],
+      "expect": {
+        "passes": true, "insufficient_reason": null,
+        "first_sale_date": "2025-07-10", "last_sale_date": "2026-07-09",
+        "span_days": 365, "open_days": 365, "closed_days": 0, "unconfirmed_days": 0
+      }
+    },
+    {
+      "name": "one_unconfirmed_day_inside_span_fails",
+      "sales_ranges": [["2025-07-10", "2026-07-09"]],
+      "sales_exclude": ["2025-12-25"],
+      "expect": {
+        "passes": false, "insufficient_reason": "unconfirmed",
+        "span_days": 365, "open_days": 364, "closed_days": 0, "unconfirmed_days": 1
+      }
+    },
+    {
+      "name": "one_gap_marked_closed_passes",
+      "sales_ranges": [["2025-07-10", "2026-07-09"]],
+      "sales_exclude": ["2025-12-25"],
+      "closed_dates": ["2025-12-25"],
+      "expect": {
+        "passes": true, "insufficient_reason": null,
+        "span_days": 365, "open_days": 364, "closed_days": 1, "unconfirmed_days": 0
+      }
+    },
+    {
+      "name": "closed_sundays_count_toward_span",
+      "sales_ranges": [["2025-07-10", "2026-07-09"]],
+      "sales_exclude_sundays": true,
+      "closed_sundays_in": ["2025-07-10", "2026-07-09"],
+      "expect": {
+        "passes": true, "insufficient_reason": null,
+        "span_days": 365, "open_days": 313, "closed_days": 52, "unconfirmed_days": 0
+      }
+    },
+    {
+      "name": "sundays_not_marked_closed_fail",
+      "sales_ranges": [["2025-07-10", "2026-07-09"]],
+      "sales_exclude_sundays": true,
+      "expect": {
+        "passes": false, "insufficient_reason": "unconfirmed",
+        "span_days": 365, "open_days": 313, "closed_days": 0, "unconfirmed_days": 52
+      }
+    },
+    {
+      "name": "closed_dates_outside_span_are_ignored",
+      "sales_ranges": [["2025-07-10", "2026-07-09"]],
+      "closed_ranges": [["2025-07-01", "2025-07-09"], ["2026-07-10", "2026-07-20"]],
+      "expect": {
+        "passes": true, "insufficient_reason": null,
+        "span_days": 365, "open_days": 365, "closed_days": 0, "unconfirmed_days": 0
+      }
+    },
+    {
+      "name": "closed_mark_on_a_sales_date_counts_as_open",
+      "sales_ranges": [["2025-07-10", "2026-07-09"]],
+      "closed_dates": ["2025-12-25"],
+      "expect": {
+        "passes": true, "insufficient_reason": null,
+        "span_days": 365, "open_days": 365, "closed_days": 0, "unconfirmed_days": 0
+      }
+    },
+    {
+      "name": "short_span_and_unconfirmed_is_both",
+      "sales_ranges": [["2025-07-10", "2025-12-31"]],
+      "sales_exclude": ["2025-11-01"],
+      "expect": {
+        "passes": false, "insufficient_reason": "both",
+        "span_days": 175, "open_days": 174, "closed_days": 0, "unconfirmed_days": 1
+      }
+    },
+    {
+      "name": "no_sales_at_all",
+      "closed_dates": ["2025-12-25"],
+      "expect": {
+        "passes": false, "insufficient_reason": "no_data",
+        "first_sale_date": null, "last_sale_date": null,
+        "span_days": 0, "open_days": 0, "closed_days": 0, "unconfirmed_days": 0
+      }
+    },
+    {
+      "name": "leap_year_span_365_passes",
+      "sales_ranges": [["2027-07-10", "2028-07-08"]],
+      "expect": {
+        "passes": true, "insufficient_reason": null,
+        "span_days": 365, "open_days": 365, "closed_days": 0, "unconfirmed_days": 0
+      }
+    },
+    {
+      "name": "leap_year_span_364_fails",
+      "sales_ranges": [["2027-07-10", "2028-07-07"]],
+      "expect": {
+        "passes": false, "insufficient_reason": "span",
+        "span_days": 364, "open_days": 364, "closed_days": 0, "unconfirmed_days": 0
+      }
+    },
+    {
+      "name": "duplicate_and_unsorted_inputs",
+      "sales_dates": ["2026-01-03", "2026-01-01", "2026-01-03", "2026-01-01"],
+      "closed_dates": ["2026-01-02", "2026-01-02"],
+      "expect": {
+        "passes": false, "insufficient_reason": "span",
+        "first_sale_date": "2026-01-01", "last_sale_date": "2026-01-03",
+        "span_days": 3, "open_days": 2, "closed_days": 1, "unconfirmed_days": 0
+      }
+    },
+    {
+      "name": "real_shape_unconfirmed_gaps",
+      "_note": "Shaped like the real data: Jul 10 2025 - Sep 29 2026, Sundays off, a two-week closure in Sep 2026. Nothing marked closed yet.",
+      "sales_ranges": [["2025-07-10", "2026-09-29"]],
+      "sales_exclude_sundays": true,
+      "sales_exclude_ranges": [["2026-09-07", "2026-09-20"]],
+      "expect": { "passes": false, "insufficient_reason": "unconfirmed", "span_days": 447 }
+    },
+    {
+      "name": "real_shape_all_gaps_marked_closed",
+      "sales_ranges": [["2025-07-10", "2026-09-29"]],
+      "sales_exclude_sundays": true,
+      "sales_exclude_ranges": [["2026-09-07", "2026-09-20"]],
+      "closed_sundays_in": ["2025-07-10", "2026-09-29"],
+      "closed_ranges": [["2026-09-07", "2026-09-20"]],
+      "expect": { "passes": true, "insufficient_reason": null, "span_days": 447, "unconfirmed_days": 0 }
+    }
+  ]
+}

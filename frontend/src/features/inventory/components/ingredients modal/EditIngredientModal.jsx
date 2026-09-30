@@ -21,7 +21,11 @@ const EditIngredientModal = ({
 	};
 
 	return (
-		<InventoryModal className="modal-lg inventory-edit-modal" onClose={close}>
+		<InventoryModal
+			className="modal-lg inventory-edit-modal"
+			onClose={close}
+			closeOnOverlay={false}
+		>
 			<div className="modal-header inventory-modal-header">
 				<h3 className="modal-title">Edit Inventory Item</h3>
 				<button className="modal-close-btn" onClick={close}>

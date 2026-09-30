@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { FaArchive, FaEye, FaTimes, FaUndo } from 'react-icons/fa';
 import InventoryModal from '../components/InventoryModal';
-import { normalizeRecipeQuantityToUnit, recipeDensityFor, pieceWeightOf, parseRecipeQuantity } from '../../../utils/recipeUnits';
+import { convertRecipeQuantity, recipeDensityFor, parseRecipeQuantity } from '../../../utils/recipeUnits';
 import './ProductDetailsModal.css';
 
 const ProductDetailsModal = ({
@@ -52,13 +52,11 @@ const ProductDetailsModal = ({
     const recipeUnit = ingredient.unit || ingredientUnit;
     const stockName = ingredient.ingredients?.name || ingredient.name || '';
     const gramsPerCup = recipeDensityFor(ingredient.ingredients?.grams_per_cup, stockName);
-    const pieceWeight = pieceWeightOf(stockName, recipeUnit);
-    const converted = Number(normalizeRecipeQuantityToUnit(
+    const converted = Number(convertRecipeQuantity(
       ingredient.quantity_per_serving ?? ingredient.quantity,
       recipeUnit,
       ingredientUnit,
-      gramsPerCup,
-      pieceWeight
+      { gramsPerCup: ingredient.ingredients?.grams_per_cup, ingredientName: stockName }
     )) || 0;
     return {
       id: ingredient.id || ingredient.inventory_item_id || null,

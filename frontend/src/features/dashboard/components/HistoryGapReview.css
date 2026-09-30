@@ -1,0 +1,111 @@
+/* components/HistoryGapReview.css */
+.gap-review {
+  margin-top: 16px;
+  padding: 16px;
+  border: 1px solid #e8c9c9;
+  border-radius: 10px;
+  background: #fff8f6;
+}
+
+.gap-review--error {
+  color: #7a0101;
+  font-size: 14px;
+}
+
+.gap-review__question {
+  margin: 0 0 12px;
+  font-size: 14px;
+  line-height: 1.5;
+  color: #1c2632;
+}
+
+.gap-review__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.gap-review__btn {
+  padding: 8px 16px;
+  border-radius: 8px;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  border: 1.5px solid #7a0101;
+}
+
+.gap-review__btn:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.gap-review__btn--primary {
+  background: #7a0101;
+  color: #fff;
+}
+
+.gap-review__btn--primary:hover:not(:disabled) {
+  background: #5c0101;
+}
+
+.gap-review__btn--secondary {
+  background: #fff;
+  color: #7a0101;
+}
+
+.gap-review__list {
+  margin-top: 16px;
+  max-height: 420px;
+  overflow-y: auto;
+  padding-right: 4px;
+}
+
+.gap-review__hint {
+  margin: 0 0 12px;
+  font-size: 13px;
+  color: #5c403c;
+}
+
+.gap-review__month {
+  border: 1px solid #e8e0dd;
+  border-radius: 8px;
+  padding: 8px 12px 12px;
+  margin: 0 0 12px;
+}
+
+.gap-review__month legend {
+  font-weight: 700;
+  font-size: 13px;
+  padding: 0 4px;
+}
+
+.gap-review__days {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(190px, 1fr));
+  gap: 6px 12px;
+}
+
+.gap-review__day {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.gap-review__weekday {
+  color: #6c757d;
+}
+
+.gap-review__footer {
+  position: sticky;
+  bottom: 0;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 10px 0 2px;
+  background: #fff8f6;
+  font-size: 13px;
+}

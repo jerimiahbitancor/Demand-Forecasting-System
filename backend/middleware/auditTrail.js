@@ -15,6 +15,7 @@ const RICH_LOG_ROUTES = [
   '/api/settings/business-profile',
   '/api/settings/backup',
   '/api/settings/reset-data',
+  '/api/business-days/bulk-close',
   '/api/auth/sync-user',
   '/api/auth/register',
   '/api/auth/verify-otp',

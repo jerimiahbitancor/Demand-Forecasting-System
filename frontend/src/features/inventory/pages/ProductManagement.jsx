@@ -20,7 +20,7 @@ import toast from 'react-hot-toast';
 import "./ProductManagement.css";
 import "../InventoryControls.css";
 import { useAuth } from "../../../context/AuthContext";
-import { normalizeRecipeQuantityToUnit, RECIPE_EXTRA_UNITS, RECIPE_VOLUME_UNITS, RECIPE_MASS_UNITS, recipeDensityFor, pieceWeightOf, priceRecipeIngredient, parseRecipeQuantity } from "../../../utils/recipeUnits";
+import { convertRecipeQuantity, setUnitMetadata, unitKindOf, canonicalUnitName, groupUnitsForSelect, recipeDensityFor, pieceWeightOf, priceRecipeIngredient, parseRecipeQuantity } from "../../../utils/recipeUnits";
 import Tippy from '@tippyjs/react';
 import 'tippy.js/dist/tippy.css';
 import 'tippy.js/animations/scale.css';
@@ -38,13 +38,11 @@ const calculateProductCogs = (product) => {
     // "price x quantity" is always in the unit the price is quoted in.
     const ingredientUnit = ingredient.ingredients?.unit || null;
     const recipeUnit = ingredient.unit || ingredientUnit;
-    const gramsPerCup = recipeDensityFor(
-      ingredient.ingredients?.grams_per_cup,
-      ingredient.ingredients?.name
-    );
-    const pieceWeight = pieceWeightOf(ingredient.ingredients?.name, ingredient.unit || ingredientUnit);
     const quantity = Number(
-      normalizeRecipeQuantityToUnit(ingredient.quantity_per_serving, recipeUnit, ingredientUnit, gramsPerCup, pieceWeight)
+      convertRecipeQuantity(ingredient.quantity_per_serving, recipeUnit, ingredientUnit, {
+        gramsPerCup: ingredient.ingredients?.grams_per_cup,
+        ingredientName: ingredient.ingredients?.name
+      })
     ) || 0;
     return total + ingredientPrice * quantity;
   }, 0);
@@ -158,12 +156,29 @@ const ProductManagement = () => {
   const [editingIngredientIndex, setEditingIngredientIndex] = useState(null);
   const [draftIngredient, setDraftIngredient] = useState(null);
 
-  const availableIngredientUnits = useMemo(() => [
-    ...new Set([
-      ...RECIPE_EXTRA_UNITS,
-      ...ingredientUnits.map((unit) => unit.name)
-    ])
-  ], [ingredientUnits]);
+  // The unit dropdown lists exactly the active rows of ingredient_units (grouped
+  // by kind). Aliases such as "cup" or "kg" are lookup keys for old recipe
+  // lines, not separate choices.
+  const unitGroups = useMemo(() => groupUnitsForSelect(ingredientUnits), [ingredientUnits]);
+
+  // <option>s for a unit <select>. If the current value isn't one of the listed
+  // units (a line saved with an unlisted unit), keep it visible and flagged
+  // instead of letting the select silently show another unit.
+  const renderUnitOptions = (currentValue) => {
+    const listed = unitGroups.some((group) => group.units.includes(currentValue));
+    return (
+      <>
+        {currentValue && !listed && (
+          <option value={currentValue}>{currentValue} (not in units list)</option>
+        )}
+        {unitGroups.map((group) => (
+          <optgroup key={group.label} label={group.label}>
+            {group.units.map((unit) => <option key={unit} value={unit}>{unit}</option>)}
+          </optgroup>
+        ))}
+      </>
+    );
+  };
 
   const [formErrors, setFormErrors] = useState({
     productName: "",
@@ -266,6 +281,16 @@ const ProductManagement = () => {
     });
   }, [foodCostThreshold]);
 
+  // The units and the products load in parallel. If the units arrive second,
+  // the stats above were computed with the built-in unit tables, so redo them
+  // once the database units (custom units, piece weights) are in.
+  useEffect(() => {
+    if (ingredientUnits.length > 0 && mappingData.length > 0) {
+      Promise.resolve().then(() => updateStats(mappingData));
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [ingredientUnits, updateStats]);
+
   // ============ FETCH INVENTORY ITEMS FOR INGREDIENTS ============
   const fetchInventoryItems = useCallback(async () => {
     try {
@@ -298,6 +323,10 @@ const ProductManagement = () => {
       const response = await apiClient.get('/units');
       if (response.data.success) {
         const units = response.data.data || [];
+        // Hand the database units to the conversion helpers BEFORE the state
+        // update, so the re-render below already converts with them (demand,
+        // COGS and stock deduction on the server use the same rows).
+        setUnitMetadata(units);
         setIngredientUnits(units);
         setNewIngredient((current) => ({
           ...current,
@@ -627,7 +656,7 @@ const ProductManagement = () => {
         ? product.product_ingredients.map(pi => ({
             name: pi.ingredients?.name || '',
             quantity: pi.quantity_per_serving?.toString() || '',
-            unit: pi.unit || pi.ingredients?.unit || 'kg',
+            unit: canonicalUnitName(pi.unit || pi.ingredients?.unit || 'kg'),
             inventory_item_id: pi.inventory_item_id || null
           }))
         : []
@@ -651,7 +680,7 @@ const ProductManagement = () => {
         ? product.product_ingredients.map(pi => ({
             name: pi.ingredients?.name || '',
             quantity: pi.quantity_per_serving?.toString() || '',
-            unit: pi.unit || pi.ingredients?.unit || 'kg',
+            unit: canonicalUnitName(pi.unit || pi.ingredients?.unit || 'kg'),
             inventory_item_id: pi.inventory_item_id || null
           }))
         : []
@@ -906,10 +935,11 @@ const ProductManagement = () => {
     const unitPrice = Number(item.price) || 0;
     const gramsPerCup = recipeDensityFor(item.grams_per_cup, item.name);
     const pieceWeight = pieceWeightOf(item.name, newIngredient.unit);
-    const converted = normalizeRecipeQuantityToUnit(qty, newIngredient.unit, item.unit, gramsPerCup, pieceWeight);
-    const from = String(newIngredient.unit || '').trim().toLowerCase();
-    const to = String(item.unit || '').trim().toLowerCase();
-    const volumeToMass = RECIPE_VOLUME_UNITS.has(from) && RECIPE_MASS_UNITS.has(to);
+    const converted = convertRecipeQuantity(qty, newIngredient.unit, item.unit, {
+      gramsPerCup: item.grams_per_cup,
+      ingredientName: item.name
+    });
+    const volumeToMass = unitKindOf(newIngredient.unit) === 'volume' && unitKindOf(item.unit) === 'mass';
     return {
       name: item.name,
       qty,
@@ -922,7 +952,10 @@ const ProductManagement = () => {
       pieceWeight,
       needsDensity: volumeToMass && !gramsPerCup
     };
-  }, [inventoryItems, newIngredient.inventory_item_id, newIngredient.quantity, newIngredient.unit]);
+    // ingredientUnits is not read here, but the conversion reads the unit map
+    // loaded from it (module state React can't see), so recompute when it loads.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [inventoryItems, ingredientUnits, newIngredient.inventory_item_id, newIngredient.quantity, newIngredient.unit]);
 
   // ============ PER-INGREDIENT COST (TABLE) ============
   // Cost of each added ingredient, using the same conversion math as the live
@@ -947,7 +980,9 @@ const ProductManagement = () => {
       ingredientName: item.name
     });
     return Number.isFinite(cost) && cost > 0 ? cost : null;
-  }, [inventoryItems]);
+    // ingredientUnits: see costPreview above.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [inventoryItems, ingredientUnits]);
 
   const totalIngredientCost = useMemo(() => {
     const costs = formData.ingredients.map(ingredientRowCost);
@@ -1976,7 +2011,7 @@ const ProductManagement = () => {
 
       {/* ============ MODAL (Add/Edit/View) ============ */}
       {isModalOpen && (
-        <div className="modal-overlay" onClick={closeModal}>
+        <div className="modal-overlay">
           <div className="modal-content modal-lg" onClick={(e) => e.stopPropagation()}>
             <div className="modal-header">
               <h3>{isViewMode ? 'Product Details' : (isEditMode ? 'Edit Product' : 'Add New Product')}</h3>
@@ -2146,11 +2181,9 @@ const ProductManagement = () => {
                       value={newIngredient.unit}
                       onChange={(e) => setNewIngredient({...newIngredient, unit: e.target.value})}
                     >
-                      {availableIngredientUnits.map((unit) => (
-                        <option key={unit} value={unit}>{unit}</option>
-                      ))}
+                      {renderUnitOptions(newIngredient.unit)}
                     </select>
-                    <button 
+                    <button
                       className="btn-add-ingredient"
                       onClick={handleAddIngredient}
                     >
@@ -2244,9 +2277,7 @@ const ProductManagement = () => {
                                   value={draftIngredient.unit || ''}
                                   onChange={(e) => handleDraftIngredientChange('unit', e.target.value)}
                                 >
-                                  {availableIngredientUnits.map((unit) => (
-                                    <option key={unit} value={unit}>{unit}</option>
-                                  ))}
+                                  {renderUnitOptions(draftIngredient.unit || '')}
                                 </select>
                               ) : (
                                 ing.unit
