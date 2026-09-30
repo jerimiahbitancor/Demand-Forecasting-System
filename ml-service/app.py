@@ -19,14 +19,15 @@ from flask import Flask, request, jsonify
 
 from config import ML_SERVICE_SHARED_SECRET, MIN_TRAINING_OBSERVATIONS
 from services.data_loader import (
-    get_active_products, get_daily_sales, get_earliest_data_date,
+    get_active_products, get_daily_sales, get_history_gate_inputs, has_trained_model,
     get_latest_confirmed_open_date, get_operating_days,
     get_recipe_and_stock, get_safety_buffer_percentage,
 )
+from services.history_gate import evaluate_history_gate, describe_failure
 from services.preprocessing import validate_sales_data, clean_sales_data, DataValidationError
 from services.feature_engineering import engineer_features, FEATURE_COLUMNS
 from services.model_service import train_global_model, filter_training_eligible
-from services.model_storage import load_latest_model
+from services.model_storage import load_latest_model, load_model_metadata
 from services.forecast_service import generate_forecast, classify_forecast, ModelNotReadyError
 from services.business_logic import estimate_ingredient_demand, estimate_cogs
 from services.supabase_writer import (
@@ -113,38 +114,36 @@ def train():
     because of that), or inactive/discontinued while still having
     plenty of historical observations on record.
 
-    ALSO GATED (first run only): 12 calendar months must have elapsed
-    since the earliest data this service has, before the very first
-    training run is allowed at all. This is separate from and on top of
-    MIN_TRAINING_OBSERVATIONS — that constant governs which pooled
-    products make it into any given run; this gate is a one-time,
-    system-level check that doesn't apply once a model already exists.
-    Ideally this would be a button-disabling check on Express's side
-    before it even offers "Start Training" to the owner, but Express's
-    ml-service wiring doesn't exist yet, so it lives here for now.
+    ALSO GATED (first run only): the first-use history rule in
+    services/history_gate.py — the uploaded sales must span at least 365
+    days (last sale date - first sale date + 1, closed days included), and
+    every date in that span must be open (has sales) or confirmed closed.
+    Today's date plays no part. This is separate from and on top of
+    MIN_TRAINING_OBSERVATIONS, which decides which products go into any
+    given run.
+
+    The backend dashboard applies the SAME rule (backend/utils/historyGate.js,
+    tested against the same cases) to decide whether to show "Start
+    Training", and both decide "is this the first run?" the same way — by
+    whether model_metrics has any row. So the button and this route agree.
     """
-    # One-time, first-training-only gate: 12 calendar months must have
-    # elapsed since the earliest data this service has, distinct from
-    # MIN_TRAINING_OBSERVATIONS (which is per-product and applies on
-    # every run, first or not). Once a model exists, this gate never
-    # applies again — monthly retraining afterward has an established
-    # baseline (previous model_metrics rows) to compare against instead.
-    existing_model, _ = load_latest_model()
-    if existing_model is None:
-        earliest = get_earliest_data_date()
-        if earliest is None:
+    # One-time, first-training-only gate. Once a model has been trained,
+    # the rule never applies again: a single missing upload in the middle
+    # of the data would otherwise block every later monthly retrain.
+    if not has_trained_model():
+        sale_dates, closed_dates = get_history_gate_inputs()
+        gate = evaluate_history_gate(sale_dates, closed_dates)
+        if not gate["passes"]:
             return jsonify({
                 "status": "failed",
-                "reason": "no sales data uploaded yet",
-            }), 422
-        days_of_history = (date.today() - date.fromisoformat(earliest)).days
-        if days_of_history < 365:
-            return jsonify({
-                "status": "failed",
-                "reason": (
-                    f"only {days_of_history} days of history since {earliest} — "
-                    "first training run requires 12 months (365 days) of data"
-                ),
+                "reason": describe_failure(gate),
+                "history": {
+                    key: gate[key] for key in (
+                        "first_sale_date", "last_sale_date", "span_days",
+                        "required_span_days", "open_days", "closed_days",
+                        "unconfirmed_days", "insufficient_reason",
+                    )
+                },
             }), 422
 
     active_ids = get_active_products()["id"].astype(int).tolist()
@@ -249,14 +248,47 @@ def forecast():
     recipe_df = get_recipe_and_stock()
     safety_buffer = get_safety_buffer_percentage()
     operating_days = get_operating_days()
-    # Loaded once here, not per product — see generate_forecast()'s docstring.
-    known_categories = products_df["id"].astype(int).tolist()
+
+    # PRODUCT LIST FOR THE MODEL — must be the exact list (same order)
+    # the model was trained with, NOT today's active-products list.
+    # XGBoost reads product_id by its position in this list, so a
+    # different order or a different set of products would silently
+    # give one product another product's forecast.
+    metadata = load_model_metadata(model_version)
+    if metadata:
+        known_categories = metadata["product_categories"]
+        trained_ids = set(metadata["trained_product_ids"])
+    else:
+        # Legacy model saved before metadata existed. Training built its
+        # category list from the pooled product IDs sorted ascending, so
+        # sorting today's active IDs is the closest match — correct only
+        # if no product was added/archived since. Retrain to remove this.
+        logger.warning(
+            f"{model_version} has no metadata file — using sorted active IDs "
+            "as the category list. Retrain to make forecasts reliable."
+        )
+        known_categories = sorted(products_df["id"].astype(int).tolist())
+        trained_ids = set(known_categories)
 
     day1_forecasts_by_product = {}
     results = []
 
     for _, product in products_df.iterrows():
         product_id = int(product["id"])
+        # Only forecast products the model actually learned. An ACTIVE
+        # product that wasn't in the last training run (not enough usable
+        # history then, or added after) waits for the next retrain.
+        if product_id not in trained_ids:
+            results.append({
+                "product_id": product_id,
+                "status": "skipped",
+                "reason": (
+                    "not in the trained model yet — needs at least "
+                    f"{MIN_TRAINING_OBSERVATIONS} usable sales days at the last "
+                    "training run; will be forecast after the next retrain"
+                ),
+            })
+            continue
         try:
             forecast_rows = generate_forecast(
                 product_id, model, model_version, known_categories, horizon_days,

@@ -1,5 +1,5 @@
 // Dashboard.jsx
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import axios from 'axios';
 import './Dashboard.css';
 
@@ -19,6 +19,11 @@ const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:5000/api';
 
 const Dashboard = () => {
   const [selectedState, setSelectedState] = useState('NoData');
+  // Bumped by a state screen that wants the dashboard re-checked right away
+  // (e.g. right after the owner marks dates closed) instead of waiting up
+  // to 5 seconds for the next poll. The effect below re-runs on change.
+  const [refreshKey, setRefreshKey] = useState(0);
+  const requestRefresh = useCallback(() => setRefreshKey((k) => k + 1), []);
 
   useEffect(() => {
     const loadDashboardState = async () => {
@@ -73,7 +78,7 @@ const Dashboard = () => {
 
     const stateInterval = setInterval(loadDashboardState, 5000);
     return () => clearInterval(stateInterval);
-  }, []);
+  }, [refreshKey]);
 
   // Configuration for each state with background
   const stateConfig = {
@@ -153,7 +158,7 @@ const Dashboard = () => {
       className="dashboard-wrapper"
       style={getBackgroundStyle()}
     >
-      <CurrentDashboard />
+      <CurrentDashboard onRefreshState={requestRefresh} />
     </div>
   );
 };

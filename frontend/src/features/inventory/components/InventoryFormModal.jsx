@@ -22,7 +22,11 @@ const InventoryFormModal = ({
   };
 
   return (
-    <InventoryModal className="modal-lg inventory-form-modal" onClose={close}>
+    <InventoryModal
+      className="modal-lg inventory-form-modal"
+      onClose={close}
+      closeOnOverlay={false}
+    >
       <div className="modal-header inventory-modal-header">
         <h3 className="modal-title">
           {isEdit ? "Edit Inventory Item" : "Add New Ingredient"}

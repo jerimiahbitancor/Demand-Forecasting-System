@@ -14,11 +14,18 @@ import pandas as pd
 from config import supabase
 
 
-# Unit conversion factors for recipe quantities (kept in sync with
-# frontend/src/utils/recipeUnits.js and backend/utils/recipeUnits.js).
+# Unit conversion for recipe quantities (kept in sync with
+# frontend/src/utils/recipeUnits.js and backend/utils/recipeUnits.js;
+# tests/fixtures/recipe_unit_cases.json is run against all three).
 # A product's recipe can use a different unit than the ingredient's stock
 # unit (e.g. "1 cup" of soy sauce vs an ingredient priced per litre); every
 # quantity is normalised to the ingredient's unit before use.
+#
+# Unit facts (family, base factor, aliases, piece weight) live in the
+# ingredient_units table, so a unit added in Settings converts here too.
+# load_unit_metadata() reads them at the start of get_recipe_and_stock(); the
+# static tables below are only the fallback when the table can't be read or a
+# unit isn't in it.
 _RECIPE_UNIT_BASE_FACTOR = {
     "kg": 1000, "kilogram": 1000, "kilograms": 1000, "kilo": 1000, "kilos": 1000,
     "kg (kg)": 1000, "kilograms (kg)": 1000, "kilogram (kg)": 1000,
@@ -26,9 +33,9 @@ _RECIPE_UNIT_BASE_FACTOR = {
     "mg": 0.001, "milligram": 0.001, "milligrams": 0.001,
     "lb": 454, "lbs": 454, "pound": 454, "pounds": 454,
     "oz": 28.35, "ounce": 28.35, "ounces": 28.35,
-    "L": 1000, "l": 1000, "litre": 1000, "liter": 1000, "litres": 1000, "liters": 1000,
+    "l": 1000, "litre": 1000, "liter": 1000, "litres": 1000, "liters": 1000,
     "l (l)": 1000, "liter (l)": 1000, "liters (l)": 1000, "litre (l)": 1000, "litres (l)": 1000,
-    "mL": 1, "ml": 1, "millilitre": 1, "milliliter": 1, "millilitres": 1, "milliliters": 1,
+    "ml": 1, "millilitre": 1, "milliliter": 1, "millilitres": 1, "milliliters": 1,
     "ml (ml)": 1, "milliliter (ml)": 1, "milliliters (ml)": 1, "millilitre (ml)": 1,
     "cup": 240, "cups": 240,
     "tbsp": 15, "tablespoon": 15, "tablespoons": 15,
@@ -46,8 +53,8 @@ _MASS_UNITS = {
 }
 
 _VOLUME_UNITS = {
-    "L", "l", "litre", "liter", "litres", "liters", "l (l)", "liter (l)", "liters (l)", "litre (l)", "litres (l)",
-    "mL", "ml", "millilitre", "milliliter", "millilitres", "milliliters",
+    "l", "litre", "liter", "litres", "liters", "l (l)", "liter (l)", "liters (l)", "litre (l)", "litres (l)",
+    "ml", "millilitre", "milliliter", "millilitres", "milliliters",
     "ml (ml)", "milliliter (ml)", "milliliters (ml)", "millilitre (ml)",
     "cup", "cups", "tbsp", "tablespoon", "tablespoons", "tsp", "tps", "teaspoon", "teaspoons",
     "fl oz", "floz", "fluid ounce", "fluid ounces",
@@ -66,7 +73,8 @@ _COUNT_PIECE_UNITS = {
 }
 
 # Default per-piece weights (grams) used when a recipe quantity uses a piece
-# unit but the ingredient is priced by weight.
+# unit but the ingredient is priced by weight. A weight set on the unit row
+# (ingredient_units.piece_weight_grams) wins over these.
 _PIECE_WEIGHT_KEYWORDS = [
     (r"\bpotato(es)?\b", 150),
     (r"\bonions?\b", 110),
@@ -81,11 +89,144 @@ _PIECE_WEIGHT_KEYWORDS = [
     (r"\bbreads?\b", 30),
 ]
 
+# Common kitchen densities (grams per 240 mL cup), used when a recipe line is
+# in a volume unit but the ingredient is stocked by weight and has no
+# grams_per_cup of its own. Matched loosely against the ingredient name, most
+# specific first (brown sugar before sugar).
+_DENSITY_KEYWORDS = [
+    (r"cake flour", 114),
+    (r"bread flour", 127),
+    (r"all[- ]?purpose|plain flour|flour", 125),
+    (r"brown sugar|demerara|muscovado", 220),
+    (r"powdered sugar|confectioner|icing sugar", 120),
+    (r"sugar", 200),
+    (r"butter", 227),
+    (r"rice", 185),
+    (r"cooking oil|oil", 216),
+    (r"condensed milk", 306),
+    (r"evaporated milk", 240),
+    (r"heavy cream|whipping cream", 240),
+    (r"cream", 240),
+    (r"milk", 240),
+    (r"water", 240),
+    (r"yogurt|yoghurt", 245),
+    (r"oats|oat", 90),
+    (r"cornstarch|corn starch", 128),
+    (r"baking powder", 192),
+    (r"baking soda|bicarbonate", 220),
+    (r"cocoa", 85),
+    (r"honey", 340),
+    (r"chocolate chip|choc chip", 170),
+    (r"nuts?|peanut|cashew|almond", 120),
+    (r"breadcrumb|panko", 108),
+    (r"cheese", 113),
+    (r"mayonnaise|mayo", 220),
+    (r"soy sauce", 255),
+    (r"vinegar", 240),
+    (r"salt", 273),
+]
+
+# lowercased unit name/alias -> {"family", "factor", "is_piece", "piece_weight_grams"}
+_UNIT_METADATA = {}
+
+
+def set_unit_metadata(rows):
+    """Rebuild the unit map from ingredient_units rows:
+    {name, family, base_factor, is_piece, piece_weight_grams, aliases, is_active}.
+    Inactive rows and rows without a valid family are skipped, so a bad row can
+    never turn kg into a plain count (those units use the static tables)."""
+    _UNIT_METADATA.clear()
+    for row in rows or []:
+        if row.get("is_active") is False:
+            continue
+        name = str(row.get("name") or "").strip()
+        family = row.get("family")
+        if not name or family not in ("mass", "volume", "count"):
+            continue
+        factor = None
+        if family != "count" and row.get("base_factor") is not None:
+            factor = float(row["base_factor"])
+        weight = row.get("piece_weight_grams")
+        meta = {
+            "family": family,
+            "factor": factor,
+            "is_piece": bool(row.get("is_piece")) and family == "count",
+            "piece_weight_grams": float(weight) if weight is not None else None,
+        }
+        for key in [name, *(row.get("aliases") or [])]:
+            clean = str(key or "").strip().lower()
+            if clean:
+                _UNIT_METADATA[clean] = meta
+
+
+def load_unit_metadata():
+    """Read ingredient_units and refresh the unit map. If the table or its
+    conversion columns can't be read, the map is left as it was (static tables
+    still work) instead of failing a forecast run over a lookup."""
+    try:
+        response = (
+            supabase.table("ingredient_units")
+            .select("name, family, base_factor, is_piece, piece_weight_grams, aliases, is_active")
+            .eq("is_active", True)
+            .execute()
+        )
+    except Exception as exc:
+        print(f"WARNING: could not load ingredient_units, using built-in unit tables: {exc}")
+        return False
+    set_unit_metadata(response.data or [])
+    return True
+
+
+def _unit_kind(unit):
+    """'mass' | 'volume' | 'piece' | 'count' | None (unknown)."""
+    key = (unit or "").strip().lower()
+    meta = _UNIT_METADATA.get(key)
+    if meta:
+        if meta["family"] in ("mass", "volume"):
+            return meta["family"]
+        return "piece" if meta["is_piece"] else "count"
+    if key in _MASS_UNITS:
+        return "mass"
+    if key in _VOLUME_UNITS:
+        return "volume"
+    if key in _COUNT_PIECE_UNITS:
+        return "piece"
+    return None
+
+
+def _unit_factor(unit):
+    """Grams (mass) or mL (volume) in one `unit`; None for counts / unknown."""
+    key = (unit or "").strip().lower()
+    meta = _UNIT_METADATA.get(key)
+    if meta:
+        return None if meta["family"] == "count" else meta["factor"]
+    return _RECIPE_UNIT_BASE_FACTOR.get(key)
+
+
+def _density_for(grams_per_cup, ingredient_name):
+    """Grams per 240 mL cup: the ingredient's own value when set, else a
+    name-based estimate, else None."""
+    try:
+        explicit = float(grams_per_cup)
+    except (TypeError, ValueError):
+        explicit = 0.0
+    if math.isfinite(explicit) and explicit > 0:
+        return explicit
+    name = (ingredient_name or "").lower()
+    for pattern, grams in _DENSITY_KEYWORDS:
+        if re.search(pattern, name):
+            return grams
+    return None
+
 
 def _piece_weight_for(ingredient_name, piece_unit=None):
     """Grams per piece for `piece_unit` pieces of `ingredient_name`, or None
-    when no trusted estimate exists."""
+    when no trusted estimate exists. A weight on the unit row wins, then the
+    butter-stick rule, then a name-based estimate."""
     unit = (piece_unit or "").strip().lower()
+    meta = _UNIT_METADATA.get(unit)
+    if meta and meta["family"] == "count" and meta["is_piece"] and meta["piece_weight_grams"] is not None:
+        return meta["piece_weight_grams"]
     if re.match(r"^sticks?(\s\(pcs\))?$", unit) and re.search(r"butter", ingredient_name or "", re.IGNORECASE):
         return 113
     name = (ingredient_name or "").lower()
@@ -130,37 +271,65 @@ def _normalize_recipe_quantity(quantity, from_unit, to_unit, grams_per_cup=None,
     qty = _parse_recipe_quantity(quantity)
     if not math.isfinite(qty) or qty <= 0:
         return 0.0
-    from_key = (from_unit or "").strip().lower()
-    to_key = (to_unit or "").strip().lower()
-    from_factor = _RECIPE_UNIT_BASE_FACTOR.get(from_key)
-    to_factor = _RECIPE_UNIT_BASE_FACTOR.get(to_key)
+    from_kind = _unit_kind(from_unit)
+    to_kind = _unit_kind(to_unit)
+    from_factor = _unit_factor(from_unit)
+    to_factor = _unit_factor(to_unit)
 
-    # Volume -> mass via the ingredient's density (grams per 240 mL cup).
-    # Without a density, cross-family units pass through unchanged.
+    # Volume -> mass via the ingredient's density (grams per 240 mL cup), taken
+    # from grams_per_cup or estimated from the name. With no density,
+    # cross-family units pass through unchanged.
+    density = _density_for(grams_per_cup, ingredient_name)
     if (
-        from_key in _VOLUME_UNITS
-        and to_key in _MASS_UNITS
+        from_kind == "volume"
+        and to_kind == "mass"
         and from_factor is not None
         and to_factor is not None
-        and grams_per_cup
-        and float(grams_per_cup) > 0
+        and density
     ):
-        grams = (qty * from_factor) * (float(grams_per_cup) / 240)
+        grams = (qty * from_factor) * (density / 240)
         return round(grams / to_factor, 4)
 
-    # Pieces -> mass via the per-piece weight estimate. Without an estimate,
-    # cross-family units pass through unchanged.
-    if from_key in _COUNT_PIECE_UNITS and to_key in _MASS_UNITS and to_factor is not None:
+    # Pieces -> mass via the per-piece weight. Without one, cross-family
+    # units pass through unchanged.
+    if from_kind == "piece" and to_kind == "mass" and to_factor is not None:
         piece_weight_grams = _piece_weight_for(ingredient_name, from_unit)
         if piece_weight_grams and piece_weight_grams > 0:
             return round((qty * piece_weight_grams) / to_factor, 4)
 
-    same_family = (from_key in _MASS_UNITS and to_key in _MASS_UNITS) or (
-        from_key in _VOLUME_UNITS and to_key in _VOLUME_UNITS
-    )
+    same_family = from_kind is not None and from_kind == to_kind and from_kind in ("mass", "volume")
     if not same_family or from_factor is None or to_factor is None:
         return qty
     return round((qty * from_factor) / to_factor, 4)
+
+
+def _fetch_all_rows(build_query) -> list:
+    """
+    PAGING: reads every matching row, one page at a time.
+
+    Supabase returns at most 1,000 rows per request (the project's
+    "Max rows" setting — kept on purpose as a safety limit). Without
+    paging, a query for more rows than that silently returns only the
+    first 1,000. This asks for rows 0-999, then 1000-1999, and so on,
+    until a page comes back EMPTY.
+
+    Stopping on an empty page (not on "page smaller than 1,000") keeps
+    this correct even if someone later lowers Max rows to, say, 500:
+    a 500-row page is then just the next page, not the last one.
+
+    `build_query` must return a fresh, fully-ordered query each call
+    (a stable ORDER BY is what keeps pages from overlapping).
+    """
+    page_size = 1000
+    rows = []
+    start = 0
+    while True:
+        batch = build_query().range(start, start + page_size - 1).execute().data or []
+        if not batch:
+            break
+        rows.extend(batch)
+        start += len(batch)
+    return rows
 
 
 def get_active_products():
@@ -180,6 +349,7 @@ def get_active_products():
         supabase.table("products")
         .select("id, name, price, is_active, status, first_sold_date")
         .eq("is_active", True)
+        .order("id")  # stable order; the DB gives no order guarantee otherwise
         .execute()
     )
     # Explicit columns so an empty result (zero active products) still
@@ -211,13 +381,14 @@ def get_training_eligible_products(min_observations: int) -> list:
     if not active_ids:
         return []
 
-    response = (
-        supabase.table("daily_sales")
+    rows = _fetch_all_rows(
+        lambda: supabase.table("daily_sales")
         .select("product_id, sale_date")
         .in_("product_id", list(active_ids))
-        .execute()
+        .order("product_id")
+        .order("sale_date")
     )
-    df = pd.DataFrame(response.data)
+    df = pd.DataFrame(rows)
     if df.empty:
         return []
 
@@ -238,16 +409,50 @@ def get_daily_sales(product_id: int = None) -> pd.DataFrame:
     store was closed will simply be absent, not present with a 0.
     That absence is exactly what preprocessing.py expects and relies on.
     """
-    query = supabase.table("daily_sales").select(
-        "product_id, sale_date, quantity_sold"
-    )
-    if product_id is not None:
-        query = query.eq("product_id", product_id)
+    def build_query():
+        query = supabase.table("daily_sales").select(
+            "product_id, sale_date, quantity_sold"
+        )
+        if product_id is not None:
+            query = query.eq("product_id", product_id)
+        # Two sort keys so every row has one fixed position. Paging needs
+        # this: if the order could shift between pages, a row could be
+        # skipped or read twice.
+        return query.order("sale_date").order("product_id")
 
-    response = query.order("sale_date").execute()
-    df = pd.DataFrame(response.data)
+    df = pd.DataFrame(
+        _fetch_all_rows(build_query),
+        columns=["product_id", "sale_date", "quantity_sold"],
+    )
     if not df.empty:
         df["sale_date"] = pd.to_datetime(df["sale_date"])
+    return df
+
+
+def get_recent_sales(product_id: int, before_date, limit: int = 60) -> pd.DataFrame:
+    """
+    The newest `limit` sales observations for ONE product, strictly
+    before `before_date`, returned oldest -> newest.
+
+    Used by forecasting, which only needs recent history. Asking the
+    database for the NEWEST rows first (then flipping the order here)
+    means this always gets the latest data, no matter how many years of
+    history the product has — and it stays far under the 1,000-row cap
+    in a single request.
+    """
+    response = (
+        supabase.table("daily_sales")
+        .select("product_id, sale_date, quantity_sold")
+        .eq("product_id", product_id)
+        .lt("sale_date", before_date.isoformat())
+        .order("sale_date", desc=True)
+        .limit(limit)
+        .execute()
+    )
+    df = pd.DataFrame(response.data, columns=["product_id", "sale_date", "quantity_sold"])
+    if not df.empty:
+        df["sale_date"] = pd.to_datetime(df["sale_date"])
+        df = df.sort_values("sale_date").reset_index(drop=True)
     return df
 
 
@@ -265,6 +470,9 @@ def get_recipe_and_stock() -> pd.DataFrame:
     "relation does not exist" error mentioning inventory_items
     anywhere else in this service, it's this same stale reference.
     """
+    # Pick up units added / edited in Settings since the last run.
+    load_unit_metadata()
+
     def _fetch(with_unit):
         columns = (
             "product_id, quantity_per_serving, unit, "
@@ -344,39 +552,51 @@ def get_operating_days() -> set:
     return set(response.data[0]["operating_days"])
 
 
-def get_earliest_data_date():
+def get_history_gate_inputs():
     """
-    The earliest date this service has real sales data for — used for
-    the one-time "has 12 months of history elapsed yet" gate before the
-    very first training run is allowed (see /train in app.py).
+    The two date lists the first-use history rule needs (see
+    services/history_gate.py): every date that has daily_sales rows, and
+    every date the owner confirmed closed.
 
-    Prefers the earliest confirmed_open business_days date, since that's
-    the more reliable open/closed-aware signal; falls back to the
-    earliest daily_sales.sale_date when business_days has no rows yet
-    (e.g. history uploaded before the business_days table/writes
-    existed). Returns None if there's no data at all.
+    Reads ALL of daily_sales, not per user or per upload, exactly like the
+    backend's businessDayService.getHistoryCoverage() — both sides must see
+    the same data or the dashboard and /train could disagree.
+
+    Paged: daily_sales holds far more than 1,000 rows. Only sale_date is
+    selected, but a full year is still ~15 pages at ~40 products/day. This
+    runs once per first-training attempt, so that's acceptable.
     """
-    response = (
-        supabase.table("business_days")
-        .select("business_date")
-        .eq("status", "confirmed_open")
-        .order("business_date", desc=False)
-        .limit(1)
-        .execute()
-    )
-    if response.data:
-        return response.data[0]["business_date"]
-
-    response = (
-        supabase.table("daily_sales")
+    sale_rows = _fetch_all_rows(
+        lambda: supabase.table("daily_sales")
         .select("sale_date")
-        .order("sale_date", desc=False)
-        .limit(1)
-        .execute()
+        .order("sale_date")
+        .order("product_id")
     )
-    if response.data:
-        return response.data[0]["sale_date"]
-    return None
+    closed_rows = _fetch_all_rows(
+        lambda: supabase.table("business_days")
+        .select("business_date")
+        .eq("status", "confirmed_closed")
+        .order("business_date")
+    )
+    sale_dates = sorted({r["sale_date"] for r in sale_rows if r.get("sale_date")})
+    closed_dates = sorted({r["business_date"] for r in closed_rows if r.get("business_date")})
+    return sale_dates, closed_dates
+
+
+def has_trained_model():
+    """
+    True once any training run has finished and written model_metrics.
+
+    This decides whether the first-use history rule applies. It reads the
+    model_metrics TABLE on purpose, not Supabase Storage: the backend
+    dashboard decides "has a model been trained?" from model_metrics
+    (uploadService.getLatestModelMetrics), and the two must agree.
+    Storage can hold old model files after the database is reset (it did,
+    Sep 29 2026: 9 files, 0 model_metrics rows), and those should not let a
+    fresh dataset skip the history check.
+    """
+    response = supabase.table("model_metrics").select("id").limit(1).execute()
+    return bool(response.data)
 
 
 def get_latest_confirmed_open_date():

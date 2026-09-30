@@ -8,6 +8,7 @@
 // does not invent new business rules, it re-derives the same ones for
 // display, since ml-service never exposes an HTTP API of its own for
 // Express to call read-only.
+const { fetchAllRows } = require('../utils/fetchAllRows');
 const { supabaseAdmin } = require('../config/supabase');
 const dayjs = require('dayjs');
 const utc = require('dayjs/plugin/utc');
@@ -15,7 +16,7 @@ const timezone = require('dayjs/plugin/timezone');
 dayjs.extend(utc);
 dayjs.extend(timezone);
 const PH_TZ = 'Asia/Manila';
-const { normalizeRecipeQuantityToUnit, parseRecipeQuantity, pieceWeightOf, isMissingColumnError } = require('../utils/recipeUnits');
+const { convertRecipeQuantity, parseRecipeQuantity, isMissingColumnError } = require('../utils/recipeUnits');
 
 // Critical <50%, Low <100%, Normal 100-200%, Excess >200% of forecasted
 // demand — locked thresholds, matches ml-service/services/business_logic.py's
@@ -149,12 +150,11 @@ async function getRecipeMap() {
     // volume recipe unit (e.g. cup) convert into a mass stock unit (kg), and
     // piece units (e.g. pcs of potato) convert into mass via a per-piece weight.
     const normalizedPerServing = 'unit' in row
-      ? normalizeRecipeQuantityToUnit(
+      ? convertRecipeQuantity(
           row.quantity_per_serving,
           row.unit || ingredient.unit,
           ingredient.unit,
-          ingredient.grams_per_cup,
-          pieceWeightOf(ingredient.name, row.unit || ingredient.unit)
+          { gramsPerCup: ingredient.grams_per_cup, ingredientName: ingredient.name }
         )
       : parseRecipeQuantity(row.quantity_per_serving) || 0;
     const entry = {
@@ -222,22 +222,32 @@ async function getForecastingAnalytics({ productId, from, to } = {}) {
   if (productsError) throw productsError;
   const productById = new Map((products || []).map((p) => [p.id, p]));
 
-  let forecastQuery = supabaseAdmin
-    .from('forecasts')
-    .select('product_id, forecast_date, predicted_quantity, model_version')
-    .gte('forecast_date', rangeFrom)
-    .lte('forecast_date', rangeTo);
-  if (productId) forecastQuery = forecastQuery.eq('product_id', productId);
-  const { data: forecastRows, error: forecastError } = await forecastQuery;
+  // Paged: the default range is 38 days (30 back + 7 forward) and a
+  // forecast row accumulates per product per date, so ~40 products
+  // already puts this over 1,000 rows.
+  const buildForecastQuery = () => {
+    let q = supabaseAdmin
+      .from('forecasts')
+      .select('product_id, forecast_date, predicted_quantity, model_version')
+      .gte('forecast_date', rangeFrom)
+      .lte('forecast_date', rangeTo);
+    if (productId) q = q.eq('product_id', productId);
+    return q.order('forecast_date').order('product_id');
+  };
+  const { data: forecastRows, error: forecastError } = await fetchAllRows(buildForecastQuery);
   if (forecastError) throw forecastError;
 
-  let salesQuery = supabaseAdmin
-    .from('daily_sales')
-    .select('product_id, sale_date, quantity_sold')
-    .gte('sale_date', rangeFrom)
-    .lte('sale_date', rangeTo);
-  if (productId) salesQuery = salesQuery.eq('product_id', productId);
-  const { data: salesRows, error: salesError } = await salesQuery;
+  // Paged: a date range across all products easily passes 1,000 rows.
+  const buildSalesQuery = () => {
+    let q = supabaseAdmin
+      .from('daily_sales')
+      .select('product_id, sale_date, quantity_sold')
+      .gte('sale_date', rangeFrom)
+      .lte('sale_date', rangeTo);
+    if (productId) q = q.eq('product_id', productId);
+    return q.order('sale_date').order('product_id');
+  };
+  const { data: salesRows, error: salesError } = await fetchAllRows(buildSalesQuery);
   if (salesError) throw salesError;
 
   const recipeMap = await getRecipeMap();
@@ -355,17 +365,24 @@ async function getProductPerformanceAnalytics({ from, to } = {}) {
   const recipeMap = await getRecipeMap();
 
   // --- Demand Classification (today's forecast + latest classification tier) ---
-  const { data: forecastRows, error: forecastError } = await supabaseAdmin
+  // Paged: same reason as getForecastingAnalytics — products x dates.
+  const { data: forecastRows, error: forecastError } = await fetchAllRows(() => supabaseAdmin
     .from('forecasts')
     .select('product_id, forecast_date, predicted_quantity')
     .gte('forecast_date', rangeFrom)
-    .lte('forecast_date', rangeTo);
+    .lte('forecast_date', rangeTo)
+    .order('forecast_date')
+    .order('product_id'));
   if (forecastError) throw forecastError;
 
-  const { data: classificationRows, error: classError } = await supabaseAdmin
+  // Paged: this reads the WHOLE table to pick each product's newest row,
+  // and the forecast run appends one row per product per day — ~40/day,
+  // so it passes 1,000 rows in under a month of normal operation.
+  const { data: classificationRows, error: classError } = await fetchAllRows(() => supabaseAdmin
     .from('product_classifications')
     .select('product_id, classification_date, demand_tier, basis')
-    .order('classification_date', { ascending: false });
+    .order('classification_date', { ascending: false })
+    .order('product_id'));
   if (classError) throw classError;
   const latestClassificationByProduct = new Map();
   for (const row of classificationRows || []) {
@@ -412,11 +429,13 @@ async function getProductPerformanceAnalytics({ from, to } = {}) {
   // --- Performance Ratio ---
   // Quantity Sold / Revenue columns are still real actual sales summed
   // over the range (unchanged).
-  const { data: salesRows, error: salesError } = await supabaseAdmin
+  const { data: salesRows, error: salesError } = await fetchAllRows(() => supabaseAdmin
     .from('daily_sales')
     .select('product_id, quantity_sold')
     .gte('sale_date', rangeFrom)
-    .lte('sale_date', rangeTo);
+    .lte('sale_date', rangeTo)
+    .order('sale_date')
+    .order('product_id'));
   if (salesError) throw salesError;
 
   const qtyByProduct = new Map();
@@ -435,12 +454,15 @@ async function getProductPerformanceAnalytics({ from, to } = {}) {
   // null and are excluded below, not treated as 0.
   const activeProductIds = new Set(products.filter((p) => p.status === 'active').map((p) => p.id));
 
-  const { data: rollingRows, error: rollingError } = await supabaseAdmin
+  // Paged: products x dates over the requested range.
+  const { data: rollingRows, error: rollingError } = await fetchAllRows(() => supabaseAdmin
     .from('forecasts')
     .select('product_id, forecast_date, rolling_7')
     .gte('forecast_date', rangeFrom)
     .lte('forecast_date', rangeTo)
-    .not('rolling_7', 'is', null);
+    .not('rolling_7', 'is', null)
+    .order('forecast_date')
+    .order('product_id'));
   if (rollingError) throw rollingError;
 
   // forecast_date -> [{ productId, rolling7 }] for active products only
@@ -503,10 +525,11 @@ async function getProductPerformanceAnalytics({ from, to } = {}) {
     .map((row, index) => ({ rank: index + 1, ...row }));
 
   // --- Product Status sections ---
-  const { data: lastSaleRows, error: lastSaleError } = await supabaseAdmin
+  const { data: lastSaleRows, error: lastSaleError } = await fetchAllRows(() => supabaseAdmin
     .from('daily_sales')
     .select('product_id, sale_date')
-    .order('sale_date', { ascending: false });
+    .order('sale_date', { ascending: false })
+    .order('product_id'));
   if (lastSaleError) throw lastSaleError;
   const lastSaleByProduct = new Map();
   for (const row of lastSaleRows || []) {
@@ -591,10 +614,15 @@ async function getProductPerformanceAnalytics({ from, to } = {}) {
 // 3. Ingredient Demand
 // ---------------------------------------------------------------------
 async function getLatestMarketPriceMap() {
-  const { data, error } = await supabaseAdmin
+  // Paged: reads the whole table to pick each ingredient's newest price.
+  // market_price gains a row per ingredient per fetch (~103 ingredients),
+  // so about ten fetches is already past 1,000 rows. Truncation here
+  // silently drops ingredients from every COGS figure downstream.
+  const { data, error } = await fetchAllRows(() => supabaseAdmin
     .from('market_price')
     .select('ingredient_id, price, source, scraped_at')
-    .order('scraped_at', { ascending: false });
+    .order('scraped_at', { ascending: false })
+    .order('ingredient_id'));
   if (error) throw error;
   const map = new Map();
   for (const row of data || []) {

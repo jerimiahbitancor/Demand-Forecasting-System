@@ -1,4 +1,5 @@
 // services/mappingService.js
+const { fetchAllRows } = require('../utils/fetchAllRows');
 const { supabase, isConfigured, supabaseAdmin } = require('../config/supabase');
 const { deriveProductStatus } = require('./productStatusService');
 const { PRODUCT_DB_STATUS_BY_DERIVED } = require('./productStatusConstants');
@@ -187,11 +188,12 @@ class MappingService {
       }));
 
       if (transformedData.length > 0) {
-        const { data: salesData, error: salesError } = await supabaseAdmin
+        const { data: salesData, error: salesError } = await fetchAllRows(() => supabaseAdmin
           .from('daily_sales')
           .select('product_id, sale_date')
           .in('product_id', transformedData.map(product => product.id))
-          .order('sale_date', { ascending: true });
+          .order('sale_date', { ascending: true })
+          .order('product_id'));
 
         if (salesError) throw salesError;
 
@@ -868,10 +870,12 @@ class MappingService {
       }
 
       const productIds = products.map((p) => p.id);
-      const { data: sales, error: salesError } = await supabaseAdmin
+      const { data: sales, error: salesError } = await fetchAllRows(() => supabaseAdmin
         .from('daily_sales')
         .select('product_id, sale_date')
-        .in('product_id', productIds);
+        .in('product_id', productIds)
+        .order('sale_date')
+        .order('product_id'));
       if (salesError) throw salesError;
 
       const salesByProduct = new Map();
@@ -1033,10 +1037,11 @@ class MappingService {
         return { updated: 0 };
       }
 
-      const { data: salesRows, error: salesError } = await supabaseAdmin
+      const { data: salesRows, error: salesError } = await fetchAllRows(() => supabaseAdmin
         .from('daily_sales')
         .select('product_id, sale_date')
-        .order('sale_date', { ascending: false });
+        .order('sale_date', { ascending: false })
+        .order('product_id'));
 
       if (salesError) throw salesError;
 

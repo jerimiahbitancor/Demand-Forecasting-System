@@ -6,36 +6,28 @@ import axios from "axios";
 import { useNavigate } from "react-router-dom";
 import uploadedInsufficientImage from "../../../assets/images/NoData.png";
 import { FaInfoCircle } from "react-icons/fa";
+import HistoryGapReview from "../components/HistoryGapReview.jsx";
 
 const API_URL = import.meta.env.VITE_API_URL || "http://localhost:5000/api";
 
-const UploadedInsufficient = () => {
+const UploadedInsufficient = ({ onRefreshState }) => {
   const navigate = useNavigate();
   const [progressPercentage, setProgressPercentage] = useState(20); // Set to 20%
   const [dataProgress, setDataProgress] = useState(0);
   const [uploadedMonths, setUploadedMonths] = useState(0);
-  // Actual distinct calendar days with real sales data — a plain, honest
-  // count of what's actually been uploaded (see uploadService.js's
-  // getUploadStats: actual_days_uploaded), shown alongside the months
-  // figure so "0 months" doesn't read as "nothing happened" when a few
-  // real days of data do exist.
-  const [uploadedDays, setUploadedDays] = useState(0);
   const [totalMonthsNeeded] = useState(12);
   const [isLoading, setIsLoading] = useState(true);
   const [hasData, setHasData] = useState(false);
-  // Why this screen is still showing — 'elapsed' (fewer than 12 calendar
-  // months have passed since the earliest sale date), 'coverage' (12
-  // months have passed, but real sales rows don't cover enough of that
-  // span — too many gap days), or 'both'. See uploadService.js's
-  // getDashboardState() — this used to be a single elapsed-time check, so
-  // "why am I still here" couldn't be answered accurately once coverage
-  // became its own requirement.
+  // Why this screen is still showing (backend/utils/historyGate.js):
+  //   'span'        — the sales history covers fewer than 365 days
+  //   'unconfirmed' — it's long enough, but some dates inside it have no
+  //                   sales and aren't marked closed
+  //   'both' / 'no_data'
   const [insufficientReason, setInsufficientReason] = useState(null);
-  // A full real year of sale-day rows (365, or 366 across a leap day) —
-  // see uploadService.js's MIN_ACTUAL_SALE_DAYS. Deliberately a hard row
-  // count, not a percentage, so the message can say exactly how many more
-  // real days are needed.
-  const [requiredActualDays, setRequiredActualDays] = useState(365);
+  // { firstSaleDate, lastSaleDate, spanDays, spanMonths, requiredSpanDays,
+  //   openDays, closedDays, unconfirmedDays } — closed days count toward
+  // the span; today's date does not.
+  const [history, setHistory] = useState(null);
   const [products, setProducts] = useState([]);
   const isMountedRef = useRef(true);
 
@@ -50,6 +42,24 @@ const UploadedInsufficient = () => {
 
   const handleAddRecipe = (productName) => {
     navigate("/inventory-management", { state: { product: productName } });
+  };
+
+  // After the owner marks dates closed: refresh this screen's numbers, then
+  // ask the Dashboard to re-check its state right away (if every date is
+  // now accounted for, it moves on to "Ready to Train").
+  const handleGapsSaved = async () => {
+    await fetchDataStatus();
+    if (onRefreshState) await onRefreshState();
+  };
+
+  // 'YYYY-MM-DD' -> 'Jul 10, 2025', built from parts so the browser's
+  // timezone can't shift the day.
+  const formatShortDate = (dateStr) => {
+    if (!dateStr) return "";
+    const [y, m, d] = dateStr.split("-").map(Number);
+    return new Date(y, m - 1, d).toLocaleDateString("en-US", {
+      month: "short", day: "numeric", year: "numeric",
+    });
   };
 
   const formatDate = (date) => {
@@ -108,11 +118,13 @@ const UploadedInsufficient = () => {
       const statusResponse = await apiClient.get("/upload/dashboard-state");
       
       if (statusResponse.data.success) {
-        const { state, stats: data, insufficientReason: reason } = statusResponse.data.data;
+        const {
+          state, stats: data, insufficientReason: reason, history: historyData,
+        } = statusResponse.data.data;
         console.log("Data status response:", data);
         setProgressPercentage(20);
         setInsufficientReason(reason || null);
-        setRequiredActualDays(data.required_actual_days || 365);
+        setHistory(historyData || null);
 
         const totalRows = data.sales_records || data.total_rows || 0;
         const totalUploads = data.total_uploads || 0;
@@ -128,13 +140,16 @@ const UploadedInsufficient = () => {
         // No "at least 1 month" or "1 month per upload" fallback: a
         // single day of data is genuinely 0/12 months, not 1.
         const months = data.actual_months_uploaded || 0;
-        const days = data.actual_days_uploaded || 0;
 
         setUploadedMonths(months);
-        setUploadedDays(days);
         setHasData(totalRows > 0 || totalUploads > 0);
 
-        const progressPercent = (months / totalMonthsNeeded) * 100;
+        // Progress tracks the history SPAN (first to last sale date, closed
+        // days included) against the 365-day rule — the thing that
+        // actually gates training.
+        const progressPercent = historyData?.requiredSpanDays
+          ? (historyData.spanDays / historyData.requiredSpanDays) * 100
+          : (months / totalMonthsNeeded) * 100;
         setDataProgress(Math.min(progressPercent, 100));
 
         if (isMountedRef.current && state !== 'uploaded-insufficient') {
@@ -340,31 +355,30 @@ const UploadedInsufficient = () => {
                       <p className="insufficient-step-description1">
                         {isLoading ? (
                           "Loading data status..."
-                        ) : hasData ? (
-                          insufficientReason === 'coverage' ? (
-                            <>
-                              It's been over {totalMonthsNeeded} months since your earliest
-                              uploaded sale date, but the system requires {requiredActualDays} real
-                              days of sales data, not just elapsed time — you're missing{" "}
-                              {Math.max(requiredActualDays - uploadedDays, 0)} more day{Math.max(requiredActualDays - uploadedDays, 0) === 1 ? "" : "s"}.
-                              Upload the missing dates to close the gap.
-                            </>
-                          ) : insufficientReason === 'both' ? (
-                            <>
-                              You've uploaded sales data, but the system needs at least{" "}
-                              {requiredActualDays} real days of sales data spanning at
-                              least {totalMonthsNeeded} months before demand forecasting
-                              can activate.
-                            </>
-                          ) : (
-                            <>
-                              You've uploaded sales data, but the system needs at
-                              least {totalMonthsNeeded} months of history before
-                              demand forecasting can activate.
-                            </>
-                          )
-                        ) : (
+                        ) : !hasData || !history || insufficientReason === 'no_data' ? (
                           "Upload your sales data to get started with forecasting."
+                        ) : insufficientReason === 'unconfirmed' ? (
+                          <>
+                            Your sales history is long enough ({history.spanMonths} months).
+                            But {history.unconfirmedDays} date{history.unconfirmedDays === 1 ? "" : "s"} in
+                            it {history.unconfirmedDays === 1 ? "has" : "have"} no sales and{" "}
+                            {history.unconfirmedDays === 1 ? "is" : "are"} not marked as closed.
+                            Please check those dates below before training can start.
+                          </>
+                        ) : insufficientReason === 'both' ? (
+                          <>
+                            You need at least {totalMonthsNeeded} months of sales history.
+                            You have {history.spanMonths} months so far. Also,{" "}
+                            {history.unconfirmedDays} date{history.unconfirmedDays === 1 ? "" : "s"} with
+                            no sales still need checking (see below).
+                          </>
+                        ) : (
+                          <>
+                            You need at least {totalMonthsNeeded} months of sales history
+                            before forecasting can start. You have {history.spanMonths} months
+                            so far ({history.spanDays} of {history.requiredSpanDays} days). Days
+                            your store was closed count too.
+                          </>
                         )}
                       </p>
                     </div>
@@ -372,9 +386,16 @@ const UploadedInsufficient = () => {
 
                   <div className="insufficient-data-progress-wrapper">
                     <div className="insufficient-data-progress-label">
-                      <span>Historical Data{hasData ? ` (${uploadedDays} day${uploadedDays === 1 ? '' : 's'} of sales data uploaded)` : ''}</span>
+                      <span>
+                        Sales history
+                        {history?.firstSaleDate
+                          ? ` (${formatShortDate(history.firstSaleDate)} – ${formatShortDate(history.lastSaleDate)})`
+                          : ""}
+                      </span>
                       <span className="insufficient-data-progress-text">
-                        {getMonths()} / {totalMonthsNeeded} months
+                        {history
+                          ? `${Math.min(history.spanMonths, totalMonthsNeeded)} / ${totalMonthsNeeded} months`
+                          : `${getMonths()} / ${totalMonthsNeeded} months`}
                       </span>
                     </div>
                     <div className="insufficient-data-progress-bar">
@@ -391,6 +412,21 @@ const UploadedInsufficient = () => {
                     </div>
                   </div>
                 </div>
+
+                {history && history.spanDays > 0 && (
+                  <div className="insufficient-history-counts">
+                    <span><strong>{history.spanDays}</strong> days in history</span>
+                    <span><strong>{history.openDays}</strong> open (with sales)</span>
+                    <span><strong>{history.closedDays}</strong> marked closed</span>
+                    <span className={history.unconfirmedDays > 0 ? "insufficient-history-counts--warn" : ""}>
+                      <strong>{history.unconfirmedDays}</strong> not yet checked
+                    </span>
+                  </div>
+                )}
+
+                {history && history.unconfirmedDays > 0 && (
+                  <HistoryGapReview onSaved={handleGapsSaved} />
+                )}
 
                 <button
                   className="insufficient-step-btn insufficient-step-btn-secondary"

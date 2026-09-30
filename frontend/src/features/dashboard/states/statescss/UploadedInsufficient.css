@@ -647,3 +647,16 @@
   background-color: rgb(86, 255, 60);
 }
 
+/* First-use history counts (span / open / closed / not yet checked) */
+.insufficient-history-counts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 20px;
+  margin-top: 12px;
+  font-size: 13px;
+  color: #5c403c;
+}
+
+.insufficient-history-counts--warn {
+  color: #7a0101;
+}

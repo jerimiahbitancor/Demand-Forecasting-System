@@ -75,6 +75,58 @@ const PIECE_WEIGHT_KEYWORDS = [
   { match: /\bbreads?\b/i, g: 30 }
 ];
 
+// Common kitchen densities (grams per 240 mL cup) used when a recipe line is in
+// a volume unit (cup, tbsp, tsp...) but the ingredient is stocked/priced by
+// weight and has no grams_per_cup of its own. Matched loosely against the
+// ingredient name, most specific first (brown sugar before sugar). Mirrors
+// DENSITY_KEYWORDS in frontend/src/utils/recipeUnits.js and _DENSITY_KEYWORDS
+// in ml-service/services/data_loader.py; ml-service/tests/fixtures/
+// recipe_unit_cases.json keeps all three honest.
+const DENSITY_KEYWORDS = [
+  { match: /cake flour/i, g: 114 },
+  { match: /bread flour/i, g: 127 },
+  { match: /all[- ]?purpose|plain flour|flour/i, g: 125 },
+  { match: /brown sugar|demerara|muscovado/i, g: 220 },
+  { match: /powdered sugar|confectioner|icing sugar/i, g: 120 },
+  { match: /sugar/i, g: 200 },
+  { match: /butter/i, g: 227 },
+  { match: /rice/i, g: 185 },
+  { match: /cooking oil|oil/i, g: 216 },
+  { match: /condensed milk/i, g: 306 },
+  { match: /evaporated milk/i, g: 240 },
+  { match: /heavy cream|whipping cream/i, g: 240 },
+  { match: /cream/i, g: 240 },
+  { match: /milk/i, g: 240 },
+  { match: /water/i, g: 240 },
+  { match: /yogurt|yoghurt/i, g: 245 },
+  { match: /oats|oat/i, g: 90 },
+  { match: /cornstarch|corn starch/i, g: 128 },
+  { match: /baking powder/i, g: 192 },
+  { match: /baking soda|bicarbonate/i, g: 220 },
+  { match: /cocoa/i, g: 85 },
+  { match: /honey/i, g: 340 },
+  { match: /chocolate chip|choc chip/i, g: 170 },
+  { match: /nuts?|peanut|cashew|almond/i, g: 120 },
+  { match: /breadcrumb|panko/i, g: 108 },
+  { match: /cheese/i, g: 113 },
+  { match: /mayonnaise|mayo/i, g: 220 },
+  { match: /soy sauce/i, g: 255 },
+  { match: /vinegar/i, g: 240 },
+  { match: /salt/i, g: 273 }
+];
+
+// Grams per 240 mL cup: the ingredient's own grams_per_cup when set, else a
+// name-based estimate, else null (no trusted density).
+function densityOf(gramsPerCup, ingredientName) {
+  const explicit = Number(gramsPerCup);
+  if (Number.isFinite(explicit) && explicit > 0) return explicit;
+  const name = String(ingredientName || '');
+  for (const { match, g } of DENSITY_KEYWORDS) {
+    if (match.test(name)) return g;
+  }
+  return null;
+}
+
 // ===========================================================================
 // Database-driven overrides. Populated from ingredient_units by
 // setUnitMetadata(); every lookup below consults this map first and falls
@@ -224,6 +276,24 @@ function normalizeRecipeQuantityToUnit(quantity, fromUnit, toUnit, gramsPerCup, 
   return roundTo((qty * fromFactor) / toFactor);
 }
 
+// The one entry point costing, demand and stock deduction should use: converts
+// a recipe line into the ingredient's stock unit, looking up the density and
+// per-piece weight itself so no caller can forget one.
+//   quantity       recipe quantity ("1/2", 0.75, ...)
+//   fromUnit       unit the recipe uses (product_ingredients.unit)
+//   toUnit         unit the ingredient is stocked/priced in (ingredients.unit)
+//   gramsPerCup    ingredients.grams_per_cup (may be null -> name estimate)
+//   ingredientName used for the density / per-piece estimates
+function convertRecipeQuantity(quantity, fromUnit, toUnit, { gramsPerCup = null, ingredientName = '' } = {}) {
+  return normalizeRecipeQuantityToUnit(
+    quantity,
+    fromUnit,
+    toUnit,
+    densityOf(gramsPerCup, ingredientName),
+    pieceWeightOf(ingredientName, fromUnit)
+  );
+}
+
 // True when a Supabase/Postgres error means the product_ingredients.unit
 // column does not exist yet (migration 008 not applied). Callers use this to
 // fall back to the old schema (quantities in the ingredient's own unit) so
@@ -267,6 +337,8 @@ async function loadUnitMetadataFromDb(client) {
 
 module.exports = {
   normalizeRecipeQuantityToUnit,
+  convertRecipeQuantity,
+  densityOf,
   parseRecipeQuantity,
   pieceWeightOf,
   setUnitMetadata,

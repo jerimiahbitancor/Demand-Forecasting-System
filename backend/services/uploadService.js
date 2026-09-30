@@ -1,7 +1,9 @@
 // services/uploadService.js
+const { fetchAllRows } = require('../utils/fetchAllRows');
 const { supabase, isConfigured, supabaseAdmin } = require('../config/supabase');
 const mappingService = require('./mappingService');
 const mlService = require('./mlService');
+const businessDayService = require('./businessDayService');
 const { deriveProductStatus } = require('./productStatusService');
 const { PRODUCT_STATUS_NOTES, PRODUCT_DB_STATUS_BY_DERIVED } = require('./productStatusConstants');
 const dayjs = require('dayjs');
@@ -10,7 +12,7 @@ const timezone = require('dayjs/plugin/timezone');
 dayjs.extend(utc);
 dayjs.extend(timezone);
 const PH_TZ = 'Asia/Manila';
-const { normalizeRecipeQuantityToUnit, pieceWeightOf, isMissingColumnError } = require('../utils/recipeUnits');
+const { convertRecipeQuantity, isMissingColumnError } = require('../utils/recipeUnits');
 
 class UploadService {
   constructor() {
@@ -489,15 +491,20 @@ class UploadService {
           continue;
         }
 
-        const quantity = parseFloat(this.getColumnValueByNames(row, ['Items sold', 'Items Sold', 'Quantity', 'Units sold']) || 0);
+        const soldRaw = parseFloat(this.getColumnValueByNames(row, ['Items sold', 'Items Sold', 'Quantity', 'Units sold']) || 0);
+        const refundedRaw = parseFloat(this.getColumnValueByNames(row, ['Items refunded', 'Items Refunded']) || 0);
         const category = this.getColumnValueByNames(row, ['Category', 'Category Name'])?.toString()?.trim() || 'Uncategorized';
         const saleDate = this.getSaleDateValue(row, fallbackDate);
-        // A missing/blank/non-numeric "Items sold" value must become a
-        // real 0, never a fabricated 1 — the ML pipeline treats an
-        // explicit zero-quantity row as legitimate "sold nothing that
-        // day" signal (see feature_engineering.py's closed-day docstring).
-        // Silently inventing a sale of 1 here would corrupt training data.
-        const normalizedQuantity = Number.isFinite(quantity) ? Math.max(0, Math.round(quantity)) : 0;
+        // NET QUANTITY: quantity_sold = max(0, Items sold - Items refunded).
+        // Refunded items were not really sold, so they are not demand.
+        // A missing/blank/non-numeric value becomes 0, never a made-up 1.
+        // The row's net is kept unclamped here so that if the same
+        // product appears on two rows of one file, the refunds on one row
+        // still cancel sales on the other. The max(0, ...) clamp is
+        // applied once, after summing (see below the loop).
+        const sold = Number.isFinite(soldRaw) ? Math.round(soldRaw) : 0;
+        const refunded = Number.isFinite(refundedRaw) ? Math.round(refundedRaw) : 0;
+        const normalizedQuantity = sold - refunded;
 
         const key = `${productId}|${saleDate}`;
         const existingRow = dailySalesByKey.get(key);
@@ -518,7 +525,12 @@ class UploadService {
         productIds.add(productId);
       }
 
-      const dailySalesRows = [...dailySalesByKey.values()];
+      // Clamp once per (product, date) after summing: net quantity can't
+      // go below 0 (e.g. a refund logged for an earlier day's sale).
+      const dailySalesRows = [...dailySalesByKey.values()].map((r) => ({
+        ...r,
+        quantity_sold: Math.max(0, r.quantity_sold),
+      }));
 
       if (dailySalesRows.length > 0) {
         const { error: saleInsertError } = await supabaseAdmin
@@ -586,10 +598,11 @@ class UploadService {
         const { data: productRows, error: productFetchError } = await supabaseAdmin.from('products')
           .select('id, created_at, first_sold_date, is_active, inactive_reason, inactive_since, status')
           .in('id', selectedProductIds);
-        const { data: salesRows, error: salesFetchError } = await supabaseAdmin.from('daily_sales')
+        const { data: salesRows, error: salesFetchError } = await fetchAllRows(() => supabaseAdmin.from('daily_sales')
           .select('product_id, sale_date')
           .in('product_id', selectedProductIds)
-          .order('sale_date', { ascending: true });
+          .order('sale_date', { ascending: true })
+          .order('product_id'));
 
         if (productFetchError || salesFetchError) {
           throw productFetchError || salesFetchError;
@@ -620,12 +633,11 @@ class UploadService {
             if (!activeProductIds.has(sale.product_id)) continue;
             for (const recipe of (recipeRows || []).filter((row) => row.product_id === sale.product_id)) {
               const ingredientUnit = recipe.ingredients?.unit || recipe.unit || null;
-              const perServing = normalizeRecipeQuantityToUnit(
+              const perServing = convertRecipeQuantity(
                 recipe.quantity_per_serving,
                 recipe.unit,
                 ingredientUnit,
-                recipe.ingredients?.grams_per_cup,
-                pieceWeightOf(recipe.ingredients?.name, recipe.unit)
+                { gramsPerCup: recipe.ingredients?.grams_per_cup, ingredientName: recipe.ingredients?.name }
               );
               const amount = Number(perServing) * Number(sale.quantity_sold);
               if (!Number.isFinite(amount) || amount <= 0) continue;
@@ -1177,7 +1189,6 @@ class UploadService {
           months_uploaded: 0,
           actual_days_uploaded: 0,
           actual_months_uploaded: 0,
-          earliest_sale_date: null,
           menu_items: this.memoryStore.products.length,
           last_sync: filtered[filtered.length - 1]?.upload_date || null
         };
@@ -1198,16 +1209,13 @@ class UploadService {
 
       const uploadIds = uploads.map((upload) => upload.id).filter(Boolean);
 
-      // Two different numbers, deliberately kept separate:
+      // Display-only numbers. NEITHER gates training any more — the
+      // first-use rule lives in utils/historyGate.js (see
+      // getDashboardState), and it measures the span of the uploaded data,
+      // never today's date.
       //
-      // - days_of_history/months_uploaded ("elapsed calendar time since
-      //   the earliest sale date") mirrors ml-service/app.py's actual
-      //   first-training gate exactly, so the "ready to train"/
-      //   "insufficient data" dashboard state can never drift from
-      //   whether a real /train call would actually be allowed to run.
-      //   This is intentionally tolerant of closed days — a business
-      //   that's open Mon-Fri only will still reach 365 here after a
-      //   calendar year, same as ml-service's own gate.
+      // - days_of_history/months_uploaded: elapsed calendar time from the
+      //   earliest sale date to TODAY. Kept for existing displays only.
       //
       // - actual_days_uploaded/actual_months_uploaded ("how many distinct
       //   calendar days actually have a real sales row") is what gets
@@ -1229,22 +1237,23 @@ class UploadService {
           // collapsing a genuine 400+ distinct sale dates down to ~22 and
           // making a fully-uploaded year look almost empty. Page through
           // with .range() until a page comes back short of PAGE_SIZE.
-          const PAGE_SIZE = 1000;
-          const distinctDates = new Set();
-          let offset = 0;
-          for (;;) {
-            const { data: page = [], error: pageError } = await supabaseAdmin
-              .from('daily_sales')
-              .select('sale_date')
-              .in('upload_id', uploadIds)
-              .range(offset, offset + PAGE_SIZE - 1);
+          // Uses the shared helper, which stops on an EMPTY page rather
+          // than a short one. The old inline loop broke on the first
+          // short page — correct only while Supabase's Max rows is
+          // exactly 1,000. If it were ever lowered, the first page would
+          // come back short and this would stop early, silently
+          // under-counting sale days again (the bug described above).
+          const { data: saleDateRows, error: pageError } = await fetchAllRows(() => supabaseAdmin
+            .from('daily_sales')
+            .select('sale_date')
+            .in('upload_id', uploadIds)
+            .order('sale_date')
+            .order('product_id'));
+          if (pageError) throw pageError;
 
-            if (pageError) throw pageError;
-            for (const row of page) {
-              if (row.sale_date) distinctDates.add(row.sale_date);
-            }
-            if (page.length < PAGE_SIZE) break;
-            offset += PAGE_SIZE;
+          const distinctDates = new Set();
+          for (const row of saleDateRows || []) {
+            if (row.sale_date) distinctDates.add(row.sale_date);
           }
 
           distinctSaleDays = distinctDates.size;
@@ -1286,7 +1295,6 @@ class UploadService {
         months_uploaded: monthsUploaded,
         actual_days_uploaded: distinctSaleDays,
         actual_months_uploaded: actualMonthsUploaded,
-        earliest_sale_date: earliestSaleDate,
         menu_items: menuItemsCount || 0,
         last_sync: uploads[uploads.length - 1]?.upload_date || new Date().toISOString()
       };
@@ -1344,43 +1352,6 @@ class UploadService {
   // grace period past the 30-day cadence before flagging attention,
   // rather than flagging the instant the cadence is technically due.
   static RETRAINING_CADENCE_DAYS = 45;
-
-  // getDashboardState()'s "ready to train" gate used to check ONLY
-  // days_of_history (elapsed calendar time since the earliest sale date)
-  // >= 365 — deliberately tolerant of closed days, matching ml-service's
-  // own first-training gate exactly. But that alone can't distinguish a
-  // genuine, mostly-complete year of real data from a sparse/old sample
-  // that happens to span >365 elapsed days (e.g. a handful of rows dated
-  // over a year ago) — the exact scenario actual_days_uploaded/
-  // actual_months_uploaded were built to call out, except that number was
-  // previously display-only and never actually gated anything.
-  //
-  // Deliberately strict, by request: a full 365 real sale-day rows must
-  // actually exist (366 in a span that crosses a leap day) — not a
-  // percentage of the elapsed span. This is meant to push toward
-  // uploading more real history before training unlocks, not just to
-  // tolerate the closed days that happen along the way.
-  static MIN_ACTUAL_SALE_DAYS = 365;
-
-  // True if [from, today] contains a Feb 29 — the one case where a real
-  // "full year" of daily rows is 366, not 365. dayjs silently rolls a
-  // non-leap-year "Feb 29" over into March 1 instead of marking it
-  // invalid, so the leap-year check has to be done arithmetically, not by
-  // just trying to construct the date and seeing if it parses.
-  spanIncludesLeapDay(fromDateStr) {
-    if (!fromDateStr) return false;
-    const isLeapYear = (year) => (year % 4 === 0 && year % 100 !== 0) || year % 400 === 0;
-    const from = dayjs(fromDateStr).tz(PH_TZ);
-    const today = dayjs().tz(PH_TZ);
-    for (let year = from.year(); year <= today.year(); year++) {
-      if (!isLeapYear(year)) continue;
-      const feb29 = dayjs.tz(`${year}-02-29`, PH_TZ);
-      if (!feb29.isBefore(from, 'day') && !feb29.isAfter(today, 'day')) {
-        return true;
-      }
-    }
-    return false;
-  }
 
   async getLatestModelMetrics() {
     if (!this.isSupabaseReady()) return null;
@@ -1510,37 +1481,40 @@ class UploadService {
       return { state: 'no-data', stats, progress };
     }
 
-    // Two conditions, both required:
-    // 1) days_of_history >= 365 — matches ml-service/app.py's actual
-    //    first-training gate exactly (elapsed calendar time since the
-    //    earliest sale date), tolerant of closed days by design.
-    // 2) actual_days_uploaded >= a full real year of sale-day rows (365,
-    //    or 366 if the span crosses a leap day) — closes the gap (1)
-    //    alone leaves open: a sparse/old sample could clear 365 elapsed
-    //    days on a handful of real rows. Deliberately strict (a hard row
-    //    count, not a percentage of the elapsed span) — the point is to
-    //    push toward uploading a genuinely complete year, not just to
-    //    tolerate the closed days along the way. See
-    //    MIN_ACTUAL_SALE_DAYS's comment above.
-    const daysOfHistory = stats.days_of_history || 0;
-    const requiredActualDays = this.spanIncludesLeapDay(stats.earliest_sale_date)
-      ? UploadService.MIN_ACTUAL_SALE_DAYS + 1
-      : UploadService.MIN_ACTUAL_SALE_DAYS;
-    stats.required_actual_days = requiredActualDays;
+    const latestModel = await this.getLatestModelMetrics();
 
-    const elapsedInsufficient = daysOfHistory < 365;
-    const coverageInsufficient = (stats.actual_days_uploaded || 0) < requiredActualDays;
-    if (elapsedInsufficient || coverageInsufficient) {
-      // Tells the frontend WHY it's still insufficient, instead of always
-      // pointing the owner at "upload more" when the real blocker might be
-      // that a lot of already-uploaded days are legitimately missing sales
-      // rows (closed days, gaps) rather than too little elapsed time.
-      const insufficientReason = elapsedInsufficient && coverageInsufficient
-        ? 'both'
-        : elapsedInsufficient
-          ? 'elapsed'
-          : 'coverage';
-      return { state: 'uploaded-insufficient', stats, progress, insufficientReason };
+    // First-use history rule (utils/historyGate.js — ml-service's /train
+    // applies the identical rule via services/history_gate.py):
+    //   1. last sale date − first sale date + 1 >= 365 days (closed days
+    //      count; today's date does not), and
+    //   2. every date in that span is open (has sales) or confirmed closed.
+    //
+    // Applied ONLY while no model has been trained yet — the same
+    // condition ml-service uses (model_metrics has no row). Once the store
+    // is operating, a single missed upload inside the span would otherwise
+    // flip a working dashboard back to this onboarding screen; missed
+    // uploads after that are reported through forecast_runs.stale_days.
+    if (!latestModel && !mlService.isTrainingInFlight()) {
+      const { gate } = await businessDayService.getHistoryCoverage();
+      if (!gate.passes) {
+        return {
+          state: 'uploaded-insufficient',
+          stats,
+          progress,
+          // 'span' | 'unconfirmed' | 'both' | 'no_data'
+          insufficientReason: gate.insufficientReason,
+          history: {
+            firstSaleDate: gate.firstSaleDate,
+            lastSaleDate: gate.lastSaleDate,
+            spanDays: gate.spanDays,
+            spanMonths: gate.spanMonths,
+            requiredSpanDays: gate.requiredSpanDays,
+            openDays: gate.openDays,
+            closedDays: gate.closedDays,
+            unconfirmedDays: gate.unconfirmedDays,
+          },
+        };
+      }
     }
 
     // Actual training-in-flight signal (see mlService.isTrainingInFlight),
@@ -1550,7 +1524,6 @@ class UploadService {
       return { state: 'training-in-progress', stats, progress };
     }
 
-    const latestModel = await this.getLatestModelMetrics();
     if (!latestModel) {
       return { state: 'ready-to-train', stats, progress };
     }

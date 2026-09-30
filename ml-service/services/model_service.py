@@ -35,7 +35,7 @@ import xgboost as xgb
 from sklearn.metrics import mean_absolute_error, mean_squared_error
 
 from services.feature_engineering import FEATURE_COLUMNS
-from services.model_storage import save_model_to_storage, new_model_version
+from services.model_storage import save_model_to_storage, save_model_metadata, new_model_version
 from utils.debug_log import log_stage
 
 
@@ -162,14 +162,35 @@ def train_global_model(features_df: pd.DataFrame, persist: bool = True, feature_
         col: float(score) for col, score in zip(columns, model.feature_importances_)
     }
 
+    # The exact category list (and order) XGBoost used for product_id,
+    # plus the products that actually had training rows. Forecasting
+    # must reuse this list as-is — see model_storage.save_model_metadata().
+    product_categories = [int(c) for c in X_train["product_id"].cat.categories]
+    # From train_df, NOT features_df: model.fit() only ever saw train_df.
+    # A product whose rows all landed in the test slice (e.g. a dish added
+    # late that still cleared the eligibility bar) is present in
+    # features_df but was never learned, so forecasting it would return
+    # whatever the trees do by default rather than anything about it.
+    trained_product_ids = sorted(
+        int(p) for p in train_df["product_id"].dropna().unique()
+    )
+    metadata = {
+        "product_categories": product_categories,
+        "trained_product_ids": trained_product_ids,
+        "feature_columns": list(columns),
+        "train_end_date": str(train_df["sale_date"].max().date()),
+    }
+
     version = new_model_version()
     if persist:
         save_model_to_storage(model, version)
+        save_model_metadata(version, metadata)
 
     metrics = {
         "aggregate": aggregate_metrics,
         "per_product": per_product_metrics,
         "feature_importance": feature_importance,
+        "metadata": metadata,
     }
     return model, metrics, version
 

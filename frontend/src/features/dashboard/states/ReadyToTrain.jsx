@@ -217,9 +217,9 @@ const ReadyToTrain = () => {
                     <div style={{ display: "flex", alignItems: "flex-start", gap: "10px" }}>
                       <FaCheckCircle style={{ color: "#0F9918", fontSize: "18px", marginTop: "2px", flexShrink: 0 }} />
                       <p className="training-step-description1">
-                        Requirement met — it's been over {totalMonthsNeeded} months since your
-                        earliest uploaded sale date, and you've uploaded a full real year of
-                        sales data ({uploadedDays} days), so training is available.
+                        Requirement met — your sales history covers at least {totalMonthsNeeded} months,
+                        and every day in it is accounted for (open with sales, or marked
+                        closed). Training is available.
                       </p>
                     </div>
 

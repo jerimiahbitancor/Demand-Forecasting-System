@@ -24,7 +24,7 @@ from datetime import date, timedelta
 import pandas as pd
 
 from services.feature_engineering import build_forecast_feature_row, apply_categorical_dtype, FEATURE_COLUMNS
-from services.data_loader import get_daily_sales
+from services.data_loader import get_daily_sales, get_recent_sales
 from services.business_logic import classify_demand
 
 
@@ -50,9 +50,9 @@ def _get_recent_quantities(product_id: int, before_date: date, lookback_days: in
     features for the first forecasted day. Uses actual recorded sales
     only — never predictions — for day 1 of any forecast run.
     """
-    sales_df = get_daily_sales(product_id)
-    sales_df = sales_df[sales_df["sale_date"].dt.date < before_date]
-    sales_df = sales_df.sort_values("sale_date").tail(lookback_days)
+    # Newest `lookback_days` observations, fetched newest-first so this
+    # always sees the latest sales (see data_loader.get_recent_sales).
+    sales_df = get_recent_sales(product_id, before_date=before_date, limit=lookback_days)
     return sales_df["quantity_sold"].tolist()
 
 

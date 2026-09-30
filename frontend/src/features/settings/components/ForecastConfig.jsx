@@ -8,6 +8,7 @@ import 'tippy.js/animations/scale.css';
 import { FiEdit2, FiInfo, FiPlus, FiTrash, FiX } from 'react-icons/fi';
 import { FaArrowLeft, FaArrowRight } from 'react-icons/fa';
 import { useAuth } from '../../../context/AuthContext';
+import { setUnitMetadata } from '../../../utils/recipeUnits';
 import './ForecastConfig.css';
 import '../../inventory/pages/Inventory.css';
 
@@ -17,6 +18,9 @@ const NAME_LABELS = {
   category: 'Category',
   unit: 'Unit',
 };
+
+// A new unit must say what kind it is so recipe costing can convert it.
+const EMPTY_UNIT_FORM = { family: '', baseFactor: '', isPiece: false, pieceWeight: '', aliases: '' };
 
 function ForecastConfig() {
   const { getToken } = useAuth();
@@ -31,6 +35,7 @@ function ForecastConfig() {
   const [managementPage, setManagementPage] = useState({});
   const [managementDialog, setManagementDialog] = useState(null);
   const [managementValue, setManagementValue] = useState('');
+  const [unitForm, setUnitForm] = useState(EMPTY_UNIT_FORM);
   const [deleteDialog, setDeleteDialog] = useState(null);
   const [isDeleting, setIsDeleting] = useState(false);
 
@@ -64,6 +69,7 @@ function ForecastConfig() {
         setCategoryData((currentData) => ({ ...currentData, ingredient: categoryResponse.data.data || [] }));
       }
       if (unitResponse.data.success) {
+        setUnitMetadata(unitResponse.data.data || []);
         setUnitData({ ingredient: unitResponse.data.data || [] });
       }
       if (productCategoryResponse.data.success) {
@@ -122,6 +128,7 @@ function ForecastConfig() {
     const activeTab = type === 'category' ? categoryTab : unitTab;
     setManagementDialog({ type, mode, activeTab, originalValue: item });
     setManagementValue(item.name || item);
+    setUnitForm(EMPTY_UNIT_FORM);
   };
 
   const getEndpoint = (type, activeTab) => {
@@ -141,8 +148,27 @@ function ForecastConfig() {
     }
     const activeTab = managementDialog.activeTab;
     const endpoint = getEndpoint(managementDialog.type, activeTab);
+    let newBody = { name: nextValue };
+    if (!isCategory && managementDialog.mode === 'new') {
+      const { family, baseFactor, isPiece, pieceWeight, aliases } = unitForm;
+      if (!family) {
+        toast.error('Choose what kind of unit this is');
+        return;
+      }
+      newBody = { name: nextValue, family, aliases };
+      if (family === 'count') {
+        newBody.is_piece = isPiece;
+        if (isPiece && pieceWeight !== '') newBody.piece_weight_grams = Number(pieceWeight);
+      } else {
+        if (!(Number(baseFactor) > 0)) {
+          toast.error(`Enter how many ${family === 'mass' ? 'grams' : 'mL'} are in 1 ${nextValue}`);
+          return;
+        }
+        newBody.base_factor = Number(baseFactor);
+      }
+    }
     const request = managementDialog.mode === 'new'
-      ? apiClient.post(endpoint, { name: nextValue })
+      ? apiClient.post(endpoint, newBody)
       : apiClient.put(`${endpoint}/${managementDialog.originalValue.id}`, { name: nextValue });
     request.then(() => {
       setManagementDialog(null);
@@ -503,6 +529,74 @@ function ForecastConfig() {
                 placeholder={managementDialog.type === 'category' ? 'e.g. Vegetables' : 'e.g. Kilograms (kg)'}
               />
             </label>
+            {managementDialog.type === 'unit' && managementDialog.mode === 'new' && (
+              <>
+                <label className="fc-dialog-label" style={{ marginTop: 12 }}>
+                  Type of unit
+                  <select
+                    className="fc-dialog-input"
+                    value={unitForm.family}
+                    onChange={(event) => setUnitForm({ ...unitForm, family: event.target.value })}
+                  >
+                    <option value="">Choose…</option>
+                    <option value="mass">Weight (g, kg, lb…)</option>
+                    <option value="volume">Volume (mL, L, cup…)</option>
+                    <option value="count">Count (pcs, pack, bottle…)</option>
+                  </select>
+                </label>
+                {(unitForm.family === 'mass' || unitForm.family === 'volume') && (
+                  <label className="fc-dialog-label" style={{ marginTop: 12 }}>
+                    {unitForm.family === 'mass'
+                      ? `Grams in 1 ${managementValue.trim() || 'unit'}`
+                      : `Milliliters (mL) in 1 ${managementValue.trim() || 'unit'}`}
+                    <input
+                      className="fc-dialog-input"
+                      type="number"
+                      min="0"
+                      step="any"
+                      value={unitForm.baseFactor}
+                      onChange={(event) => setUnitForm({ ...unitForm, baseFactor: event.target.value })}
+                      placeholder={unitForm.family === 'mass' ? 'e.g. 1000 for a kilogram' : 'e.g. 240 for a cup'}
+                    />
+                  </label>
+                )}
+                {unitForm.family === 'count' && (
+                  <>
+                    <label className="fc-dialog-label" style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 12 }}>
+                      <input
+                        type="checkbox"
+                        checked={unitForm.isPiece}
+                        onChange={(event) => setUnitForm({ ...unitForm, isPiece: event.target.checked, pieceWeight: '' })}
+                      />
+                      Single pieces (slices, cloves, sticks) that can be weighed
+                    </label>
+                    {unitForm.isPiece && (
+                      <label className="fc-dialog-label" style={{ marginTop: 12 }}>
+                        Grams per piece (optional)
+                        <input
+                          className="fc-dialog-input"
+                          type="number"
+                          min="0"
+                          step="any"
+                          value={unitForm.pieceWeight}
+                          onChange={(event) => setUnitForm({ ...unitForm, pieceWeight: event.target.value })}
+                          placeholder="Leave blank to estimate by ingredient name"
+                        />
+                      </label>
+                    )}
+                  </>
+                )}
+                <label className="fc-dialog-label" style={{ marginTop: 12 }}>
+                  Other names (optional, comma-separated)
+                  <input
+                    className="fc-dialog-input"
+                    value={unitForm.aliases}
+                    onChange={(event) => setUnitForm({ ...unitForm, aliases: event.target.value })}
+                    placeholder="e.g. kg, kilo, kilos"
+                  />
+                </label>
+              </>
+            )}
             <div className="fc-dialog-actions">
               <button type="button" className="fc-dialog-cancel" onClick={() => setManagementDialog(null)}>Cancel</button>
               <button type="submit" className="fc-dialog-submit">{managementDialog.mode === 'new' ? 'Add' : 'Save Changes'}</button>
@@ -518,7 +612,9 @@ function ForecastConfig() {
             <h2>Delete {NAME_LABELS[deleteDialog.type]}?</h2>
             <p>
               You are about to delete <strong>"{deleteDialog.item.name || deleteDialog.item}"</strong>.
-              Items that still use it will be updated automatically.
+              {deleteDialog.type === 'unit'
+                ? 'A unit that ingredients or recipes still use cannot be deleted.'
+                : 'Items that still use it will be updated automatically.'}
             </p>
             <div className="fc-dialog-actions">
               <button type="button" className="fc-dialog-cancel" onClick={() => setDeleteDialog(null)} disabled={isDeleting}>Cancel</button>
