@@ -8,8 +8,7 @@ import {
   FaKey,
   FaEye,
   FaEyeSlash,
-  FaSpinner,
-  FaArrowLeft
+  FaSpinner
 } from 'react-icons/fa';
 import { useAuth } from '../../../../context/AuthContext';
 import { useBusinessLogo } from '../../../../context/BusinessProfileContext';
@@ -325,16 +324,6 @@ const CreatePassword = () => {
               )}
             </button>
 
-            <div className="auth-links">
-              <button
-                type="button"
-                className="back-link"
-                onClick={() => navigate('/verify-email')}
-              >
-                <FaArrowLeft />
-                Back to Verification
-              </button>
-            </div>
           </form>
         </div>
       </main>

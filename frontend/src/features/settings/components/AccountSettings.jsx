@@ -1,5 +1,4 @@
 import { useState, useEffect } from 'react';
-import { FiCheckCircle } from "react-icons/fi";
 import { FaEye, FaEyeSlash } from "react-icons/fa";
 import toast from 'react-hot-toast';
 import { useAuth } from '../../../context/AuthContext';
@@ -524,14 +523,6 @@ function AccountSettings() {
               readOnly
               disabled
             />
-          </div>
-
-          <div className="form-group">
-            <p className="form-label">Email Status</p>
-            <div className="status-row">
-              <FiCheckCircle size={18} color="#0f8725" />
-              <span className="status-badge">Verified</span>
-            </div>
           </div>
 
           <div className="info-box">
