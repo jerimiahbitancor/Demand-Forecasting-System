@@ -243,12 +243,16 @@ display: flex;
 
 /* Table */
 .history-table-wrapper {
-  overflow: visible;
+  max-width: 100%;
+  overflow-x: auto;
+  overflow-y: hidden;
+  -webkit-overflow-scrolling: touch;
   margin-bottom: 1rem;
 }
 
 .history-table {
   width: 100%;
+  min-width: 680px;
   table-layout: fixed;
   border-collapse: collapse;
   font-size: 0.8rem;
@@ -526,11 +530,11 @@ display: flex;
   }
 
   .history-table-wrapper {
-    overflow: visible;
+    overflow-x: auto;
   }
 
   .history-table {
-    min-width: 0;
+    min-width: 680px;
   }
 
   .history-pagination .page-btn {

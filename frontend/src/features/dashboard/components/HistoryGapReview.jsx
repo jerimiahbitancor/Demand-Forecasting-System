@@ -10,8 +10,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import axios from "axios";
 import toast from "react-hot-toast";
-import Swal from "sweetalert2";
-import "../../../utils/swalTheme.css";
+import Swal from '../../../utils/swal';
 import "./HistoryGapReview.css";
 
 const API_URL = import.meta.env.VITE_API_URL || "http://localhost:5000/api";

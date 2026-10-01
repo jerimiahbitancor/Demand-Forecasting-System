@@ -1,8 +1,7 @@
 // frontend/src/features/auth/pages/register/CreatePassword.jsx
 import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
-import Swal from 'sweetalert2';
-import '../../../../utils/swalTheme.css';
+import Swal from '../../../../utils/swal';
 import { 
   FaLock, 
   FaKey,

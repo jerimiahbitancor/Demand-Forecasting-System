@@ -165,15 +165,18 @@
 
 /* Table */
 .audit-table-wrap {
-  border: 1px solid #e2e8f0;
-  border-radius: 10px;
-  overflow: hidden;
-  background: #ffffff;
-  min-height: 200px;
-}
+    border: 1px solid #e2e8f0;
+    border-radius: 10px;
+    max-width: 100%;
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+    background: #ffffff;
+    min-height: 200px;
+  }
 
 .audit-table {
   width: 100%;
+  min-width: 620px;
   table-layout: fixed;
   border-collapse: collapse;
   font-size: 0.82rem;
@@ -198,7 +201,7 @@
 }
 
 .audit-th-action {
-  width: 160px;
+  width: 150px;
 }
 
 .audit-th-actor {
@@ -238,14 +241,20 @@
   color: #475569;
 }
 
-/* Action badges */
+/* Action badges. Labels are kept short (see ACTION_LABELS in AuditLogs.jsx)
+   so they fit one line in the 150px action column instead of forcing the
+   table wider and making every other column scroll. */
 .audit-badge {
   display: inline-block;
-  padding: 0.22rem 0.6rem;
+  max-width: 100%;
+  padding: 0.22rem 0.55rem;
   border-radius: 999px;
   font-size: 0.72rem;
   font-weight: 700;
-  white-space: nowrap;
+  line-height: 1.4;
+  /* Allow the odd long label to wrap rather than stretch the column. */
+  white-space: normal;
+  overflow-wrap: break-word;
 }
 
 .badge-price {

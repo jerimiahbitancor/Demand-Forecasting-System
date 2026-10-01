@@ -99,21 +99,66 @@ display: flex;
   min-width: 150px;
 }
 
-@media (max-width: 768px) {
+/* Tablet tier. The controls bar is `flex-wrap: nowrap` on desktop because the
+   filters fit on one line at full width. They do not fit in the 641-1024px
+   range though: search (200px) + 3 selects (128px each) + date filter (150px)
+   + sort select (128px) + "Add New Item" (~140px) plus gaps is ~1,100px of
+   content, so at 820px (iPad Air portrait) the row overflowed its container
+   and the right-hand filters were clipped off-screen with nothing to scroll
+   to. Unstack here instead of waiting for the 768px phone tier. */
+@media (max-width: 1024px) {
   .inventory-controls {
     flex-direction: column;
     align-items: stretch;
-    gap: 10px;
+    gap: 12px;
   }
 
   .inventory-search-box {
-    flex: 1;
+    flex: 0 0 auto;
+    width: 100%;
     max-width: 100%;
-    min-width: unset;
+    min-width: 0;
   }
 
   .inventory-controls-right {
     flex-wrap: wrap;
+    justify-content: flex-start;
+    gap: 10px;
+  }
+
+  /* 13px is under the 16px iOS threshold: focusing a text/date input smaller
+     than that auto-zooms the viewport and leaves the page unusable. */
+  .inventory-search-input,
+  .inventory-sort-select {
+    font-size: 16px;
+    min-height: 44px;
+  }
+
+  .inventory-sort-select {
+    flex: 1 1 150px;
+    min-width: 150px;
+  }
+
+  .inventory-date-filter {
+    flex: 1 1 170px;
+    min-width: 170px;
+  }
+
+  .inventory-controls-right .btn-warning,
+  .inventory-controls-right .btn-secondary,
+  .inventory-controls-right .btn-primary {
+    flex: 1 1 auto;
+    justify-content: center;
+    min-height: 44px;
+  }
+}
+
+@media (max-width: 768px) {
+  .inventory-controls {
+    gap: 10px;
+  }
+
+  .inventory-controls-right {
     justify-content: stretch;
   }
 
@@ -121,11 +166,24 @@ display: flex;
     flex: 1;
     min-width: 120px;
   }
+}
 
+/* Phones: one control per row, full width. Two side-by-side selects at this
+   width truncate their longest option ("All Categories", "Sort By: Quantity")
+   past the arrow, so they get a full line each. */
+@media (max-width: 560px) {
+  .inventory-controls-right {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .inventory-sort-select,
+  .inventory-date-filter,
   .inventory-controls-right .btn-warning,
   .inventory-controls-right .btn-secondary,
   .inventory-controls-right .btn-primary {
-    flex: 1;
-    justify-content: center;
+    flex: 0 0 auto;
+    width: 100%;
+    min-width: 0;
   }
 }

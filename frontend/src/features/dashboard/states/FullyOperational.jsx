@@ -17,8 +17,7 @@ import {
   ResponsiveContainer,
   ComposedChart
 } from 'recharts';
-import Swal from 'sweetalert2';
-import '../../../utils/swalTheme.css';
+import Swal from '../../../utils/swal';
 import axios from 'axios';
 import Navbar from "../../components/Navbar/Navbar";
 import "../pages/Dashboard.css";

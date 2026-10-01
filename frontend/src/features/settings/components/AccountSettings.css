@@ -415,17 +415,57 @@
     line-height: 1.7;
   }
 
+  /* The three modal stages used two different action classes: the verify
+     stage rendered .modal-actions1 (a flex row) while the password and success
+     stages rendered .modal-actions, which had no layout rules at all. Those
+     buttons therefore fell back to inline flow and sat left-aligned and
+     unevenly spaced. Both classes now share one layout so Cancel is always on
+     the left and the red action always on the right. */
+  .modal-actions,
   .modal-actions1 {
+    display: flex;
     flex-wrap: nowrap;
     justify-content: flex-end;
+    align-items: center;
     gap: 12px;
     margin-top: 10px;
-    display: flex;
   }
 
   .modal-actions .btn-primary,
-  .modal-actions .btn-secondary {
+  .modal-actions .btn-secondary,
+  .modal-actions1 .btn-primary,
+  .modal-actions1 .btn-secondary {
     min-width: 140px;
+    /* App.css's .btn-secondary sets align-items/justify-content but no
+       display, so those declarations were inert and the label sat
+       off-centre. inline-flex makes them take effect. */
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    text-align: center;
+  }
+
+  /* Phones: stack the pair, keeping the red action on top and Cancel directly
+     underneath it. column-reverse because the DOM order is Cancel then the
+     primary action. */
+  @media (max-width: 560px) {
+    .modal-actions,
+    .modal-actions1 {
+      flex-direction: column-reverse;
+      align-items: stretch;
+      gap: 10px;
+      margin-top: 14px;
+    }
+
+    .modal-actions .btn-primary,
+    .modal-actions .btn-secondary,
+    .modal-actions1 .btn-primary,
+    .modal-actions1 .btn-secondary {
+      width: 100%;
+      min-width: 0;
+      min-height: 46px;
+      justify-content: center;
+    }
   }
 
   .modal-complete {

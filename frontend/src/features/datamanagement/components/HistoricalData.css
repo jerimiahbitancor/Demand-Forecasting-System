@@ -118,11 +118,15 @@
 }
 
 .historical-table-wrapper {
-  overflow: visible;
+  max-width: 100%;
+  overflow-x: auto;
+  overflow-y: hidden;
+  -webkit-overflow-scrolling: touch;
 }
 
 .historical-table {
   width: 100%;
+  min-width: 720px;
   table-layout: fixed;
   border-collapse: collapse;
 }
@@ -532,11 +536,15 @@
 }
 
 .historical-table-wrapper {
-  overflow: visible;
+  max-width: 100%;
+  overflow-x: auto;
+  overflow-y: hidden;
+  -webkit-overflow-scrolling: touch;
 }
 
 .historical-table {
   width: 100%;
+  min-width: 720px;
   table-layout: fixed;
   border-collapse: collapse;
   font-size: 14px;
@@ -576,12 +584,18 @@
 }
 
 .file-name-cell {
-  font-weight: 500;
-  max-width: 200px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
+     font-weight: 500;
+     max-width: 200px;
+     overflow: hidden;
+     text-overflow: ellipsis;
+     white-space: nowrap;
+   }
+
+   @media (max-width: 480px) {
+     .file-name-cell {
+       max-width: 140px;
+     }
+   }
 
 /* Badges */
 .type-badge {

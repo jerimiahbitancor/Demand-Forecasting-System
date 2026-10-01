@@ -6,11 +6,13 @@ import axios from "axios";
 import { useNavigate } from "react-router-dom";
 import trainingInProgressImage from "../../../assets/images/Rene.png";
 import { FaInfoCircle, FaCheckCircle, FaSpinner } from "react-icons/fa";
+import { useHelp } from "../../../hooks/useHelp";
 
 const API_URL = import.meta.env.VITE_API_URL || "http://localhost:5000/api";
 
 const TrainingInProgress = () => {
   const navigate = useNavigate();
+  const { openHelp } = useHelp();
   const [progressPercentage, setProgressPercentage] = useState(50);
   const [dataProgress, setDataProgress] = useState(100);
   const [uploadedMonths, setUploadedMonths] = useState(12);
@@ -288,9 +290,13 @@ const TrainingInProgress = () => {
                 Your dashboard will become available once you have completed the
                 steps requirements.
               </p>
-              <a href="#" className="training-welcome-link">
+              <button
+                type="button"
+                className="training-welcome-link"
+                onClick={() => openHelp('how-it-works')}
+              >
                 Learn How ChefDuo Forecast Works →
-              </a>
+              </button>
             </div>
 
             {/* Right Side - Image */}

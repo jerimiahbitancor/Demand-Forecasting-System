@@ -114,6 +114,8 @@
 .ingredient-list-row {
   display: flex;
   justify-content: space-between;
+  gap: 12px;
+  min-width: 0;
   align-items: flex-start;
   padding: 14px 0;
   border-bottom: 1px solid var(--color-border-light);
@@ -126,6 +128,7 @@
 .ingredient-list-name {
   font-size: 14px;
   font-weight: 700;
+  min-width: 0;
   color: var(--color-text-primary);
 }
 
@@ -147,6 +150,25 @@
 .ingredient-list-unit {
   font-size: 12px;
   font-weight: 600;
+}
+
+/* Tablet tier, declared before the 640px tier so that one still wins below
+   640px. */
+@media (max-width: 1024px) {
+  .stock-legend {
+    gap: 8px;
+  }
+
+  .calc-note {
+    padding: 12px 14px;
+  }
+}
+
+/* .grocery-kpi-row keeps its 2 tracks down to 768px only */
+@media (max-width: 768px) {
+  .grocery-kpi-row {
+    grid-template-columns: 1fr;
+  }
 }
 
 @media (max-width: 640px) {
@@ -221,11 +243,13 @@
   display: grid;
   grid-template-columns: 1fr 1fr;
   gap: 10px;
+  min-width: 0;
   margin: 12px 0;
 }
 .grocery-kpi-card {
   background: var(--color-bg-light);
   border-radius: 8px;
+  min-width: 0;
   padding: 12px;
   text-align: center;
 }
@@ -243,22 +267,27 @@
 .grocery-preview-row {
   display: flex;
   justify-content: space-between;
+  gap: 12px;
+  min-width: 0;
   align-items: flex-start;
   padding: 10px 0;
   border-bottom: 1px solid var(--color-border-light);
 }
 .grocery-preview-row:last-child { border-bottom: none; }
-.grocery-preview-name { font-size: 13px; font-weight: 600; color: var(--color-text-primary); }
+.grocery-preview-name { font-size: 13px; font-weight: 600; min-width: 0; color: var(--color-text-primary); }
 .grocery-preview-sub { font-size: 11px; color: var(--color-text-light); margin-top: 2px; }
 .grocery-preview-qty { font-size: 13px; font-weight: 700; color: var(--color-red-primary); white-space: nowrap; }
 .grocery-preview-more { font-size: 12px; color: var(--color-text-light); text-align: center; padding: 8px 0; }
 .grocery-action-row {
   display: flex;
+  flex-wrap: wrap;
   gap: 8px;
+  min-width: 0;
   margin-top: 14px;
 }
 .btn-grocery-view {
-  flex: 1;
+  flex: 1 1 140px;
+  min-width: 0;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -275,7 +304,8 @@
 }
 .btn-grocery-view:hover { background: var(--color-red-primary); color: #fff; }
 .btn-grocery-download {
-  flex: 1;
+  flex: 1 1 140px;
+  min-width: 0;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -317,6 +347,10 @@
 }
 
 .heatmap-wrapper {
-  overflow-x: visible;
-  margin-bottom: 8px;
-}
+    max-width: 100%;
+    min-width: 0;
+    overflow-x: auto;
+    overflow-y: hidden;
+    -webkit-overflow-scrolling: touch;
+    margin-bottom: 8px;
+  }

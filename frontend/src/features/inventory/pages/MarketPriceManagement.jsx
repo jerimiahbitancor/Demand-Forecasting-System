@@ -44,7 +44,7 @@ import {
 } from 'recharts';
 import InventoryModal from '../components/InventoryModal';
 import MarketPriceModal from '../components/market modal/MarketPriceModal';
-import Swal from 'sweetalert2';
+import Swal from '../../../utils/swal';
 
 const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:5000/api';
 
@@ -1418,12 +1418,12 @@ const MarketPriceManagement = () => {
                   const effectiveRow = getEffectiveRow(row);
                   return (
                     <tr key={row.ingredientId || index}>
-                      <td>{displayIndex}</td>
-                      <td className="inventory-item-name-cell">
+                      <td data-label="#">{displayIndex}</td>
+                      <td data-label="Ingredient" className="inventory-item-name-cell">
                         <span className="inventory-item-name">{row.ingredient || 'Unnamed'}</span>
                       </td>
-                      <td>{row.unit || 'pcs'}</td>
-                      <td>
+                      <td data-label="Unit">{row.unit || 'pcs'}</td>
+                      <td data-label="Category">
                         {row.category ? (
                           <span className="category-badge">{row.category}</span>
                         ) : (
@@ -1431,12 +1431,12 @@ const MarketPriceManagement = () => {
                         )}
                       </td>
                       {(sources || []).map((s) => (
-                        <td key={s.key}>{renderPriceCell(effectiveRow, s.key)}</td>
+                        <td data-label={s.label} key={s.key}>{renderPriceCell(effectiveRow, s.key)}</td>
                       ))}
-                      <td>{renderLowest(effectiveRow)}</td>
-                      <td>{renderSavings(effectiveRow)}</td>
-                      <td>{row.lastUpdated ? formatDate(row.lastUpdated) : <span className="market-price-empty">—</span>}</td>
-                      <td>
+                      <td data-label="Lowest">{renderLowest(effectiveRow)}</td>
+                      <td data-label="Savings vs Your Price">{renderSavings(effectiveRow)}</td>
+                      <td data-label="Last Updated">{row.lastUpdated ? formatDate(row.lastUpdated) : <span className="market-price-empty">—</span>}</td>
+                      <td data-label="Actions">
                         <div className="inventory-action-buttons">
                           <button
                             className="inventory-action-btn edit"

@@ -1,14 +1,14 @@
 // login.jsx
 import { useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
-import Swal from 'sweetalert2';
-import '../../../../utils/swalTheme.css';
+import Swal from '../../../../utils/swal';
 import { 
   FaEnvelope, 
   FaLock, 
   FaEye,
   FaEyeSlash,
-  FaSpinner
+  FaSpinner,
+  FaArrowLeft
 } from 'react-icons/fa';
 import { useAuth } from '../../../../context/AuthContext';
 import { useBusinessLogo } from '../../../../context/BusinessProfileContext';
@@ -125,6 +125,16 @@ const Login = () => {
     setShowPassword(!showPassword);
   };
 
+  // Go back to the previous page. Falls back to the landing page when the user
+  // opened /login directly, where there is no in-app history to return to.
+  const goBack = () => {
+    if (window.history.length > 1) {
+      navigate(-1);
+    } else {
+      navigate('/');
+    }
+  };
+
   if (checking) {
     return (
       <div className="login-container">
@@ -144,6 +154,8 @@ const Login = () => {
         </div>
         
         <div className="login-card">
+         
+
           <div className="brand-header">
             <img
               alt="Chef Duo Logo"

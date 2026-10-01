@@ -2,7 +2,7 @@
 import { useState, useEffect } from "react";
 import axios from "axios";
 import toast from "react-hot-toast";
-import { FiChevronDown, FiSearch, FiCalendar, FiInfo, FiExternalLink } from "react-icons/fi";
+import { FiChevronDown, FiCalendar, FiInfo, FiExternalLink } from "react-icons/fi";
 import GenerateReportModal from "../../components/Reports/GenerateReportModal.jsx";
 import { buildProductPerformancePDF, generateExcel } from "./../../../services/reportService.js";
 import { logAuditEvent, formatAuditDateRange } from "../../../services/auditClient.js";
@@ -259,6 +259,16 @@ function ProductPerformance() {
   const [isLoading, setIsLoading] = useState(true);
   const [loadError, setLoadError] = useState(null);
   const [selectedRange, setSelectedRange] = useState([new Date(), new Date()]);
+
+  // "Last 7 Days" was an inert <span> that looked like a dropdown. The
+  // performance ratio is fetched as params:{from,to} from selectedRange, so
+  // the useful behaviour is to drive that range: today back six days.
+  const applyLast7Days = () => {
+    const end = new Date();
+    const start = new Date();
+    start.setDate(start.getDate() - 6);
+    setSelectedRange([start, end]);
+  };
   const [isReportModalOpen, setIsReportModalOpen] = useState(false);
   // Modal open states
   const [isDemandClassOpen, setIsDemandClassOpen] = useState(false);
@@ -268,6 +278,8 @@ function ProductPerformance() {
   // Pagination — panel (5 rows each)
   const [demandPage, setDemandPage] = useState(1);
   const [ratioPage, setRatioPage] = useState(1);
+  const [demandQuery, setDemandQuery] = useState('');
+  const [ratioQuery, setRatioQuery] = useState('');
   const [activeStatusPage, setActiveStatusPage] = useState(1);
   const [newStatusPage, setNewStatusPage] = useState(1);
   const [inactiveStatusPage, setInactiveStatusPage] = useState(1);
@@ -407,13 +419,36 @@ function ProductPerformance() {
 
 
 
-  const totalDemandPages = Math.max(1, Math.ceil(demandRows.length / ROWS_PER_PAGE));
-  const paginatedDemandRows = demandRows.slice(
+  // Product search. Two independent queries: one feeds the Demand
+  // Classification table, the other the Performance Ratio table, so typing in
+  // one card does not silently empty the other. Chart series are left
+  // unfiltered so the visual still shows overall shape. Page counters reset in
+  // the change handler, not an effect, to avoid a stale page showing empty.
+  const matchesQuery = (row, query) =>
+    (row.product || "").toLowerCase().includes(query.trim().toLowerCase());
+
+  const filteredDemandRows = demandRows.filter((row) => matchesQuery(row, demandQuery));
+  const filteredPerformanceRows = performanceRows.filter((row) => matchesQuery(row, ratioQuery));
+
+  const handleDemandQueryChange = (value) => {
+    setDemandQuery(value);
+    setDemandPage(1);
+    setModalDemandPage(1);
+  };
+
+  const handleRatioQueryChange = (value) => {
+    setRatioQuery(value);
+    setRatioPage(1);
+    setModalRatioPage(1);
+  };
+
+  const totalDemandPages = Math.max(1, Math.ceil(filteredDemandRows.length / ROWS_PER_PAGE));
+  const paginatedDemandRows = filteredDemandRows.slice(
     (demandPage - 1) * ROWS_PER_PAGE, demandPage * ROWS_PER_PAGE
   );
 
-  const totalRatioPages = Math.max(1, Math.ceil(performanceRows.length / ROWS_PER_PAGE));
-  const paginatedRatioRows = performanceRows.slice(
+  const totalRatioPages = Math.max(1, Math.ceil(filteredPerformanceRows.length / ROWS_PER_PAGE));
+  const paginatedRatioRows = filteredPerformanceRows.slice(
     (ratioPage - 1) * ROWS_PER_PAGE, ratioPage * ROWS_PER_PAGE
   );
 
@@ -441,8 +476,8 @@ function ProductPerformance() {
     (archivedStatusPage - 1) * ROWS_PER_PAGE, archivedStatusPage * ROWS_PER_PAGE
   );
 
-  const modalDemandRows = demandRows.slice((modalDemandPage - 1) * 10, modalDemandPage * 10);
-  const modalRatioRows = performanceRows.slice((modalRatioPage - 1) * 10, modalRatioPage * 10);
+  const modalDemandRows = filteredDemandRows.slice((modalDemandPage - 1) * 10, modalDemandPage * 10);
+  const modalRatioRows = filteredPerformanceRows.slice((modalRatioPage - 1) * 10, modalRatioPage * 10);
   const modalDemandChartRows = demandRows.slice((modalDemandChartPage - 1) * 10, modalDemandChartPage * 10);
   const modalRatioChartRows = performanceRows.slice((modalRatioChartPage - 1) * 10, modalRatioChartPage * 10);
   const modalActiveProducts = activeProducts.slice((modalActiveStatusPage - 1) * 10, modalActiveStatusPage * 10);
@@ -466,7 +501,7 @@ function ProductPerformance() {
               Demand Classification
               <Tippy
                 content={tooltips.demandClassification}
-                placement="right"
+                placement="bottom"
                 animation="scale"
                 duration={200}
                 theme="dark"
@@ -486,9 +521,14 @@ function ProductPerformance() {
 
           <div className="analytics-filter-row">
             <DatePicker value={selectedRange} onChange={setSelectedRange} mode="range" />
-            <span className="filter-search">
-              <FiSearch size={14} /> Search Product
-            </span>
+            <input
+              className="filter-search"
+              type="search"
+              value={demandQuery}
+              onChange={(e) => handleDemandQueryChange(e.target.value)}
+              placeholder="Search Product"
+              aria-label="Search products in demand classification"
+            />
           </div>
 
           <p className="section-note">
@@ -516,32 +556,34 @@ function ProductPerformance() {
             <span className="legend-item"><span className="legend-swatch legend-swatch--high" /> High Zone</span>
           </div>
 
-          <table className="analytics-table">
-            <thead>
-              <tr>
-                <th>No.</th>
-                <th>Date</th>
-                <th>Product</th>
-                <th>Forecast Qty. (Tomorrow)</th>
-                <th>Demand Level</th>
-                <th>Action Signal</th>
-              </tr>
-            </thead>
-            <tbody>
-              {paginatedDemandRows.map((row, i) => (
-                <tr key={row.product}>
-                  <td>{i + 1}</td>
-                  <td>{row.date}</td>
-                  <td>{row.product}</td>
-                  <td>{row.forecastQty} servings</td>
-                  <td>
-                    <span className={`pill ${pillClass[row.demandLevel]}`}>{row.demandLevel}</span>
-                  </td>
-                  <td className="action-signal">{getActionSignal(row.demandLevel, row.bottleneckIngredient, row.bottleneckStatus)}</td>
+          <div className="table-scroll" tabIndex={0} role="region" aria-label="Demand classification: forecast quantity, demand level and action signal by product">
+            <table className="analytics-table">
+              <thead>
+                <tr>
+                  <th>No.</th>
+                  <th>Date</th>
+                  <th>Product</th>
+                  <th>Forecast Qty. (Tomorrow)</th>
+                  <th>Demand Level</th>
+                  <th>Action Signal</th>
                 </tr>
-              ))}
-            </tbody>
-          </table>
+              </thead>
+              <tbody>
+                {paginatedDemandRows.map((row, i) => (
+                  <tr key={row.product}>
+                    <td data-label="No.">{i + 1}</td>
+                    <td data-label="Date">{row.date}</td>
+                    <td data-label="Product">{row.product}</td>
+                    <td data-label="Forecast Qty. (Tomorrow)">{row.forecastQty} servings</td>
+                    <td data-label="Demand Level">
+                      <span className={`pill ${pillClass[row.demandLevel]}`}>{row.demandLevel}</span>
+                    </td>
+                    <td data-label="Action Signal" className="action-signal">{getActionSignal(row.demandLevel, row.bottleneckIngredient, row.bottleneckStatus)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
           <Pagination currentPage={demandPage} totalPages={totalDemandPages} onPageChange={setDemandPage} />
         </section>
 
@@ -552,7 +594,7 @@ function ProductPerformance() {
               Product Performance Ratio Analysis
               <Tippy
                 content={tooltips.performanceRatio}
-                placement="right"
+                placement="bottom"
                 animation="scale"
                 duration={200}
                 theme="dark"
@@ -572,12 +614,22 @@ function ProductPerformance() {
 
           <div className="analytics-filter-row">
             <DatePicker value={selectedRange} onChange={setSelectedRange} mode="range" />
-            <span className="filter-search">
-              <FiSearch size={14} /> Search Product
-            </span>
-            <span className="filter-pill">
+            <input
+              className="filter-search"
+              type="search"
+              value={ratioQuery}
+              onChange={(e) => handleRatioQueryChange(e.target.value)}
+              placeholder="Search Product"
+              aria-label="Search products in performance ratio"
+            />
+            <button
+              type="button"
+              className="filter-pill"
+              onClick={applyLast7Days}
+              title="Set the analysis range to the last 7 days"
+            >
               Last 7 Days <FiChevronDown size={14} />
-            </span>
+            </button>
           </div>
 
           <p className="section-note">
@@ -604,32 +656,34 @@ function ProductPerformance() {
             <span className="legend-item"><span className="legend-swatch legend-swatch--below" /> Below Average (ratio &lt; 1.0)</span>
           </div>
 
-          <table className="analytics-table">
-            <thead>
-              <tr>
-                <th>Rank</th>
-                <th>Product</th>
-                <th>Quantity Sold</th>
-                <th>Revenue</th>
-                <th>Performance Ratio</th>
-                <th>Action Signal</th>
-              </tr>
-            </thead>
-            <tbody>
-              {paginatedRatioRows.map((row) => (
-                <tr key={row.product}>
-                  <td>{row.rank}</td>
-                  <td>{row.product}</td>
-                  <td>{row.qtySold}</td>
-                  <td>{row.revenue}</td>
-                  <td className={row.ratio >= 1 ? "value--success" : "value--error"}>
-                    {row.ratio.toFixed(2)} {row.ratio >= 1 ? "▲" : "▼"}
-                  </td>
-                  <td className="action-signal">{row.actionSignal}</td>
+          <div className="table-scroll" tabIndex={0} role="region" aria-label="Product performance ratio: rank, quantity sold, revenue and ratio versus store average">
+            <table className="analytics-table">
+              <thead>
+                <tr>
+                  <th>Rank</th>
+                  <th>Product</th>
+                  <th>Quantity Sold</th>
+                  <th>Revenue</th>
+                  <th>Performance Ratio</th>
+                  <th>Action Signal</th>
                 </tr>
-              ))}
-            </tbody>
-          </table>
+              </thead>
+              <tbody>
+                {paginatedRatioRows.map((row) => (
+                  <tr key={row.product}>
+                    <td data-label="Rank">{row.rank}</td>
+                    <td data-label="Product">{row.product}</td>
+                    <td data-label="Quantity Sold">{row.qtySold}</td>
+                    <td data-label="Revenue">{row.revenue}</td>
+                    <td data-label="Performance Ratio" className={row.ratio >= 1 ? "value--success" : "value--error"}>
+                      {row.ratio.toFixed(2)} {row.ratio >= 1 ? "▲" : "▼"}
+                    </td>
+                    <td data-label="Action Signal" className="action-signal">{row.actionSignal}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
 
           <Pagination currentPage={ratioPage} totalPages={totalRatioPages} onPageChange={setRatioPage} />
 
@@ -650,7 +704,7 @@ function ProductPerformance() {
               Product Status
               <Tippy
                 content={tooltips.productStatus}
-                placement="right"
+                placement="bottom"
                 animation="scale"
                 duration={200}
                 theme="dark"
@@ -676,26 +730,28 @@ function ProductPerformance() {
           <div className="status-group">
             <p className="status-group-title">Active Product</p>
             <p className="status-group-subtitle">There {statusCounts.active === 1 ? "is" : "are"} {statusCounts.active} menu item{statusCounts.active === 1 ? "" : "s"} active</p>
-            <table className="analytics-table analytics-table--compact">
-              <thead>
-                <tr>
-                  <th>No.</th>
-                  <th>Product</th>
-                  <th>Days on Menu</th>
-                  <th>Forecast Status</th>
-                </tr>
-              </thead>
-              <tbody>
-                {paginatedActiveProducts.map((row, i) => (
-                  <tr key={row.product}>
-                    <td>{i + 1}</td>
-                    <td>{row.product}</td>
-                    <td>{row.daysOnMenu}</td>
-                    <td className="value--success">{row.forecastStatus}</td>
+            <div className="table-scroll" tabIndex={0} role="region" aria-label="Active products: days on menu and forecast status">
+              <table className="analytics-table analytics-table--compact">
+                <thead>
+                  <tr>
+                    <th>No.</th>
+                    <th>Product</th>
+                    <th>Days on Menu</th>
+                    <th>Forecast Status</th>
                   </tr>
-                ))}
-              </tbody>
-            </table>
+                </thead>
+                <tbody>
+                  {paginatedActiveProducts.map((row, i) => (
+                    <tr key={row.product}>
+                      <td data-label="No.">{i + 1}</td>
+                      <td data-label="Product">{row.product}</td>
+                      <td data-label="Days on Menu">{row.daysOnMenu}</td>
+                      <td data-label="Forecast Status" className="value--success">{row.forecastStatus}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
             <Pagination currentPage={activeStatusPage} totalPages={Math.max(1, Math.ceil(activeProducts.length / ROWS_PER_PAGE))} onPageChange={setActiveStatusPage} />
           </div>
 
@@ -704,26 +760,28 @@ function ProductPerformance() {
             <p className="status-group-subtitle">
               New product needs 4 weeks of data before forecast activates
             </p>
-            <table className="analytics-table analytics-table--compact">
-              <thead>
-                <tr>
-                  <th>No.</th>
-                  <th>Product</th>
-                  <th>Days on Menu</th>
-                  <th>Forecast Status</th>
-                </tr>
-              </thead>
-              <tbody>
-                {paginatedNewProducts.map((row, i) => (
-                  <tr key={row.product}>
-                    <td>{i + 1}</td>
-                    <td>{row.product}</td>
-                    <td>{row.daysOnMenu}</td>
-                    <td className="value--warning">{row.forecastStatus}</td>
+            <div className="table-scroll" tabIndex={0} role="region" aria-label="New products: days on menu and forecast status">
+              <table className="analytics-table analytics-table--compact">
+                <thead>
+                  <tr>
+                    <th>No.</th>
+                    <th>Product</th>
+                    <th>Days on Menu</th>
+                    <th>Forecast Status</th>
                   </tr>
-                ))}
-              </tbody>
-            </table>
+                </thead>
+                <tbody>
+                  {paginatedNewProducts.map((row, i) => (
+                    <tr key={row.product}>
+                      <td data-label="No.">{i + 1}</td>
+                      <td data-label="Product">{row.product}</td>
+                      <td data-label="Days on Menu">{row.daysOnMenu}</td>
+                      <td data-label="Forecast Status" className="value--warning">{row.forecastStatus}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
             <Pagination currentPage={newStatusPage} totalPages={Math.max(1, Math.ceil(newProducts.length / ROWS_PER_PAGE))} onPageChange={setNewStatusPage} />
           </div>
 
@@ -732,26 +790,28 @@ function ProductPerformance() {
             <p className="status-group-subtitle">
               System auto-flags product inactive with 0 sales for 28 consecutive days
             </p>
-            <table className="analytics-table analytics-table--compact">
-              <thead>
-                <tr>
-                  <th>No.</th>
-                  <th>Product</th>
-                  <th>Last Sale</th>
-                  <th>Forecast Status</th>
-                </tr>
-              </thead>
-              <tbody>
-                {paginatedInactiveProducts.map((row, i) => (
-                  <tr key={row.product}>
-                    <td>{i + 1}</td>
-                    <td>{row.product}</td>
-                    <td>{row.lastSale}</td>
-                    <td className="value--error">{row.forecastStatus}</td>
+            <div className="table-scroll" tabIndex={0} role="region" aria-label="Inactive products: last sale and forecast status">
+              <table className="analytics-table analytics-table--compact">
+                <thead>
+                  <tr>
+                    <th>No.</th>
+                    <th>Product</th>
+                    <th>Last Sale</th>
+                    <th>Forecast Status</th>
                   </tr>
-                ))}
-              </tbody>
-            </table>
+                </thead>
+                <tbody>
+                  {paginatedInactiveProducts.map((row, i) => (
+                    <tr key={row.product}>
+                      <td data-label="No.">{i + 1}</td>
+                      <td data-label="Product">{row.product}</td>
+                      <td data-label="Last Sale">{row.lastSale}</td>
+                      <td data-label="Forecast Status" className="value--error">{row.forecastStatus}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
             <Pagination currentPage={inactiveStatusPage} totalPages={Math.max(1, Math.ceil(inactiveProducts.length / ROWS_PER_PAGE))} onPageChange={setInactiveStatusPage} />
           </div>
 
@@ -760,23 +820,25 @@ function ProductPerformance() {
             <p className="status-group-subtitle">
               Permanently removed from the menu, or temporarily off the menu and will return.
             </p>
-            <table className="analytics-table analytics-table--compact">
-              <thead>
-                <tr>
-                  <th>No.</th><th>Product</th><th>Last Sale</th><th>Forecast Status</th>
-                </tr>
-              </thead>
-              <tbody>
-                {paginatedArchivedProducts.map((row, i) => (
-                  <tr key={row.product}>
-                    <td>{(archivedStatusPage - 1) * ROWS_PER_PAGE + i + 1}</td>
-                    <td>{row.product}</td>
-                    <td>{row.lastSale}</td>
-                    <td className="value--error">{row.forecastStatus}</td>
+            <div className="table-scroll" tabIndex={0} role="region" aria-label="Archived products: last sale and forecast status">
+              <table className="analytics-table analytics-table--compact">
+                <thead>
+                  <tr>
+                    <th>No.</th><th>Product</th><th>Last Sale</th><th>Forecast Status</th>
                   </tr>
-                ))}
-              </tbody>
-            </table>
+                </thead>
+                <tbody>
+                  {paginatedArchivedProducts.map((row, i) => (
+                    <tr key={row.product}>
+                      <td data-label="No.">{(archivedStatusPage - 1) * ROWS_PER_PAGE + i + 1}</td>
+                      <td data-label="Product">{row.product}</td>
+                      <td data-label="Last Sale">{row.lastSale}</td>
+                      <td data-label="Forecast Status" className="value--error">{row.forecastStatus}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
             <Pagination
               currentPage={archivedStatusPage}
               totalPages={Math.max(1, Math.ceil(archivedProducts.length / ROWS_PER_PAGE))}
@@ -814,28 +876,30 @@ function ProductPerformance() {
           <span className="legend-item"><span className="legend-swatch legend-swatch--medium" /> Medium Zone</span>
           <span className="legend-item"><span className="legend-swatch legend-swatch--high" /> High Zone</span>
         </div>
-        <table className="analytics-table">
-          <thead>
-            <tr>
-              <th>No.</th><th>Date</th><th>Product</th><th>Forecast Qty. (Tomorrow)</th><th>Demand Level</th><th>Action Signal</th>
-            </tr>
-          </thead>
-          <tbody>
-            {modalDemandRows.map((row, i) => (
-              <tr key={row.product}>
-                <td>{(modalDemandPage - 1) * 10 + i + 1}</td>
-                <td>{row.date}</td>
-                <td>{row.product}</td>
-                <td>{row.forecastQty} servings</td>
-                <td><span className={`pill ${pillClass[row.demandLevel]}`}>{row.demandLevel}</span></td>
-                <td className="action-signal">{getActionSignal(row.demandLevel, row.bottleneckIngredient, row.bottleneckStatus)}</td>
+        <div className="table-scroll" tabIndex={0} role="region" aria-label="Demand classification: forecast quantity, demand level and action signal by product (full view)">
+          <table className="analytics-table">
+            <thead>
+              <tr>
+                <th>No.</th><th>Date</th><th>Product</th><th>Forecast Qty. (Tomorrow)</th><th>Demand Level</th><th>Action Signal</th>
               </tr>
-            ))}
-          </tbody>
-        </table>
+            </thead>
+            <tbody>
+              {modalDemandRows.map((row, i) => (
+                <tr key={row.product}>
+                  <td>{(modalDemandPage - 1) * 10 + i + 1}</td>
+                  <td>{row.date}</td>
+                  <td>{row.product}</td>
+                  <td>{row.forecastQty} servings</td>
+                  <td><span className={`pill ${pillClass[row.demandLevel]}`}>{row.demandLevel}</span></td>
+                  <td className="action-signal">{getActionSignal(row.demandLevel, row.bottleneckIngredient, row.bottleneckStatus)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
         <Pagination
           currentPage={modalDemandPage}
-          totalPages={Math.max(1, Math.ceil(demandRows.length / 10))}
+          totalPages={Math.max(1, Math.ceil(filteredDemandRows.length / 10))}
           onPageChange={setModalDemandPage}
         />
       </ExpandableModal>
@@ -864,28 +928,30 @@ function ProductPerformance() {
           <span className="legend-item"><span className="legend-swatch legend-swatch--above" /> Above Average (ratio &gt; 1.0)</span>
           <span className="legend-item"><span className="legend-swatch legend-swatch--below" /> Below Average (ratio &lt; 1.0)</span>
         </div>
-        <table className="analytics-table">
-          <thead>
-            <tr>
-              <th>Rank</th><th>Product</th><th>Quantity Sold</th><th>Revenue</th><th>Performance Ratio</th><th>Action Signal</th>
-            </tr>
-          </thead>
-          <tbody>
-            {modalRatioRows.map((row) => (
-              <tr key={row.product}>
-                <td>{row.rank}</td>
-                <td>{row.product}</td>
-                <td>{row.qtySold}</td>
-                <td>{row.revenue}</td>
-                <td className={row.ratio >= 1 ? "value--success" : "value--error"}>{row.ratio.toFixed(2)} {row.ratio >= 1 ? "▲" : "▼"}</td>
-                <td className="action-signal">{row.actionSignal}</td>
+        <div className="table-scroll" tabIndex={0} role="region" aria-label="Product performance ratio: rank, quantity sold, revenue and ratio versus store average (full view)">
+          <table className="analytics-table">
+            <thead>
+              <tr>
+                <th>Rank</th><th>Product</th><th>Quantity Sold</th><th>Revenue</th><th>Performance Ratio</th><th>Action Signal</th>
               </tr>
-            ))}
-          </tbody>
-        </table>
+            </thead>
+            <tbody>
+              {modalRatioRows.map((row) => (
+                <tr key={row.product}>
+                  <td>{row.rank}</td>
+                  <td>{row.product}</td>
+                  <td>{row.qtySold}</td>
+                  <td>{row.revenue}</td>
+                  <td className={row.ratio >= 1 ? "value--success" : "value--error"}>{row.ratio.toFixed(2)} {row.ratio >= 1 ? "▲" : "▼"}</td>
+                  <td className="action-signal">{row.actionSignal}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
         <Pagination
           currentPage={modalRatioPage}
-          totalPages={Math.max(1, Math.ceil(performanceRows.length / 10))}
+          totalPages={Math.max(1, Math.ceil(filteredPerformanceRows.length / 10))}
           onPageChange={setModalRatioPage}
         />
       </ExpandableModal>
@@ -903,48 +969,56 @@ function ProductPerformance() {
         <div className="status-group">
           <p className="status-group-title">Active Product</p>
           <p className="status-group-subtitle">There {statusCounts.active === 1 ? "is" : "are"} {statusCounts.active} menu item{statusCounts.active === 1 ? "" : "s"} active</p>
-          <table className="analytics-table analytics-table--compact">
-            <thead><tr><th>No.</th><th>Product</th><th>Days on Menu</th><th>Forecast Status</th></tr></thead>
-            <tbody>{modalActiveProducts.map((row, i) => (
-              <tr key={row.product}><td>{(modalActiveStatusPage - 1) * 10 + i + 1}</td><td>{row.product}</td><td>{row.daysOnMenu}</td><td className="value--success">{row.forecastStatus}</td></tr>
-            ))}</tbody>
-          </table>
+          <div className="table-scroll" tabIndex={0} role="region" aria-label="Active products: days on menu and forecast status (full view)">
+            <table className="analytics-table analytics-table--compact">
+              <thead><tr><th>No.</th><th>Product</th><th>Days on Menu</th><th>Forecast Status</th></tr></thead>
+              <tbody>{modalActiveProducts.map((row, i) => (
+                <tr key={row.product}><td>{(modalActiveStatusPage - 1) * 10 + i + 1}</td><td>{row.product}</td><td>{row.daysOnMenu}</td><td className="value--success">{row.forecastStatus}</td></tr>
+              ))}</tbody>
+            </table>
+          </div>
           <Pagination currentPage={modalActiveStatusPage} totalPages={Math.max(1, Math.ceil(activeProducts.length / 10))} onPageChange={setModalActiveStatusPage} />
         </div>
 
         <div className="status-group">
           <p className="status-group-title">New Product</p>
           <p className="status-group-subtitle">New product needs 4 weeks of data before forecast activates</p>
-          <table className="analytics-table analytics-table--compact">
-            <thead><tr><th>No.</th><th>Product</th><th>Days on Menu</th><th>Forecast Status</th></tr></thead>
-            <tbody>{modalNewProducts.map((row, i) => (
-              <tr key={row.product}><td>{(modalNewStatusPage - 1) * 10 + i + 1}</td><td>{row.product}</td><td>{row.daysOnMenu}</td><td className="value--warning">{row.forecastStatus}</td></tr>
-            ))}</tbody>
-          </table>
+          <div className="table-scroll" tabIndex={0} role="region" aria-label="New products: days on menu and forecast status (full view)">
+            <table className="analytics-table analytics-table--compact">
+              <thead><tr><th>No.</th><th>Product</th><th>Days on Menu</th><th>Forecast Status</th></tr></thead>
+              <tbody>{modalNewProducts.map((row, i) => (
+                <tr key={row.product}><td>{(modalNewStatusPage - 1) * 10 + i + 1}</td><td>{row.product}</td><td>{row.daysOnMenu}</td><td className="value--warning">{row.forecastStatus}</td></tr>
+              ))}</tbody>
+            </table>
+          </div>
           <Pagination currentPage={modalNewStatusPage} totalPages={Math.max(1, Math.ceil(newProducts.length / 10))} onPageChange={setModalNewStatusPage} />
         </div>
 
         <div className="status-group">
           <p className="status-group-title">Inactive Product</p>
           <p className="status-group-subtitle">System auto-flags product inactive with 0 sales for 28 consecutive days</p>
-          <table className="analytics-table analytics-table--compact">
-            <thead><tr><th>No.</th><th>Product</th><th>Last Sale</th><th>Forecast Status</th></tr></thead>
-            <tbody>{modalInactiveProducts.map((row, i) => (
-              <tr key={row.product}><td>{(modalInactiveStatusPage - 1) * 10 + i + 1}</td><td>{row.product}</td><td>{row.lastSale}</td><td className="value--error">{row.forecastStatus}</td></tr>
-            ))}</tbody>
-          </table>
+          <div className="table-scroll" tabIndex={0} role="region" aria-label="Inactive products: last sale and forecast status (full view)">
+            <table className="analytics-table analytics-table--compact">
+              <thead><tr><th>No.</th><th>Product</th><th>Last Sale</th><th>Forecast Status</th></tr></thead>
+              <tbody>{modalInactiveProducts.map((row, i) => (
+                <tr key={row.product}><td>{(modalInactiveStatusPage - 1) * 10 + i + 1}</td><td>{row.product}</td><td>{row.lastSale}</td><td className="value--error">{row.forecastStatus}</td></tr>
+              ))}</tbody>
+            </table>
+          </div>
           <Pagination currentPage={modalInactiveStatusPage} totalPages={Math.max(1, Math.ceil(inactiveProducts.length / 10))} onPageChange={setModalInactiveStatusPage} />
         </div>
 
         <div className="status-group">
           <p className="status-group-title">Archived Product</p>
           <p className="status-group-subtitle">Permanently removed from the menu, or temporarily off the menu and will return.</p>
-          <table className="analytics-table analytics-table--compact">
-            <thead><tr><th>No.</th><th>Product</th><th>Last Sale</th><th>Forecast Status</th></tr></thead>
-            <tbody>{modalArchivedProducts.map((row, i) => (
-              <tr key={row.product}><td>{(modalArchivedStatusPage - 1) * 10 + i + 1}</td><td>{row.product}</td><td>{row.lastSale}</td><td className="value--error">{row.forecastStatus}</td></tr>
-            ))}</tbody>
-          </table>
+          <div className="table-scroll" tabIndex={0} role="region" aria-label="Archived products: last sale and forecast status (full view)">
+            <table className="analytics-table analytics-table--compact">
+              <thead><tr><th>No.</th><th>Product</th><th>Last Sale</th><th>Forecast Status</th></tr></thead>
+              <tbody>{modalArchivedProducts.map((row, i) => (
+                <tr key={row.product}><td>{(modalArchivedStatusPage - 1) * 10 + i + 1}</td><td>{row.product}</td><td>{row.lastSale}</td><td className="value--error">{row.forecastStatus}</td></tr>
+              ))}</tbody>
+            </table>
+          </div>
           <Pagination currentPage={modalArchivedStatusPage} totalPages={Math.max(1, Math.ceil(archivedProducts.length / 10))} onPageChange={setModalArchivedStatusPage} />
         </div>
       </ExpandableModal>

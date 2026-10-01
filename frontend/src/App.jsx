@@ -1,5 +1,6 @@
 // frontend/src/App.jsx
-import { Routes, Route, Navigate, useSearchParams } from 'react-router-dom';
+import { Routes, Route, Navigate, useSearchParams, useLocation } from 'react-router-dom';
+import { useEffect } from 'react';
 import { Toaster } from 'react-hot-toast';
 import Register from './features/auth/pages/register/Register';
 import VerifyEmail from './features/auth/pages/register/VerifyEmail';
@@ -24,6 +25,10 @@ import NotificationsPage from './features/components/Notification/NotificationsP
 import './App.css';
 import './RouteGuard.css';
 import Landing from './features/landing/Landing';
+import Features from './features/landing/pages/Features';
+
+import About from './features/landing/pages/About';
+import Contact from './features/landing/pages/Contact';
 
 // Import individual state components
 import FullyOperational from './features/dashboard/states/FullyOperational';
@@ -55,7 +60,7 @@ function RouteGuard({ children, mode }) {
   return children;
 }
 
-function LandingRoute() {
+function EntryRoute({ children }) {
   const checking = useSetupGuard('entry');
   
   if (checking) {
@@ -74,7 +79,25 @@ function LandingRoute() {
     );
   }
   
-  return <Landing />;
+  return children;
+}
+
+// Restores top-of-page on route change and honours #hash links (footer anchors)
+function ScrollManager() {
+  const { pathname, hash } = useLocation();
+
+  useEffect(() => {
+    if (hash) {
+      const target = document.getElementById(hash.slice(1));
+      if (target) {
+        target.scrollIntoView({ behavior: 'smooth', block: 'start' });
+        return;
+      }
+    }
+    window.scrollTo(0, 0);
+  }, [pathname, hash]);
+
+  return null;
 }
 
 function Gated({ children }) {
@@ -181,9 +204,15 @@ function App() {
         }}
       />
 
+      <ScrollManager />
+
       <Routes>
-        {/* Landing Page - with entry guard */}
-        <Route path="/" element={<LandingRoute />} />
+        {/* Public Marketing Pages - with entry guard */}
+        <Route path="/" element={<EntryRoute><Landing /></EntryRoute>} />
+        <Route path="/features" element={<EntryRoute><Features /></EntryRoute>} />
+        
+        <Route path="/about" element={<EntryRoute><About /></EntryRoute>} />
+        <Route path="/contact" element={<EntryRoute><Contact /></EntryRoute>} />
 
         {/* Auth Routes */}
         <Route path="/login" element={

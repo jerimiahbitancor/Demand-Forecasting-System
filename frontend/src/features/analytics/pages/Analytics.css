@@ -48,6 +48,7 @@
   display: flex;
   align-items: center;
   gap: 12px;
+  min-width: 0;
   
 }
 
@@ -74,6 +75,7 @@
 /* Tab bar */
 .analytics-tabs {
   display: flex;
+  min-width: 0;
   background-color: var(--color-bg-white);
   border-radius: 12px;
   box-shadow: 0 4px 20px -2px rgba(0, 0, 0, 0.05), 0 2px 10px -2px rgba(0, 0, 0, 0.03);
@@ -83,6 +85,7 @@
 
 .analytics-tab {
   flex: 1;
+  min-width: 0;
   padding: 18px 24px;
   background: none;
   border: none;
@@ -110,6 +113,7 @@
   display: grid;
   grid-template-columns: 1fr;
   gap: 24px;
+  min-width: 0;
 }
 
 .analytics-col-main {
@@ -133,11 +137,17 @@
   }
 }
 
-/* Card shell reused by every section across the three tabs */
+/* Card shell reused by every section across the three tabs.
+   Deliberately does NOT set overflow-x: doing so made the whole card a
+   scroll region, so card titles, legends, footnotes and the Pagination
+   controls slid sideways together with the table. Wide tables now sit in
+   their own .table-scroll region (App.css) so only the table moves. */
 .analytics-card {
   background-color: var(--color-bg-white);
   border-radius: 16px;
   padding: 24px;
+  max-width: 100%;
+  min-width: 0;
   box-shadow: 0 4px 20px -2px rgba(0, 0, 0, 0.05), 0 2px 10px -2px rgba(0, 0, 0, 0.03);
 }
 
@@ -166,7 +176,7 @@
   color: var(--color-white);
 }
 
-/* Manual "Generate Forecast" trigger — filled, to read as the primary
+/* Manual "Generate Forecast" trigger â€” filled, to read as the primary
    action distinct from the outlined Generate Report button above it. */
 .btn-generate-forecast {
   width: 100%;
@@ -192,45 +202,119 @@
   cursor: not-allowed;
 }
 
-/* Generic filter row (week picker / search / dropdown) used in every tab */
+/* Generic filter row (week picker / search / dropdown) used in every tab.
+   Wraps rather than overflowing: the DatePicker trigger is shrink-to-fit with
+   a nowrap label, so on narrow viewports a single-line row pushed the search
+   box and mode toggle past the card edge. */
 .analytics-filter-row {
   display: flex;
+  flex-wrap: wrap;
+  align-items: center;
   gap: 12px;
   margin-bottom: 16px;
+  min-width: 0;
+}
+
+/* A nowrap date label can be wider than the space left on its line, so let it
+   shrink and clip rather than push the other controls off the row. */
+.date-picker {
+  min-width: 0;
+  max-width: 100%;
+}
+
+.analytics-filter-row > .date-picker {
+  flex: 0 1 auto;
 }
 
 .filter-pill {
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 10px 14px;
+  height: 40px;
+  align-self: center;
+  padding: 0 14px;
   background-color: var(--color-bg-light);
   border: 1px solid var(--color-border);
   border-radius: 8px;
+  font-family: inherit;
   font-size: 13px;
   color: var(--color-text-primary);
   cursor: pointer;
 }
 
-.filter-search {
-  flex: 1;
-  min-width: 180px;
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 10px 14px;
-  border: 1px solid var(--color-border);
-  border-radius: 8px;
-  color: var(--color-text-light);
-  font-size: 13px;
+/* Sales/Demand mode toggle. Was an inline style={{ width: '120px' }}, which a
+   stylesheet cannot override — including the mobile full-width rule — so it
+   stayed 120px on phones. A class lets the media queries win. */
+.filter-pill--mode {
+  width: 120px;
+  flex: 0 0 auto;
 }
 
-/* Generic data table used across all three tabs */
+/* The search control is the <input> itself, not a wrapper around one. That
+   means there is no div to style or click through: the whole box is the input,
+   and the browser's own focus ring and native clear button work normally.
+   Width is left to flex so it can grow on desktop and go full-width at 480px. */
+.filter-search {
+  flex: 1 1 200px;
+  min-width: 0;
+  height: 40px;
+  align-self: center;
+  padding: 0 12px;
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+  background: var(--color-bg-white);
+  color: var(--color-text-primary);
+  font-family: inherit;
+  font-size: 13px;
+  line-height: normal;
+  outline: none;
+  transition: border-color 0.2s, box-shadow 0.2s;
+}
+
+.filter-search::placeholder {
+  color: var(--color-text-light);
+}
+
+.filter-search:focus {
+  border-color: var(--color-red-primary);
+  box-shadow: 0 0 0 3px rgba(122, 1, 1, 0.1);
+}
+
+/* Safari/Chrome render a native clear button that overflows a 40px box. */
+.filter-search::-webkit-search-cancel-button {
+  cursor: pointer;
+}
+
+/* Generic data table used across all three tabs.
+   min-width is the *scroll tier* floor: below it the table stays readable
+   and the surrounding .table-scroll region pans sideways. It is overridden
+   to 0 by the phone tier further down, where rows stack into cards instead.
+   Specificity here (.table-scroll > .analytics-table) has to beat App.css's
+   generic `.table-scroll > table { min-width: 640px }`. */
 .analytics-table {
   width: 100%;
+  min-width: 720px;
   table-layout: fixed;
   border-collapse: collapse;
   font-size: 13px;
+}
+
+.analytics-table--compact {
+  min-width: 520px;
+}
+
+.table-scroll > .analytics-table {
+  min-width: 720px;
+}
+
+.table-scroll > .analytics-table--compact {
+  min-width: 520px;
+}
+
+/* Heatmap is a matrix (ingredient x weekday). Stacking it into cards would
+   destroy the grid it exists to show, so it always stays a scrolling table. */
+.analytics-table.heatmap-table {
+  min-width: 640px;
 }
 
 .analytics-table th {
@@ -256,9 +340,95 @@
   border-bottom: none;
 }
 
+/* Scrolling hint shown above wide tables on touch-sized viewports, so it is
+   obvious there are more columns off-screen to the right. */
+.analytics-scroll-hint {
+  display: none;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 10px;
+  padding: 7px 10px;
+  border-radius: 8px;
+  background: var(--color-bg-light);
+  color: var(--color-text-light);
+  font-size: 12px;
+}
+
+@media (max-width: 1024px) {
+  .analytics-scroll-hint {
+    display: flex;
+  }
+}
+
+/* Tablet tier. Declared before the 768/480 tiers so those still win below
+   768px. Trims the shell padding so the 720px .analytics-table fits inside
+   .analytics-card at ~820px (iPad Air portrait) instead of forcing a tiny
+   horizontal scrollbar on every card. */
+@media (max-width: 1024px) {
+  .analytics-main {
+    padding: 20px;
+  }
+
+  .analytics-card {
+    padding: 20px;
+  }
+
+  .analytics-header {
+    flex-wrap: wrap;
+  }
+
+  .analytics-tab {
+    padding: 14px 12px;
+    font-size: 14px;
+  }
+
+  .page-subtitle {
+    margin-bottom: 16px;
+  }
+
+  /* Filter row: the DatePicker + search + Sales/Demand toggle don't share a
+     line at tablet widths. Let the search input take a full row of its own so
+     every control stays reachable instead of being pushed off the card. */
+  .analytics-filter-row {
+    gap: 10px;
+  }
+
+  .analytics-filter-row .filter-search {
+    flex: 1 1 100%;
+    order: 2;
+  }
+
+  .analytics-filter-row .date-picker {
+    order: 1;
+  }
+
+  .analytics-filter-row .filter-pill--mode {
+    order: 3;
+  }
+
+  /* 13px is below the 16px iOS threshold — focusing the search box would zoom
+     the viewport and cut off the rest of the page. */
+  .analytics-filter-row .filter-search,
+  .analytics-filter-row .filter-pill {
+    font-size: 16px;
+    min-height: 44px;
+  }
+
+  .analytics-filter-row .filter-pill--mode {
+    flex: 0 0 auto;
+    width: auto;
+    min-width: 130px;
+  }
+}
+
 @media (max-width: 768px) {
   .analytics-main {
     padding: 16px;
+  }
+
+  .analytics-card {
+    padding: 16px;
+    border-radius: 12px;
   }
 
   .analytics-tabs {
@@ -275,3 +445,158 @@
     border-left-color: var(--color-red-primary);
   }
 }
+
+@media (max-width: 480px) {
+  .analytics-main {
+    padding: 12px;
+  }
+
+  .analytics-card {
+    padding: 12px;
+  }
+
+  .analytics-card-title {
+    font-size: 16px;
+  }
+
+  .analytics-filter-row {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+/* In a column flex container flex-basis sizes the HEIGHT, so the desktop
+     `flex: 1 1 200px` on .filter-search turned into a 200px-tall box here
+     (flex-basis also beats the height property). Reset it to a fixed 40px so
+     the stacked controls keep the same size they have on desktop. */
+  .filter-pill,
+  .filter-search {
+    flex: 0 0 auto;
+    width: 100%;
+    max-width: 100%;
+    height: 40px;
+  }
+
+  /* The Sales/Demand toggle is a fixed 120px on desktop; let it stretch with
+     the rest of the stacked controls here. */
+  .filter-pill--mode {
+    width: 100%;
+  }
+
+  /* The DatePicker wrapper is an inline-block shrink-to-fit, so its trigger
+     needs the parent pinned to full width to actually stretch. */
+  .date-picker {
+    display: block;
+    width: 100%;
+  }
+}
+/* Scroll affordance for the analytics table surfaces. .table-scroll is styled
+   in App.css; .heatmap-wrapper and .expandable-modal-body keep their own rules
+   here. .analytics-card is no longer a scroll region, so it is not listed. */
+.expandable-modal-body::-webkit-scrollbar,
+.heatmap-wrapper::-webkit-scrollbar {
+  height: 8px;
+}
+
+.expandable-modal-body::-webkit-scrollbar-track,
+.heatmap-wrapper::-webkit-scrollbar-track {
+  background: var(--color-bg-light, #f1f2f3);
+  border-radius: 4px;
+}
+
+.expandable-modal-body::-webkit-scrollbar-thumb,
+.heatmap-wrapper::-webkit-scrollbar-thumb {
+  background: var(--color-border-hover, #adb5bd);
+  border-radius: 4px;
+}
+
+/* ---------------------------------------------------------------------------
+   PHONE TIER (<= 640px): rows become cards.
+   A 9-10 column table forced into a 351px viewport is unusable, so below this
+   width each <tr> renders as its own bordered card and every <td> prints its
+   column name via ::before { content: attr(data-label) }. The <thead> is
+   hidden because the labels now live on the cells.
+   The heatmap is excluded: it is a weekday matrix and must stay a table.
+   -------------------------------------------------------------------------- */
+@media (max-width: 640px) {
+  .analytics-scroll-hint {
+    display: none;
+  }
+
+  .analytics-table:not(.heatmap-table),
+  .table-scroll > .analytics-table:not(.heatmap-table) {
+    min-width: 0;
+    table-layout: auto;
+  }
+
+  .table-scroll > .analytics-table:not(.heatmap-table),
+  .table-scroll > .analytics-table--compact:not(.heatmap-table) {
+    overflow-x: visible;
+  }
+
+  .analytics-table:not(.heatmap-table) thead {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    padding: 0;
+    margin: -1px;
+    overflow: hidden;
+    clip: rect(0, 0, 0, 0);
+    white-space: nowrap;
+    border: 0;
+  }
+
+  .analytics-table:not(.heatmap-table) tbody,
+  .analytics-table:not(.heatmap-table) tr,
+  .analytics-table:not(.heatmap-table) td {
+    display: block;
+    width: auto;
+  }
+
+  .analytics-table:not(.heatmap-table) tbody tr {
+    margin-bottom: 10px;
+    padding: 6px 2px;
+    border: 1px solid var(--color-border-light);
+    border-radius: 10px;
+    background: var(--color-bg-white);
+  }
+
+  .analytics-table:not(.heatmap-table) tbody tr:last-child {
+    margin-bottom: 0;
+  }
+
+  .analytics-table:not(.heatmap-table) td {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 14px;
+    padding: 8px 12px;
+    border-bottom: 1px dashed var(--color-border-light);
+    text-align: right;
+  }
+
+  .analytics-table:not(.heatmap-table) tbody tr td:last-child {
+    border-bottom: none;
+  }
+
+  .analytics-table:not(.heatmap-table) td::before {
+    content: attr(data-label);
+    flex: 0 0 auto;
+    max-width: 45%;
+    font-weight: 600;
+    color: var(--color-text-light);
+    text-align: left;
+  }
+
+  /* The "no rows" message spans the whole table, so it has no column label. */
+  .analytics-table:not(.heatmap-table) td.empty-row {
+    justify-content: center;
+    text-align: center;
+    color: var(--color-text-light);
+    font-style: italic;
+  }
+
+  .analytics-table:not(.heatmap-table) td.empty-row::before {
+    content: none;
+  }
+}
+

@@ -2,7 +2,7 @@
 import { useState, useEffect } from "react";
 import axios from "axios";
 import toast from "react-hot-toast";
-import { FiSearch, FiInfo, FiDownload, FiExternalLink, FiShoppingCart } from "react-icons/fi";
+import { FiInfo, FiDownload, FiExternalLink, FiShoppingCart } from "react-icons/fi";
 import GenerateReportModal from "../../components/Reports/GenerateReportModal.jsx";
 import { buildIngredientDemandPDF, buildGroceryListPDF, generateExcel } from "./../../../services/reportService.js";
 import { logAuditEvent, formatAuditDateRange } from "../../../services/auditClient.js";
@@ -238,6 +238,8 @@ function IngredientDemand() {
   const [isReportModalOpen, setIsReportModalOpen] = useState(false);
   const [weeklyPage, setWeeklyPage] = useState(1);
   const [dailyPage, setDailyPage] = useState(1);
+  const [weeklyQuery, setWeeklyQuery] = useState('');
+  const [dailyQuery, setDailyQuery] = useState('');
   const [groceryMode, setGroceryMode] = useState("daily");
   const [isWeeklyOpen, setIsWeeklyOpen] = useState(false);
   const [isDailyOpen, setIsDailyOpen] = useState(false);
@@ -288,12 +290,35 @@ function IngredientDemand() {
     ? `${apiData.weekly.weekStart} – ${apiData.weekly.weekEnd}`
     : "—";
 
-  const totalWeeklyPages = Math.max(1, Math.ceil(demandGrid.length / ROWS_PER_PAGE));
-  const paginatedWeekly = demandGrid.slice(
+  // Two independent searches: the weekly heatmap grid is keyed on
+  // `ingredient`, the daily table on `name`. Each has its own query so typing
+  // in one card never empties the other. Page counters reset in the change
+  // handler rather than an effect, so a stale page > 1 can't show empty.
+  const filteredDemandGrid = demandGrid.filter((row) =>
+    (row.ingredient || "").toLowerCase().includes(weeklyQuery.trim().toLowerCase())
+  );
+  const filteredDailyIngredients = dailyIngredients.filter((row) =>
+    (row.name || "").toLowerCase().includes(dailyQuery.trim().toLowerCase())
+  );
+
+  const handleWeeklyQueryChange = (value) => {
+    setWeeklyQuery(value);
+    setWeeklyPage(1);
+    setModalWeeklyPage(1);
+  };
+
+  const handleDailyQueryChange = (value) => {
+    setDailyQuery(value);
+    setDailyPage(1);
+    setModalDailyPage(1);
+  };
+
+  const totalWeeklyPages = Math.max(1, Math.ceil(filteredDemandGrid.length / ROWS_PER_PAGE));
+  const paginatedWeekly = filteredDemandGrid.slice(
     (weeklyPage - 1) * ROWS_PER_PAGE, weeklyPage * ROWS_PER_PAGE
   );
-  const totalDailyPages = Math.max(1, Math.ceil(dailyIngredients.length / ROWS_PER_PAGE));
-  const paginatedDaily = dailyIngredients.slice(
+  const totalDailyPages = Math.max(1, Math.ceil(filteredDailyIngredients.length / ROWS_PER_PAGE));
+  const paginatedDaily = filteredDailyIngredients.slice(
     (dailyPage - 1) * ROWS_PER_PAGE, dailyPage * ROWS_PER_PAGE
   );
 
@@ -485,7 +510,7 @@ function IngredientDemand() {
             Weekly Ingredient Demand
             <Tippy
               content={tooltips.weeklyPlanner}
-              placement="right"
+              placement="bottom"
               animation="scale"
               duration={200}
               theme="dark"
@@ -505,9 +530,14 @@ function IngredientDemand() {
 
           <div className="analytics-filter-row">
             <DatePicker value={selectedRange} onChange={setSelectedRange} mode="range" />
-            <span className="filter-search">
-              <FiSearch size={14} /> Search Product
-            </span>
+            <input
+                className="filter-search"
+                type="search"
+                value={weeklyQuery}
+                onChange={(e) => handleWeeklyQueryChange(e.target.value)}
+                placeholder="Search Ingredient"
+                aria-label="Search ingredients in the weekly demand heatmap"
+              />
           </div>
 
           <p className="section-note">
@@ -570,7 +600,7 @@ function IngredientDemand() {
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '16px' }}>
             <h2 className="analytics-card-title" style={{ marginBottom: 0 }}>
               Daily Ingredient Demand
-              <Tippy content={tooltips.dailyIngredientDemand} placement="right" animation="scale" duration={200} theme="dark" arrow maxWidth={380} interactive>
+              <Tippy content={tooltips.dailyIngredientDemand} placement="bottom" animation="scale" duration={200} theme="dark" arrow maxWidth={380} interactive>
                 <span className="info-icon-wrapper"><FiInfo className="info-icon" /></span>
               </Tippy>
             </h2>
@@ -581,7 +611,14 @@ function IngredientDemand() {
 
           <div className="analytics-filter-row">
             <DatePicker value={selectedRange} onChange={setSelectedRange} mode="range" />
-            <span className="filter-search"><FiSearch size={14} /> Search Product</span>
+            <input
+              className="filter-search"
+              type="search"
+              value={dailyQuery}
+              onChange={(e) => handleDailyQueryChange(e.target.value)}
+              placeholder="Search Ingredient"
+              aria-label="Search ingredients in daily demand"
+            />
           </div>
 
           <p className="section-note">
@@ -596,25 +633,35 @@ function IngredientDemand() {
             <span className="stock-legend-pill stock-legend--critical">● Critical — order now</span>
           </div>
 
+          <div className="analytics-scroll-hint">
+            Swipe the table sideways to see every column.
+          </div>
+          <div
+            className="table-scroll"
+            tabIndex={0}
+            role="region"
+            aria-label="Daily ingredient demand: need, stock, status, quantity to buy and cost by ingredient"
+          >
           <table className="analytics-table">
             <thead><tr><th>No.</th><th>Ingredient</th><th>Used in</th><th>Forecasted Need</th><th>On Stock</th><th>Status</th><th>To Buy</th><th>Unit</th><th>Market Price</th><th>Est. Cost</th></tr></thead>
             <tbody>
               {paginatedDaily.map((row, i) => (
                 <tr key={row.name}>
-                  <td>{i + 1}</td>
-                  <td>{row.name}</td>
-                  <td>{row.usedIn}</td>
-                  <td>{row.forecasted.toFixed(2)}</td>
-                  <td>{row.onStock.toFixed(2)}</td>
-                  <td><span className={`status-badge status-badge--${row.status.toLowerCase()}`}>{row.status}</span></td>
-                  <td>{row.toBuy === null ? <span className="value--muted">{row.status === "Normal" ? "— no order" : "— delay restock"}</span> : row.toBuy.toFixed(2)}</td>
-                  <td>{row.unit}</td>
-                  <td>{row.marketPrice === null ? "—" : `₱${row.marketPrice}`}</td>
-                  <td>{row.estCost === null ? "—" : `₱${row.estCost.toLocaleString()}`}</td>
+                  <td data-label="No.">{i + 1}</td>
+                  <td data-label="Ingredient">{row.name}</td>
+                  <td data-label="Used in">{row.usedIn}</td>
+                  <td data-label="Forecasted Need">{row.forecasted.toFixed(2)}</td>
+                  <td data-label="On Stock">{row.onStock.toFixed(2)}</td>
+                  <td data-label="Status"><span className={`status-badge status-badge--${row.status.toLowerCase()}`}>{row.status}</span></td>
+                  <td data-label="To Buy">{row.toBuy === null ? <span className="value--muted">{row.status === "Normal" ? "— no order" : "— delay restock"}</span> : row.toBuy.toFixed(2)}</td>
+                  <td data-label="Unit">{row.unit}</td>
+                  <td data-label="Market Price">{row.marketPrice === null ? "—" : `₱${row.marketPrice}`}</td>
+                  <td data-label="Est. Cost">{row.estCost === null ? "—" : `₱${row.estCost.toLocaleString()}`}</td>
                 </tr>
               ))}
             </tbody>
           </table>
+          </div>
           <Pagination currentPage={dailyPage} totalPages={totalDailyPages} onPageChange={setDailyPage} />
         </section>
       </div>
@@ -629,7 +676,7 @@ function IngredientDemand() {
             <h2 className="analytics-card-title" style={{ marginBottom:0 }}>
               <FiShoppingCart size={16} style={{ marginRight:6, verticalAlign:-2 }} />
               Grocery List
-              <Tippy content={tooltips.groceryList} placement="right" animation="scale" duration={200} theme="dark" arrow maxWidth={380} interactive>
+              <Tippy content={tooltips.groceryList} placement="bottom" animation="scale" duration={200} theme="dark" arrow maxWidth={380} interactive>
                 <span className="info-icon-wrapper"><FiInfo className="info-icon" /></span>
               </Tippy>
             </h2>
@@ -677,23 +724,32 @@ function IngredientDemand() {
         />
       )}
       <ExpandableModal isOpen={isWeeklyOpen} onClose={() => setIsWeeklyOpen(false)} title="Weekly Ingredient Demand — Full View">
-        <table className="analytics-table heatmap-table">
-          <thead><tr><th>No.</th><th>Ingredient</th>{weekDays.map((day) => <th key={day}>{day}</th>)}</tr></thead>
-          <tbody>{demandGrid.slice((modalWeeklyPage - 1) * 10, modalWeeklyPage * 10).map((row, i) => (
-            <tr key={row.ingredient}><td>{(modalWeeklyPage - 1) * 10 + i + 1}</td><td>{row.ingredient}</td>{row.values.map((value, dayIndex) => <td key={dayIndex} className={`heatmap-cell heatmap-cell--${cellLevel(row, dayIndex)}`}>{value}</td>)}</tr>
-          ))}</tbody>
-        </table>
-        <Pagination currentPage={modalWeeklyPage} totalPages={Math.max(1, Math.ceil(demandGrid.length / 10))} onPageChange={setModalWeeklyPage} />
+        <div className="heatmap-wrapper">
+          <table className="analytics-table heatmap-table">
+            <thead><tr><th>No.</th><th>Ingredient</th>{weekDays.map((day) => <th key={day}>{day}</th>)}</tr></thead>
+            <tbody>{filteredDemandGrid.slice((modalWeeklyPage - 1) * 10, modalWeeklyPage * 10).map((row, i) => (
+              <tr key={row.ingredient}><td>{(modalWeeklyPage - 1) * 10 + i + 1}</td><td>{row.ingredient}</td>{row.values.map((value, dayIndex) => <td key={dayIndex} className={`heatmap-cell heatmap-cell--${cellLevel(row, dayIndex)}`}>{value}</td>)}</tr>
+            ))}</tbody>
+          </table>
+        </div>
+        <Pagination currentPage={modalWeeklyPage} totalPages={Math.max(1, Math.ceil(filteredDemandGrid.length / 10))} onPageChange={setModalWeeklyPage} />
       </ExpandableModal>
 
       <ExpandableModal isOpen={isDailyOpen} onClose={() => setIsDailyOpen(false)} title="Daily Ingredient Demand — Full View">
+        <div
+          className="table-scroll"
+          tabIndex={0}
+          role="region"
+          aria-label="Daily ingredient demand, full view"
+        >
         <table className="analytics-table">
           <thead><tr><th>No.</th><th>Ingredient</th><th>Used in</th><th>Forecasted Need</th><th>On Stock</th><th>Status</th><th>To Buy</th><th>Unit</th><th>Market Price</th><th>Est. Cost</th></tr></thead>
-          <tbody>{dailyIngredients.slice((modalDailyPage - 1) * 10, modalDailyPage * 10).map((row, i) => (
-            <tr key={row.name}><td>{i + 1}</td><td>{row.name}</td><td>{row.usedIn}</td><td>{row.forecasted.toFixed(2)}</td><td>{row.onStock.toFixed(2)}</td><td><span className={`status-badge status-badge--${row.status.toLowerCase()}`}>{row.status}</span></td><td>{row.toBuy === null ? <span className="value--muted">{row.status === "Normal" ? "— no order" : "— delay restock"}</span> : row.toBuy.toFixed(2)}</td><td>{row.unit}</td><td>{row.marketPrice === null ? "—" : `₱${row.marketPrice}`}</td><td>{row.estCost === null ? "—" : `₱${row.estCost.toLocaleString()}`}</td></tr>
+          <tbody>{filteredDailyIngredients.slice((modalDailyPage - 1) * 10, modalDailyPage * 10).map((row, i) => (
+            <tr key={row.name}><td data-label="No.">{i + 1}</td><td data-label="Ingredient">{row.name}</td><td data-label="Used in">{row.usedIn}</td><td data-label="Forecasted Need">{row.forecasted.toFixed(2)}</td><td data-label="On Stock">{row.onStock.toFixed(2)}</td><td data-label="Status"><span className={`status-badge status-badge--${row.status.toLowerCase()}`}>{row.status}</span></td><td data-label="To Buy">{row.toBuy === null ? <span className="value--muted">{row.status === "Normal" ? "— no order" : "— delay restock"}</span> : row.toBuy.toFixed(2)}</td><td data-label="Unit">{row.unit}</td><td data-label="Market Price">{row.marketPrice === null ? "—" : `₱${row.marketPrice}`}</td><td data-label="Est. Cost">{row.estCost === null ? "—" : `₱${row.estCost.toLocaleString()}`}</td></tr>
           ))}</tbody>
         </table>
-        <Pagination currentPage={modalDailyPage} totalPages={Math.max(1, Math.ceil(dailyIngredients.length / 10))} onPageChange={setModalDailyPage} />
+        </div>
+        <Pagination currentPage={modalDailyPage} totalPages={Math.max(1, Math.ceil(filteredDailyIngredients.length / 10))} onPageChange={setModalDailyPage} />
       </ExpandableModal>
 
       <ExpandableModal isOpen={isGroceryOpen} onClose={() => setIsGroceryOpen(false)} title="Grocery List — Full View">
@@ -711,6 +767,12 @@ function IngredientDemand() {
           return (
             <div className="grocery-category" key={category}>
               <p className="status-group-title">{category}</p>
+              <div
+                className="table-scroll"
+                tabIndex={0}
+                role="region"
+                aria-label={`Grocery list: ${category}`}
+              >
               <table className="analytics-table analytics-table--compact">
                 <thead>
                   <tr>
@@ -724,15 +786,16 @@ function IngredientDemand() {
                 <tbody>
                   {items.map((item) => (
                     <tr key={item.name}>
-                      <td>{item.name}</td>
-                      <td>{item.toBuy?.toFixed(2) ?? "—"}</td>
-                      <td>{item.unit}</td>
-                      <td>{item.marketPrice === null ? "—" : `₱${item.marketPrice}/${item.unit}`}</td>
-                      <td>{item.usedIn}</td>
+                      <td data-label="Item">{item.name}</td>
+                      <td data-label="Qty">{item.toBuy?.toFixed(2) ?? "—"}</td>
+                      <td data-label="Unit">{item.unit}</td>
+                      <td data-label="Market Price">{item.marketPrice === null ? "—" : `₱${item.marketPrice}/${item.unit}`}</td>
+                      <td data-label="Notes">{item.usedIn}</td>
                     </tr>
                   ))}
                 </tbody>
               </table>
+              </div>
             </div>
           );
         })}

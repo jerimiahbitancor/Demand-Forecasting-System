@@ -1,759 +1,567 @@
 // frontend/src/features/landing/Landing.jsx
-import React, { useEffect, useState } from "react";
-import { useNavigate } from "react-router-dom";
-import "./Landing.css";
-import bgImage from "../../assets/landing/bg.png";
-import worksImage from "../../assets/landing/works.png";
-import { FaCheck, FaTimes, FaLock, FaShieldAlt } from "react-icons/fa";
-import { FiX } from "react-icons/fi";
-import ctaImage from "../../assets/landing/client.png";
+import { useState } from 'react';
+import { Link } from 'react-router-dom';
+import {
+  FaChartLine,
+  FaChartBar,
+  FaBoxes,
+  FaClipboardList,
+  FaLayerGroup,
+  FaDatabase,
+  FaBolt,
+  FaCheck,
+  FaTimes,
+  FaUpload,
+  FaBrain,
+  FaListOl,
+  FaArrowRight,
+  FaLightbulb,
+  FaFileExcel,
+  FaClock,
+} from 'react-icons/fa';
+
+import LandingNav from './landing-kit/LandingNav';
+import LandingFooter from './landing-kit/LandingFooter';
+import FaqAccordion from './landing-kit/FaqAccordion';
+import { PrivacyModal, TermsModal } from './landing-kit/LegalModals';
+import useReveal from './landing-kit/useReveal';
+import './landing-kit/landing-kit.css';
+
+import dashboardImg from '../../assets/landing/Dashboard.png';
+import analyticsImg from '../../assets/landing/Analytics.png';
+import inventoryImg from '../../assets/landing/Inventory.png';
+import inventoryImg2 from '../../assets/landing/Inventory2.png';
+
+import dataMgmtImg from '../../assets/landing/DataManagement.png';
+
+const STATS = [
+  { value: '12+', label: 'Months of history used' },
+  { value: '6', label: 'Integrated modules' },
+  { value: 'XGBoost', label: 'Forecasting engine' },
+  { value: 'CSV / XLSX', label: 'Supported uploads' },
+];
+
+const FEATURES = [
+  {
+    icon: <FaChartLine />,
+    tone: '',
+    title: 'Demand Forecasting',
+    text: 'Analyze historical sales data and generate daily and weekly product demand forecasts using gradient-boosted models.',
+    tags: ['XGBoost', 'Daily + Weekly'],
+    span: 3,
+    img: dashboardImg,
+    alt: 'Demand forecasting dashboard with daily and weekly projections',
+  },
+  {
+    icon: <FaChartBar />,
+    tone: 'lk-card-ico--amber',
+    title: 'Product Performance',
+    text: 'Classify products by demand level and evaluate performance against overall sales patterns.',
+    tags: ['Segmentation'],
+    span: 3,
+    img: analyticsImg,
+    alt: 'Product performance breakdown grouped by demand level',
+  },
+  {
+    icon: <FaBoxes />,
+    tone: 'lk-card-ico--green',
+    title: 'Ingredient Management',
+    text: 'Record ingredient stock, minimum levels, and restocks, then see every item measured against today’s forecasted need so shortages and excess show up early.',
+    tags: ['Stock Tracking', 'Reorder Alerts'],
+        img: inventoryImg2,
+    alt: 'Ingredient management screen with stock levels and projected need',
+
+    span: 3,
+  },
+  {
+    icon: <FaClipboardList />,
+    tone: 'lk-card-ico--ink',
+    title: 'Product Management',
+    text: 'Map each product to a recipe and see its cost of goods and food cost percentage against your recorded ingredient prices.',
+    tags: ['Product Recipes', 'COGS & Food Cost'],
+    span: 3,
+    img: inventoryImg,
+    alt: 'Product management screen listing menu items with recipes and stock levels',
+  },
+  {
+    icon: <FaDatabase />,
+    tone: 'lk-card-ico--ink',
+    title: 'Data Management',
+    text: 'Upload, review, and maintain the historical sales records that every forecast is trained on. Archive old periods, keep the training set current, and generate forecasts whenever the data changes.',
+    tags: ['CSV / XLSX', 'Upload History'],
+    span: 6,
+    split: true,
+    img: dataMgmtImg,
+    alt: 'Data management screen for uploading and reviewing sales history',
+  },
+];
+
+const STEPS = [
+  {
+    icon: <FaFileExcel />,
+    title: 'Upload your sales data',
+    text: 'Export your POS sales history as CSV or XLSX and upload it. Twelve or more months gives the most reliable signal.',
+  },
+  {
+    icon: <FaBrain />,
+    title: 'Train the model',
+    text: 'The forecasting engine learns weekday, weekend, seasonal, and payday-related patterns from your history.',
+  },
+  {
+    icon: <FaChartLine />,
+    title: 'Review forecasts',
+    text: 'Generate daily and weekly demand projections and inspect product-level performance breakdowns.',
+  },
+  {
+    icon: <FaListOl />,
+    title: 'Plan replenishment',
+    text: 'Compare forecasted ingredient needs against current stock to see what may need reordering.',
+  },
+];
+
+const SUPPORTS = [
+  'Demand forecasting',
+  'Product performance analysis',
+  'Ingredient demand estimation',
+  'Inventory monitoring',
+  'Replenishment decision support',
+];
+
+const DOES_NOT = [
+  'Automatically purchase ingredients',
+  'Manage suppliers',
+  'Process purchase orders',
+  'Manage deliveries or logistics',
+  'Replace business-owner decisions',
+];
+
+const FORMATS = ['CSV', 'XLSX'];
+const FIELDS = [
+  'Item Name',
+  'Category',
+  'Item Sold',
+  'Gross Sales',
+  'Refunds',
+  'Net Sales',
+];
+
+const OUTCOMES = [
+  {
+    icon: <FaLayerGroup />,
+    title: 'Prep matches the forecast',
+    text: 'Ingredient requirements come from the same forecast your sales data describes, so prep and purchasing stop disagreeing with each other.',
+    tint: '#7a0010',
+  },
+  {
+    icon: <FaChartBar />,
+    title: 'Dead stock becomes visible',
+    text: 'Product performance separates items that actually move from the ones quietly tying up stock you assumed was essential.',
+    tint: '#b31230',
+  },
+  {
+    icon: <FaClock />,
+    title: 'Patterns surface on their own',
+    text: 'The weekday-versus-weekend and payday cycles already in your history get picked up automatically, instead of being tracked by hand.',
+    tint: '#1c2632',
+  },
+];
+
+const FAQS = [
+  {
+    q: 'How much sales history do I need?',
+    a: 'At least 12 months of sales history is recommended for reliable forecasts. With 12 months or more, upload everything you have — more data helps the system identify recurring patterns such as weekday and weekend behavior, seasonal swings, and payday-related demand changes.',
+  },
+  {
+    q: 'What file format should I upload?',
+    a: 'ChefDuo Forecast accepts CSV and XLSX files. Your file should include Item Name, Category, Item Sold, Gross Sales, Refunds, and Net Sales so the model has both volume and revenue signals to work from.',
+  },
+  {
+    q: 'Does it place orders or manage suppliers automatically?',
+    a: 'No. ChefDuo Forecast is a decision-support system. It surfaces what may need replenishment, but purchasing, supplier management, purchase orders, and deliveries all stay under your control.',
+  },
+  {
+    q: 'How are ingredient requirements calculated?',
+    a: 'Ingredient demand combines predicted product demand with the recipe quantities you have recorded. If a forecast says you will sell more of a dish next week, the system works out what that means for each ingredient it needs.',
+  },
+  {
+    q: 'How accurate are the forecasts?',
+    a: 'Forecasts are estimates, not guarantees. Accuracy depends on the volume and consistency of the history you upload, and on whether real-world conditions match past patterns. Treat the output as one input alongside your own operational judgment.',
+  },
+  {
+    q: 'Who can see my business data?',
+    a: 'Your uploaded sales, product, and inventory data is used only to generate your forecasts. ChefDuo Forecast does not sell or rent your information to third parties, and handles personal information in accordance with the Data Privacy Act of 2012.',
+  },
+];
 
 const Landing = () => {
-  const navigate = useNavigate();
   const [showTerms, setShowTerms] = useState(false);
   const [showPrivacy, setShowPrivacy] = useState(false);
 
-  
-  
-
-  
-
-  const handleGetStarted = () => {
-    navigate("/register");
-  };
-
-
-  const openTerms = (e) => {
-    e.preventDefault();
-    setShowTerms(true);
-    document.body.style.overflow = "hidden";
-  };
-
-  const closeTerms = () => {
-    setShowTerms(false);
-    document.body.style.overflow = "unset";
-  };
-
-  const openPrivacy = (e) => {
-    e.preventDefault();
-    setShowPrivacy(true);
-    document.body.style.overflow = "hidden";
-  };
-
-  const closePrivacy = () => {
-    setShowPrivacy(false);
-    document.body.style.overflow = "unset";
-  };
+  useReveal();
 
   return (
-    <div
-      className="landing-wrapper"
-      style={{ backgroundImage: `url(${bgImage})` }}
-    >
-      {/* Hero Section */}
-      <header className="hero-wrapper">
-        <h1 className="hero-heading">
-          Smarter Demand Planning <br /> for Better Supply Decisions
-        </h1>
-        <p className="hero-text">
-          ChefDuo Forecast uses historical sales data to predict future product
-          demand, estimate ingredient needs, and provide data-driven insights to
-          support inventory and replenishment decisions.
-        </p>
-        <p className="hero-highlight">
-          <em>
-            Turn historical sales data into actionable demand insights for your
-            food service operations.
-          </em>
-        </p>
-        <button className="btn-landing" onClick={handleGetStarted}>
-          Get Started
-        </button>
-        <p className="scroll-indicator">Scroll to see how it works</p>
-      </header>
+    <div className="lk-root" id="top">
+      <a className="lk-skip" href="#main">
+        Skip to content
+      </a>
 
-      {/* Features Section */}
-      <section className="features-wrapper">
-        <div className="features-header">
-          <h2 className="features-label">WHAT THE SYSTEM DOES</h2>
-          <h3 className="features-title">What ChefDuo Forecast Can Do</h3>
-          <p className="features-description">
-            ChefDuo Forecast combines demand forecasting, product analysis,
-            ingredient demand estimation, and inventory information to provide
-            decision-support insights for daily food service operations.
-          </p>
-        </div>
+      <LandingNav />
 
-        <div className="features-grid">
-          <div className="feature-item">
-            <h4 className="feature-name">Demand Forecasting</h4>
-            <p className="feature-info">
-              Analyze historical sales data and generate daily and weekly
-              forecasts for product demand using XGBoost.
-            </p>
-          </div>
+      <main id="main">
+        {/* ================= HERO ================= */}
+        <section className="lk-hero">
+          <div className="lk-container">
+            <div className="lk-hero-inner">
+              <div className="lk-hero-copy">
+                <span className="lk-eyebrow">Demand Forecasting</span>
+                <h1 className="lk-hero-title">
+                  Smarter demand planning for <em>better supply decisions</em>
+                </h1>
+                <p className="lk-hero-lead">
+                  ChefDuo Forecast reads your historical sales data, predicts
+                  future product demand, translates that into ingredient
+                  requirements, and shows where your current stock falls short —
+                  so you plan with numbers instead of guesswork.
+                </p>
 
-          <div className="feature-item">
-            <h4 className="feature-name">Product Performance</h4>
-            <p className="feature-info">
-              Classify products by demand level and evaluate performance against
-              store-level sales patterns.
-            </p>
-          </div>
+                <div className="lk-hero-actions">
+                  <Link to="/register" className="lk-btn lk-btn--primary lk-btn--lg">
+                    Get Started
+                    <FaArrowRight size={15} />
+                  </Link>
+                  <Link to="/features" className="lk-btn lk-btn--secondary lk-btn--lg">
+                    Explore Features
+                  </Link>
+                </div>
 
-          <div className="feature-item">
-            <h4 className="feature-name">Ingredient Demand</h4>
-            <p className="feature-info">
-              Estimate future ingredient needs by combining predicted product
-              demand with recipe quantities.
-            </p>
-          </div>
-
-          <div className="feature-item">
-            <h4 className="feature-name">Inventory Management</h4>
-            <p className="feature-info">
-              Record and monitor ingredient stock information to help compare
-              available inventory with forecasted ingredient needs.
-            </p>
-          </div>
-
-          <div className="feature-item">
-            <h4 className="feature-name">Replenishment Support</h4>
-            <p className="feature-info">
-              Compare forecasted ingredient needs with available stock to
-              identify ingredients that may require replenishment.
-            </p>
-          </div>
-
-          <div className="feature-item">
-            <h4 className="feature-name">Decision Support</h4>
-            <p className="feature-info">
-              Bring forecasts, product performance, ingredient needs, and
-              inventory information together to support data-driven operational
-              decisions.
-            </p>
-          </div>
-        </div>
-      </section>
-
-      <section className="works-section">
-        <div className="works-content">
-          <h2 className="works-label">HOW IT WORKS</h2>
-          <h3 className="works-title">How ChefDuo Forecast Works</h3>
-          <p className="works-description">
-            ChefDuo Forecast transforms historical sales information into demand
-            forecasts and supply-chain decision-support insights through a
-            series of data-driven steps.
-          </p>
-          <div className="works-features">
-            <div className="works-features-image">
-              <img
-                src={worksImage}
-                alt="ChefDuo Forecast Dashboard"
-                className="works-features-img"
-              />
-            </div>
-          </div>
-        </div>
-      </section>
-
-      <section className="explore-section">
-        <div className="explore-content">
-          <h2 className="explore-label">EXPLORE THE SYSTEM</h2>
-          <h3 className="explore-title">Explore ChefDuo Forecast</h3>
-          <p className="explore-description">
-            Explore the system's modules for managing sales data, monitoring
-            inventory, analyzing demand, and configuring forecasting and
-            operational parameters.
-          </p>
-        </div>
-
-        {/* Top Row - 2 items */}
-        <div className="explore-top-row">
-          <div className="explore-item">
-            <h4 className="explore-name">Dashboard</h4>
-            <p className="explore-info">
-              Analyze historical sales data and generate daily and weekly
-              forecasts for product demand using XGBoost.
-            </p>
-          </div>
-
-          <div className="explore-item">
-            <h4 className="explore-name">Data Management</h4>
-            <p className="explore-info">
-              Classify products by demand level and evaluate performance against
-              store-level sales patterns.
-            </p>
-          </div>
-        </div>
-
-        {/* Bottom Row - 3 items */}
-        <div className="explore-bottom-row">
-          <div className="explore-item">
-            <h4 className="explore-name">Inventory Management</h4>
-            <p className="explore-info">
-              Record and monitor ingredient stock information to help compare
-              available inventory with forecasted ingredient needs.
-            </p>
-          </div>
-
-          <div className="explore-item">
-            <h4 className="explore-name">Analytics</h4>
-            <p className="explore-info">
-              Compare forecasted ingredient needs with available stock to
-              identify ingredients that may require replenishment.
-            </p>
-          </div>
-
-          <div className="explore-item">
-            <h4 className="explore-name">Decision Support</h4>
-            <p className="explore-info">
-              Bring forecasts, product performance, ingredient needs, and
-              inventory information together to support data-driven operational
-              decisions.
-            </p>
-          </div>
-        </div>
-      </section>
-
-      <section className="built-section">
-        <div className="built-content">
-          <h2 className="built-label">System Scope and Limitation</h2>
-          <h3 className="built-title">Built for Decision Support</h3>
-          <p className="built-description">
-            ChefDuo Forecast provides information to support planning and
-            inventory decisions. It does not automatically purchase ingredients,
-            manage suppliers, or arrange deliveries.
-          </p>
-
-          <div className="built-supports">
-            <div className="built-supports-column">
-              <h4 className="built-supports-title">The system supports</h4>
-              <ul className="built-supports-list">
-                <li className="built-supports-item support-yes">
-                  <span className="built-supports-icon">
-                    <FaCheck />
-                  </span>
-                  Demand forecasting
-                </li>
-                <li className="built-supports-item support-yes">
-                  <span className="built-supports-icon">
-                    <FaCheck />
-                  </span>
-                  Product performance analysis
-                </li>
-                <li className="built-supports-item support-yes">
-                  <span className="built-supports-icon">
-                    <FaCheck />
-                  </span>
-                  Ingredient demand estimation
-                </li>
-                <li className="built-supports-item support-yes">
-                  <span className="built-supports-icon">
-                    <FaCheck />
-                  </span>
-                  Inventory monitoring
-                </li>
-                <li className="built-supports-item support-yes">
-                  <span className="built-supports-icon">
-                    <FaCheck />
-                  </span>
-                  Replenishment decision support
-                </li>
-              </ul>
-            </div>
-
-            <div className="built-supports-column">
-              <h4 className="built-supports-title">
-                The system does not support
-              </h4>
-              <ul className="built-supports-list">
-                <li className="built-supports-item support-no">
-                  <span className="built-supports-icon">
-                    <FaTimes />
-                  </span>
-                  Automatically purchase ingredients
-                </li>
-                <li className="built-supports-item support-no">
-                  <span className="built-supports-icon">
-                    <FaTimes />
-                  </span>
-                  Manage suppliers
-                </li>
-                <li className="built-supports-item support-no">
-                  <span className="built-supports-icon">
-                    <FaTimes />
-                  </span>
-                  Process purchase orders
-                </li>
-                <li className="built-supports-item support-no">
-                  <span className="built-supports-icon">
-                    <FaTimes />
-                  </span>
-                  Manage deliveries or logistics
-                </li>
-                <li className="built-supports-item support-no">
-                  <span className="built-supports-icon">
-                    <FaTimes />
-                  </span>
-                  Replace business-owner decisions
-                </li>
-              </ul>
-            </div>
-          </div>
-          <div className="built-disclaimer">
-            <p className="built-disclaimer-text">
-              <span className="bold">Your data, your decisions</span>. ChefDuo
-              Forecast uses your provided business data to generate forecasting
-              and decision-support information. Forecast results are estimates
-              and should be interpreted together with actual business conditions
-              and the owner's operational judgment.
-            </p>
-          </div>
-        </div>
-      </section>
-
-      <section className="req-section">
-        <div className="req-content">
-          <h2 className="req-label">DATA REQUIREMENTS</h2>
-          <h3 className="req-title">What Data Do You Need</h3>
-          <p className="req-description">
-            ChefDuo Forecast uses historical sales information to identify
-            demand patterns and generate forecasts.
-          </p>
-
-          <div className="req-data-grid">
-            <div className="req-data-card">
-              <h4 className="req-data-title">Supported Formats</h4>
-              <div className="req-data-formats">
-                <span className="req-data-format">CSV</span>
-                <span className="req-data-format">XLSX</span>
+              
               </div>
-              <h4 className="req-data-title">Required Fields</h4>
-              <ul className="req-data-list">
-                <span className="req-data-format">Item Name</span>
-                <span className="req-data-format">Category</span>
-                <span className="req-data-format">Item Sold</span>
-                <span className="req-data-format">Gross Sales</span>
-                <span className="req-data-format">Refunds</span>
-                <span className="req-data-format">Net Sales</span>
-              </ul>
+
+              <div className="lk-hero-visual">
+                <div className="lk-hero-frame">
+                  <img
+                    src={dashboardImg}
+                    alt="ChefDuo Forecast dashboard showing demand projections"
+                  />
+                </div>
+
+                <div className="lk-float lk-float--tl">
+                  <span className="lk-float-ico lk-float-ico--up">
+                    <FaChartLine size={16} />
+                  </span>
+                  <span>
+                    <span className="lk-float-value">Updated daily</span>
+                  </span>
+                </div>
+
+                <div className="lk-float lk-float--br">
+                  <span className="lk-float-ico lk-float-ico--amber">
+                    <FaBolt size={16} />
+                  </span>
+                  <span>
+                    <span className="lk-float-value">Ready to plan</span>
+                  </span>
+                </div>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        {/* ================= STATS ================= */}
+        <section className="lk-section lk-section--white">
+          <div className="lk-container">
+            <div className="lk-stats lk-reveal">
+              {STATS.map((s) => (
+                <div className="lk-stat" key={s.label}>
+                  <div className="lk-stat-value">{s.value}</div>
+                  <div className="lk-stat-label">{s.label}</div>
+                </div>
+              ))}
+            </div>
+          </div>
+        </section>
+
+        {/* ================= FEATURES ================= */}
+        <section className="lk-section lk-section--tint" id="features">
+          <div className="lk-container">
+            <div className="lk-section-head lk-reveal">
+              <span className="lk-eyebrow">What the system does</span>
+              <h2 className="lk-section-title">
+                One platform from sales history to restocking decision
+              </h2>
+              <p className="lk-section-sub">
+                Forecasting, product analysis, ingredient stock, and product
+                recipes and costs brought together so the numbers behind each
+                decision are in one place.
+              </p>
             </div>
 
-            <div className="req-note">
-              <p className="req-note-text">
-                <strong>Product Performance</strong>
+            <div className="lk-bento">
+              {FEATURES.map((f) => {
+                const shot = f.img ? (
+                  <div className="lk-card-shot">
+                    <img src={f.img} alt={f.alt} loading="lazy" />
+                  </div>
+                ) : null;
+
+                return (
+                  <article
+                    className={`lk-card lk-card--span${f.span}${
+                      f.split ? ' lk-card--split' : ''
+                    } lk-reveal`}
+                    key={f.title}
+                  >
+                    <div className="lk-card-copy">
+                      <span className={`lk-card-ico ${f.tone}`}>{f.icon}</span>
+                      <h3 className="lk-card-title">{f.title}</h3>
+                      <p className="lk-card-text">{f.text}</p>
+                      {!f.split && shot}
+                      <div className="lk-card-tags">
+                        {f.tags.map((t) => (
+                          <span className="lk-tag" key={t}>
+                            {t}
+                          </span>
+                        ))}
+                      </div>
+                    </div>
+                    {f.split && shot}
+                  </article>
+                );
+              })}
+            </div>
+          </div>
+        </section>
+
+        {/* ================= HOW IT WORKS ================= */}
+        <section className="lk-section lk-section--white" id="how-it-works">
+          <div className="lk-container">
+            <div className="lk-section-head lk-reveal">
+              <span className="lk-eyebrow">How it works</span>
+              <h2 className="lk-section-title">Four steps from upload to plan</h2>
+              <p className="lk-section-sub">
+                ChefDuo Forecast turns historical sales information into
+                decision-support insights through a short, repeatable cycle.
+              </p>
+            </div>
+
+            <div className="lk-steps">
+              {STEPS.map((s) => (
+                <div className="lk-step lk-reveal" key={s.title}>
+                  <div className="lk-step-num" aria-hidden="true" />
+                  <h3 className="lk-step-title">{s.title}</h3>
+                  <p className="lk-step-text">{s.text}</p>
+                </div>
+              ))}
+            </div>
+          </div>
+        </section>
+
+        {/* ================= DATA REQUIREMENTS ================= */}
+        <section className="lk-section lk-section--cream" id="data">
+          <div className="lk-container">
+            <div className="lk-section-head lk-reveal">
+              <span className="lk-eyebrow">Data requirements</span>
+              <h2 className="lk-section-title">What data you need</h2>
+              <p className="lk-section-sub">
+                ChefDuo Forecast uses historical sales information to identify
+                demand patterns and generate forecasts. Here is exactly what to
+                have ready.
+              </p>
+            </div>
+
+            <div className="lk-spec lk-reveal">
+              <div className="lk-spec-card">
+                <h3 className="lk-spec-title">Supported formats</h3>
+                                <br />
+
+                <div className="lk-chiprow">
+                  {FORMATS.map((f) => (
+                    <span className="lk-chip lk-chip--brand" key={f}>
+                      {f}
+                    </span>
+                  ))}
+                </div>
+
+                <h3 className="lk-spec-title" style={{ marginTop: 28 }}>
+                  Required fields
+                </h3>
                 <br />
-                Upload at least 12 months of sales history for reliable
-                forecasts. If you have 12 months or more, upload everything.
-              </p>
-              <p className="req-note-subtext">
-                More historical data can help the system identify recurring
-                patterns such as weekday and weekend behavior, seasonal
-                patterns, and payday-related demand variations.
-              </p>
-            </div>
-          </div>
-        </div>
-      </section>
-
-      <section className="cta-section">
-        <div className="cta-content">
-          <div className="cta-image">
-            <img
-              src={ctaImage}
-              alt="ChefDuo Forecast Dashboard"
-              className="cta-img"
-            />
-          </div>
-
-          <div className="cta-text">
-            <h2 className="req-title">
-              Ready to Make Better Demand Decisions?
-            </h2>
-            <p className="req-description">
-              Start using ChefDuo Forecast to transform your historical sales
-              data into forecasts, ingredient requirements, inventory insights,
-              and replenishment decision support.
-            </p>
-            <div className="cta-buttons">
-              <button className="cta-btn" onClick={handleGetStarted}>
-                Let's Dive In!
-              </button>
-            </div>
-          </div>
-        </div>
-      </section>
-
-      {/* Footer */}
-      <footer className="footer-section">
-        <div className="footer-content">
-          <p className="footer-text">
-            © 2026 ChefDuo Forecast · Demand Forecasting and Supply Chain Decision Support System
-          </p>
-          <div className="footer-links">
-            <a href="#" className="footer-link" onClick={openPrivacy}>
-              Privacy Policy
-            </a>
-            <span className="footer-divider">·</span>
-            <a href="#" className="footer-link" onClick={openTerms}>
-              Terms and Conditions
-            </a>
-          </div>
-        </div>
-      </footer>
-
-      {/* Terms and Conditions Modal */}
-      {showTerms && (
-        <div className="modal-overlay" onClick={closeTerms}>
-          <div className="modal-content" onClick={(e) => e.stopPropagation()}>
-            <div className="modal-header">
-              <div className="modal-header-left">
-                <FaLock className="modal-header-icon" />
-                <h2>Terms and Conditions</h2>
-              </div>
-              <button className="modal-close" onClick={closeTerms}>
-                <FiX />
-              </button>
-            </div>
-            <div className="modal-body">
-              <div className="modal-section">
-                <h3>Welcome to ChefDuo Forecast</h3>
-                <p>
-                  These Terms and Conditions govern your access to and use of the system. By accessing or using ChefDuo Forecast, 
-                  you acknowledge that you have read, understood, and agreed to comply with these Terms. If you do not agree, 
-                  you must discontinue use of the system.
-                </p>
-              </div>
-
-              <div className="modal-section">
-                <h3>1. Acceptance of Terms</h3>
-                <p>
-                  By accessing or using ChefDuo Forecast, you acknowledge that you have read, understood, and agree to be bound 
-                  by these Terms and Conditions. If you do not agree with any part of these Terms, you must discontinue use of 
-                  the system.
-                </p>
-                <p style={{ marginTop: '8px' }}>
-                  ChefDuo reserves the right to update or modify these Terms and Conditions at any time. Any changes will take 
-                  effect upon publication within the system. Your continued use of ChefDuo Forecast after such changes constitutes 
-                  your acceptance of the revised Terms.
-                </p>
-              </div>
-
-              <div className="modal-section">
-                <h3>2. Data Collection and Privacy</h3>
-                <p>
-                  ChefDuo Forecast collects and processes information necessary for system functionality, including:
-                </p>
-                <ul style={{ color: 'rgba(237, 233, 222, 0.6)', fontSize: '13px', lineHeight: '1.7', paddingLeft: '20px', margin: '6px 0' }}>
-                  <li>User account information</li>
-                  <li>Sales and transaction records</li>
-                  <li>Product and inventory data</li>
-                  <li>Ingredient usage data</li>
-                  <li>System usage information</li>
-                </ul>
-                <p style={{ marginTop: '8px' }}>
-                  The collected information is used solely to:
-                </p>
-                <ul style={{ color: 'rgba(237, 233, 222, 0.6)', fontSize: '13px', lineHeight: '1.7', paddingLeft: '20px', margin: '6px 0' }}>
-                  <li>Generate sales forecasts and demand predictions</li>
-                  <li>Produce inventory and ingredient recommendations</li>
-                  <li>Improve forecasting accuracy and system performance</li>
-                  <li>Generate reports and analytics</li>
-                </ul>
-                <p style={{ marginTop: '8px' }}>
-                  ChefDuo does not sell, rent, or disclose user information to third parties except when required by law.
-                </p>
-                <p style={{ marginTop: '8px' }}>
-                  All personal information is collected, processed, stored, and protected in accordance with the 
-                  <strong> Data Privacy Act of 2012 (Republic Act No. 10173)</strong> and its Implementing Rules and Regulations.
-                </p>
-                <p style={{ marginTop: '8px' }}>
-                  Reasonable administrative, technical, and organizational safeguards are implemented to protect user information 
-                  from unauthorized access, alteration, disclosure, or loss.
-                </p>
-              </div>
-
-              <div className="modal-section">
-                <h3>3. System Usage</h3>
-                <p>
-                  ChefDuo Forecast is designed to assist businesses in forecasting sales demand and estimating ingredient 
-                  requirements using historical sales data.
-                </p>
-                <p style={{ marginTop: '8px' }}>
-                  The forecasts and recommendations generated by the system are intended to support business planning and 
-                  decision-making. While predictive analytics are used to improve forecasting accuracy, all results are estimates 
-                  and should not be considered guarantees of future performance.
-                </p>
-                <p style={{ marginTop: '8px' }}>
-                  Actual sales and inventory requirements may vary due to market conditions, customer demand, seasonal factors, 
-                  supplier availability, and other circumstances beyond the system's control.
-                </p>
-              </div>
-
-              <div className="modal-section">
-                <h3>4. User Responsibilities</h3>
-                <p>
-                  Users are responsible for:
-                </p>
-                <ul style={{ color: 'rgba(237, 233, 222, 0.6)', fontSize: '13px', lineHeight: '1.7', paddingLeft: '20px', margin: '6px 0' }}>
-                  <li>Providing accurate, complete, and up-to-date information</li>
-                  <li>Maintaining the confidentiality of their account credentials</li>
-                  <li>Using the system only for lawful and authorized purposes</li>
-                  <li>Ensuring that uploaded sales and inventory data are accurate to produce reliable forecasting results</li>
-                </ul>
-                <p style={{ marginTop: '8px' }}>
-                  Users shall not:
-                </p>
-                <ul style={{ color: 'rgba(237, 233, 222, 0.6)', fontSize: '13px', lineHeight: '1.7', paddingLeft: '20px', margin: '6px 0' }}>
-                  <li>Attempt to gain unauthorized access to the system or its database</li>
-                  <li>Upload malicious software, viruses, or harmful content</li>
-                  <li>Interfere with the operation or security of the system</li>
-                  <li>Use the system in violation of applicable laws and regulations</li>
-                </ul>
-              </div>
-
-              <div className="modal-section">
-                <h3>5. Disclaimer</h3>
-                <p>
-                  ChefDuo Forecast is provided as a decision-support tool. Although reasonable efforts are made to produce 
-                  accurate forecasts and recommendations, the system does not guarantee the accuracy, completeness, or reliability 
-                  of its predictions.
-                </p>
-                <p style={{ marginTop: '8px' }}>
-                  Users acknowledge that forecasting results should be used alongside professional judgment and other relevant 
-                  business considerations. The developers are not responsible for business decisions or losses resulting from 
-                  reliance on the system's forecasts or recommendations.
-                </p>
-              </div>
-
-              <div className="modal-section">
-                <h3>6. Governing Law</h3>
-                <p>
-                  These Terms and Conditions shall be governed by and interpreted in accordance with the laws of the 
-                  Republic of the Philippines, including but not limited to:
-                </p>
-                <ul style={{ color: 'rgba(237, 233, 222, 0.6)', fontSize: '13px', lineHeight: '1.7', paddingLeft: '20px', margin: '6px 0' }}>
-                  <li><strong>Republic Act No. 10173</strong> – Data Privacy Act of 2012</li>
-                  <li><strong>Republic Act No. 8792</strong> – Electronic Commerce Act of 2000</li>
-                </ul>
-                <p style={{ marginTop: '8px' }}>
-                  Any dispute arising from the use of ChefDuo Forecast shall first be resolved through good-faith discussion. 
-                  If no resolution is reached, the matter shall be subject to the jurisdiction of the appropriate courts of the 
-                  Republic of the Philippines.
-                </p>
-              </div>
-
-              <div className="modal-section">
-                <h3>7. Contact Information</h3>
-                <p>
-                  For questions or concerns regarding these Terms and Conditions or the use of ChefDuo Forecast, users may 
-                  contact the system developers through the contact information provided by the institution or organization 
-                  responsible for the system.
-                </p>
-              </div>
-
-              <div className="modal-footer-text">
-                <button type="button" className="modal-agree-btn" onClick={closeTerms}>
-                  I Agree
-                </button>
-              </div>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* Privacy Policy Modal */}
-      {showPrivacy && (
-        <div className="modal-overlay" onClick={closePrivacy}>
-          <div className="modal-content" onClick={(e) => e.stopPropagation()}>
-            <div className="modal-header">
-              <div className="modal-header-left">
-                <FaShieldAlt className="modal-header-icon" />
-                <h2>Privacy Policy</h2>
-              </div>
-              <button className="modal-close" onClick={closePrivacy}>
-                <FiX />
-              </button>
-            </div>
-            <div className="modal-body">
-              <div className="modal-section">
-                <h3>Welcome to ChefDuo Forecast</h3>
-                <p>
-                  ChefDuo Forecast ("System") respects your privacy and is committed to protecting the personal information 
-                  you provide. This Privacy Policy explains how your information is collected, used, stored, and protected in 
-                  accordance with the <strong>Data Privacy Act of 2012 (Republic Act No. 10173)</strong> and its Implementing 
-                  Rules and Regulations.
-                </p>
-                <p style={{ marginTop: '8px' }}>
-                  By using ChefDuo Forecast, you acknowledge that you have read and understood this Privacy Policy.
-                </p>
-              </div>
-
-              <div className="modal-section">
-                <h3>1. Information We Collect</h3>
-                <p>
-                  ChefDuo Forecast collects only the information necessary to provide forecasting and analytics services.
-                </p>
-                <p style={{ marginTop: '8px' }}>
-                  <strong>Personal Information</strong>
-                </p>
-                <ul style={{ color: 'rgba(237, 233, 222, 0.6)', fontSize: '13px', lineHeight: '1.7', paddingLeft: '20px', margin: '6px 0' }}>
-                  <li>Name</li>
-                  <li>Email address</li>
-                  <li>Contact number</li>
-                  <li>Account credentials</li>
-                </ul>
-                <p style={{ marginTop: '8px' }}>
-                  <strong>Business Information</strong>
-                </p>
-                <ul style={{ color: 'rgba(237, 233, 222, 0.6)', fontSize: '13px', lineHeight: '1.7', paddingLeft: '20px', margin: '6px 0' }}>
-                  <li>Product and menu information</li>
-                  <li>Sales transaction records</li>
-                  <li>Inventory and ingredient data</li>
-                  <li>Historical sales records used for forecasting</li>
-                </ul>
-                <p style={{ marginTop: '8px' }}>
-                  <strong>System Information</strong>
-                </p>
-                <ul style={{ color: 'rgba(237, 233, 222, 0.6)', fontSize: '13px', lineHeight: '1.7', paddingLeft: '20px', margin: '6px 0' }}>
-                  <li>IP address</li>
-                  <li>Browser or device information</li>
-                  <li>Login activity and system logs</li>
-                </ul>
-              </div>
-
-              <div className="modal-section">
-                <h3>2. How We Use Your Information</h3>
-                <p>
-                  The information collected is used solely to:
-                </p>
-                <ul style={{ color: 'rgba(237, 233, 222, 0.6)', fontSize: '13px', lineHeight: '1.7', paddingLeft: '20px', margin: '6px 0' }}>
-                  <li>Generate sales forecasts and ingredient demand predictions</li>
-                  <li>Produce reports and analytics</li>
-                  <li>Improve forecasting accuracy and system performance</li>
-                  <li>Maintain the security and functionality of the system</li>
-                  <li>Provide technical support when necessary</li>
-                </ul>
-                <p style={{ marginTop: '8px' }}>
-                  ChefDuo Forecast does not sell, rent, or share personal information with third parties for advertising or 
-                  marketing purposes.
-                </p>
-              </div>
-
-              <div className="modal-section">
-                <h3>3. Data Protection</h3>
-                <p>
-                  Reasonable administrative, technical, and organizational measures are implemented to safeguard personal 
-                  information against unauthorized access, disclosure, alteration, or loss.
-                </p>
-                <p style={{ marginTop: '8px' }}>
-                  Access to personal information is limited to authorized users and system administrators.
-                </p>
-              </div>
-
-              <div className="modal-section">
-                <h3>4. Data Retention</h3>
-                <p>
-                  Personal information will be retained only for as long as necessary to fulfill the purposes of the system 
-                  or as required by applicable laws and institutional policies.
-                </p>
-                <p style={{ marginTop: '8px' }}>
-                  When no longer required, the information will be securely deleted or disposed of.
-                </p>
-              </div>
-
-              <div className="modal-section">
-                <h3>5. Disclosure of Information</h3>
-                <p>
-                  Personal information will not be disclosed to third parties except:
-                </p>
-                <ul style={{ color: 'rgba(237, 233, 222, 0.6)', fontSize: '13px', lineHeight: '1.7', paddingLeft: '20px', margin: '6px 0' }}>
-                  <li>When required by law</li>
-                  <li>With the user's consent</li>
-                  <li>To protect the security and integrity of the system</li>
-                </ul>
-              </div>
-
-              <div className="modal-section">
-                <h3>6. Your Rights</h3>
-                <p>
-                  In accordance with the <strong>Data Privacy Act of 2012 (Republic Act No. 10173)</strong>, users have the 
-                  right to:
-                </p>
-                <ul style={{ color: 'rgba(237, 233, 222, 0.6)', fontSize: '13px', lineHeight: '1.7', paddingLeft: '20px', margin: '6px 0' }}>
-                  <li>Access their personal information</li>
-                  <li>Request correction of inaccurate or incomplete information</li>
-                  <li>Request deletion of personal information, subject to applicable legal requirements</li>
-                  <li>File a complaint with the National Privacy Commission (NPC) if they believe their privacy rights have been violated</li>
-                </ul>
-              </div>
-
-              <div className="modal-section">
-                <h3>7. Cookies</h3>
-                <p>
-                  ChefDuo Forecast may use cookies or similar technologies to maintain user sessions and improve system 
-                  functionality. These cookies are used solely for operational purposes and not for advertising or marketing.
-                </p>
-                <p style={{ marginTop: '8px' }}>
-                  Users may manage cookie settings through their web browser. Disabling cookies may affect certain system 
-                  features.
-                </p>
-              </div>
-
-              <div className="modal-section">
-                <h3>8. Data Breach Notification</h3>
-                <p>
-                  In the event of a data breach involving personal information, ChefDuo Forecast will take appropriate measures 
-                  to contain the incident and notify affected users and the National Privacy Commission (NPC) when required 
-                  under the <strong>Data Privacy Act of 2012 (Republic Act No. 10173)</strong>.
-                </p>
-              </div>
-
-              <div className="modal-section">
-                <h3>9. Changes to this Privacy Policy</h3>
-                <p>
-                  ChefDuo Forecast may update this Privacy Policy from time to time to reflect changes in the system or 
-                  applicable laws. Any updates will be posted within the system and will take effect upon publication.
-                </p>
-                <p style={{ marginTop: '8px' }}>
-                  Continued use of the system after such updates signifies acknowledgment of the revised Privacy Policy.
-                </p>
-              </div>
-
-              <div className="modal-section">
-                <h3>10. Contact Information</h3>
-                <p>
-                  For questions or concerns regarding this Privacy Policy, please contact:
-                </p>
-                <div style={{ 
-                  background: 'rgba(254, 177, 97, 0.05)', 
-                  padding: '12px 16px', 
-                  borderRadius: '8px', 
-                  marginTop: '8px',
-                  border: '1px solid rgba(254, 177, 97, 0.1)'
-                }}>
-                  <p style={{ margin: '4px 0', fontSize: '13px' }}>
-                    <strong>ChefDuo Forecast Support</strong>
-                  </p>
-                  <p style={{ margin: '4px 0', fontSize: '13px' }}>
-                    <strong>Email:</strong> BCF@gmail.com
-                  </p>
-                  <p style={{ margin: '4px 0', fontSize: '13px' }}>
-                    <strong>Address:</strong> Pasig City, Metro Manila, Philippines
-                  </p>
+                <div className="lk-fieldlist">
+                  {FIELDS.map((f) => (
+                    <div className="lk-field" key={f}>
+                      <FaCheck size={13} />
+                      {f}
+                    </div>
+                  ))}
                 </div>
               </div>
 
-              <div className="modal-footer-text">
-                <button type="button" className="modal-agree-btn" onClick={closePrivacy}>
-                  I Understand
-                </button>
+              <div className="lk-spec-card">
+                <h3 className="lk-spec-title">
+                  <FaUpload
+                    size={15}
+                    style={{
+                      marginRight: 8,
+                      verticalAlign: -2,
+                      color: 'var(--lk-burgundy)',
+                    }}
+                  />
+                  Getting the best forecast
+                </h3>
+                                <br />
+
+                <p
+                  style={{
+                    fontSize: 14.6,
+                    lineHeight: 1.68,
+                    color: 'var(--lk-ink-500)',
+                  }}
+                >
+                  Upload at least{' '}
+                  <strong style={{ color: 'var(--lk-ink)' }}>
+                    12 months
+                  </strong>{' '}
+                  of sales history for reliable forecasts. If you have 12 months
+                  or more, upload everything.
+                </p>
+
+               
+
+                <div className="lk-note">
+                  <strong>Why more history matters.</strong> More data helps the
+                  system identify recurring patterns such as weekday and weekend
+                  behavior, seasonal patterns, and payday-related demand
+                  variations.
+                </div>
+
+                
               </div>
             </div>
           </div>
-        </div>
-      )}
+        </section>
+
+        {/* ================= SCOPE ================= */}
+        <section className="lk-section lk-section--white">
+          <div className="lk-container">
+            <div className="lk-section-head lk-reveal">
+              <span className="lk-eyebrow">System scope</span>
+              <h2 className="lk-section-title">Built for decision support</h2>
+              <p className="lk-section-sub">
+                ChefDuo Forecast provides information to support planning and
+                inventory decisions. Being clear about where it stops helps you
+                trust where it speaks.
+              </p>
+            </div>
+
+            <div className="lk-compare lk-reveal">
+              <div className="lk-compare-col lk-compare-col--yes">
+                <div className="lk-compare-head">
+                  <span className="lk-compare-badge">
+                    <FaCheck />
+                  </span>
+                  <h3 className="lk-compare-title">The system supports</h3>
+                </div>
+                <ul className="lk-compare-list">
+                  {SUPPORTS.map((s) => (
+                    <li className="lk-compare-item" key={s}>
+                      <FaCheck size={14} />
+                      {s}
+                    </li>
+                  ))}
+                </ul>
+              </div>
+
+              <div className="lk-compare-col lk-compare-col--no">
+                <div className="lk-compare-head">
+                  <span className="lk-compare-badge">
+                    <FaTimes />
+                  </span>
+                  <h3 className="lk-compare-title">
+                    The system does not support
+                  </h3>
+                </div>
+                <ul className="lk-compare-list">
+                  {DOES_NOT.map((s) => (
+                    <li className="lk-compare-item" key={s}>
+                      <FaTimes size={14} />
+                      {s}
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            </div>
+
+            <div className="lk-callout lk-reveal">
+              <FaLightbulb size={19} />
+              <p className="lk-callout-text">
+                <strong>Your data, your decisions.</strong> ChefDuo Forecast uses
+                your provided business data to generate forecasting and
+                decision-support information. Forecast results are estimates and
+                should be interpreted together with actual business conditions
+                and the owner’s operational judgment.
+              </p>
+            </div>
+          </div>
+        </section>
+
+        {/* ================= OUTCOMES ================= */}
+        <section className="lk-section lk-section--tint">
+          <div className="lk-container">
+            <div className="lk-section-head lk-reveal">
+              <span className="lk-eyebrow">What changes</span>
+              <h2 className="lk-section-title">
+                What planning with data actually changes
+              </h2>
+              <p className="lk-section-sub">
+                The practical difference once prep, purchasing, and stock all read
+                from the same forecast instead of separate guesses.
+              </p>
+            </div>
+
+            <div className="lk-quotes">
+              {OUTCOMES.map((o) => (
+                <article className="lk-quote lk-reveal" key={o.title}>
+                  <span
+                    className="lk-quote-ico"
+                    style={{ background: o.tint }}
+                    aria-hidden="true"
+                  >
+                    {o.icon}
+                  </span>
+                  <h3 className="lk-quote-name">{o.title}</h3>
+                  <p className="lk-quote-text">{o.text}</p>
+                </article>
+              ))}
+            </div>
+          </div>
+        </section>
+
+        {/* ================= FAQ ================= */}
+        <section className="lk-section lk-section--white" id="faq">
+          <div className="lk-container">
+            <div className="lk-section-head lk-reveal">
+              <span className="lk-eyebrow">FAQ</span>
+              <h2 className="lk-section-title">Questions, answered</h2>
+              <p className="lk-section-sub">
+                The things operators ask us before they upload their first file.
+              </p>
+            </div>
+
+            <div className="lk-reveal">
+              <FaqAccordion items={FAQS} />
+            </div>
+          </div>
+        </section>
+
+</main>
+
+      <LandingFooter
+        onOpenPrivacy={() => setShowPrivacy(true)}
+        onOpenTerms={() => setShowTerms(true)}
+      />
+
+      {showPrivacy && <PrivacyModal onClose={() => setShowPrivacy(false)} />}
+      {showTerms && <TermsModal onClose={() => setShowTerms(false)} />}
     </div>
   );
 };

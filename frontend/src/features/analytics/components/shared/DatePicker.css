@@ -3,6 +3,8 @@
 .date-picker {
   position: relative;
   display: inline-block;
+  max-width: 100%;
+  min-width: 0;
 }
 
 .date-picker-trigger {
@@ -10,12 +12,21 @@
   white-space: nowrap;
 }
 
+/* max-width is viewport-relative, not 100%: this popover is absolutely
+   positioned inside .date-picker, so 100% would clamp it to the trigger
+   width instead of the screen. */
 .date-picker-popover {
   position: absolute;
   top: calc(100% + 8px);
   left: 0;
   z-index: 50;
   width: 280px;
+  max-width: calc(100vw - 24px);
+  max-height: calc(100vh - 96px);
+  max-height: calc(100dvh - 96px);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  -webkit-overflow-scrolling: touch;
   background-color: var(--color-bg-white);
   border: 1px solid var(--color-border-light);
   border-radius: 12px;
@@ -27,6 +38,8 @@
   display: flex;
   align-items: center;
   justify-content: space-between;
+  gap: 8px;
+  min-width: 0;
   margin-bottom: 10px;
 }
 
@@ -51,6 +64,7 @@
 .date-picker-month {
   font-size: 13px;
   font-weight: 700;
+  min-width: 0;
   color: var(--color-text-primary);
 }
 
@@ -78,6 +92,7 @@
   display: flex;
   align-items: center;
   justify-content: center;
+  min-width: 0;
   background: none;
   border: none;
   border-radius: 6px;
@@ -120,4 +135,15 @@
 
 .date-picker-today-btn:hover {
   background-color: var(--color-border-light);
+}
+
+/* Tablet tier: keeps the calendar narrower than the trigger's surroundings
+   can afford, and scrollable rather than taller than the viewport. */
+@media (max-width: 1024px) {
+  .date-picker-popover {
+    width: min(280px, calc(100vw - 32px));
+    max-width: calc(100vw - 32px);
+    max-height: calc(100dvh - 80px);
+    padding: 12px;
+  }
 }

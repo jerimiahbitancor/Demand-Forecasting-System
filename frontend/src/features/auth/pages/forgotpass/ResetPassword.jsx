@@ -1,7 +1,6 @@
 import { useState } from 'react';
 import { Link, useLocation, useNavigate } from 'react-router-dom';
-import Swal from 'sweetalert2';
-import '../../../../utils/swalTheme.css';
+import Swal from '../../../../utils/swal';
 import {
   FaLock,
   FaEye,

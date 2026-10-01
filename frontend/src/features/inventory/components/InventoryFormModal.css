@@ -9,3 +9,52 @@
     grid-template-columns: 1fr;
   }
 }
+
+/* Phones: the form was a 900px-wide dialog squeezed into a ~360px column, so
+   labels, inputs and error text were cramped together and the numeric fields
+   triggered the on-screen keyboard immediately on focus. Stack the fields,
+   give each one a comfortable tap target, and stop inputs from zooming the
+   viewport (iOS zooms any input under 16px). */
+@media (max-width: 640px) {
+  .inventory-form-modal .form-grid {
+    grid-template-columns: 1fr;
+    gap: 1rem;
+  }
+
+  .inventory-form-modal .form-group {
+    gap: 0.375rem;
+  }
+
+  .inventory-form-modal .form-label {
+    font-size: 0.875rem;
+    font-weight: 600;
+  }
+
+  .inventory-form-modal .form-input {
+    /* 16px minimum keeps iOS Safari from zooming the page on focus. */
+    font-size: 16px;
+    min-height: 46px;
+    padding: 0.625rem 0.875rem;
+  }
+
+  .inventory-form-modal .form-error {
+    font-size: 0.8125rem;
+  }
+
+  /* Buttons become full-width and stack; Cancel sits underneath the red
+     action so the primary stays reachable with the thumb. */
+  .inventory-form-modal .inventory-modal-footer {
+    flex-direction: column-reverse;
+    align-items: stretch;
+    gap: 0.625rem;
+  }
+
+  .inventory-form-modal .inventory-modal-footer .btn-secondary,
+  .inventory-form-modal .inventory-modal-footer .btn-primary {
+    width: 100%;
+    justify-content: center;
+    min-height: 46px;
+    padding: 0.75rem 1rem;
+    font-size: 0.9375rem;
+  }
+}

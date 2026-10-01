@@ -28,9 +28,16 @@
 
 .swal2-actions {
   display: flex !important;
-  justify-content: flex-end !important;
+  justify-content: flex-start !important;
   gap: 10px !important;
   padding: 0 28px 24px !important;
+}
+
+@media (max-width: 480px) {
+  .swal2-actions {
+    flex-direction: column-reverse !important;
+    align-items: stretch !important;
+  }
 }
 
 .swal2-styled {

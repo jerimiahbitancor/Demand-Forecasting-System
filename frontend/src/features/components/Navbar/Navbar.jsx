@@ -1,10 +1,10 @@
 // frontend/src/features/components/Navbar/Navbar.jsx
 import { useState, useEffect } from 'react';
 import { NavLink, useNavigate } from 'react-router-dom';
-import Swal from 'sweetalert2';
-import '../../../utils/swalTheme.css';
+import Swal from '../../../utils/swal';
 import { useAuth } from '../../../context/AuthContext';
 import { useBusinessLogo } from '../../../context/BusinessProfileContext';
+import { useHelp } from '../../../hooks/useHelp';
 import { 
   FaChartBar,
   FaDatabase,
@@ -26,6 +26,7 @@ const Navbar = () => {
   const navigate = useNavigate();
   const { logout, user } = useAuth();
   const businessLogo = useBusinessLogo();
+  const { openHelp } = useHelp();
 
   // Close dropdown when clicking outside
   useEffect(() => {
@@ -57,6 +58,21 @@ const Navbar = () => {
     navigate(path);
     setIsDropdownOpen(false);
     setIsMobileMenuOpen(false);
+    setIsMobileProfileOpen(false);
+  };
+
+  // The brand must never bounce a signed-in user out to the public landing
+  // page. Sending them to '/' runs the entry setup guard, which resolves to
+  // the marketing site when access bypass is on, so it would read as a
+  // logout. Signed in -> dashboard, signed out -> landing.
+  const handleBrandClick = () => {
+    if (user) {
+      navigate('/dashboard');
+    } else {
+      navigate('/');
+    }
+    setIsMobileMenuOpen(false);
+    setIsDropdownOpen(false);
     setIsMobileProfileOpen(false);
   };
 
@@ -111,7 +127,12 @@ const Navbar = () => {
   return (
     <header className="navbar">
       {/* Logo and Brand */}
-      <div className="navbar-brand" onClick={() => handleNavigation('/')}>
+      <button
+        type="button"
+        className="navbar-brand"
+        onClick={handleBrandClick}
+        aria-label={user ? 'Go to dashboard' : 'Go to homepage'}
+      >
         <div className="brand-logo">
           <img
             alt="Chef Duo Logo"
@@ -120,7 +141,7 @@ const Navbar = () => {
           />
         </div>
         <span className="brand-text">Demand Forecasting</span>
-      </div>
+      </button>
 
       {/* Navigation */}
       <nav className="navbar-nav">
@@ -176,7 +197,12 @@ const Navbar = () => {
         {/* Notification Dropdown Component */}
         <NotificationDropdown />
 
-        <button className="action-btn" aria-label="Help">
+        <button
+          className="action-btn"
+          type="button"
+          aria-label="How the modules work"
+          onClick={() => openHelp('modules')}
+        >
           <FaRegQuestionCircle className="action-icon" />
         </button>
 
