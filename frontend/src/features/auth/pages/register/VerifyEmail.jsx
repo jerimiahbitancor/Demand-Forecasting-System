@@ -92,7 +92,7 @@ const VerifyEmail = () => {
         });
 
         // No state needed! AuthContext has the data
-        navigate('/create-password');
+        navigate('/create-password', { replace: true });
       } else {
         throw new Error(result.error);
       }

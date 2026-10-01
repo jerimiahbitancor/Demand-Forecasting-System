@@ -70,21 +70,6 @@
   box-shadow: 0 0 0 4px rgba(184, 95, 85, 0.12);
 }
 
-.status-row {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  margin-top: 6px;
-}
-
-.status-badge {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  color: #0f8725;
-  font-weight: 600;
-}
-
 .info-box {
   border: 2px dashed #46a149;
   border-radius: 10px;
