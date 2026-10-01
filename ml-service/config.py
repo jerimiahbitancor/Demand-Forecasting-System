@@ -33,6 +33,21 @@ SUPABASE_MODEL_BUCKET = os.environ.get("SUPABASE_MODEL_BUCKET", "ml-models")
 # ineligible.
 MIN_TRAINING_OBSERVATIONS = int(os.environ.get("MIN_TRAINING_OBSERVATIONS", "28"))
 
+# How many consecutive no-sale CONFIRMED-OPEN days mean a product was off
+# the menu rather than simply not selling. Shorter runs get zero-filled;
+# runs this long or longer are left out and the product's history resumes
+# at its next sale. See services/zero_fill.py for the full rule.
+#
+# It lives here, next to MIN_TRAINING_OBSERVATIONS, because both are
+# ML-pipeline tunables read by training AND forecasting, and this file is
+# already the one place either side looks for them.
+#
+# Same number as the INACTIVE (DISCONTINUED) badge window, deliberately —
+# but NOT the same rule and not shared in code: the badges count CALENDAR
+# days in backend/services/productStatusService.js (locked decision),
+# this counts CONFIRMED-OPEN days.
+OFF_MENU_GAP_OPEN_DAYS = int(os.environ.get("OFF_MENU_GAP_OPEN_DAYS", "28"))
+
 if not SUPABASE_URL or not SUPABASE_SERVICE_KEY:
     raise RuntimeError(
         "SUPABASE_URL and SUPABASE_SERVICE_KEY must be set. "

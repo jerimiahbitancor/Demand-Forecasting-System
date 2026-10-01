@@ -10,6 +10,7 @@ this service IS allowed to write to).
 """
 import math
 import re
+from datetime import date
 import pandas as pd
 from config import supabase
 
@@ -454,6 +455,84 @@ def get_recent_sales(product_id: int, before_date, limit: int = 60) -> pd.DataFr
         df["sale_date"] = pd.to_datetime(df["sale_date"])
         df = df.sort_values("sale_date").reset_index(drop=True)
     return df
+
+
+def get_confirmed_open_dates() -> list:
+    """
+    Every date the owner confirmed the store was OPEN, oldest first, as
+    datetime.date objects.
+
+    This is the calendar the zero-fill rule runs on: a date in this list
+    with no daily_sales row for a product means that product sold 0 there
+    (see services/zero_fill.py). Confirmed-CLOSED and UNCONFIRMED dates
+    are deliberately absent, so they can never be filled.
+
+    Paged — a full year of operation is ~336 rows today, but this table
+    grows one row per day forever and the 1,000-row cap would start
+    silently truncating the OLDEST history in under three years, which
+    would quietly un-fill the earliest gaps.
+    """
+    rows = _fetch_all_rows(
+        lambda: supabase.table("business_days")
+        .select("business_date")
+        .eq("status", "confirmed_open")
+        .order("business_date")
+    )
+    dates = {r["business_date"] for r in rows if r.get("business_date")}
+    return sorted(date.fromisoformat(d) if isinstance(d, str) else d for d in dates)
+
+
+def get_recent_open_dates(before_date, limit: int = 60) -> list:
+    """
+    The newest `limit` confirmed-open dates strictly before `before_date`,
+    returned oldest first.
+
+    Forecasting only needs recent history, and it must count in OPEN DAYS
+    rather than rows: asking for "the newest 60 rows" (the old behaviour)
+    gave a slow-selling product a window stretching back months, because
+    its no-sale days had no rows to count. 60 open days is the same window
+    for every product, which is what the lag/rolling features assume.
+    """
+    response = (
+        supabase.table("business_days")
+        .select("business_date")
+        .eq("status", "confirmed_open")
+        .lt("business_date", before_date.isoformat())
+        .order("business_date", desc=True)
+        .limit(limit)
+        .execute()
+    )
+    dates = {r["business_date"] for r in (response.data or []) if r.get("business_date")}
+    return sorted(date.fromisoformat(d) if isinstance(d, str) else d for d in dates)
+
+
+def get_sales_between(product_id: int, start_date, before_date) -> dict:
+    """
+    {date: quantity} for ONE product between `start_date` (inclusive) and
+    `before_date` (exclusive).
+
+    Bounded by a date window rather than a row count, so it pairs with
+    get_recent_open_dates() — the caller asks for a window of open days,
+    then fills it. One product over 60 open days is far under the
+    1,000-row cap, so no paging is needed here.
+    """
+    response = (
+        supabase.table("daily_sales")
+        .select("sale_date, quantity_sold")
+        .eq("product_id", product_id)
+        .gte("sale_date", start_date.isoformat())
+        .lt("sale_date", before_date.isoformat())
+        .order("sale_date")
+        .execute()
+    )
+    out = {}
+    for row in response.data or []:
+        raw = row.get("sale_date")
+        if not raw:
+            continue
+        key = date.fromisoformat(raw) if isinstance(raw, str) else raw
+        out[key] = float(row["quantity_sold"])
+    return out
 
 
 def get_recipe_and_stock() -> pd.DataFrame:

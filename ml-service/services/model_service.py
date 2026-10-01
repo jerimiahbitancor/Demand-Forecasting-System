@@ -63,13 +63,37 @@ def filter_training_eligible(features_df: pd.DataFrame, min_observations: int):
     with NaN warmup rows already dropped by the caller — this function
     only counts what SURVIVED that, per product.
 
+    REAL OBSERVATIONS ONLY (Oct 1 2026). Since zero-fill was added, the
+    surviving rows include invented zeros for open days the product
+    didn't sell on. Those must NOT count toward eligibility, or a dish
+    that genuinely sold 5 times in a year would qualify on the strength
+    of 300 fabricated zeros and get a forecast built on almost no real
+    signal. Only rows with is_real=True are counted; the filled zeros
+    still go into TRAINING for the products that qualify, because a real
+    "sold nothing today" is exactly the pattern the model needs to learn.
+
+    The owner's spec is "42 real sales observations." That is this bar,
+    28, plus the 14 warm-up rows rolling_14 eats before any row is
+    usable — so min_observations stays 28 and is applied after the
+    warm-up dropna, which is what makes 28 here mean 42 raw.
+
     Returns (filtered_df, excluded_report) — filtered_df contains only
     rows belonging to products that cleared the bar; excluded_report
     lists every product that didn't, with its actual usable count, so
     the /train response can explain exactly why each excluded product
     was left out rather than silently vanishing from training.
     """
-    counts = features_df.groupby("product_id", observed=True).size()
+    if "is_real" in features_df.columns:
+        real_rows = features_df[features_df["is_real"]]
+    else:
+        # No zero-fill was applied (engineer_features called with
+        # open_dates=None), so every surviving row is a real observation.
+        real_rows = features_df
+
+    counts = (
+        real_rows.groupby("product_id", observed=True).size()
+        .reindex(features_df["product_id"].unique(), fill_value=0)
+    )
     eligible_ids = counts[counts >= min_observations].index
     excluded_counts = counts[counts < min_observations]
 
@@ -153,6 +177,15 @@ def train_global_model(features_df: pd.DataFrame, persist: bool = True, feature_
     aggregate_metrics = evaluate_predictions(y_test.values, predictions)
     per_product_metrics = evaluate_per_product(test_df, predictions)
 
+    # WMAPE for the model AND for the 7-day-average baseline, on exactly
+    # the SAME test rows (both zero-filled), so the comparison is honest.
+    # The baseline needs no model at all: rolling_7 is already the mean of
+    # the previous 7 open days for that row. If the model can't beat that,
+    # the machine learning is not earning its place, and the dashboard now
+    # says so instead of quoting a MAPE-derived accuracy in a vacuum.
+    aggregate_metrics["wmape"] = wmape(y_test.values, predictions)
+    aggregate_metrics["baseline_wmape"] = wmape(y_test.values, test_df["rolling_7"].values)
+
     # Native categorical support (enable_categorical=True) keeps product_id
     # as ONE column, not one-hot expanded — so feature_importances_ lines
     # up 1:1 with FEATURE_COLUMNS, no reconciliation needed. This is what
@@ -193,6 +226,32 @@ def train_global_model(features_df: pd.DataFrame, persist: bool = True, feature_
         "metadata": metadata,
     }
     return model, metrics, version
+
+
+def wmape(actual: np.ndarray, predicted: np.ndarray):
+    """
+    Weighted MAPE = total units missed / total units actually sold x 100.
+
+    This is the headline metric as of Oct 1 2026, replacing MAPE. Plain
+    MAPE divides each row's error by that row's actual, so a dish selling
+    1 a day that we predict as 2 scores a 100% error — the same as being
+    off by 40 on a dish selling 40. WMAPE divides ONE total by another
+    total, so busy dishes count proportionally more and a near-zero day
+    can't blow the number up.
+
+    Returns None when the actuals sum to zero (nothing sold in the whole
+    window, so there is no denominator and no meaningful percentage) —
+    callers must handle None rather than treat it as 0%.
+    """
+    actual = np.asarray(actual, dtype=float)
+    predicted = np.asarray(predicted, dtype=float)
+    mask = ~(np.isnan(actual) | np.isnan(predicted))
+    if not mask.any():
+        return None
+    denominator = np.abs(actual[mask]).sum()
+    if denominator == 0:
+        return None
+    return float(np.abs(actual[mask] - predicted[mask]).sum() / denominator * 100)
 
 
 def evaluate_predictions(actual: np.ndarray, predicted: np.ndarray) -> dict:
