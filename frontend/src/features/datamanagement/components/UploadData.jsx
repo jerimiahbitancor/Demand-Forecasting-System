@@ -17,90 +17,18 @@ import * as XLSX from 'xlsx';
 import toast from 'react-hot-toast';
 import { useAuth } from "../../../context/AuthContext";
 
-const BULK_UPLOAD_STATUS_KEY = 'bulk_upload_status';
-
-// Plain, non-mutating read — just what's currently in storage, no
-// "is this stale" judgment. Safe to call on every tick of the 500ms
-// polling interval (see syncUploadStatus below), including while a real
-// upload is actively in progress and genuinely, correctly 'loading'.
-const peekStoredUploadStatus = (type) => {
-  try {
-    const stored = JSON.parse(sessionStorage.getItem(BULK_UPLOAD_STATUS_KEY) || '{}');
-    return stored[type] || null;
-  } catch {
-    return null;
-  }
-};
-
-// Mount-time-only recovery: a page load/refresh always destroys whatever
-// request was actually in flight — there is no way an upload can
-// genuinely still be "loading" by the time a *fresh* component mount
-// reads this. Trusting a persisted 'loading' status in that case
-// permanently disables the upload button (its `disabled` check includes
-// `status === 'loading'`) and nothing will ever resolve it back to
-// 'success'/'error', because the request that would have done that no
-// longer exists.
-//
-// This must NEVER be called from the recurring 500ms polling interval —
-// it used to be, and that meant every poll tick during a real, currently
-// uploading request (which writes 'loading' to storage many times over
-// its lifetime, via saveUploadStatus) got "corrected" to 'error' and
-// written back, flashing a false "Upload failed" mid-upload before the
-// real completion state landed a moment later. Call this only from the
-// one-time useState initializers below; use peekStoredUploadStatus for
-// anything that runs repeatedly.
-const getStoredUploadStatus = (type) => {
-  try {
-    const stored = JSON.parse(sessionStorage.getItem(BULK_UPLOAD_STATUS_KEY) || '{}');
-    const status = stored[type] || null;
-
-    if (status && status.status === 'loading') {
-      const corrected = { ...status, status: 'error' };
-      stored[type] = corrected;
-      try {
-        sessionStorage.setItem(BULK_UPLOAD_STATUS_KEY, JSON.stringify(stored));
-      } catch {
-        // Storage write is best-effort — the corrected value is still
-        // returned below either way.
-      }
-      return corrected;
-    }
-
-    return status;
-  } catch {
-    return null;
-  }
-};
-
-const saveUploadStatus = (type, status) => {
-  try {
-    const stored = JSON.parse(sessionStorage.getItem(BULK_UPLOAD_STATUS_KEY) || '{}');
-    sessionStorage.setItem(BULK_UPLOAD_STATUS_KEY, JSON.stringify({
-      ...stored,
-      [type]: {
-        ...(stored[type] || {}),
-        ...status
-      }
-    }));
-  } catch {
-    // Storage is optional; the upload itself should continue.
-  }
-};
-
-const getStoredFiles = (type) => {
-  const status = getStoredUploadStatus(type);
-  return (status?.files || []).map((file) => ({ ...file, isRestored: true }));
-};
-
-const clearUploadStatus = (type) => {
-  try {
-    const stored = JSON.parse(sessionStorage.getItem(BULK_UPLOAD_STATUS_KEY) || '{}');
-    delete stored[type];
-    sessionStorage.setItem(BULK_UPLOAD_STATUS_KEY, JSON.stringify(stored));
-  } catch {
-    // Storage is optional.
-  }
-};
+import {
+  isRunAlive,
+  setRunAlive,
+  peekStoredUploadStatus,
+  getStoredUploadStatus,
+  saveUploadStatus,
+  getStoredFiles,
+  clearUploadStatus,
+  packRun,
+  unpackRun,
+  initialRunView,
+} from "../utils/uploadRunState";
 
 // Runs `worker(item, index)` over `items` in fixed-size batches instead of
 // all at once — firing every file concurrently (e.g. a 284-file historical
@@ -189,14 +117,19 @@ const UploadData = ({
   const [salesIsValid, setIsSalesValid] = useState(false);
   // Concurrency is > 1 (see UPLOAD_CONCURRENCY), so several files are
   // genuinely in flight at once — a Set of indices, not one index.
-  const [salesProcessingIndices, setSalesProcessingIndices] = useState(() => new Set());
-  const [salesDoneIndices, setSalesDoneIndices] = useState(() => new Set());
+  //
+  // These start from the running upload's real counters (initialRunView)
+  // rather than empty. If this component was rebuilt while an upload it
+  // started is still running, empty counters here are what produced
+  // "Uploading 0 at once — 0/288 done" next to a moving progress bar.
+  const [salesProcessingIndices, setSalesProcessingIndices] = useState(() => initialRunView('sales').processing);
+  const [salesDoneIndices, setSalesDoneIndices] = useState(() => initialRunView('sales').done);
   // Per-file failure reason, keyed by index — 'duplicate' (this exact
   // file/date was already uploaded before, not a real error) vs 'error'
   // (something actually went wrong). Without this, a batch upload could
   // only report an aggregate "N file(s) skipped" with no way to tell the
   // user which files, or whether it was safe to ignore.
-  const [salesFailedIndices, setSalesFailedIndices] = useState(() => new Map());
+  const [salesFailedIndices, setSalesFailedIndices] = useState(() => initialRunView('sales').failed);
   const [salesUploadedCount, setSalesUploadedCount] = useState(
     () => getStoredUploadStatus('sales')?.uploadedCount || 0
   );
@@ -220,15 +153,66 @@ const UploadData = ({
     () => getStoredUploadStatus('menu')?.uploadedCount || 0
   );
 
+  // Mirrors of state the poll below needs to read. The interval is created
+  // once, so it can't see fresh state through its closure.
+  const salesStatusRef = useRef(salesUploadStatus);
+  useEffect(() => {
+    salesStatusRef.current = salesUploadStatus;
+  }, [salesUploadStatus]);
+  const lastAppliedRunRef = useRef(null);
+  // True only on the screen instance that actually clicked "Upload". That
+  // screen resets itself when the run ends. Any OTHER instance (one rebuilt
+  // mid-run) has no cleanup timer of its own, which is what the poll below
+  // covers — and it must not also run on the starter, or the two cleanups
+  // would race and the starter could lose a file list it meant to keep
+  // after a failed run.
+  const startedUploadHereRef = useRef(false);
+
   useEffect(() => {
     const syncUploadStatus = () => {
       const salesStatus = peekStoredUploadStatus('sales');
       const menuStatus = peekStoredUploadStatus('menu');
 
       if (salesStatus) {
-        setSalesUploadStatus(salesStatus.status || null);
-        setSalesProgress(salesStatus.progress || 0);
-        setSalesUploadedCount(salesStatus.uploadedCount || 0);
+        // A stored 'loading' with no upload alive in THIS page is a dead
+        // run's leftover (the page was reloaded). Re-applying it is what
+        // made the screen flip back to "Uploading..." after it had already
+        // shown a failure. The mount-time recovery turns it into 'error';
+        // the poll must not undo that.
+        const staleLoading = salesStatus.status === 'loading' && !isRunAlive('sales');
+        if (!staleLoading) {
+          setSalesUploadStatus(salesStatus.status || null);
+          setSalesProgress(salesStatus.progress || 0);
+          setSalesUploadedCount(salesStatus.uploadedCount || 0);
+
+          // Per-file counters, only rebuilt when the running upload
+          // actually wrote something new (otherwise every tick would
+          // allocate new Sets and re-render the whole screen twice a second).
+          if (salesStatus.run && salesStatus.updatedAt !== lastAppliedRunRef.current) {
+            lastAppliedRunRef.current = salesStatus.updatedAt;
+            const run = unpackRun(salesStatus.run);
+            setSalesProcessingIndices(run.processing);
+            setSalesDoneIndices(run.done);
+            setSalesFailedIndices(run.failed);
+          }
+        }
+      } else if (!isRunAlive('sales') && salesStatusRef.current && !startedUploadHereRef.current) {
+        // The upload finished and cleared its storage entry while this
+        // screen wasn't the one that started it (it was rebuilt mid-run),
+        // so the starter's own cleanup timer reset a screen that no longer
+        // exists. Without this, the new screen keeps showing a finished
+        // run's file list and banner until the page is refreshed.
+        lastAppliedRunRef.current = null;
+        setSalesUploadStatus(null);
+        setSalesFiles([]);
+        setSalesProgress(0);
+        setSalesValidated(false);
+        setSalesValidationErrors([]);
+        setIsSalesValid(false);
+        setSalesProcessingIndices(new Set());
+        setSalesDoneIndices(new Set());
+        setSalesFailedIndices(new Map());
+        setSalesUploadedCount(0);
       }
 
       if (menuStatus) {
@@ -704,8 +688,14 @@ const UploadData = ({
       return;
     }
 
-    if (salesSubmittingRef.current) return;
+    // isRunAlive covers what the ref can't: the ref belongs to THIS screen
+    // instance, so after the screen is rebuilt mid-upload it reads false
+    // again, and a second click would start a second run over the same
+    // files — racing the first into duplicate-key (409) failures.
+    if (salesSubmittingRef.current || isRunAlive('sales')) return;
     salesSubmittingRef.current = true;
+    startedUploadHereRef.current = true;
+    setRunAlive('sales', true);
 
     try {
       setSalesUploadStatus('loading');
@@ -718,6 +708,10 @@ const UploadData = ({
         status: 'loading',
         progress: 0,
         uploadedCount: 0,
+        // Overwrite any snapshot left by a previous run, so this run never
+        // starts out showing someone else's counters.
+        run: packRun({ processing: new Set(), done: new Set(), failed: new Map() }),
+        updatedAt: Date.now(),
         files: salesFiles.map(({ name, size, type }) => ({ name, size, type }))
       });
 
@@ -725,6 +719,16 @@ const UploadData = ({
       let uploaded = 0;
       const failedFiles = [];
       let completed = 0;
+      // The run's per-file counters, kept here AND written to storage on
+      // every change, so a screen rebuilt mid-upload can show the truth.
+      // `uploaded` above only reaches its real value after every batch has
+      // finished, so it can't drive a live "N done" — run.done can.
+      const run = { processing: new Set(), done: new Set(), failed: new Map() };
+      const persistRun = (extra = {}) => saveUploadStatus('sales', {
+        run: packRun(run),
+        updatedAt: Date.now(),
+        ...extra
+      });
       // Plain local map (not React state) so the logic right below —
       // deciding whether every failure was a harmless duplicate — can
       // read it synchronously within this same function call, instead of
@@ -733,6 +737,8 @@ const UploadData = ({
 
       const uploadOneSalesFile = async (file, i) => {
         setSalesProcessingIndices((prev) => new Set(prev).add(i));
+        run.processing.add(i);
+        persistRun();
         try {
           console.log(`Uploading sales file ${i + 1}/${totalFiles}: ${file.name}`);
 
@@ -745,11 +751,21 @@ const UploadData = ({
               headers: {
                 'Content-Type': 'multipart/form-data'
               },
+              // A sales file legitimately takes longer than the client's
+              // default 30 s: the server saves the rows, then updates
+              // product status, stock and open days, several round trips
+              // to Supabase each. On a slow network with 5 files in flight
+              // some requests passed 30 s and were shown as "failed" while
+              // the server went on to finish them (Oct 1 2026: 40 browser
+              // timeouts, 0 real failures in the database). The 30 s
+              // default stays for every other request, where it still
+              // catches a dead backend quickly.
+              timeout: 120000,
               onUploadProgress: (progressEvent) => {
                 const percentCompleted = Math.round((progressEvent.loaded * 100) / progressEvent.total);
                 const overallProgress = Math.round(((completed + (percentCompleted / 100)) / totalFiles) * 100);
                 setSalesProgress(overallProgress);
-                saveUploadStatus('sales', { status: 'loading', progress: overallProgress, uploadedCount: uploaded });
+                saveUploadStatus('sales', { status: 'loading', progress: overallProgress, uploadedCount: run.done.size });
               }
             });
           });
@@ -760,6 +776,8 @@ const UploadData = ({
 
           fileOutcomes.set(i, { status: 'success' });
           setSalesDoneIndices((prev) => new Set(prev).add(i));
+          run.done.add(i);
+          setSalesUploadedCount(run.done.size);
           return response;
         } catch (err) {
           // A 409 here means "this exact file/date is already in the
@@ -769,6 +787,7 @@ const UploadData = ({
           const isDuplicate = err?.response?.data?.duplicate === true || err?.response?.status === 409;
           const message = err?.response?.data?.message || err?.response?.data?.error || err?.message || 'Upload failed';
           fileOutcomes.set(i, { status: isDuplicate ? 'duplicate' : 'error', message });
+          run.failed.set(i, { status: isDuplicate ? 'duplicate' : 'error', message });
           setSalesFailedIndices((prev) => {
             const next = new Map(prev);
             next.set(i, { status: isDuplicate ? 'duplicate' : 'error', message });
@@ -781,10 +800,11 @@ const UploadData = ({
             next.delete(i);
             return next;
           });
+          run.processing.delete(i);
           completed++;
           const progress = Math.round((completed / totalFiles) * 100);
           setSalesProgress(progress);
-          saveUploadStatus('sales', { status: 'loading', progress, uploadedCount: uploaded });
+          persistRun({ status: 'loading', progress, uploadedCount: run.done.size });
         }
       };
 
@@ -980,6 +1000,10 @@ const UploadData = ({
       }, 3000);
     } finally {
       salesSubmittingRef.current = false;
+      // Cleared in `finally` so it ALSO clears when the run throws. If this
+      // were left true, every later "Upload" click would be refused by the
+      // isRunAlive guard above for the rest of the page's life.
+      setRunAlive('sales', false);
     }
   };
 

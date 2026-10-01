@@ -1,5 +1,7 @@
 // services/uploadService.js
 const { fetchAllRows } = require('../utils/fetchAllRows');
+const { accuracyFromWmape, beatsBaseline, modelNeedsAttention } = require('../utils/accuracy');
+const { getProductSalesSummary } = require('../utils/productSalesSummary');
 const { supabase, isConfigured, supabaseAdmin } = require('../config/supabase');
 const mappingService = require('./mappingService');
 const mlService = require('./mlService');
@@ -598,11 +600,9 @@ class UploadService {
         const { data: productRows, error: productFetchError } = await supabaseAdmin.from('products')
           .select('id, created_at, first_sold_date, is_active, inactive_reason, inactive_since, status')
           .in('id', selectedProductIds);
-        const { data: salesRows, error: salesFetchError } = await fetchAllRows(() => supabaseAdmin.from('daily_sales')
-          .select('product_id, sale_date')
-          .in('product_id', selectedProductIds)
-          .order('sale_date', { ascending: true })
-          .order('product_id'));
+        // First/last sale per product via the view -- this is the per-upload
+        // call that used to read every sales row for the selected products.
+        const { data: salesSummary, error: salesFetchError } = await getProductSalesSummary(selectedProductIds);
 
         if (productFetchError || salesFetchError) {
           throw productFetchError || salesFetchError;
@@ -688,18 +688,11 @@ class UploadService {
         }
       }
 
-      const salesByProductId = new Map();
-      for (const sale of salesRows || []) {
-        const dates = salesByProductId.get(sale.product_id) || [];
-        dates.push(sale.sale_date);
-        salesByProductId.set(sale.product_id, dates);
-      }
-
       for (const product of productRows || []) {
-        const productSales = salesByProductId.get(product.id) || [];
+        const summary = salesSummary.get(product.id);
 
-        const firstSoldDate = productSales[0] || product.first_sold_date || null;
-        const lastSoldDate = productSales[productSales.length - 1] || firstSoldDate || null;
+        const firstSoldDate = summary?.firstSaleDate || product.first_sold_date || null;
+        const lastSoldDate = summary?.lastSaleDate || firstSoldDate || null;
         const status = deriveProductStatus({
           firstSoldDate: firstSoldDate || null,
           lastSoldDate: lastSoldDate || null,
@@ -708,18 +701,36 @@ class UploadService {
           inactiveReason: product.inactive_reason
         });
 
+        const nextValues = {
+          first_sold_date: firstSoldDate ? firstSoldDate.slice(0, 10) : null,
+          // is_active is a GENERATED column (is_active = (status = 'active'))
+          // — it can never be written directly (Postgres error 428C9, see
+          // productStatusConstants.js). Every write to activity status must
+          // go through the enum column instead, translated via
+          // PRODUCT_DB_STATUS_BY_DERIVED, same as mappingService.js/menuService.js.
+          status: PRODUCT_DB_STATUS_BY_DERIVED[status.status],
+          inactive_reason: status.note || null,
+          inactive_since: status.isActive ? null : (product.inactive_since || new Date().toISOString().slice(0, 10))
+        };
+
+        // Skip products whose values would not change. This used to send
+        // one UPDATE per product in the file, every time — ~50 sequential
+        // round trips per file. On a network where each query takes
+        // ~150-400 ms that alone is 10+ seconds per file, and with 5 files
+        // uploading at once requests ran past the browser's timeout and
+        // were reported as failed even though the server finished them
+        // (Oct 1 2026). Once history is loaded, most uploads change
+        // nothing here, so this usually drops to zero queries.
+        const currentFirstSold = product.first_sold_date ? String(product.first_sold_date).slice(0, 10) : null;
+        const currentInactiveSince = product.inactive_since ? String(product.inactive_since).slice(0, 10) : null;
+        const unchanged = currentFirstSold === nextValues.first_sold_date
+          && product.status === nextValues.status
+          && (product.inactive_reason || null) === nextValues.inactive_reason
+          && currentInactiveSince === (nextValues.inactive_since ? nextValues.inactive_since.slice(0, 10) : null);
+        if (unchanged) continue;
+
         const { error: updateError } = await supabaseAdmin.from('products')
-          .update({
-            first_sold_date: firstSoldDate ? firstSoldDate.slice(0, 10) : null,
-            // is_active is a GENERATED column (is_active = (status = 'active'))
-            // — it can never be written directly (Postgres error 428C9, see
-            // productStatusConstants.js). Every write to activity status must
-            // go through the enum column instead, translated via
-            // PRODUCT_DB_STATUS_BY_DERIVED, same as mappingService.js/menuService.js.
-            status: PRODUCT_DB_STATUS_BY_DERIVED[status.status],
-            inactive_reason: status.note || null,
-            inactive_since: status.isActive ? null : (product.inactive_since || new Date().toISOString().slice(0, 10))
-          })
+          .update(nextValues)
           .eq('id', product.id);
 
           if (updateError) throw updateError;
@@ -1357,7 +1368,7 @@ class UploadService {
     if (!this.isSupabaseReady()) return null;
     const { data, error } = await supabaseAdmin
       .from('model_metrics')
-      .select('model_version, evaluation_date, mape')
+      .select('model_version, evaluation_date, mape, wmape, baseline_wmape')
       .order('evaluation_date', { ascending: false })
       .limit(1)
       .maybeSingle();
@@ -1565,10 +1576,20 @@ class UploadService {
 
     const staleDays = forecastRun?.stale_days || 0;
     const isStale = staleDays > 0;
-    const accuracy = latestModel.mape != null
-      ? Math.max(0, Math.min(100, 100 - Number(latestModel.mape)))
-      : null;
-    const isLowAccuracy = accuracy !== null && accuracy < 70;
+
+    // Accuracy is WMAPE-based now, and "is it good enough?" is answered by
+    // comparison, not by a threshold (owner decision, Oct 1 2026): the
+    // model needs attention when it does NOT beat the 7-day average on the
+    // same test rows. The old rule was accuracy = 100 - MAPE with a
+    // hardcoded "< 70%" cutoff — a number nobody chose, inherited from the
+    // Lewis (1982) MAPE bands, which are dropped along with MAPE.
+    //
+    // The rule lives in utils/accuracy.js so Analytics and this dashboard
+    // can never disagree about whether the model is healthy.
+    const accuracy = accuracyFromWmape(latestModel.wmape);
+    const baselineAccuracy = accuracyFromWmape(latestModel.baseline_wmape);
+    const beatsBaselineFlag = beatsBaseline(latestModel.wmape, latestModel.baseline_wmape);
+    const isLowAccuracy = modelNeedsAttention(latestModel.wmape, latestModel.baseline_wmape);
     const daysSinceTraining = latestModel.evaluation_date
       ? Math.floor((Date.now() - new Date(latestModel.evaluation_date).getTime()) / 86400000)
       : null;
@@ -1581,7 +1602,7 @@ class UploadService {
         progress,
         attention: {
           isStale, staleDays, lastConfirmedDate: forecastRun?.last_confirmed_date || null,
-          isLowAccuracy, accuracy,
+          isLowAccuracy, accuracy, baselineAccuracy, beatsBaseline: beatsBaselineFlag,
           needsRetraining, daysSinceTraining,
           dataQualityIssue,
         },

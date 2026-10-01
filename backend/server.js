@@ -11,6 +11,26 @@ const path = require('path');
 // undefined values. Loading env here removes that ordering dependency.
 dotenv.config({ path: path.join(__dirname, '.env') });
 
+// NETWORK: give each Supabase address enough time to connect.
+//
+// Node 20+ tries every address a hostname resolves to ("happy eyeballs") and
+// gives each one only 250 ms before moving on. Measured on the dev network
+// (Oct 1 2026): Supabase's IPv4 addresses took 0.9-2.7 s to connect and its
+// IPv6 addresses were unreachable. So every attempt failed, and requests died
+// with "TypeError: fetch failed ... AggregateError [ETIMEDOUT]" — first in the
+// auth middleware (fetching Supabase's signing keys), then anywhere else.
+// In a 12-fetch test: 5 of 6 failed at 250 ms, 6 of 6 succeeded at 5000 ms.
+//
+// This only changes how long ONE address may take before Node tries the
+// next. It does not slow down a healthy network: a fast connect still
+// returns as soon as it succeeds. Must run before anything opens a socket,
+// which is why it sits right after env loading. Override with
+// NETWORK_ATTEMPT_TIMEOUT_MS if a slower network ever needs more.
+const net = require('net');
+net.setDefaultAutoSelectFamilyAttemptTimeout(
+  Number(process.env.NETWORK_ATTEMPT_TIMEOUT_MS) || 5000
+);
+
 const express = require('express');
 const cors = require('cors');
 const helmet = require('helmet');

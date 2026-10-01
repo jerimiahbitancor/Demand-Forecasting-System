@@ -63,10 +63,10 @@ def smape(actual: np.ndarray, predicted: np.ndarray):
 
 
 def mase(test_actual: np.ndarray, test_predicted: np.ndarray,
-         train_actual: np.ndarray, train_lag7: np.ndarray):
+         train_actual: np.ndarray, train_same_dow: np.ndarray):
     """
     Mean Absolute Scaled Error (Hyndman & Koehler 2006) =
-    mean(|test_actual - test_predicted|) / mean(|train_actual - train_lag7|).
+    mean(|test_actual - test_predicted|) / mean(|train_actual - train_same_dow|).
 
     The numerator is this model's average error on the test set, same
     as MAE. The denominator is NOT computed on the test set — it's the
@@ -80,8 +80,8 @@ def mase(test_actual: np.ndarray, test_predicted: np.ndarray,
     one, so the score isn't contaminated by how easy or hard the
     particular test window happened to be.
 
-    train_actual and train_lag7 should already be warmup-clean (rows
-    where lag_7 is NaN dropped) — this naturally happens upstream via
+    train_actual and train_same_dow should already be warmup-clean (rows
+    where same_dow_last_open is NaN dropped) — this naturally happens upstream via
     dropna(subset=FEATURE_COLUMNS) before training, so a caller passing
     in the same train_df used for training already satisfies this.
 
@@ -92,9 +92,9 @@ def mase(test_actual: np.ndarray, test_predicted: np.ndarray,
     test_actual = np.asarray(test_actual, dtype=float)
     test_predicted = np.asarray(test_predicted, dtype=float)
     train_actual = np.asarray(train_actual, dtype=float)
-    train_lag7 = np.asarray(train_lag7, dtype=float)
+    train_same_dow = np.asarray(train_same_dow, dtype=float)
 
-    denominator = np.mean(np.abs(train_actual - train_lag7))
+    denominator = np.mean(np.abs(train_actual - train_same_dow))
     if denominator == 0:
         return None
     numerator = np.mean(np.abs(test_actual - test_predicted))

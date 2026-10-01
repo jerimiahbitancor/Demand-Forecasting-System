@@ -55,6 +55,13 @@ def write_model_metrics(model_version: str, metrics: dict):
         "mape": aggregate["mape"],
         "mae": aggregate["mae"],
         "rmse": aggregate["rmse"],
+        # Headline metric since Oct 1 2026, plus the 7-day-average
+        # baseline on the same test rows. The dashboard and Analytics read
+        # these two; `mape` is still written for continuity with older
+        # rows and the paper, but nothing decides anything from it now.
+        # Requires migration 008 — see ml-service/migrations.
+        "wmape": aggregate.get("wmape"),
+        "baseline_wmape": aggregate.get("baseline_wmape"),
         "notes": f"global model; worst products: {worst_summary}" if worst_summary else "global model",
         "feature_importance": metrics.get("feature_importance"),
     }).execute()
