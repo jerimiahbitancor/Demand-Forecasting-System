@@ -58,6 +58,7 @@
 .chart-block {
   margin-top: 16px;
   padding: 16px;
+  min-width: 0;
   background-color: var(--color-bg-light);
   border-radius: 12px;
 }
@@ -166,6 +167,7 @@
 /* Sidebar: feature importance list */
 .feature-importance {
   margin-top: 4px;
+  min-width: 0;
 }
 
 .feature-importance-title {
@@ -187,6 +189,8 @@
 .feature-row {
   display: flex;
   justify-content: space-between;
+  gap: 12px;
+  min-width: 0;
   padding: 10px 0;
   border-bottom: 1px solid var(--color-border-light);
   font-size: 14px;
@@ -206,6 +210,7 @@
 .training-info {
   margin-top: 8px;
   padding-top: 16px;
+  min-width: 0;
   border-top: 1px solid var(--color-border-light);
 }
 
@@ -229,6 +234,8 @@
 .training-info-row {
   display: flex;
   justify-content: space-between;
+  gap: 12px;
+  min-width: 0;
   padding: 10px 0;
   font-size: 13px;
 }
@@ -246,6 +253,7 @@
 .accuracy-warning-banner {
   display: flex;
   gap: 12px;
+  min-width: 0;
   align-items: flex-start;
   padding: 12px 16px;
   background: #fff7ed;
@@ -267,6 +275,7 @@
   font-size: 12px;
   color: #92400e;
   line-height: 1.5;
+  min-width: 0;
   margin-top: 2px;
 }
 
@@ -275,6 +284,23 @@
   color: var(--color-text-light);
   margin-top: 8px;
   padding: 0 4px;
+}
+
+/* Tablet tier, declared before the 640px tier so that one still wins below
+   640px. .chart-block keeps 16px of padding around the full-width SVG
+   charts, which eats usable width at ~820px. */
+@media (max-width: 1024px) {
+  .chart-block {
+    padding: 12px;
+  }
+
+  .metric-pair {
+    gap: 12px;
+  }
+
+  .metric-value {
+    font-size: 24px;
+  }
 }
 
 @media (max-width: 640px) {

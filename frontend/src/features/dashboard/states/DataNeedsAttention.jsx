@@ -7,8 +7,7 @@ import { useNavigate } from "react-router-dom";
 import { RiErrorWarningLine } from "react-icons/ri";
 import axios from "axios";
 import toast from "react-hot-toast";
-import Swal from "sweetalert2";
-import "../../../utils/swalTheme.css";
+import Swal from '../../../utils/swal';
 
 const API_URL = import.meta.env.VITE_API_URL || "http://localhost:5000/api";
 

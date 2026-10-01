@@ -1,14 +1,14 @@
 // frontend/src/features/auth/pages/register/Register.jsx
 import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import Swal from 'sweetalert2';
-import '../../../../utils/swalTheme.css';
+import Swal from '../../../../utils/swal';
 import { 
   FaUser, 
   FaEnvelope, 
   FaSpinner,
   FaShieldAlt,
-  FaLock
+  FaLock,
+  FaArrowLeft
 } from 'react-icons/fa';
 import { FiX } from 'react-icons/fi';
 import { useAuth } from '../../../../context/AuthContext';
@@ -120,6 +120,16 @@ const Register = () => {
   const openPrivacy = () => setShowPrivacy(true);
   const closePrivacy = () => setShowPrivacy(false);
 
+  // Go back to the previous page. Falls back to the landing page when the user
+  // opened /register directly, where there is no in-app history to return to.
+  const goBack = () => {
+    if (window.history.length > 1) {
+      navigate(-1);
+    } else {
+      navigate('/');
+    }
+  };
+
   if (checking) {
     return (
       <div className="register-container">
@@ -139,6 +149,16 @@ const Register = () => {
         </div>
         
         <div className="registration-card">
+          <button
+            type="button"
+            className="back-button"
+            onClick={goBack}
+            aria-label="Go back"
+          >
+            <FaArrowLeft size={14} />
+            <span>Back</span>
+          </button>
+
           <div className="brand-header">
             <img
               alt="Chef Duo Logo"

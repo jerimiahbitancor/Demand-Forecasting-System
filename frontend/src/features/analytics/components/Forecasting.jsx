@@ -2,9 +2,8 @@
 import { useState, useEffect, useMemo, useCallback } from "react";
 import axios from "axios";
 import toast from "react-hot-toast";
-import Swal from "sweetalert2";
-import "../../../utils/swalTheme.css";
-import { FiChevronDown, FiSearch, FiCalendar, FiInfo, FiZap, FiExternalLink } from "react-icons/fi";
+import Swal from '../../../utils/swal';
+import { FiChevronDown, FiCalendar, FiInfo, FiZap, FiExternalLink } from "react-icons/fi";
 import GenerateReportModal from "../../components/Reports/GenerateReportModal.jsx";
 import { buildSalesForecastPDF, generateExcel } from "./../../../services/reportService.js";
 import { logAuditEvent, formatAuditDateRange } from "../../../services/auditClient.js";
@@ -345,6 +344,7 @@ function Forecasting() {
   const [isModelInsightsOpen, setIsModelInsightsOpen] = useState(false);
   const [modalSalesPage, setModalSalesPage] = useState(1);
   const [salesPage, setSalesPage] = useState(1);
+  const [productQuery, setProductQuery] = useState('');
   const ROWS_PER_PAGE = 5;
 
   const [apiData, setApiData] = useState(null);
@@ -553,13 +553,28 @@ function Forecasting() {
   };
 
   const chartPoints = mode === "Sales" ? salesPrediction.points : demandPrediction.points;
-  const totalSalesPages = Math.max(1, Math.ceil(salesPrediction.rows.length / ROWS_PER_PAGE));
-  const paginatedSalesRows = salesPrediction.rows.slice(
+
+  // Product search filters both the paged table and the full-view modal off a
+  // single query, so the two never disagree. Page counters are reset in the
+  // change handler rather than in an effect to avoid a stale page > 1 showing
+  // an empty table after the result set shrinks.
+  const filteredSalesRows = salesPrediction.rows.filter((row) =>
+    (row.product || "").toLowerCase().includes(productQuery.trim().toLowerCase())
+  );
+
+  const handleProductQueryChange = (value) => {
+    setProductQuery(value);
+    setSalesPage(1);
+    setModalSalesPage(1);
+  };
+
+  const totalSalesPages = Math.max(1, Math.ceil(filteredSalesRows.length / ROWS_PER_PAGE));
+  const paginatedSalesRows = filteredSalesRows.slice(
     (salesPage - 1) * ROWS_PER_PAGE,
     salesPage * ROWS_PER_PAGE
   );
-  const modalSalesRows = salesPrediction.rows.slice((modalSalesPage - 1) * 10, modalSalesPage * 10);
-  const modalSalesTotalPages = Math.ceil(salesPrediction.rows.length / 10);
+  const modalSalesRows = filteredSalesRows.slice((modalSalesPage - 1) * 10, modalSalesPage * 10);
+  const modalSalesTotalPages = Math.max(1, Math.ceil(filteredSalesRows.length / 10));
 
   return (
     <>
@@ -576,7 +591,7 @@ function Forecasting() {
               Forecast Accuracy
               <Tippy
                 content={tooltips.forecastAccuracy}
-                placement="right"
+                placement="bottom"
                 animation="scale"
                 duration={200}
                 theme="dark"
@@ -673,7 +688,7 @@ function Forecasting() {
               Sales and Demand Prediction
               <Tippy
                 content={tooltips.salesPrediction}
-                placement="right"
+                placement="bottom"
                 animation="scale"
                 duration={200}
                 theme="dark"
@@ -698,10 +713,15 @@ function Forecasting() {
 
           <div className="analytics-filter-row">
             <DatePicker value={selectedRange} onChange={setSelectedRange} mode="range" />
-            <span className="filter-search">
-              <FiSearch size={14} /> Search Product
-            </span>
-            <select className="filter-pill" style={{ width: '120px' }} value={mode} onChange={(e) => setMode(e.target.value)}>
+            <input
+              className="filter-search"
+              type="search"
+              value={productQuery}
+              onChange={(e) => handleProductQueryChange(e.target.value)}
+              placeholder="Search Product"
+              aria-label="Search products by name"
+            />
+            <select className="filter-pill filter-pill--mode" value={mode} onChange={(e) => setMode(e.target.value)}>
               <option value="Sales">Sales</option>
               <option value="Demand">Demand</option>
             </select>
@@ -717,6 +737,15 @@ function Forecasting() {
             </span>
           </div>
 
+          <div className="analytics-scroll-hint">
+            Swipe the table sideways to see every column.
+          </div>
+          <div
+            className="table-scroll"
+            tabIndex={0}
+            role="region"
+            aria-label="Sales and forecast by date: actual and forecast quantity, revenue, cost and gross profit"
+          >
           <table className="analytics-table">
             <thead>
               <tr>
@@ -732,29 +761,32 @@ function Forecasting() {
               </tr>
             </thead>
             <tbody>
-              {salesPrediction.rows.length === 0 ? (
+              {filteredSalesRows.length === 0 ? (
                 <tr>
-                  <td colSpan={7} className="empty-row">
-                    Upload sales data to populate this table.
+                  <td colSpan={9} className="empty-row">
+                    {salesPrediction.rows.length === 0
+                      ? "Upload sales data to populate this table."
+                      : `No products match "${productQuery.trim()}".`}
                   </td>
                 </tr>
               ) : (
                 paginatedSalesRows.map((row, i) => (
                   <tr key={i}>
-                    <td>{i + 1}</td>
-                    <td>{row.date}</td>
-                    <td>{row.product}</td>
-                    <td>{row.actualQty}</td>
-                    <td>{row.forecastQty}</td>
-                    <td>{row.actualRevenue}</td>
-                    <td>{row.forecastRevenue}</td>
-                    <td>{row.estCost}</td>
-                    <td>{row.estGrossProfit}</td>
+                    <td data-label="No.">{i + 1}</td>
+                    <td data-label="Date">{row.date}</td>
+                    <td data-label="Product">{row.product}</td>
+                    <td data-label="Actual Qty.">{row.actualQty}</td>
+                    <td data-label="Forecast Qty.">{row.forecastQty}</td>
+                    <td data-label="Actual Revenue">{row.actualRevenue}</td>
+                    <td data-label="Forecast Revenue">{row.forecastRevenue}</td>
+                    <td data-label="Est. Total Cost">{row.estCost}</td>
+                    <td data-label="Est. Gross Profit">{row.estGrossProfit}</td>
                   </tr>
                 ))
               )}
             </tbody>
           </table>
+          </div>
           <Pagination
             currentPage={salesPage}
             totalPages={totalSalesPages}
@@ -785,7 +817,7 @@ function Forecasting() {
               Model Insights
               <Tippy
                 content={tooltips.modelInsights}
-                placement="right"
+                placement="bottom"
                 animation="scale"
                 duration={200}
                 theme="dark"
@@ -968,10 +1000,15 @@ function Forecasting() {
       >
         <div className="analytics-filter-row">
           <DatePicker value={selectedRange} onChange={setSelectedRange} mode="range" />
-          <span className="filter-search">
-            <FiSearch size={14} /> Search Product
-          </span>
-          <select className="filter-pill" style={{ width: '120px' }} value={mode} onChange={(e) => setMode(e.target.value)}>
+          <input
+            className="filter-search"
+            type="search"
+            value={productQuery}
+            onChange={(e) => handleProductQueryChange(e.target.value)}
+            placeholder="Search Product"
+            aria-label="Search products by name"
+          />
+          <select className="filter-pill filter-pill--mode" value={mode} onChange={(e) => setMode(e.target.value)}>
             <option value="Sales">Sales</option>
             <option value="Demand">Demand</option>
           </select>
@@ -987,6 +1024,12 @@ function Forecasting() {
           </span>
         </div>
 
+        <div
+          className="table-scroll"
+          tabIndex={0}
+          role="region"
+          aria-label="Sales and forecast by date, full view"
+        >
         <table className="analytics-table">
           <thead>
             <tr>
@@ -1002,29 +1045,32 @@ function Forecasting() {
             </tr>
           </thead>
           <tbody>
-            {salesPrediction.rows.length === 0 ? (
+            {filteredSalesRows.length === 0 ? (
               <tr>
                 <td colSpan={9} className="empty-row">
-                  Upload sales data to populate this table.
+                  {salesPrediction.rows.length === 0
+                    ? "Upload sales data to populate this table."
+                    : `No products match "${productQuery.trim()}".`}
                 </td>
               </tr>
             ) : (
               modalSalesRows.map((row, i) => (
                 <tr key={i}>
-                  <td>{(modalSalesPage - 1) * 10 + i + 1}</td>
-                  <td>{row.date}</td>
-                  <td>{row.product}</td>
-                  <td>{row.actualQty}</td>
-                  <td>{row.forecastQty}</td>
-                  <td>{row.actualRevenue}</td>
-                  <td>{row.forecastRevenue}</td>
-                  <td>{row.estCost}</td>
-                  <td>{row.estGrossProfit}</td>
+                  <td data-label="No.">{(modalSalesPage - 1) * 10 + i + 1}</td>
+                  <td data-label="Date">{row.date}</td>
+                  <td data-label="Product">{row.product}</td>
+                  <td data-label="Actual Qty.">{row.actualQty}</td>
+                  <td data-label="Forecast Qty.">{row.forecastQty}</td>
+                  <td data-label="Actual Revenue">{row.actualRevenue}</td>
+                  <td data-label="Forecast Revenue">{row.forecastRevenue}</td>
+                  <td data-label="Est. Total Cost">{row.estCost}</td>
+                  <td data-label="Est. Gross Profit">{row.estGrossProfit}</td>
                 </tr>
               ))
             )}
           </tbody>
         </table>
+        </div>
         <Pagination
           currentPage={modalSalesPage}
           totalPages={modalSalesTotalPages}

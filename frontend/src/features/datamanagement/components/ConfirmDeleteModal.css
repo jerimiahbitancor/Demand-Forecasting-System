@@ -20,7 +20,9 @@
   background: var(--color-bg-white, #fff);
   border-radius: 10px;
   width: 380px;
-  max-width: 90vw;
+  max-width: min(90vw, 380px);
+  max-height: 90vh;
+  overflow-y: auto;
   box-shadow: 0 10px 40px rgba(0, 0, 0, 0.25);
   padding: 28px 28px 24px;
   text-align: center;
@@ -112,7 +114,21 @@
 
 @media (max-width: 480px) {
   .confirm-delete-card {
-    width: 320px;
+    width: 100%;
+    max-width: min(90vw, 320px);
+    max-height: 90vh;
+    max-height: 90dvh;
+    overflow-y: auto;
+    -webkit-overflow-scrolling: touch;
     padding: 24px 20px 20px;
+  }
+
+  .confirm-delete-actions {
+    flex-direction: column-reverse;
+  }
+
+  .confirm-delete-cancel,
+  .confirm-delete-confirm {
+    width: 100%;
   }
 }

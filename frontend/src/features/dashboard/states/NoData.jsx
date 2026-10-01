@@ -5,11 +5,13 @@ import { useState, useEffect, useRef } from "react";
 import axios from 'axios';
 import { useNavigate } from "react-router-dom"; // Import useNavigate
 import noDataImage from "../../../assets/images/NoData.png";
+import { useHelp } from "../../../hooks/useHelp";
 
 const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:5000/api';
 
 const NoData = () => {
   const navigate = useNavigate(); // Initialize navigate
+  const { openHelp } = useHelp();
   const [progressPercentage, setProgressPercentage] = useState(0);
   const isMountedRef = useRef(true);
 
@@ -164,9 +166,13 @@ const NoData = () => {
               <p className="no-data-welcome-note">
                 Your dashboard will become available once you have completed the steps requirements.
               </p>
-              <a href="#" className="no-data-welcome-link">
+              <button
+                type="button"
+                className="no-data-welcome-link"
+                onClick={() => openHelp('how-it-works')}
+              >
                 Learn How ChefDuo Forecast Works →
-              </a>
+              </button>
             </div>
 
             {/* Right Side - Image */}

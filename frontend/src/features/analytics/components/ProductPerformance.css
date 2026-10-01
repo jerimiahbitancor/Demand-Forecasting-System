@@ -18,6 +18,7 @@
 .demand-bar-row {
   display: grid;
   grid-template-columns: 130px 1fr;
+  min-width: 0;
   align-items: center;
   gap: 12px;
 }
@@ -25,12 +26,14 @@
 .demand-bar-label {
   font-size: 13px;
   color: var(--color-text-primary);
+  min-width: 0;
   text-align: right;
 }
 
 .demand-bar-track {
   background-color: var(--color-bg-light);
   border-radius: 6px;
+  min-width: 0;
   height: 32px;
   overflow: hidden;
 }
@@ -40,6 +43,7 @@
   display: flex;
   align-items: center;
   justify-content: flex-end;
+  min-width: 0;
   padding-right: 10px;
   border-radius: 6px;
   transition: width 0.3s ease;
@@ -87,6 +91,7 @@
 .ratio-bar-row {
   display: grid;
   grid-template-columns: 130px 1fr;
+  min-width: 0;
   align-items: center;
   gap: 12px;
   margin-bottom: 12px;
@@ -95,11 +100,13 @@
 .ratio-bar-label {
   font-size: 13px;
   color: var(--color-text-primary);
+  min-width: 0;
   text-align: right;
 }
 
 .ratio-bar-track {
   position: relative;
+  min-width: 0;
   height: 24px;
   background-color: var(--color-bg-light);
   border-radius: 6px;
@@ -172,6 +179,21 @@
   font-size: 12px;
 }
 
+/* Tablet tier, declared before the 640px tier so that one still wins below
+   640px. The recharts container is a flex-column child and needs min-width: 0
+   or the responsive SVG pushes the card wider than the viewport. */
+@media (max-width: 1024px) {
+  .demand-bar-row,
+  .ratio-bar-row {
+    grid-template-columns: 110px 1fr;
+    gap: 10px;
+  }
+
+  .chart-wrapper {
+    max-width: 100%;
+  }
+}
+
 @media (max-width: 640px) {
   .demand-bar-row,
   .ratio-bar-row {
@@ -220,6 +242,8 @@
 .chart-wrapper {
   cursor: pointer;
   position: relative;
+  max-width: 100%;
+  min-width: 0;
 }
 
 /* Tippy Dark Theme Customization */

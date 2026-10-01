@@ -216,13 +216,17 @@
 }
 
 .product-table-wrapper {
-  overflow: visible;
-}
-
-.product-table {
-  width: 100%;
-  table-layout: fixed;
-  border-collapse: collapse;
+    max-width: 100%;
+    overflow-x: auto;
+    overflow-y: hidden;
+    -webkit-overflow-scrolling: touch;
+  }
+  
+  .product-table {
+    width: 100%;
+    min-width: 1000px;
+    table-layout: fixed;
+    border-collapse: collapse;
   font-size: 14px;
 }
 
@@ -868,7 +872,7 @@
 
 .ingredient-name-input {
   flex: 2;
-  min-width: 120px;
+  min-width: 0;
   padding: 8px 12px;
   border: 1px solid #ced4da;
   border-radius: 4px;
@@ -886,7 +890,7 @@
 
 .ingredient-qty-input {
   flex: 1;
-  min-width: 70px;
+  min-width: 0;
   padding: 8px 12px;
   border: 1px solid #ced4da;
   border-radius: 4px;
@@ -902,7 +906,7 @@
 
 .ingredient-unit-select {
   flex: 0.7;
-  min-width: 70px;
+  min-width: 0;
   padding: 8px 12px;
   border: 1px solid #ced4da;
   border-radius: 4px;
@@ -1007,11 +1011,13 @@
 
 /* ============ INGREDIENTS TABLE IN MODAL ============ */
 .ingredients-table-wrapper {
-  margin-top: 6px;
-  border: 1px solid #ced4da;
-  border-radius: 4px;
-  overflow: hidden;
-}
+    margin-top: 6px;
+    border: 1px solid #ced4da;
+    border-radius: 4px;
+    max-width: 100%;
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+  }
 
 .ingredients-table-wrapper.error-border {
   border-color: #ef4444;
@@ -1019,6 +1025,7 @@
 
 .ingredients-modal-table {
   width: 100%;
+  min-width: 420px;
   table-layout: fixed;
   border-collapse: collapse;
 }
@@ -1503,13 +1510,69 @@
     justify-content: center;
   }
 
+  /* Product modals (Add/Edit/Details, Low Margin) use the shared
+     .modal-* classes from this file rather than InventoryModal.css, so they
+     need their own phone treatment. */
+  .modal-overlay {
+    padding: 0;
+    align-items: flex-end;
+  }
+
+  .modal-content,
+  .modal-content.modal-lg,
+  .modal-content.modal-md {
+    width: 100%;
+    max-width: 100%;
+    max-height: 100vh;
+    height: 100vh;
+    border-radius: 0;
+  }
+
+  .modal-header {
+    padding: 12px 16px;
+  }
+
+  .modal-header h3 {
+    font-size: 1.0625rem;
+  }
+
+  .modal-close-btn {
+    width: 44px;
+    height: 44px;
+    justify-content: center;
+  }
+
+  .modal-body {
+    padding: 16px;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  /* Cancel underneath the red action, both full width with 44px+ targets. */
   .modal-footer {
-    flex-direction: column;
+    flex-direction: column-reverse;
+    align-items: stretch;
+    gap: 8px;
+    padding: 12px 16px calc(12px + env(safe-area-inset-bottom, 0px));
   }
 
   .modal-footer button {
     width: 100%;
     justify-content: center;
+    min-height: 46px;
+    font-size: 0.9375rem;
+  }
+
+  .form-group label {
+    font-size: 0.875rem;
+    font-weight: 600;
+  }
+
+  /* 16px minimum stops iOS Safari zooming the viewport when a field is
+     focused, which otherwise leaves the modal half off-screen. */
+  .form-input {
+    font-size: 16px;
+    min-height: 46px;
+    padding: 10px 12px;
   }
 
   .ingredients-modal-table th,
@@ -1575,6 +1638,46 @@
   .product-table td {
     padding: 8px 10px;
     font-size: 12px;
+  }
+
+  .pagination {
+    grid-template-columns: 1fr;
+    justify-items: center;
+    padding: 12px;
+  }
+
+  .pagination-info-wrap {
+    justify-content: center;
+  }
+
+  .pagination-controls {
+    gap: 6px;
+  }
+
+  .page-btn {
+    min-height: 44px;
+    padding: 8px 12px;
+  }
+
+  .page-number {
+    min-width: 44px;
+    height: 44px;
+  }
+
+  .product-stat-card-value {
+    font-size: 22px;
+  }
+
+  .product-action-btn,
+  .inventory-action-btn {
+    width: 40px;
+    height: 40px;
+  }
+
+  .btn-primary,
+  .btn-secondary,
+  .btn-warning {
+    min-height: 44px;
   }
 
   .ingredient-tag {
@@ -1679,13 +1782,17 @@
 }
 
 .low-margin-table-wrapper {
-  overflow: visible;
-  margin-bottom: 20px;
-}
-
-.low-margin-table {
-  width: 100%;
-  table-layout: fixed;
+    max-width: 100%;
+    overflow-x: auto;
+    overflow-y: hidden;
+    -webkit-overflow-scrolling: touch;
+    margin-bottom: 20px;
+  }
+  
+  .low-margin-table {
+    width: 100%;
+    min-width: 640px;
+    table-layout: fixed;
   border-collapse: collapse;
   font-size: 14px;
   border-radius: 8px;
@@ -2098,3 +2205,24 @@
     padding: 2px 4px;
   }
 }
+/* ========== TABLE SCROLL AFFORDANCE ========== */
+.product-table-wrapper::-webkit-scrollbar,
+.low-margin-table-wrapper::-webkit-scrollbar,
+.ingredients-table-wrapper::-webkit-scrollbar {
+  height: 8px;
+}
+
+.product-table-wrapper::-webkit-scrollbar-track,
+.low-margin-table-wrapper::-webkit-scrollbar-track,
+.ingredients-table-wrapper::-webkit-scrollbar-track {
+  background: #f1f2f3;
+  border-radius: 4px;
+}
+
+.product-table-wrapper::-webkit-scrollbar-thumb,
+.low-margin-table-wrapper::-webkit-scrollbar-thumb,
+.ingredients-table-wrapper::-webkit-scrollbar-thumb {
+  background: #adb5bd;
+  border-radius: 4px;
+}
+

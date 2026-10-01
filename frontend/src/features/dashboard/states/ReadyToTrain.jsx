@@ -10,8 +10,7 @@ import "../states/statescss/TrainingInProgress.css";
 import { useNavigate } from "react-router-dom";
 import axios from "axios";
 import toast from "react-hot-toast";
-import Swal from 'sweetalert2';
-import '../../../utils/swalTheme.css';
+import Swal from '../../../utils/swal';
 import trainingImage from "../../../assets/images/Rene.png";
 import { FaCheckCircle } from "react-icons/fa";
 

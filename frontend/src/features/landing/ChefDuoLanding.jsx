@@ -9,7 +9,6 @@ import { Link } from "react-router-dom";
 import card1Img from "../../assets/landing/card1.png";
 import card2Img from "../../assets/landing/card2.png";
 import card3Img from "../../assets/landing/card3.png";
-import Footer from "../components/Footer/Footer";
 
 const ChefDuoLanding = () => {
   const [showTerms, setShowTerms] = useState(false);

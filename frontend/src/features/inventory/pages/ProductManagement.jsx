@@ -1757,7 +1757,7 @@ const ProductManagement = () => {
 
                   return (
                     <tr key={item.id}>
-                      <td className="inventory-checkbox-cell">
+                      <td data-label="Select" className="inventory-checkbox-cell">
                         <input
                           type="checkbox"
                           className="inventory-row-checkbox"
@@ -1767,11 +1767,11 @@ const ProductManagement = () => {
                           aria-label={`Select ${item.name || 'product'}`}
                         />
                       </td>
-                      <td>{startIndex + index + 1}</td>
-                      <td className="product-item-name">{item.name}</td>
-                      <td><span className="product-category-badge">{item.category || 'Uncategorized'}</span></td>
-                      <td>{item.serving_size_label || '—'}</td>
-                      <td className="ingredients-cell">
+                      <td data-label="#">{startIndex + index + 1}</td>
+                      <td data-label="Item Name" className="product-item-name">{item.name}</td>
+                      <td data-label="Category"><span className="product-category-badge">{item.category || 'Uncategorized'}</span></td>
+                      <td data-label="Modifier">{item.serving_size_label || '—'}</td>
+                      <td data-label="Ingredients" className="ingredients-cell">
                         {item.product_ingredients && item.product_ingredients.length > 0 ? (
                           <Tippy
                             content={
@@ -1805,9 +1805,9 @@ const ProductManagement = () => {
                           <span className="no-ingredients">No ingredients</span>
                         )}
                       </td>
-                      <td className="price-cell">{formatCurrency(item.price)}</td>
-                      <td>{totalIngredientCost === null ? 'N/A' : formatCurrency(totalIngredientCost)}</td>
-                      <td>
+                      <td data-label="Selling Price" className="price-cell">{formatCurrency(item.price)}</td>
+                      <td data-label="Total Ingredient Cost">{totalIngredientCost === null ? 'N/A' : formatCurrency(totalIngredientCost)}</td>
+                      <td data-label="Status">
                         <div className="status-pill-group">
                           <Tippy
                             content={status.tooltip}
@@ -1846,9 +1846,9 @@ const ProductManagement = () => {
                           ))}
                         </div>
                       </td>
-                      <td>{formatDate(item.created_at)}</td>
-                      <td>{formatDate(item.updated_at)}</td>
-                      <td>
+                      <td data-label="Date Created">{formatDate(item.created_at)}</td>
+                      <td data-label="Last Updated">{formatDate(item.updated_at)}</td>
+                      <td data-label="Actions">
                         <div className="product-action-buttons">
                           <button 
                             className="product-action-btn view"
@@ -1977,12 +1977,12 @@ const ProductManagement = () => {
                           const profit = price - cogs;
                           return (
                             <tr key={idx} className={margin < 20 ? 'very-low-margin-row' : 'low-margin-row'}>
-                              <td><strong>{item.name}</strong></td>
-                              <td className="price-amount">{formatCurrency(price)}</td>
-                              <td className="cost-amount">−{formatCurrency(cogs)}</td>
-                              <td><span className="margin-badge low">{foodCostPercentage.toFixed(1)}%</span></td>
-                              <td className="profit-amount">{formatCurrency(profit)}</td>
-                              <td>
+                              <td data-label="Menu Item"><strong>{item.name}</strong></td>
+                              <td data-label="Selling Price" className="price-amount">{formatCurrency(price)}</td>
+                              <td data-label="Ingredient Cost" className="cost-amount">−{formatCurrency(cogs)}</td>
+                              <td data-label="Food Cost %"><span className="margin-badge low">{foodCostPercentage.toFixed(1)}%</span></td>
+                              <td data-label="Profit per Menu" className="profit-amount">{formatCurrency(profit)}</td>
+                              <td data-label="Profit Margin">
                                 <span className={`margin-badge ${margin < 20 ? 'very-low' : 'low'}`}>
                                   {margin.toFixed(0)}%
                                 </span>
@@ -2238,7 +2238,7 @@ const ProductManagement = () => {
                           const rowCost = ingredientRowCost(activeIngredient);
                           return (
                           <tr key={index} className={editingIngredientIndex === index ? 'editing-ingredient-row' : ''}>
-                            <td>
+                            <td data-label="Ingredient Name">
                               {editingIngredientIndex === index && draftIngredient ? (
                                 <input
                                   type="text"
@@ -2256,7 +2256,7 @@ const ProductManagement = () => {
                                 </>
                               )}
                             </td>
-                            <td>
+                            <td data-label="Quantity">
                               {editingIngredientIndex === index && draftIngredient ? (
                                 <input
                                   type="text"
@@ -2270,7 +2270,7 @@ const ProductManagement = () => {
                                 ing.quantity
                               )}
                             </td>
-                            <td>
+                            <td data-label="Unit">
                               {editingIngredientIndex === index && draftIngredient ? (
                                 <select
                                   className="ingredient-edit-select"
@@ -2283,11 +2283,11 @@ const ProductManagement = () => {
                                 ing.unit
                               )}
                             </td>
-                            <td className="ingredient-cost-cell">
+                            <td data-label="Cost" className="ingredient-cost-cell">
                               {rowCost !== null ? formatCurrency(rowCost) : '—'}
                             </td>
                             {!isViewMode && (
-                              <td>
+                              <td data-label="Action">
                                 <div className="ingredient-row-actions">
                                   {editingIngredientIndex === index ? (
                                     <>

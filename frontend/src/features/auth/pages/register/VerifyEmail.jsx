@@ -1,8 +1,7 @@
 // frontend/src/features/auth/pages/register/VerifyEmail.jsx
 import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
-import Swal from 'sweetalert2';
-import '../../../../utils/swalTheme.css';
+import Swal from '../../../../utils/swal';
 import { FaEnvelope, FaKey, FaSpinner, FaArrowLeft } from 'react-icons/fa';
 import { useAuth } from '../../../../context/AuthContext';
 import { useBusinessLogo } from '../../../../context/BusinessProfileContext';

@@ -129,3 +129,24 @@
   padding: 14px 20px;
   border-top: 1px solid var(--color-border-light, #e8e0dd);
 }
+
+@media (max-width: 480px) {
+  .report-modal-overlay {
+    padding: 12px;
+  }
+
+  .report-modal-card {
+    width: 100%;
+    max-width: 100%;
+    max-height: 90vh;
+    max-height: 90dvh;
+  }
+
+  .report-modal-footer {
+    flex-direction: column-reverse;
+  }
+
+  .report-modal-footer > button {
+    width: 100%;
+  }
+}

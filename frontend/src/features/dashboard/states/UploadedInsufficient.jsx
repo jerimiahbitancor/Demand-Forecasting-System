@@ -7,11 +7,13 @@ import { useNavigate } from "react-router-dom";
 import uploadedInsufficientImage from "../../../assets/images/NoData.png";
 import { FaInfoCircle } from "react-icons/fa";
 import HistoryGapReview from "../components/HistoryGapReview.jsx";
+import { useHelp } from "../../../hooks/useHelp";
 
 const API_URL = import.meta.env.VITE_API_URL || "http://localhost:5000/api";
 
 const UploadedInsufficient = ({ onRefreshState }) => {
   const navigate = useNavigate();
+  const { openHelp } = useHelp();
   const [progressPercentage, setProgressPercentage] = useState(20); // Set to 20%
   const [dataProgress, setDataProgress] = useState(0);
   const [uploadedMonths, setUploadedMonths] = useState(0);
@@ -303,9 +305,13 @@ const UploadedInsufficient = ({ onRefreshState }) => {
                 Your dashboard will become available once you have completed the
                 steps requirements.
               </p>
-              <a href="#" className="insufficient-welcome-link">
+              <button
+                type="button"
+                className="insufficient-welcome-link"
+                onClick={() => openHelp('how-it-works')}
+              >
                 Learn How ChefDuo Forecast Works →
-              </a>
+              </button>
             </div>
 
             {/* Right Side - Image */}

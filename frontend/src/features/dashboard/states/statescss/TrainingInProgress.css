@@ -157,11 +157,14 @@
   color: var(--color-red-primary);
   font-weight: 600;
   font-size: 14px;
+  font-family: inherit;
   text-decoration: none;
   transition: all 0.3s ease;
   padding: 10px 20px;
+  background: transparent;
   border: 2px solid var(--color-red-primary);
   border-radius: 8px;
+  cursor: pointer;
 }
 
 .training-welcome-link:hover {

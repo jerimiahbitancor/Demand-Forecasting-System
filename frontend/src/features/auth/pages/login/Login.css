@@ -92,6 +92,43 @@
   transition: transform 0.3s ease, box-shadow 0.3s ease;
 }
 
+/* Back link, pinned to the card corner so it does not push the centred
+   brand header out of alignment */
+.back-button {
+  position: absolute;
+  top: 12px;
+  left: 12px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 12px 8px 10px;
+  min-height: 36px;
+  border-radius: 9px;
+  border: 1px solid rgba(187, 1, 20, 0.14);
+  background: rgba(255, 255, 255, 0.72);
+  color: #6c757d;
+  font-family: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 1;
+  cursor: pointer;
+  z-index: 1;
+  transition: color 0.2s ease, background 0.2s ease,
+    border-color 0.2s ease, transform 0.2s ease;
+}
+
+.back-button:hover {
+  color: #bb0114;
+  background: #fff;
+  border-color: rgba(187, 1, 20, 0.28);
+  transform: translateX(-2px);
+}
+
+.back-button:focus-visible {
+  outline: 2px solid #bb0114;
+  outline-offset: 2px;
+}
+
 .login-card:hover {
   box-shadow: 
     0 8px 32px rgba(0, 0, 0, 0.08),
@@ -294,6 +331,12 @@
     padding: 20px 16px;
     border-radius: 14px;
     max-width: 100%;
+  }
+
+  /* Comfortable tap target on touch devices */
+  .back-button {
+    min-height: 44px;
+    padding: 10px 14px 10px 12px;
   }
   
   .brand-title {

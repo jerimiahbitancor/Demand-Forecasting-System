@@ -122,3 +122,50 @@
     border-radius: 6px;
   }
 }
+
+/* Phones: go full-bleed and let the body own the scroll. The header and
+   footer stay pinned so Cancel/Save are always reachable without scrolling
+   past a long form. */
+@media (max-width: 640px) {
+  .inventory-modal-overlay {
+    padding: 0;
+    align-items: flex-end;
+  }
+
+  .inventory-modal-content,
+  .inventory-modal-content.modal-md,
+  .inventory-modal-content.modal-lg,
+  .inventory-modal-content.market-trend-modal {
+    max-width: 100%;
+    /* Full-height sheet: avoids the mid-scroll "cut off" feel where a tall
+       dialog is clipped at both ends with no way to see the whole form. */
+    max-height: 100vh;
+    height: 100vh;
+    border-radius: 0;
+  }
+
+  .inventory-modal-header {
+    padding: 1rem 1rem 0.75rem;
+  }
+
+  .inventory-modal-header .modal-title {
+    font-size: 1.0625rem;
+  }
+
+  .inventory-modal-body {
+    padding: 0.5rem 1rem 1rem;
+    /* Prevent the iOS rubber-band from revealing the page behind the sheet. */
+    -webkit-overflow-scrolling: touch;
+  }
+
+  .inventory-modal-footer {
+    padding: 0.875rem 1rem calc(0.875rem + env(safe-area-inset-bottom, 0px));
+  }
+
+  /* Tap targets: 44px is the Apple/Google minimum for a comfortable press. */
+  .inventory-modal-close-btn {
+    width: 44px;
+    height: 44px;
+    justify-content: center;
+  }
+}

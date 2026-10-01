@@ -79,7 +79,7 @@
 }
 
 .btn-landing {
-  color: #ede9de;
+  color: #7a0010;
   border: 4px solid #7a0010;
   padding: 16px 50px;
   font-size: 1.1rem;
@@ -88,7 +88,7 @@
   cursor: pointer;
   transition: all 0.3s ease;
   letter-spacing: 0.5px;
-  background: none;
+  background: #ffffff;
 }
 
 .btn-landing:hover {
@@ -174,9 +174,15 @@
   display: grid;
   grid-template-columns: 1fr;
   gap: 30px;
-  margin: 100px;
+  margin: 48px 16px;
   position: relative;
   z-index: 1;
+}
+
+@media (min-width: 768px) {
+  .features-grid {
+    margin: 72px 40px;
+  }
 }
 
 @media (min-width: 640px) {
@@ -187,6 +193,7 @@
 
 @media (min-width: 1024px) {
   .features-grid {
+    margin: 100px;
     grid-template-columns: repeat(3, 1fr);
   }
 }
@@ -1015,8 +1022,8 @@
   top: 50%;
   left: 50%;
   transform: translate(-50%, -50%);
-  width: 1700px;
-  height: 600px;
+  width: min(1700px, 140vw);
+  height: min(600px, 50vw);
   background: radial-gradient(
     ellipse at center,
     rgba(122, 0, 16, 0.263) 0%,

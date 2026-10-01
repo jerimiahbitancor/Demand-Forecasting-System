@@ -17,6 +17,21 @@
   align-items: center;
   gap: 10px;
   cursor: pointer;
+  /* Reset the <button> chrome: the brand is a control, not a styled button */
+  padding: 0;
+  margin: 0;
+  border: none;
+  background: none;
+  font-family: inherit;
+  font-size: inherit;
+  color: inherit;
+  text-align: left;
+}
+
+.navbar-brand:focus-visible {
+  outline: 2px solid #bb0114;
+  outline-offset: 4px;
+  border-radius: 6px;
 }
 
 .brand-logo {
@@ -50,7 +65,11 @@
   color: #6b7280;
 }
 
-@media (min-width: 768px) {
+/* The full desktop link row (5 labels + brand + actions) needs roughly
+   1080px before it starts wrapping or colliding. Below that -- which
+   includes tablet portrait such as iPad Air at 820px -- collapse to the
+   burger drawer instead of squeezing the links. */
+@media (min-width: 1080px) {
   .navbar-nav {
     display: flex;
   }
@@ -367,7 +386,7 @@
   line-height: 1;
 }
 
-@media (max-width: 767px) {
+@media (max-width: 1079px) {
   .navbar-toggle {
     display: flex;
   }
@@ -451,9 +470,28 @@
   border-bottom: none;
 }
 
-@media (min-width: 768px) {
+@media (min-width: 1080px) {
   .navbar-menu {
     display: none !important;
+  }
+}
+
+/* Tablet tier: iPad portrait and similar. Tighten the chrome so the brand,
+   action buttons and burger sit comfortably without the brand text pushing
+   the actions off the edge. */
+@media (max-width: 1079px) {
+  .navbar {
+    padding: 12px 20px;
+  }
+
+  .brand-text {
+    font-size: 18px;
+  }
+}
+
+@media (max-width: 560px) {
+  .brand-text {
+    display: none;
   }
 }
 

@@ -125,3 +125,59 @@
     background-color: #faf8f7;
   }
 }
+
+/* Phones: the tab bar and page header were forcing the tabbed container to be
+   wider than the viewport, so every table inside had to pan sideways just to
+   reach the controls. */
+@media (max-width: 640px) {
+  .inventory-management-main {
+    padding: 12px;
+  }
+
+  .page-title {
+    font-size: 22px;
+  }
+
+  .page-subtitle {
+    font-size: 13px;
+    line-height: 1.5;
+  }
+
+  .inventory-management-header {
+    margin-bottom: 20px;
+  }
+
+  .tabbed-container {
+    border-radius: 12px;
+  }
+
+  /* Horizontal tab strip with edge padding reads better than a stacked list
+     on a narrow screen, and keeps all three tabs visible at once. */
+  .tabs-header {
+    flex-direction: row;
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  .tab-btn {
+    flex: 0 0 auto;
+    padding: 12px 16px;
+    font-size: 12px;
+    border-bottom: 2px solid transparent;
+    border-left: none;
+  }
+
+  .tab-btn.active {
+    border-bottom: 2px solid #a31d1d;
+    border-left: none;
+    background-color: #ffffff;
+  }
+
+  .tab-content {
+    padding: 12px;
+  }
+
+  .content-grid {
+    gap: 16px;
+  }
+}

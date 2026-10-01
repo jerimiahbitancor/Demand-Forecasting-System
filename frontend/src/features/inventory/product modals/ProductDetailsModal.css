@@ -133,14 +133,18 @@
   font-size: 0.95rem;
 }
 
-.product-details-table-wrapper {
-  overflow: visible;
-  border: 1px solid #e5e7eb;
-  border-radius: 8px;
-}
+  .product-details-table-wrapper {
+    max-width: 100%;
+    overflow-x: auto;
+    overflow-y: hidden;
+    -webkit-overflow-scrolling: touch;
+    border: 1px solid #e5e7eb;
+    border-radius: 8px;
+  }
 
 .product-details-table {
   width: 100%;
+  min-width: 420px;
   table-layout: fixed;
   border-collapse: collapse;
   font-size: 0.85rem;

@@ -1046,7 +1046,7 @@ const IngredientManagement = () => {
                   const isArchived = item.is_archived;
                   return (
                     <tr key={item.id || index} className={isArchived ? 'archived-row' : ''}>
-                      <td className="inventory-checkbox-cell">
+                      <td data-label="Select" className="inventory-checkbox-cell">
                         <input
                           type="checkbox"
                           className="inventory-row-checkbox"
@@ -1056,13 +1056,13 @@ const IngredientManagement = () => {
                           aria-label={`Select ${item.name || 'item'}`}
                         />
                       </td>
-                      <td>{displayIndex}</td>
-                      <td className="inventory-item-name-cell">
+                      <td data-label="#">{displayIndex}</td>
+                      <td data-label="Item Name" className="inventory-item-name-cell">
                         <span className="inventory-item-name">{item.name || 'Unnamed'}</span>
                       </td>
-                      <td>{item.unit || 'pcs'}</td>
-                      <td><span className="category-badge">{item.category || 'Uncategorized'}</span></td>
-                      <td className={
+                      <td data-label="Unit">{item.unit || 'pcs'}</td>
+                      <td data-label="Category"><span className="category-badge">{item.category || 'Uncategorized'}</span></td>
+                      <td data-label="Current Stock" className={
                         status.className === 'status-critical' ? 'inventory-critical-stock' : 
                         status.className === 'status-low' ? 'inventory-low-stock' : 
                         status.className === 'status-excess' ? 'inventory-excess-stock' : 
@@ -1070,14 +1070,14 @@ const IngredientManagement = () => {
                       }>
                         {item.quantity || 0}
                       </td>
-                      <td>{formatCurrency(item.price)}</td>
-                      <td>
+                      <td data-label="Unit Cost">{formatCurrency(item.price)}</td>
+                      <td data-label="Avg Market Price">
                         {item.avg_market_price !== null && item.avg_market_price !== undefined
                           ? formatCurrency(item.avg_market_price)
                           : <span className="market-price-empty">—</span>}
                       </td>
-                      <td>{formatDate(item.updated_at || item.created_at)}</td>
-                      <td>
+                      <td data-label="Last Updated">{formatDate(item.updated_at || item.created_at)}</td>
+                      <td data-label="Status">
                         <Tippy
                           content={<div className="inventory-status-tooltip">{status.hint}</div>}
                           placement="top"
@@ -1089,7 +1089,7 @@ const IngredientManagement = () => {
                           </span>
                         </Tippy>
                       </td>
-                      <td>
+                      <td data-label="Actions">
                         <div className="inventory-action-buttons">
                           
                           {!isArchived && (
