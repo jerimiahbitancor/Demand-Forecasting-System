@@ -23,9 +23,12 @@ short-circuited to 0 here rather than sent through the model.
 from datetime import date, timedelta
 import pandas as pd
 
-from services.feature_engineering import build_forecast_feature_row, apply_categorical_dtype, FEATURE_COLUMNS
-from services.data_loader import get_daily_sales, get_recent_sales
+from services.feature_engineering import (
+    build_feature_row, apply_categorical_dtype, FEATURE_COLUMNS, WARMUP_OBSERVATIONS,
+)
+from services.data_loader import get_daily_sales, get_confirmed_open_dates
 from services.business_logic import classify_demand
+from services.zero_fill import build_open_day_series
 
 
 class ModelNotReadyError(Exception):
@@ -44,16 +47,63 @@ def _is_operating_day(d: date, operating_days: set) -> bool:
     return d.weekday() in operating_days
 
 
-def _get_recent_quantities(product_id: int, before_date: date, lookback_days: int = 60) -> list:
+def recent_series_from(sales_by_date: dict, open_dates, before_date: date,
+                       lookback_open_days: int = 60) -> list:
     """
-    Recent actual sales for a product, used to seed lag_1/lag_7/rolling
-    features for the first forecasted day. Uses actual recorded sales
-    only — never predictions — for day 1 of any forecast run.
+    Pure: the newest `lookback_open_days` entries of the product's
+    zero-filled series, built over its FULL history and only then trimmed.
+
+    The order matters. Building the series from just the last 60 open days
+    (the Oct 1 2026 first version) made the product's first sale INSIDE
+    the window look like its first sale ever, so every open day before it
+    went unfilled. A product last sold 20 open days before the window
+    started and again near its end came back with 4 observations instead
+    of 60 — skipped as "not enough history" even though it was trained —
+    and any product with a gap at the window edge got different lag and
+    rolling values here than training saw for the same dates. Building the
+    whole series exactly as engineer_features() does and keeping the tail
+    makes the two identical by construction (tests/test_feature_parity.py).
     """
-    # Newest `lookback_days` observations, fetched newest-first so this
-    # always sees the latest sales (see data_loader.get_recent_sales).
-    sales_df = get_recent_sales(product_id, before_date=before_date, limit=lookback_days)
-    return sales_df["quantity_sold"].tolist()
+    earlier_open = [d for d in open_dates if d < before_date]
+    earlier_sales = {d: q for d, q in sales_by_date.items() if d < before_date}
+    series = build_open_day_series(earlier_sales, earlier_open)
+    return series[-lookback_open_days:]
+
+
+def _get_recent_series(product_id: int, before_date: date, lookback_open_days: int = 60,
+                       open_dates=None) -> list:
+    """
+    The product's zero-filled open-day series for the most recent
+    `lookback_open_days` CONFIRMED-OPEN days before `before_date`.
+
+    Two things changed here on Oct 1 2026, and both matter:
+
+    1. The window is counted in OPEN DAYS, not rows. It used to fetch the
+       newest 60 daily_sales ROWS, which for a slow-selling dish reached
+       back months (it has no rows on the days it didn't sell) while a
+       popular dish got exactly 60 days. The lag and rolling features
+       assume a fixed-length window, so those two products were being
+       described on completely different timescales.
+
+    2. The gaps are zero-filled by the SAME function training uses
+       (services/zero_fill.py), so a day the store was open and this dish
+       sold nothing now reads as 0 on both sides instead of vanishing.
+
+    Real recorded sales only — never predictions. The recursive step in
+    generate_forecast() appends its own predictions on top of this.
+
+    Reads the product's full history (one product is a few hundred rows,
+    one page) and trims AFTER zero-filling — see recent_series_from() for
+    why trimming first was wrong. `open_dates` should be loaded once per
+    forecast run by the caller; it is fetched here only as a fallback.
+    """
+    if open_dates is None:
+        open_dates = get_confirmed_open_dates()
+    sales_df = get_daily_sales(product_id)
+    sales_by_date = {}
+    if not sales_df.empty:
+        sales_by_date = dict(zip(sales_df["sale_date"].dt.date, sales_df["quantity_sold"].astype(float)))
+    return recent_series_from(sales_by_date, open_dates, before_date, lookback_open_days)
 
 
 def generate_forecast(
@@ -64,6 +114,7 @@ def generate_forecast(
     horizon_days: int = 1,
     start_offset: int = 0,
     operating_days: set = None,
+    open_dates=None,
 ) -> list:
     """
     Generates `horizon_days` forecasts for one product against the
@@ -97,12 +148,13 @@ def generate_forecast(
         operating_days = {0, 1, 2, 3, 4}  # Mon-Fri fallback if caller didn't pass one
 
     today = date.today()
-    recent_quantities = _get_recent_quantities(product_id, before_date=today)
+    history = _get_recent_series(product_id, before_date=today, open_dates=open_dates)
 
-    if len(recent_quantities) < 14:
+    if len(history) < WARMUP_OBSERVATIONS:
         raise ModelNotReadyError(
-            f"Product {product_id} has only {len(recent_quantities)} recent days "
-            "of sales — needs at least 14 to seed lag/rolling features."
+            f"Product {product_id} has only {len(history)} recent open-day "
+            f"observations — needs at least {WARMUP_OBSERVATIONS} to seed "
+            "lag/rolling features."
         )
 
     results = []
@@ -118,9 +170,23 @@ def generate_forecast(
                 "model_version": f"{model_version}_closed",
                 "rolling_7": None,  # business-rule zero day, not a real trend value
             })
-            continue  # do NOT feed this into recent_quantities — see docstring
+            continue  # do NOT feed this into `history` — see docstring
 
-        feature_row = build_forecast_feature_row(product_id, target_date, recent_quantities)
+        # For a FUTURE date, "the previous open day" comes from the
+        # owner's operating-days rule, not business_days (nobody has
+        # confirmed tomorrow yet). Walk back to the nearest operating day
+        # so days_since_last_open is 1 on an ordinary day and 2 on a
+        # Monday after a closed Sunday, exactly as in training.
+        prev_open = target_date - timedelta(days=1)
+        while not _is_operating_day(prev_open, operating_days):
+            prev_open -= timedelta(days=1)
+
+        feature_row = build_feature_row(
+            product_id=product_id,
+            target_date=target_date,
+            history=history,
+            prev_open_date=prev_open,
+        )
         X = pd.DataFrame([feature_row])
         X = apply_categorical_dtype(X, known_categories=known_categories)
         X = X[FEATURE_COLUMNS]
@@ -141,9 +207,14 @@ def generate_forecast(
             "rolling_7": round(feature_row["rolling_7"], 2),
         })
 
-        # feed this day's prediction back in as the next OPERATING day's
-        # most recent value — this is the recursive step
-        recent_quantities.append(predicted)
+        # Feed this day's prediction back in as the next operating day's
+        # most recent observation — the recursive step. It carries its
+        # date too, because same_dow_last_open searches by weekday.
+        history = history + [{
+            "sale_date": target_date,
+            "quantity_sold": predicted,
+            "is_real": False,
+        }]
 
     return results
 

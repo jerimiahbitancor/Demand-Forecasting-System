@@ -76,7 +76,7 @@ if REPORTS_DIR not in sys.path:
 
 from config import MIN_TRAINING_OBSERVATIONS  # noqa: E402
 from services.data_loader import (  # noqa: E402
-    get_active_products, get_daily_sales,
+    get_active_products, get_confirmed_open_dates, get_daily_sales,
     get_forecast_runs_history, get_model_metrics_history,
 )
 from services.preprocessing import (  # noqa: E402
@@ -84,7 +84,7 @@ from services.preprocessing import (  # noqa: E402
 )
 from services.feature_engineering import (  # noqa: E402
     engineer_features, FEATURE_COLUMNS,
-    build_forecast_feature_row, apply_categorical_dtype,
+    build_feature_row, apply_categorical_dtype, WARMUP_OBSERVATIONS,
 )
 from services.model_service import (  # noqa: E402
     filter_training_eligible, chronological_split, train_global_model,
@@ -108,8 +108,9 @@ FEATURE_LABELS = {
     "is_weekend": "Weekend",
     "is_holiday": "Holiday",
     "is_payday": "Payday",
-    "lag_1": "Yesterday's Sales",
-    "lag_7": "Sales From Last Week (Same Day)",
+    "lag_1": "Sales on the Last Open Day",
+    "same_dow_last_open": "Sales on the Same Weekday, Last Time Open",
+    "days_since_last_open": "Days Since the Store Was Last Open",
     "rolling_7": "Rolling Average (7 days)",
     "rolling_14": "Rolling Average (14 days)",
 }
@@ -582,7 +583,8 @@ def stage_4_features(eligible_df: pd.DataFrame, sample_product_id: int):
 
     display_cols = [
         "sale_date", "quantity_sold", "dow", "month", "is_weekend",
-        "is_holiday", "is_payday", "lag_1", "lag_7", "rolling_7", "rolling_14",
+        "is_holiday", "is_payday", "lag_1", "same_dow_last_open",
+        "days_since_last_open", "rolling_7", "rolling_14",
     ]
     sample = (
         eligible_df[eligible_df["product_id"] == sample_product_id][display_cols]
@@ -630,11 +632,11 @@ def stage_baseline_comparison(model, test_df: pd.DataFrame):
     model_per_product = {r["product_id"]: r for r in evaluate_per_product(test_df, model_predictions)}
     model_wmape = wmape(test_df["quantity_sold"].values, model_predictions)
 
-    naive_lag7_agg = evaluate_predictions(test_df["quantity_sold"].values, test_df["lag_7"].values)
-    naive_lag7_per_product = {
-        r["product_id"]: r for r in evaluate_per_product(test_df, test_df["lag_7"].values)
+    naive_same_dow_agg = evaluate_predictions(test_df["quantity_sold"].values, test_df["same_dow_last_open"].values)
+    naive_same_dow_per_product = {
+        r["product_id"]: r for r in evaluate_per_product(test_df, test_df["same_dow_last_open"].values)
     }
-    naive_lag7_wmape = wmape(test_df["quantity_sold"].values, test_df["lag_7"].values)
+    naive_same_dow_wmape = wmape(test_df["quantity_sold"].values, test_df["same_dow_last_open"].values)
 
     naive_rolling7_agg = evaluate_predictions(test_df["quantity_sold"].values, test_df["rolling_7"].values)
     naive_rolling7_per_product = {
@@ -645,8 +647,8 @@ def stage_baseline_comparison(model, test_df: pd.DataFrame):
     summary_df = pd.DataFrame([
         {"source": "Model", "mae": model_agg["mae"], "rmse": model_agg["rmse"],
          "mape": model_agg["mape"], "wmape": model_wmape},
-        {"source": "Naive: same day last week (lag_7)", "mae": naive_lag7_agg["mae"],
-         "rmse": naive_lag7_agg["rmse"], "mape": naive_lag7_agg["mape"], "wmape": naive_lag7_wmape},
+        {"source": "Naive: same weekday, last time open (same_dow_last_open)", "mae": naive_same_dow_agg["mae"],
+         "rmse": naive_same_dow_agg["rmse"], "mape": naive_same_dow_agg["mape"], "wmape": naive_same_dow_wmape},
         {"source": "Naive: 7-day rolling average", "mae": naive_rolling7_agg["mae"],
          "rmse": naive_rolling7_agg["rmse"], "mape": naive_rolling7_agg["mape"], "wmape": naive_rolling7_wmape},
     ])
@@ -655,13 +657,13 @@ def stage_baseline_comparison(model, test_df: pd.DataFrame):
     rows = []
     for pid in sorted(model_per_product.keys(), key=lambda x: int(x)):
         m_mae = model_per_product[pid]["mae"]
-        l_mae = naive_lag7_per_product.get(pid, {}).get("mae")
+        l_mae = naive_same_dow_per_product.get(pid, {}).get("mae")
         r_mae = naive_rolling7_per_product.get(pid, {}).get("mae")
         beats_both = bool(l_mae is not None and r_mae is not None and m_mae < l_mae and m_mae < r_mae)
         rows.append({
             "product_id": pid,
             "model_mae": m_mae,
-            "naive_lag7_mae": l_mae,
+            "naive_same_dow_mae": l_mae,
             "naive_rolling7_mae": r_mae,
             "model_beats_both": beats_both,
         })
@@ -671,9 +673,9 @@ def stage_baseline_comparison(model, test_df: pd.DataFrame):
     print_table("5. Baseline Comparison — per product (failures first)", per_product_baseline_df)
 
     fig, axes = plt.subplots(1, 2, figsize=(11, 4))
-    sources = ["Model", "Naive\n(lag_7)", "Naive\n(rolling_7)"]
-    mae_values = [model_agg["mae"], naive_lag7_agg["mae"], naive_rolling7_agg["mae"]]
-    wmape_values = [model_wmape or 0, naive_lag7_wmape or 0, naive_rolling7_wmape or 0]
+    sources = ["Model", "Naive\n(same dow)", "Naive\n(rolling_7)"]
+    mae_values = [model_agg["mae"], naive_same_dow_agg["mae"], naive_rolling7_agg["mae"]]
+    wmape_values = [model_wmape or 0, naive_same_dow_wmape or 0, naive_rolling7_wmape or 0]
     axes[0].bar(sources, mae_values, color="#2563eb")
     axes[0].set_title("Aggregate MAE")
     axes[1].bar(sources, wmape_values, color="#f59e0b")
@@ -685,7 +687,7 @@ def stage_baseline_comparison(model, test_df: pd.DataFrame):
     n_total = len(per_product_baseline_df)
     body = f"""
     <p>Compares the current model against two naive baselines that require no training at all:
-    "same day last week" (<code>lag_7</code>) and the 7-day rolling average (<code>rolling_7</code>)
+    "same weekday, last time open" (<code>same_dow_last_open</code>) and the 7-day rolling average (<code>rolling_7</code>)
     — both columns already exist on <code>test_df</code> straight from
     <code>engineer_features()</code>, no extra computation needed to get the naive predictions
     themselves.</p>
@@ -768,7 +770,7 @@ def stage_5_and_6(eligible_df: pd.DataFrame, force_train: bool):
 
     # NEW: WMAPE / sMAPE / MASE per product (reports/metrics.py). Sample
     # size is already present as "test_rows" from evaluate_per_product().
-    scored_for_metrics = test_df[["product_id", "quantity_sold", "lag_7"]].copy()
+    scored_for_metrics = test_df[["product_id", "quantity_sold", "same_dow_last_open"]].copy()
     scored_for_metrics["predicted"] = predictions
     extra_by_product = {}
     for pid, grp in scored_for_metrics.groupby("product_id", observed=True):
@@ -777,7 +779,7 @@ def stage_5_and_6(eligible_df: pd.DataFrame, force_train: bool):
         s = smape(grp["quantity_sold"].values, grp["predicted"].values)
         m = (
             mase(grp["quantity_sold"].values, grp["predicted"].values,
-                 train_grp["quantity_sold"].values, train_grp["lag_7"].values)
+                 train_grp["quantity_sold"].values, train_grp["same_dow_last_open"].values)
             if len(train_grp) > 0 else None
         )
         extra_by_product[pid] = {"wmape": w, "smape": s, "mase": m}
@@ -1008,20 +1010,29 @@ def stage_forecast_horizon(eligible_df: pd.DataFrame, model, known_categories: l
         start_dates = _pick_horizon_start_dates(actual_series, test_start, test_end)
 
         for start_date in start_dates:
-            history = actual_series[actual_series["sale_date"] < start_date]
-            recent_quantities = history.tail(60)["quantity_sold"].tolist()
-            if len(recent_quantities) < 14:
+            prior = actual_series[actual_series["sale_date"] < start_date].tail(60)
+            # Dated entries, not bare numbers: same_dow_last_open searches the
+            # history by weekday, so each value must carry its date. This is
+            # the same shape forecast_service passes to build_feature_row().
+            recent = [
+                {"sale_date": d.date(), "quantity_sold": float(q)}
+                for d, q in zip(prior["sale_date"], prior["quantity_sold"])
+            ]
+            if len(recent) < WARMUP_OBSERVATIONS:
                 skipped_starts.append({
                     "product_id": pid, "start_date": start_date.date(),
-                    "reason": f"only {len(recent_quantities)} prior days available (need >= 14)",
+                    "reason": f"only {len(recent)} prior days available (need >= {WARMUP_OBSERVATIONS})",
                 })
                 continue
 
-            recent = list(recent_quantities)
             for day_offset in range(7):
                 target_date = (start_date + pd.Timedelta(days=day_offset)).date()
 
-                feature_row = build_forecast_feature_row(pid, target_date, recent)
+                # Every calendar day is simulated (see the note in this
+                # section's HTML), so the previous "open" day is simply the
+                # last entry in the history.
+                feature_row = build_feature_row(pid, target_date, recent,
+                                                prev_open_date=recent[-1]["sale_date"])
                 X = pd.DataFrame([feature_row])
                 X = apply_categorical_dtype(X, known_categories=known_categories)
                 X = X[FEATURE_COLUMNS]
@@ -1037,7 +1048,7 @@ def stage_forecast_horizon(eligible_df: pd.DataFrame, model, known_categories: l
                 })
                 # feed this day's prediction back in as the next day's lag_1 — the
                 # recursive step, mirroring generate_forecast() exactly.
-                recent.append(predicted)
+                recent.append({"sale_date": target_date, "quantity_sold": predicted})
 
     records_df = pd.DataFrame(records)
     if records_df.empty:
@@ -1092,7 +1103,7 @@ def stage_forecast_horizon(eligible_df: pd.DataFrame, model, known_categories: l
     <p>Simulated for both representative products (product {high_id}, high-volume; product
     {low_id}, low-volume) across {n_combos} (product, start date) combination(s) spread evenly
     across the test period.{skipped_note} Each day's prediction is fed back in as the next day's
-    <code>lag_1</code> via <code>build_forecast_feature_row()</code> — the exact function
+    <code>lag_1</code> via <code>build_feature_row()</code> — the exact function
     <code>generate_forecast()</code> calls, not a reimplementation. Known actual values are used
     here only to SCORE the simulation after the fact — they are never fed into the simulation
     itself.</p>
@@ -1144,7 +1155,7 @@ def stage_7_predictions(test_df: pd.DataFrame, predictions, high_id: int, low_id
     <p>Actual vs. predicted quantity over the held-out test period, for the same
     high- and low-volume products used in the split stage.</p>
     <p>Note on what this does and doesn't show: every test row here uses
-    <code>lag_1</code>/<code>lag_7</code>/<code>rolling_7</code>/<code>rolling_14</code>
+    <code>lag_1</code>/<code>same_dow_last_open</code>/<code>rolling_7</code>/<code>rolling_14</code>
     computed from real, actual historical sales (that's what
     <code>engineer_features()</code> produced before the split ever happened) — this is
     <strong>one-step evaluation against real held-out data</strong>, not a simulated
@@ -1523,11 +1534,35 @@ def main():
     print("=" * 78)
     print("ChefDuo ML Training Pipeline — Diagnostic Report")
     print("=" * 78)
+    print()
+    print("!! NUMBERS IN THIS RUN ARE NOT COMPARABLE WITH ANY EARLIER REPORT !!")
+    print("   Two things changed on Oct 1 2026, and both change WHICH ROWS get")
+    print("   scored, not just how well the model does on them:")
+    print("     1. Features: lag_7 was replaced by same_dow_last_open, and")
+    print("        days_since_last_open was added (11 features -> 12).")
+    print("     2. Zero-fill: a confirmed-open day with no sales row for a")
+    print("        product now counts as a real 0 instead of being absent, so")
+    print("        the test set contains many rows that simply did not exist")
+    print("        before.")
+    print("   A WMAPE or MAE from this run therefore cannot be held up against")
+    print("   the old 27.4% figure (or the 37.5%/61.6% synthetic-data ones).")
+    print("   Only compare runs from Oct 1 2026 onward with each other.")
+    print()
 
     all_sales_df, _skipped = stage_1_preprocessing()
     stage_2_outliers(all_sales_df)
 
-    features_df = engineer_features(all_sales_df).dropna(subset=FEATURE_COLUMNS)
+    # Zero-filled on the confirmed-open calendar, exactly like /train.
+    # Without passing open_dates this would silently fall back to
+    # "every date with a row is an open day", which is the pre-Oct-2026
+    # behaviour and would make this report describe a pipeline that no
+    # longer exists.
+    open_dates = get_confirmed_open_dates()
+    print(f"  Confirmed-open dates loaded: {len(open_dates)}")
+    features_df = engineer_features(all_sales_df, open_dates=open_dates).dropna(subset=FEATURE_COLUMNS)
+    print(f"  Rows after zero-fill + warm-up drop: {len(features_df)} "
+          f"({int(features_df['is_real'].sum())} real, "
+          f"{int((~features_df['is_real']).sum())} filled zeros)")
     eligible_df, excluded = filter_training_eligible(features_df, MIN_TRAINING_OBSERVATIONS)
 
     if eligible_df.empty:

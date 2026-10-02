@@ -128,14 +128,14 @@ def volume_tier_map(eligible_df: pd.DataFrame) -> dict:
 
 
 # ---------------------------------------------------------------------
-# Naive baselines — lag_7 and rolling_7 are already columns on any
+# Naive baselines — same_dow_last_open and rolling_7 are already columns on any
 # feature-engineered split, exactly like generate_training_report.py's
 # baseline section uses on test_df.
 # ---------------------------------------------------------------------
 def naive_baselines(df: pd.DataFrame, label: str) -> dict:
     actual = df["quantity_sold"].values
     results = {}
-    for name, col in [("lag_7", "lag_7"), ("rolling_7", "rolling_7")]:
+    for name, col in [("same_dow_last_open", "same_dow_last_open"), ("rolling_7", "rolling_7")]:
         pred = df[col].values
         m = evaluate_predictions(actual, pred)
         w = wmape(actual, pred)
@@ -409,12 +409,12 @@ def final_test_evaluation(train_df, test_df, columns, params, n_estimators, targ
         if sub.empty:
             continue
         w = wmape(sub["quantity_sold"].values, sub["predicted"].values)
-        naive_lag7_w = wmape(sub["quantity_sold"].values, test_df.loc[sub.index, "lag_7"].values)
+        naive_same_dow_w = wmape(sub["quantity_sold"].values, test_df.loc[sub.index, "same_dow_last_open"].values)
         naive_roll7_w = wmape(sub["quantity_sold"].values, test_df.loc[sub.index, "rolling_7"].values)
         tier_rows.append({
             "volume_tier": tier, "n_products": sub["product_id"].nunique(), "n_rows": len(sub),
-            "model_wmape": w, "naive_lag7_wmape": naive_lag7_w, "naive_rolling7_wmape": naive_roll7_w,
-            "beats_lag7": (w is not None and naive_lag7_w is not None and w < naive_lag7_w),
+            "model_wmape": w, "naive_same_dow_wmape": naive_same_dow_w, "naive_rolling7_wmape": naive_roll7_w,
+            "beats_same_dow": (w is not None and naive_same_dow_w is not None and w < naive_same_dow_w),
             "beats_rolling7": (w is not None and naive_roll7_w is not None and w < naive_roll7_w),
         })
     tier_df = pd.DataFrame(tier_rows)
@@ -498,9 +498,9 @@ def main():
     cand_df = pd.DataFrame([{k: v for k, v in c.items() if k not in ("columns", "params")} for c in candidates])
     cand_df = cand_df.sort_values("val_wmape")
     log(cand_df.to_string(index=False))
-    naive_lag7_wmape = val_naive["lag_7"]["wmape"]
+    naive_same_dow_wmape = val_naive["same_dow_last_open"]["wmape"]
     naive_roll7_wmape = val_naive["rolling_7"]["wmape"]
-    log(f"\n  val_df naive lag_7 WMAPE:     {naive_lag7_wmape:.2f}%" if naive_lag7_wmape is not None else "  val_df naive lag_7 WMAPE: N/A")
+    log(f"\n  val_df naive same-dow WMAPE:     {naive_same_dow_wmape:.2f}%" if naive_same_dow_wmape is not None else "  val_df naive same-dow WMAPE: N/A")
     log(f"  val_df naive rolling_7 WMAPE: {naive_roll7_wmape:.2f}%" if naive_roll7_wmape is not None else "  val_df naive rolling_7 WMAPE: N/A")
 
     winner = sorted(candidates, key=lambda c: (c["val_wmape"] is None, c["val_wmape"]))[0]

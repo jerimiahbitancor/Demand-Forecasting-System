@@ -1,5 +1,5 @@
 // services/mappingService.js
-const { fetchAllRows } = require('../utils/fetchAllRows');
+const { getProductSalesSummary } = require('../utils/productSalesSummary');
 const { supabase, isConfigured, supabaseAdmin } = require('../config/supabase');
 const { deriveProductStatus } = require('./productStatusService');
 const { PRODUCT_DB_STATUS_BY_DERIVED } = require('./productStatusConstants');
@@ -188,26 +188,17 @@ class MappingService {
       }));
 
       if (transformedData.length > 0) {
-        const { data: salesData, error: salesError } = await fetchAllRows(() => supabaseAdmin
-          .from('daily_sales')
-          .select('product_id, sale_date')
-          .in('product_id', transformedData.map(product => product.id))
-          .order('sale_date', { ascending: true })
-          .order('product_id'));
+        const { data: salesSummary, error: salesError } = await getProductSalesSummary(
+          transformedData.map(product => product.id)
+        );
 
         if (salesError) throw salesError;
 
-        const salesByProduct = new Map();
-        for (const sale of salesData || []) {
-          const dates = salesByProduct.get(sale.product_id) || [];
-          dates.push(sale.sale_date);
-          salesByProduct.set(sale.product_id, dates);
-        }
-
         for (const product of transformedData) {
+          const summary = salesSummary.get(product.id);
           const statusDetails = deriveProductStatus({
-            firstSoldDate: salesByProduct.get(product.id)?.[0] || product.first_sold_date,
-            lastSoldDate: salesByProduct.get(product.id)?.at(-1) || product.first_sold_date || null,
+            firstSoldDate: summary?.firstSaleDate || product.first_sold_date,
+            lastSoldDate: summary?.lastSaleDate || product.first_sold_date || null,
             createdAt: product.created_at,
             isActive: product.is_active,
             inactiveReason: product.inactive_reason
@@ -870,26 +861,14 @@ class MappingService {
       }
 
       const productIds = products.map((p) => p.id);
-      const { data: sales, error: salesError } = await fetchAllRows(() => supabaseAdmin
-        .from('daily_sales')
-        .select('product_id, sale_date')
-        .in('product_id', productIds)
-        .order('sale_date')
-        .order('product_id'));
+      const { data: salesSummary, error: salesError } = await getProductSalesSummary(productIds);
       if (salesError) throw salesError;
-
-      const salesByProduct = new Map();
-      for (const s of sales || []) {
-        const dates = salesByProduct.get(s.product_id) || [];
-        dates.push(s.sale_date);
-        salesByProduct.set(s.product_id, dates);
-      }
 
       let updated = 0;
       for (const p of products) {
-        const dates = salesByProduct.get(p.id) || [];
-        const firstSoldDate = dates[0] || p.first_sold_date || null;
-        const lastSoldDate = dates.at(-1) || firstSoldDate || null;
+        const summary = salesSummary.get(p.id);
+        const firstSoldDate = summary?.firstSaleDate || p.first_sold_date || null;
+        const lastSoldDate = summary?.lastSaleDate || firstSoldDate || null;
 
         const sd = deriveProductStatus({
           firstSoldDate,
@@ -1037,22 +1016,17 @@ class MappingService {
         return { updated: 0 };
       }
 
-      const { data: salesRows, error: salesError } = await fetchAllRows(() => supabaseAdmin
-        .from('daily_sales')
-        .select('product_id, sale_date')
-        .order('sale_date', { ascending: false })
-        .order('product_id'));
+      // This runs after EVERY sales upload. It used to read the entire
+      // daily_sales table to find each product's newest sale, which across
+      // a bulk backfill exhausted the connection pool. The view returns
+      // one row per product instead.
+      const { data: salesSummary, error: salesError } = await getProductSalesSummary();
 
       if (salesError) throw salesError;
 
-      // First row seen per product_id is its most recent sale, since the
-      // query above is already ordered sale_date descending.
-      const lastSoldDateByProduct = new Map();
-      for (const row of salesRows || []) {
-        if (!lastSoldDateByProduct.has(row.product_id)) {
-          lastSoldDateByProduct.set(row.product_id, row.sale_date);
-        }
-      }
+      const lastSoldDateByProduct = new Map(
+        [...salesSummary].map(([productId, s]) => [productId, s.lastSaleDate])
+      );
 
       const updates = [];
       for (const product of products) {

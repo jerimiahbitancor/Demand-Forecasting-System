@@ -9,6 +9,8 @@
 // display, since ml-service never exposes an HTTP API of its own for
 // Express to call read-only.
 const { fetchAllRows } = require('../utils/fetchAllRows');
+const { accuracyFromWmape, beatsBaseline } = require('../utils/accuracy');
+const { getProductSalesSummary } = require('../utils/productSalesSummary');
 const { supabaseAdmin } = require('../config/supabase');
 const dayjs = require('dayjs');
 const utc = require('dayjs/plugin/utc');
@@ -39,26 +41,36 @@ function worseStockStatus(a, b) {
   return (STOCK_SEVERITY[a] ?? -1) >= (STOCK_SEVERITY[b] ?? -1) ? a : b;
 }
 
-// Lewis 1982 MAPE-scale accuracy tiers, per the system module spec
-// (Forecasting > 1.1 Forecast Accuracy). accuracy = 100 - MAPE, clamped
-// to [0, 100] since MAPE has no natural upper bound.
-function accuracyFromMape(mape) {
-  if (mape === null || mape === undefined) return null;
-  return Math.max(0, Math.min(100, 100 - Number(mape)));
+// Accuracy = 100 - WMAPE, and "is it good enough?" = does it beat the
+// 7-day average (owner decision, Oct 1 2026). This replaced 100 - MAPE and
+// the Lewis (1982) tier bands. The rule itself lives in utils/accuracy.js
+// because the dashboard needs the identical answer — see the note there.
+//
+// There is no citable WMAPE band table, so there are deliberately only two
+// states and no invented numeric threshold.
+function accuracyStanding(wmape, baselineWmape) {
+  if (wmape === null || wmape === undefined) return null;
+  const beats = beatsBaseline(wmape, baselineWmape);
+  if (beats === null) {
+    return { beatsBaseline: null, label: 'No baseline recorded', color: 'amber' };
+  }
+  return {
+    beatsBaseline: beats,
+    label: beats ? 'Better than a simple average' : 'Not yet better than a simple average',
+    color: beats ? 'green' : 'amber',
+  };
 }
 
-function accuracyTier(accuracy) {
-  if (accuracy === null || accuracy === undefined) return null;
-  if (accuracy > 90) return { label: 'Excellent', color: 'green' };
-  if (accuracy >= 80) return { label: 'Good', color: 'green' };
-  if (accuracy >= 70) return { label: 'Fair', color: 'amber' };
-  return { label: 'Low', color: 'red' };
-}
-
-// Human labels for the 11 locked FEATURE_COLUMNS (ml-service/services/
+// Human labels for the 12 FEATURE_COLUMNS (ml-service/services/
 // feature_engineering.py) — used only for display; the DB key stays
 // the raw column name so this never has to be kept in sync with a
 // separate id scheme.
+//
+// Updated Oct 1 2026: `lag_7` is gone (it meant "7 rows back", which is
+// not the same weekday once there are closed days), replaced by
+// `same_dow_last_open`, and `days_since_last_open` was added. An unknown
+// key still falls back to the raw column name, so an older model's
+// feature_importance keys render readably rather than crashing.
 const FEATURE_LABELS = {
   product_id: 'Product',
   dow: 'Day of Week',
@@ -67,8 +79,9 @@ const FEATURE_LABELS = {
   is_weekend: 'Weekend',
   is_holiday: 'Holiday',
   is_payday: 'Payday',
-  lag_1: "Yesterday's Sales",
-  lag_7: 'Sales From Last Week (Same Day)',
+  lag_1: 'Sales on the Last Open Day',
+  same_dow_last_open: 'Sales on the Same Weekday, Last Time Open',
+  days_since_last_open: 'Days Since the Store Was Last Open',
   rolling_7: 'Rolling Average (7 days)',
   rolling_14: 'Rolling Average (14 days)',
 };
@@ -199,12 +212,24 @@ async function getForecastingAnalytics({ productId, from, to } = {}) {
   if (metricsError) throw metricsError;
 
   const latestMetrics = metricsRows && metricsRows.length ? metricsRows[metricsRows.length - 1] : null;
-  const accuracyHistory = (metricsRows || []).map((row) => ({
-    date: row.evaluation_date,
-    modelVersion: row.model_version,
-    accuracy: accuracyFromMape(row.mape),
-  }));
-  const latestAccuracy = latestMetrics ? accuracyFromMape(latestMetrics.mape) : null;
+  // Rows written before migration 008 have no wmape and never will —
+  // re-scoring them would mean rebuilding a feature set that no longer
+  // exists. They are SKIPPED, not treated as 0% accuracy, so the history
+  // line and the chart simply start at the first WMAPE-scored run instead
+  // of plunging to zero for every older row.
+  const accuracyHistory = (metricsRows || [])
+    .filter((row) => row.wmape !== null && row.wmape !== undefined)
+    .map((row) => ({
+      date: row.evaluation_date,
+      modelVersion: row.model_version,
+      accuracy: accuracyFromWmape(row.wmape),
+      baselineAccuracy: accuracyFromWmape(row.baseline_wmape),
+    }));
+  const latestAccuracy = latestMetrics ? accuracyFromWmape(latestMetrics.wmape) : null;
+  const latestBaselineAccuracy = latestMetrics ? accuracyFromWmape(latestMetrics.baseline_wmape) : null;
+  const standing = latestMetrics
+    ? accuracyStanding(latestMetrics.wmape, latestMetrics.baseline_wmape)
+    : null;
 
   const featureImportance = latestMetrics?.feature_importance
     ? Object.entries(latestMetrics.feature_importance)
@@ -320,8 +345,12 @@ async function getForecastingAnalytics({ productId, from, to } = {}) {
   return {
     accuracy: {
       value: latestAccuracy,
-      tier: accuracyTier(latestAccuracy),
-      errorRate: latestMetrics?.mape ?? null,
+      // WMAPE itself: "forecasts were off by about N% of total sales".
+      errorRate: latestMetrics?.wmape ?? null,
+      baselineValue: latestBaselineAccuracy,
+      baselineErrorRate: latestMetrics?.baseline_wmape ?? null,
+      beatsBaseline: standing?.beatsBaseline ?? null,
+      standing,
       history: accuracyHistory,
     },
     prediction: { rows, series, range: { from: rangeFrom, to: rangeTo } },
@@ -334,6 +363,11 @@ async function getForecastingAnalytics({ productId, from, to } = {}) {
         latestForecastRun: latestRun?.run_at || null,
         latestForecastStaleDays: latestRun?.stale_days ?? null,
         activeProducts: activeProductsCount || 0,
+        // MAE = average servings missed per product per day. Surfaced so
+        // the accuracy sentence can quote a physical number ("about 2
+        // plates per dish per day") next to the percentage, instead of
+        // the frontend inventing one. Null on older rows.
+        mae: latestMetrics?.mae ?? null,
         // Not persisted anywhere per training run (see model_service.py) —
         // returning null rather than a fabricated number.
         trainingRecords: null,
@@ -525,16 +559,13 @@ async function getProductPerformanceAnalytics({ from, to } = {}) {
     .map((row, index) => ({ rank: index + 1, ...row }));
 
   // --- Product Status sections ---
-  const { data: lastSaleRows, error: lastSaleError } = await fetchAllRows(() => supabaseAdmin
-    .from('daily_sales')
-    .select('product_id, sale_date')
-    .order('sale_date', { ascending: false })
-    .order('product_id'));
+  // One query via the product_sales_summary view instead of reading the
+  // whole daily_sales table on every page load.
+  const { data: salesSummary, error: lastSaleError } = await getProductSalesSummary();
   if (lastSaleError) throw lastSaleError;
-  const lastSaleByProduct = new Map();
-  for (const row of lastSaleRows || []) {
-    if (!lastSaleByProduct.has(row.product_id)) lastSaleByProduct.set(row.product_id, row.sale_date);
-  }
+  const lastSaleByProduct = new Map(
+    [...salesSummary].map(([productId, s]) => [productId, s.lastSaleDate])
+  );
 
   const unmappedProductIds = new Set(products.map((p) => p.id).filter((id) => !recipeMap.has(id)));
 
@@ -852,11 +883,14 @@ async function getForecastSummary() {
 
   const { data: latestMetrics } = await supabaseAdmin
     .from('model_metrics')
-    .select('mape, evaluation_date')
+    .select('wmape, baseline_wmape, evaluation_date')
     .order('evaluation_date', { ascending: false })
     .limit(1)
     .maybeSingle();
-  const accuracy = latestMetrics ? accuracyFromMape(latestMetrics.mape) : null;
+  const accuracy = latestMetrics ? accuracyFromWmape(latestMetrics.wmape) : null;
+  const standing = latestMetrics
+    ? accuracyStanding(latestMetrics.wmape, latestMetrics.baseline_wmape)
+    : null;
 
   const recipeMap = await getRecipeMap();
   const forecastByProduct = new Map(todayForecasts.map((f) => [f.product_id, Number(f.predicted_quantity)]));
@@ -887,7 +921,12 @@ async function getForecastSummary() {
   return {
     predictedSalesToday,
     actualSalesYesterday,
-    forecastAccuracy: { value: accuracy, tier: accuracyTier(accuracy) },
+    forecastAccuracy: {
+      value: accuracy,
+      baselineValue: accuracyFromWmape(latestMetrics?.baseline_wmape),
+      beatsBaseline: standing?.beatsBaseline ?? null,
+      standing,
+    },
     stockAlerts: stockCounts,
     freshness: latestRun
       ? { staleDays: latestRun.stale_days, lastConfirmedDate: latestRun.last_confirmed_date, runAt: latestRun.run_at }
@@ -898,9 +937,8 @@ async function getForecastSummary() {
 module.exports = {
   computeStockStatus,
   getIngredientDailyNeeds,
-  getMappedIngredientIds,
-  accuracyFromMape,
-  accuracyTier,
+  accuracyFromWmape,
+  accuracyStanding,
   getForecastingAnalytics,
   getProductPerformanceAnalytics,
   getIngredientDemandAnalytics,

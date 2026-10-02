@@ -20,7 +20,7 @@ from flask import Flask, request, jsonify
 from config import ML_SERVICE_SHARED_SECRET, MIN_TRAINING_OBSERVATIONS
 from services.data_loader import (
     get_active_products, get_daily_sales, get_history_gate_inputs, has_trained_model,
-    get_latest_confirmed_open_date, get_operating_days,
+    get_confirmed_open_dates, get_latest_confirmed_open_date, get_operating_days,
     get_recipe_and_stock, get_safety_buffer_percentage,
 )
 from services.history_gate import evaluate_history_gate, describe_failure
@@ -181,8 +181,20 @@ def train():
     all_sales_df = pd.concat(pooled_frames, ignore_index=True)
     log_stage("after preprocessing (pooled, cleaned)", all_sales_df)
 
-    features_df = engineer_features(all_sales_df).dropna(subset=FEATURE_COLUMNS)
-    log_stage("after feature engineering (NaN warm-up rows dropped)", features_df)
+    # The confirmed-open calendar drives zero-filling: an open day with no
+    # row for a product means that product sold 0 there. Closed and
+    # unconfirmed dates are not in this list, so they can never be filled
+    # (services/zero_fill.py). Read once for the whole run, not per product.
+    open_dates = get_confirmed_open_dates()
+    log_stage("confirmed-open dates loaded", all_sales_df,
+              extra={"confirmed_open_days": len(open_dates)})
+
+    features_df = engineer_features(all_sales_df, open_dates=open_dates).dropna(subset=FEATURE_COLUMNS)
+    log_stage("after feature engineering (zero-filled, NaN warm-up rows dropped)", features_df,
+              extra={
+                  "real_observations": int(features_df["is_real"].sum()) if not features_df.empty else 0,
+                  "filled_zeros": int((~features_df["is_real"]).sum()) if not features_df.empty else 0,
+              })
 
     features_df, excluded = filter_training_eligible(features_df, MIN_TRAINING_OBSERVATIONS)
     log_stage("after eligibility filter (usable post-warmup rows)", features_df,
@@ -256,19 +268,63 @@ def forecast():
     # give one product another product's forecast.
     metadata = load_model_metadata(model_version)
     if metadata:
+        # FEATURE SET GUARD. XGBoost is handed a matrix of columns in a
+        # fixed order; it has no idea what they mean. If FEATURE_COLUMNS
+        # has changed since this model was trained (it did on Oct 1 2026 —
+        # lag_7 was replaced by same_dow_last_open and
+        # days_since_last_open), predicting anyway would feed each column
+        # into whatever slot happens to line up and return confident
+        # nonsense. Same class of silent-wrong as the category-order bug.
+        # Refuse instead, and say what to do about it.
+        saved_columns = metadata.get("feature_columns")
+        if saved_columns is not None and list(saved_columns) != list(FEATURE_COLUMNS):
+            logger.error(
+                f"{model_version} was trained on {len(saved_columns)} features "
+                f"{list(saved_columns)}, but this service builds {len(FEATURE_COLUMNS)} "
+                f"{list(FEATURE_COLUMNS)} — refusing to forecast."
+            )
+            return jsonify({
+                "status": "failed",
+                "reason": (
+                    "retrain required: the saved model was trained on a different "
+                    "feature set than this service now builds, so its predictions "
+                    "would be meaningless. Run training once to produce a model "
+                    "that matches."
+                ),
+                "model_version": model_version,
+                "model_feature_columns": list(saved_columns),
+                "current_feature_columns": list(FEATURE_COLUMNS),
+            }), 409
+
         known_categories = metadata["product_categories"]
         trained_ids = set(metadata["trained_product_ids"])
     else:
-        # Legacy model saved before metadata existed. Training built its
-        # category list from the pooled product IDs sorted ascending, so
-        # sorting today's active IDs is the closest match — correct only
-        # if no product was added/archived since. Retrain to remove this.
-        logger.warning(
-            f"{model_version} has no metadata file — using sorted active IDs "
-            "as the category list. Retrain to make forecasts reliable."
+        # Legacy model with no metadata sidecar. This used to fall back to
+        # sorting today's active IDs and forecasting anyway. That is no
+        # longer survivable: metadata sidecars only started being written
+        # in batch 1 (Sep 29 2026), which is BEFORE the Oct 1 2026 feature
+        # change — so a model without one was necessarily trained on the
+        # old 11-column set and cannot be fed the current 12. There is no
+        # way to verify it and no way to make it right except retraining.
+        logger.error(
+            f"{model_version} has no metadata file, so it predates the "
+            "current feature set — refusing to forecast. Retrain once."
         )
-        known_categories = sorted(products_df["id"].astype(int).tolist())
-        trained_ids = set(known_categories)
+        return jsonify({
+            "status": "failed",
+            "reason": (
+                "retrain required: the saved model has no feature metadata, "
+                "which means it was trained before the current feature set "
+                "and cannot be used. Run training once."
+            ),
+            "model_version": model_version,
+            "current_feature_columns": list(FEATURE_COLUMNS),
+        }), 409
+
+    # Loaded once per run and shared by every product. Deliberately AFTER
+    # the feature-set guard above, so a model that must be refused is
+    # refused before any database work.
+    open_dates = get_confirmed_open_dates()
 
     day1_forecasts_by_product = {}
     results = []
@@ -293,6 +349,7 @@ def forecast():
             forecast_rows = generate_forecast(
                 product_id, model, model_version, known_categories, horizon_days,
                 operating_days=operating_days,
+                open_dates=open_dates,
             )
 
             forecast_ids = [write_forecast(row) for row in forecast_rows]

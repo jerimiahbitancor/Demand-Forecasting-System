@@ -14,29 +14,67 @@ model that tested well quietly produces bad live results. Having one
 shared source of truth for feature logic is how you prevent it
 structurally, not just by being careful.
 
-UPDATED for the global model: product_id is now a feature (one model
-across all products, not one model per product). It's added as a
-pandas `category` dtype and passed to XGBoost with
-`enable_categorical=True`, rather than being one-hot encoded by hand —
-XGBoost's native categorical support (2.x+) splits on categories
-directly, which is cleaner than manufacturing 61 extra binary columns
-and doesn't impose a false numeric ordering the way plain integer
-label-encoding would.
+HOW THAT IS NOW ENFORCED (Oct 1 2026): there is ONE function,
+build_feature_row(), and both sides call it. Training calls it once per
+observation; /forecast calls it once per forecast date. It used to be two
+functions — a vectorised pandas path for training and a separate
+hand-rolled dict for forecasting — which is exactly the shape that lets
+the two drift apart. The vectorised version was faster, but a per-row
+loop over ~13,000 training rows costs well under a second, and buying a
+structural parity guarantee for that is a trade worth making.
+tests/test_feature_parity.py asserts the two paths agree row for row.
+
+UPDATED for the global model: product_id is a feature (one model across
+all products, not one model per product). It's added as a pandas
+`category` dtype and passed to XGBoost with `enable_categorical=True`,
+rather than being one-hot encoded by hand. Note that XGBoost stores each
+category's POSITION, not the product id, so the exact training category
+list is saved with the model — see model_storage.save_model_metadata().
+
+THE OBSERVATION SERIES: features are built from the zero-filled
+CONFIRMED-OPEN-DAY series, not from raw daily_sales rows — see
+services/zero_fill.py for why and for what is never filled. Closed and
+unconfirmed days never appear in it at all.
 """
 from datetime import date
+
 import pandas as pd
+
+from services.zero_fill import build_open_day_series, previous_open_date
 from utils.holidays import is_holiday
 
 # product_id is listed first deliberately — see engineer_features()
 # for how its dtype gets set to 'category' before this list is used
 # to slice the training/prediction matrix.
+#
+# 12 features as of Oct 1 2026 (owner-approved change from 11):
+#   - `lag_7` REMOVED. It meant "7 rows back," which is only "same day
+#     last week" when there are no gaps. On a Mon-Sat schedule, 7 open
+#     days back from a Monday is a Saturday — so more than half the
+#     training rows had a lag_7 pointing at the wrong weekday.
+#   - `same_dow_last_open` ADDED in its place: the real "same weekday,
+#     last time we were open" value, found by searching the series.
+#   - `days_since_last_open` ADDED: tells the model how big the gap
+#     before this day was (1 normally, 2 after a closed Sunday, 15 after
+#     a two-week closure), so it can tell a normal Tuesday from the first
+#     day back after a shutdown.
+# `month` and `day` were deliberately KEPT (the owner declined removing
+# them). If FEATURE_COLUMNS changes again, every saved model becomes
+# unusable until retrained — /forecast refuses to predict on a mismatch,
+# see app.py.
 FEATURE_COLUMNS = [
     "product_id",
     "dow", "month", "day", "is_weekend", "is_holiday", "is_payday",
-    "lag_1", "lag_7", "rolling_7", "rolling_14",
+    "lag_1", "same_dow_last_open", "days_since_last_open",
+    "rolling_7", "rolling_14",
 ]
 
 CATEGORICAL_COLUMNS = ["product_id"]
+
+# Longest window any feature needs before it stops being NaN. rolling_14
+# is the binding one. Rows below this are warm-up rows and get dropped by
+# the caller's dropna(subset=FEATURE_COLUMNS).
+WARMUP_OBSERVATIONS = 14
 
 
 def calendar_features(d: date) -> dict:
@@ -56,92 +94,120 @@ def calendar_features(d: date) -> dict:
     }
 
 
-def engineer_features(sales_df: pd.DataFrame) -> pd.DataFrame:
+def build_feature_row(product_id: int, target_date: date, history: list,
+                      prev_open_date: date = None) -> dict:
     """
-    Builds the full training feature set from cleaned daily_sales rows,
-    across ALL products at once (this is the global-model dataset).
+    THE one feature function. Training and forecasting both call this.
 
-    Expects columns: product_id, sale_date (datetime), quantity_sold.
-    Returns the same rows with all FEATURE_COLUMNS added, plus
-    quantity_sold as the target.
+    Args:
+        product_id: this product's database id.
+        target_date: the day being described (a past observation during
+            training, a future date during forecasting).
+        history: this product's zero-filled open-day series STRICTLY
+            BEFORE target_date, oldest first. Each entry needs
+            "quantity_sold" and "sale_date"; build_open_day_series()
+            produces exactly this shape. During a recursive forecast the
+            caller appends its own predictions here, which is what makes
+            day 3 depend on day 2's guess.
+        prev_open_date: the previous CONFIRMED-OPEN store date. Passed in
+            rather than read off `history` on purpose — it is a
+            store-level fact, and a product that was off the menu would
+            otherwise report a gap the store never had. None yields NaN.
 
-    CLOSED-DAY HANDLING (deliberate, do not "fix" this into a
-    zero-filled calendar grid): this function only ever computes
-    lag/rolling values from rows that actually exist in daily_sales.
-    A date with no row for a product is simply absent — not zero-filled
-    — so lag_1 naturally resolves to "the last day this product
-    actually had a recorded sale," which is correct whether that gap is
-    a single closed Sunday or a whole recent shift in operating hours.
-    Building a full product-x-date grid and filling gaps with 0 would
-    reintroduce exactly the "closed day counted as zero demand" mistake
-    documented in the paper's Step 1(a) — do not do that here.
-
-    CRITICAL: lag/rolling values are computed per product (groupby),
-    never across the whole table — mixing products would let one
-    product's sales history leak into another's lag features. This
-    still applies with the global model: pooling products into one
-    training set is about sharing the MODEL, not sharing each other's
-    lag history.
-
-    Rows with insufficient history to compute lag_7/rolling_14 (a
-    product's first ~14 recorded days) will have NaNs in those columns
-    and should be dropped before training — see model_service.py.
+    Returns a plain dict with every key in FEATURE_COLUMNS. Anything that
+    cannot be computed yet is float("nan"), which the training path drops
+    as a warm-up row and the forecast path treats as "not ready".
     """
-    sales_df = sales_df.sort_values(["product_id", "sale_date"]).copy()
-
-    cal = sales_df["sale_date"].dt.date.apply(calendar_features).apply(pd.Series)
-    sales_df = pd.concat([sales_df.reset_index(drop=True), cal.reset_index(drop=True)], axis=1)
-
-    grouped = sales_df.groupby("product_id")["quantity_sold"]
-    sales_df["lag_1"] = grouped.shift(1)
-    sales_df["lag_7"] = grouped.shift(7)
-    # shift(1) before rolling() so rolling_7 for day i uses days i-1..i-7,
-    # never day i itself — this is the off-by-one leak called out in the
-    # pipeline walkthrough.
-    #
-    # CRITICAL: must use .transform() here, not grouped.shift(1).rolling(...).
-    # grouped.shift(1) is per-product, but the flat Series it returns loses
-    # that grouping — a plain .rolling() chained onto it slides across
-    # product boundaries near the top of each product's block (rows are
-    # sorted product_id, sale_date). .transform() keeps the whole
-    # shift+rolling computation inside each group.
-    sales_df["rolling_7"] = grouped.transform(
-        lambda x: x.shift(1).rolling(window=7, min_periods=7).mean()
-    )
-    sales_df["rolling_14"] = grouped.transform(
-        lambda x: x.shift(1).rolling(window=14, min_periods=14).mean()
-    )
-
-    sales_df["product_id"] = sales_df["product_id"].astype("category")
-
-    return sales_df
-
-
-def build_forecast_feature_row(product_id: int, target_date: date, recent_quantities: list) -> dict:
-    """
-    Builds a single feature row for ONE product on ONE future date, for
-    live forecasting against the global model.
-
-    `recent_quantities` must be a chronologically-ordered list of the
-    most recent quantities for this specific product, ending the day
-    before target_date — actual sales where available, or previously
-    predicted values when doing a recursive multi-day forecast (see
-    forecast_service.py). At least 14 entries are needed to compute
-    rolling_14; fewer than that means this product isn't ready to
-    forecast yet.
-    """
-    if len(recent_quantities) < 14:
-        raise ValueError(
-            f"Need at least 14 days of recent history, got {len(recent_quantities)}"
-        )
-
     row = calendar_features(target_date)
     row["product_id"] = product_id
-    row["lag_1"] = recent_quantities[-1]
-    row["lag_7"] = recent_quantities[-7]
-    row["rolling_7"] = sum(recent_quantities[-7:]) / 7
-    row["rolling_14"] = sum(recent_quantities[-14:]) / 14
+
+    quantities = [float(h["quantity_sold"]) for h in history]
+
+    row["lag_1"] = quantities[-1] if quantities else float("nan")
+
+    # Same weekday, last time the store was open. Searched backwards
+    # through real observations instead of assuming a fixed offset, which
+    # is the whole point of replacing lag_7.
+    row["same_dow_last_open"] = float("nan")
+    target_dow = target_date.weekday()
+    for past in reversed(history):
+        if past["sale_date"].weekday() == target_dow:
+            row["same_dow_last_open"] = float(past["quantity_sold"])
+            break
+
+    row["days_since_last_open"] = (
+        float((target_date - prev_open_date).days) if prev_open_date is not None
+        else float("nan")
+    )
+
+    row["rolling_7"] = sum(quantities[-7:]) / 7 if len(quantities) >= 7 else float("nan")
+    row["rolling_14"] = sum(quantities[-14:]) / 14 if len(quantities) >= 14 else float("nan")
+
     return row
+
+
+def engineer_features(sales_df: pd.DataFrame, open_dates=None) -> pd.DataFrame:
+    """
+    Builds the full training feature set across ALL products at once
+    (this is the global-model dataset).
+
+    Expects columns: product_id, sale_date (datetime), quantity_sold.
+    `open_dates` is every CONFIRMED-OPEN store date (a set/list of
+    datetime.date). Passing None disables zero-filling and falls back to
+    "every date that has a row is an open day" — only for callers with no
+    business_days access; production always passes the real list.
+
+    Returns one row per observation in each product's zero-filled
+    open-day series, with all FEATURE_COLUMNS plus:
+      - quantity_sold: the target
+      - is_real: False for a filled zero. Training eligibility counts
+        real observations only — see filter_training_eligible().
+
+    Per-product isolation is structural now: each product's series is
+    built and walked on its own, so one product's history cannot leak
+    into another's lag features. That used to depend on getting
+    groupby(...).transform() exactly right.
+
+    Rows without enough history for rolling_14 come back with NaNs and
+    are dropped by the caller's dropna(subset=FEATURE_COLUMNS).
+    """
+    if sales_df.empty:
+        return pd.DataFrame(columns=["product_id", "sale_date", "quantity_sold", "is_real", *FEATURE_COLUMNS])
+
+    sales_df = sales_df.sort_values(["product_id", "sale_date"]).copy()
+    sales_df["_date"] = sales_df["sale_date"].dt.date
+
+    if open_dates is None:
+        open_date_set = set(sales_df["_date"])
+    else:
+        open_date_set = set(open_dates)
+    sorted_open = sorted(open_date_set)
+
+    rows = []
+    for product_id, group in sales_df.groupby("product_id", observed=True):
+        sales_by_date = dict(zip(group["_date"], group["quantity_sold"]))
+        series = build_open_day_series(sales_by_date, sorted_open)
+
+        for index, entry in enumerate(series):
+            target_date = entry["sale_date"]
+            feature_row = build_feature_row(
+                product_id=int(product_id),
+                target_date=target_date,
+                history=series[:index],
+                prev_open_date=previous_open_date(target_date, sorted_open),
+            )
+            feature_row["sale_date"] = pd.Timestamp(target_date)
+            feature_row["quantity_sold"] = float(entry["quantity_sold"])
+            feature_row["is_real"] = entry["is_real"]
+            rows.append(feature_row)
+
+    features_df = pd.DataFrame(rows)
+    if features_df.empty:
+        return pd.DataFrame(columns=["product_id", "sale_date", "quantity_sold", "is_real", *FEATURE_COLUMNS])
+
+    features_df = features_df.sort_values(["product_id", "sale_date"]).reset_index(drop=True)
+    features_df["product_id"] = features_df["product_id"].astype("category")
+    return features_df
 
 
 def apply_categorical_dtype(df: pd.DataFrame, known_categories=None) -> pd.DataFrame:

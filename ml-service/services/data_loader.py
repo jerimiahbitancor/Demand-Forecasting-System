@@ -10,6 +10,7 @@ this service IS allowed to write to).
 """
 import math
 import re
+from datetime import date
 import pandas as pd
 from config import supabase
 
@@ -429,31 +430,29 @@ def get_daily_sales(product_id: int = None) -> pd.DataFrame:
     return df
 
 
-def get_recent_sales(product_id: int, before_date, limit: int = 60) -> pd.DataFrame:
+def get_confirmed_open_dates() -> list:
     """
-    The newest `limit` sales observations for ONE product, strictly
-    before `before_date`, returned oldest -> newest.
+    Every date the owner confirmed the store was OPEN, oldest first, as
+    datetime.date objects.
 
-    Used by forecasting, which only needs recent history. Asking the
-    database for the NEWEST rows first (then flipping the order here)
-    means this always gets the latest data, no matter how many years of
-    history the product has — and it stays far under the 1,000-row cap
-    in a single request.
+    This is the calendar the zero-fill rule runs on: a date in this list
+    with no daily_sales row for a product means that product sold 0 there
+    (see services/zero_fill.py). Confirmed-CLOSED and UNCONFIRMED dates
+    are deliberately absent, so they can never be filled.
+
+    Paged — a full year of operation is ~336 rows today, but this table
+    grows one row per day forever and the 1,000-row cap would start
+    silently truncating the OLDEST history in under three years, which
+    would quietly un-fill the earliest gaps.
     """
-    response = (
-        supabase.table("daily_sales")
-        .select("product_id, sale_date, quantity_sold")
-        .eq("product_id", product_id)
-        .lt("sale_date", before_date.isoformat())
-        .order("sale_date", desc=True)
-        .limit(limit)
-        .execute()
+    rows = _fetch_all_rows(
+        lambda: supabase.table("business_days")
+        .select("business_date")
+        .eq("status", "confirmed_open")
+        .order("business_date")
     )
-    df = pd.DataFrame(response.data, columns=["product_id", "sale_date", "quantity_sold"])
-    if not df.empty:
-        df["sale_date"] = pd.to_datetime(df["sale_date"])
-        df = df.sort_values("sale_date").reset_index(drop=True)
-    return df
+    dates = {r["business_date"] for r in rows if r.get("business_date")}
+    return sorted(date.fromisoformat(d) if isinstance(d, str) else d for d in dates)
 
 
 def get_recipe_and_stock() -> pd.DataFrame:

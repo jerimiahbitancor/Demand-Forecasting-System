@@ -96,29 +96,27 @@ const tooltips = {
       </strong>
       This tells you how close your forecasts have been to what actually happened.
       <br/><br/>
+      We check it by comparing the forecast against the simplest thing you
+      could do instead: just averaging the last 7 days. If the forecast is
+      closer to your real sales than that average, it is worth using.
+      <br/><br/>
       <div style={{ margin: '8px 0' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '4px' }}>
           <span style={{ color: '#22c55e', fontWeight: 'bold' }}>●</span>
-          <span><strong>Above 90%</strong> — Excellent. You can rely on these numbers.</span>
-        </div>
-        <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '4px' }}>
-          <span style={{ color: '#60a5fa', fontWeight: 'bold' }}>●</span>
-          <span><strong>80-90%</strong> — Good. Still useful for planning.</span>
-        </div>
-        <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '4px' }}>
-          <span style={{ color: '#fbbf24', fontWeight: 'bold' }}>●</span>
-          <span><strong>70-80%</strong> — Fair. Use with caution.</span>
+          <span><strong>Better than a simple average</strong> — the forecast is adding real value.</span>
         </div>
         <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-          <span style={{ color: '#ef4444', fontWeight: 'bold' }}>●</span>
-          <span><strong>Below 70%</strong> — Low. Consider uploading more sales data.</span>
+          <span style={{ color: '#fbbf24', fontWeight: 'bold' }}>●</span>
+          <span><strong>Not yet better</strong> — upload more sales data and it should improve.</span>
         </div>
       </div>
       <br/>
       Accurate forecasts help you order ingredients closer to actual demand, reducing waste and stockouts.
       <br/><br/>
       <span style={{ color: '#94a3b8', fontSize: '12px' }}>
-        MAPE = (1/n) × Σ |(Actual − Forecast) / Actual| × 100
+        Accuracy = 100% − WMAPE, where WMAPE = total servings missed ÷ total
+        servings sold. Counting one total against another keeps a dish that
+        sells one or two a day from swamping the number.
       </span>
     </div>
   ),
@@ -188,12 +186,13 @@ const tooltips = {
       <strong style={{ color: '#FEB161', display: 'block', marginBottom: '6px' }}>
         Accuracy Over Time
       </strong>
-      Plots daily or weekly accuracy across a rolling window (last 30 days).
+      Plots the accuracy of each training run, newest last.
       <br/><br/>
-      The <strong style={{ color: '#fbbf24' }}>80% threshold line</strong> marks the boundary between "Good" and "Fair" performance.
+      Runs from before the accuracy measure changed are left out rather than
+      drawn as zero, so the line may start later than your first training run.
       <br/><br/>
       <span style={{ color: '#94a3b8', fontSize: '12px' }}>
-        Accuracy % = 100% − MAPE
+        Accuracy % = 100% − WMAPE
       </span>
     </div>
   ),
@@ -257,8 +256,10 @@ function AccuracyChart({ data }) {
   const max = 100;
   const linePath = buildLinePath(data, width, height, min, max);
   const areaPath = `${linePath} L${width},${height} L0,${height} Z`;
-  const thresholdY = height - ((80 - min) / (max - min)) * height;
-  const excellentY = height - ((90 - min) / (max - min)) * height;
+  // The 80% and 90% reference lines are gone: they were the Lewis (1982)
+  // MAPE band boundaries, and accuracy is WMAPE-based now with no
+  // equivalent published bands. Drawing them would imply a standard that
+  // does not exist for this metric.
 
   return (
     <Tippy
@@ -275,20 +276,6 @@ function AccuracyChart({ data }) {
         <svg viewBox={`0 0 ${width} ${height}`} className="accuracy-chart" preserveAspectRatio="none">
           <path d={areaPath} className="accuracy-chart-area" />
           <path d={linePath} className="accuracy-chart-line" />
-          <line
-            x1="0"
-            y1={thresholdY}
-            x2={width}
-            y2={thresholdY}
-            className="accuracy-chart-threshold"
-          />
-          <line
-            x1="0"
-            y1={excellentY}
-            x2={width}
-            y2={excellentY}
-            className="accuracy-chart-excellent"
-          />
         </svg>
       </div>
     </Tippy>
@@ -432,19 +419,41 @@ function Forecasting() {
     [apiData]
   );
   const latestAccuracy = apiData?.accuracy?.value ?? null;
+  // errorRate is WMAPE now: "off by about N% of total sales".
   const errorRate = apiData?.accuracy?.errorRate != null ? Number(apiData.accuracy.errorRate).toFixed(1) : null;
-  const accuracyTierLabel = apiData?.accuracy?.tier?.label || null;
-  // Lewis 1982 tier captions, matching the system module spec's table
-  // (Forecasting > 1.1 Forecast Accuracy) exactly — not hardcoded to
-  // always say "Excellent" regardless of the real number.
-  const TIER_CAPTIONS = {
-    Excellent: { css: "success", accuracy: "Excellent — reliable for planning", error: "Excellent — below 10% threshold" },
-    Good: { css: "success", accuracy: "Good — reliable with minor safety buffer recommended", error: "Good — minor safety buffer recommended" },
-    Fair: { css: "warning", accuracy: "Fair — use as rough guide, increase safety buffer", error: "Fair — increase safety buffer" },
-    Low: { css: "danger", accuracy: "Low — upload more sales data to improve", error: "Low — upload more sales data to improve" },
-  };
-  const tierInfo = accuracyTierLabel ? TIER_CAPTIONS[accuracyTierLabel] : null;
-  const accuracyCssSuffix = tierInfo?.css || "success";
+  const baselineErrorRate = apiData?.accuracy?.baselineErrorRate != null
+    ? Number(apiData.accuracy.baselineErrorRate).toFixed(1)
+    : null;
+  const beatsBaseline = apiData?.accuracy?.beatsBaseline ?? null;
+  // Two states, not four. The old four came from the Lewis (1982) MAPE
+  // bands, which do not apply to WMAPE — "good" is now defined by beating
+  // the 7-day average, so there is nothing to grade on a curve.
+  const accuracyCssSuffix = beatsBaseline === false ? "warning" : "success";
+
+  // The average number of servings missed per dish per day, so the owner
+  // has something physical to hold on to next to the percentage. Derived
+  // from real values only; null unless we have all three.
+  const platesPerDishPerDay = (() => {
+    const mae = apiData?.modelInsights?.trainingInfo?.mae;
+    return mae != null ? Number(mae).toFixed(1) : null;
+  })();
+
+  // The sentence the owner approved, built from real numbers. No
+  // hardcoded percentages — if a value is missing the clause is dropped
+  // rather than invented.
+  const accuracySentence = (() => {
+    if (latestAccuracy === null || errorRate === null) return null;
+    const missedClause = platesPerDishPerDay
+      ? `, about ${platesPerDishPerDay} ${platesPerDishPerDay === "1.0" ? "plate" : "plates"} per dish per day`
+      : "";
+    const head = `We compared past forecasts with what you actually sold. Overall, forecasts were off by about ${errorRate}% of total sales${missedClause}.`;
+    if (baselineErrorRate === null) {
+      return `${head} No simple-average comparison was recorded for this model.`;
+    }
+    return beatsBaseline
+      ? `${head} A simple 7-day average was off by ${baselineErrorRate}%, so the forecast is doing better than guessing from the average.`
+      : `${head} A simple 7-day average was off by ${baselineErrorRate}%, so the forecast is not yet better than a simple average. It should improve as more sales are uploaded.`;
+  })();
 
   const predictionRows = apiData?.prediction?.rows || [];
   const salesPrediction = buildPredictionSet(predictionRows, true);
@@ -501,7 +510,7 @@ function Forecasting() {
     const errorRateText = errorRate !== null ? `${errorRate}%` : "N/A";
     const metrics = [
       { label: "Forecast Accuracy", value: accuracyText, caption: "current model accuracy" },
-      { label: "Error Rate", value: errorRateText, caption: "average forecast error" },
+      { label: "Error Rate (WMAPE)", value: errorRateText, caption: "share of total servings missed" },
       { label: "Forecast Days", value: reportSales.points.length, caption: "tracked sales points" },
       { label: "Demand Days", value: reportDemand.points.length, caption: "tracked demand points" },
     ];
@@ -627,38 +636,45 @@ function Forecasting() {
                   <p className="metric-label">Forecast Accuracy</p>
                   <p className={`metric-value metric-value--${accuracyCssSuffix}`}>{latestAccuracy.toFixed(1)}%</p>
                   <p className={`metric-caption metric-caption--${accuracyCssSuffix}`}>
-                    {tierInfo?.accuracy}
+                    {beatsBaseline === false
+                      ? "Not yet better than a simple average"
+                      : beatsBaseline === true
+                        ? "Better than a simple 7-day average"
+                        : "No simple-average comparison recorded"}
                   </p>
                 </div>
                 <div className="metric-box">
-                  <p className="metric-label">Forecast error rate</p>
-                  <p className={`metric-value metric-value--${accuracyCssSuffix}`}>{errorRate}%</p>
+                  <p className="metric-label">A simple 7-day average</p>
+                  <p className={`metric-value metric-value--${accuracyCssSuffix}`}>
+                    {apiData?.accuracy?.baselineValue != null
+                      ? `${Number(apiData.accuracy.baselineValue).toFixed(1)}%`
+                      : "N/A"}
+                  </p>
                   <p className={`metric-caption metric-caption--${accuracyCssSuffix}`}>
-                    {tierInfo?.error}
+                    what you'd get without the model
                   </p>
                 </div>
               </div>
 
-              {latestAccuracy < 80 && (
+              {beatsBaseline === false && (
                 <div className="accuracy-warning-banner">
                   <span className="accuracy-warning-icon">⚠️</span>
                   <div>
-                    <p className="accuracy-warning-title">Accuracy is below the reliable threshold.</p>
-                    <p className="accuracy-warning-body">
-                      Possible reasons: fewer than 28 days of sales history (new product), sales data not uploaded recently, or an unusual event (holiday, closure, weather) affected recent sales.
+                    <p className="accuracy-warning-title">
+                      The forecast is not yet better than a simple 7-day average.
                     </p>
                     <p className="accuracy-warning-body">
-                      <strong>What to do:</strong> Upload your most recent sales data to retrain the model.
+                      Possible reasons: not much sales history yet, sales data not uploaded recently, or an unusual stretch (holiday, closure, weather) that no pattern could have predicted.
+                    </p>
+                    <p className="accuracy-warning-body">
+                      <strong>What to do:</strong> Keep uploading your daily sales, then retrain. More history is what closes this gap.
                     </p>
                   </div>
                 </div>
               )}
 
               <InfoBanner variant="info">
-                <strong>What is this metric?</strong> This percentage tells you how close your
-                forecasts are to real-world results on average. Your current error rate of {errorRate}% means your
-                predictions are typically accurate to within {latestAccuracy.toFixed(1)}% of the actual
-                totals, whether the guess was slightly too high or too low.
+                <strong>Forecast Accuracy: {latestAccuracy.toFixed(1)}%</strong> — {accuracySentence}
               </InfoBanner>
             </>
           )}
@@ -667,15 +683,11 @@ function Forecasting() {
             <p className="chart-block-title">Accuracy over time</p>
             <p className="chart-block-subtitle">Accuracy improves as more data is uploaded</p>
             <AccuracyChart data={accuracyHistory} />
+            {/* The 80%/90% threshold entries are gone with their lines —
+                they were Lewis (1982) MAPE bands and do not apply to WMAPE. */}
             <div className="chart-legend">
               <span className="legend-item">
                 <span className="legend-swatch legend-swatch--success" /> Accuracy %
-              </span>
-              <span className="legend-item">
-                <span className="legend-swatch legend-swatch--warning" /> Good threshold (80%)
-              </span>
-              <span className="legend-item">
-                <span className="legend-swatch legend-swatch--excellent" /> Excellent threshold (90%)
               </span>
             </div>
           </div>
@@ -955,20 +967,29 @@ function Forecasting() {
               <div className="metric-box">
                 <p className="metric-label">Forecast Accuracy</p>
                 <p className={`metric-value metric-value--${accuracyCssSuffix}`}>{latestAccuracy.toFixed(1)}%</p>
-                <p className={`metric-caption metric-caption--${accuracyCssSuffix}`}>{tierInfo?.accuracy}</p>
+                <p className={`metric-caption metric-caption--${accuracyCssSuffix}`}>
+                  {beatsBaseline === false
+                    ? "Not yet better than a simple average"
+                    : beatsBaseline === true
+                      ? "Better than a simple 7-day average"
+                      : "No simple-average comparison recorded"}
+                </p>
               </div>
               <div className="metric-box">
-                <p className="metric-label">Forecast error rate</p>
-                <p className={`metric-value metric-value--${accuracyCssSuffix}`}>{errorRate}%</p>
-                <p className={`metric-caption metric-caption--${accuracyCssSuffix}`}>{tierInfo?.error}</p>
+                <p className="metric-label">A simple 7-day average</p>
+                <p className={`metric-value metric-value--${accuracyCssSuffix}`}>
+                  {apiData?.accuracy?.baselineValue != null
+                    ? `${Number(apiData.accuracy.baselineValue).toFixed(1)}%`
+                    : "N/A"}
+                </p>
+                <p className={`metric-caption metric-caption--${accuracyCssSuffix}`}>
+                  what you'd get without the model
+                </p>
               </div>
             </div>
 
             <InfoBanner variant="info">
-              <strong>What is this metric?</strong> This percentage tells you how close your
-              forecasts are to real-world results on average. Your current error rate of {errorRate}% means your
-              predictions are typically accurate to within {latestAccuracy.toFixed(1)}% of the actual
-              totals, whether the guess was slightly too high or too low.
+              <strong>Forecast Accuracy: {latestAccuracy.toFixed(1)}%</strong> — {accuracySentence}
             </InfoBanner>
           </>
         )}
@@ -981,12 +1002,6 @@ function Forecasting() {
             <span className="legend-item">
               <span className="legend-swatch legend-swatch--success" /> Accuracy %
             </span>
-            <span className="legend-item">
-              <span className="legend-swatch legend-swatch--warning" /> Good threshold (80%)
-            </span>
-              <span className="legend-item">
-                <span className="legend-swatch legend-swatch--excellent" /> Excellent threshold (90%)
-              </span>
           </div>
         </div>
         <p className="chart-block-subtitle">Accuracy improves as more sales data is uploaded.</p>
