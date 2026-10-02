@@ -26,7 +26,7 @@ import pandas as pd
 from services.feature_engineering import (
     build_feature_row, apply_categorical_dtype, FEATURE_COLUMNS, WARMUP_OBSERVATIONS,
 )
-from services.data_loader import get_daily_sales, get_recent_open_dates, get_sales_between
+from services.data_loader import get_daily_sales, get_confirmed_open_dates
 from services.business_logic import classify_demand
 from services.zero_fill import build_open_day_series
 
@@ -47,7 +47,31 @@ def _is_operating_day(d: date, operating_days: set) -> bool:
     return d.weekday() in operating_days
 
 
-def _get_recent_series(product_id: int, before_date: date, lookback_open_days: int = 60) -> list:
+def recent_series_from(sales_by_date: dict, open_dates, before_date: date,
+                       lookback_open_days: int = 60) -> list:
+    """
+    Pure: the newest `lookback_open_days` entries of the product's
+    zero-filled series, built over its FULL history and only then trimmed.
+
+    The order matters. Building the series from just the last 60 open days
+    (the Oct 1 2026 first version) made the product's first sale INSIDE
+    the window look like its first sale ever, so every open day before it
+    went unfilled. A product last sold 20 open days before the window
+    started and again near its end came back with 4 observations instead
+    of 60 — skipped as "not enough history" even though it was trained —
+    and any product with a gap at the window edge got different lag and
+    rolling values here than training saw for the same dates. Building the
+    whole series exactly as engineer_features() does and keeping the tail
+    makes the two identical by construction (tests/test_feature_parity.py).
+    """
+    earlier_open = [d for d in open_dates if d < before_date]
+    earlier_sales = {d: q for d, q in sales_by_date.items() if d < before_date}
+    series = build_open_day_series(earlier_sales, earlier_open)
+    return series[-lookback_open_days:]
+
+
+def _get_recent_series(product_id: int, before_date: date, lookback_open_days: int = 60,
+                       open_dates=None) -> list:
     """
     The product's zero-filled open-day series for the most recent
     `lookback_open_days` CONFIRMED-OPEN days before `before_date`.
@@ -67,12 +91,19 @@ def _get_recent_series(product_id: int, before_date: date, lookback_open_days: i
 
     Real recorded sales only — never predictions. The recursive step in
     generate_forecast() appends its own predictions on top of this.
+
+    Reads the product's full history (one product is a few hundred rows,
+    one page) and trims AFTER zero-filling — see recent_series_from() for
+    why trimming first was wrong. `open_dates` should be loaded once per
+    forecast run by the caller; it is fetched here only as a fallback.
     """
-    open_dates = get_recent_open_dates(before_date, limit=lookback_open_days)
-    if not open_dates:
-        return []
-    sales_by_date = get_sales_between(product_id, open_dates[0], before_date)
-    return build_open_day_series(sales_by_date, open_dates)
+    if open_dates is None:
+        open_dates = get_confirmed_open_dates()
+    sales_df = get_daily_sales(product_id)
+    sales_by_date = {}
+    if not sales_df.empty:
+        sales_by_date = dict(zip(sales_df["sale_date"].dt.date, sales_df["quantity_sold"].astype(float)))
+    return recent_series_from(sales_by_date, open_dates, before_date, lookback_open_days)
 
 
 def generate_forecast(
@@ -83,6 +114,7 @@ def generate_forecast(
     horizon_days: int = 1,
     start_offset: int = 0,
     operating_days: set = None,
+    open_dates=None,
 ) -> list:
     """
     Generates `horizon_days` forecasts for one product against the
@@ -116,7 +148,7 @@ def generate_forecast(
         operating_days = {0, 1, 2, 3, 4}  # Mon-Fri fallback if caller didn't pass one
 
     today = date.today()
-    history = _get_recent_series(product_id, before_date=today)
+    history = _get_recent_series(product_id, before_date=today, open_dates=open_dates)
 
     if len(history) < WARMUP_OBSERVATIONS:
         raise ModelNotReadyError(

@@ -84,7 +84,7 @@ from services.preprocessing import (  # noqa: E402
 )
 from services.feature_engineering import (  # noqa: E402
     engineer_features, FEATURE_COLUMNS,
-    build_forecast_feature_row, apply_categorical_dtype,
+    build_feature_row, apply_categorical_dtype, WARMUP_OBSERVATIONS,
 )
 from services.model_service import (  # noqa: E402
     filter_training_eligible, chronological_split, train_global_model,
@@ -1010,20 +1010,29 @@ def stage_forecast_horizon(eligible_df: pd.DataFrame, model, known_categories: l
         start_dates = _pick_horizon_start_dates(actual_series, test_start, test_end)
 
         for start_date in start_dates:
-            history = actual_series[actual_series["sale_date"] < start_date]
-            recent_quantities = history.tail(60)["quantity_sold"].tolist()
-            if len(recent_quantities) < 14:
+            prior = actual_series[actual_series["sale_date"] < start_date].tail(60)
+            # Dated entries, not bare numbers: same_dow_last_open searches the
+            # history by weekday, so each value must carry its date. This is
+            # the same shape forecast_service passes to build_feature_row().
+            recent = [
+                {"sale_date": d.date(), "quantity_sold": float(q)}
+                for d, q in zip(prior["sale_date"], prior["quantity_sold"])
+            ]
+            if len(recent) < WARMUP_OBSERVATIONS:
                 skipped_starts.append({
                     "product_id": pid, "start_date": start_date.date(),
-                    "reason": f"only {len(recent_quantities)} prior days available (need >= 14)",
+                    "reason": f"only {len(recent)} prior days available (need >= {WARMUP_OBSERVATIONS})",
                 })
                 continue
 
-            recent = list(recent_quantities)
             for day_offset in range(7):
                 target_date = (start_date + pd.Timedelta(days=day_offset)).date()
 
-                feature_row = build_forecast_feature_row(pid, target_date, recent)
+                # Every calendar day is simulated (see the note in this
+                # section's HTML), so the previous "open" day is simply the
+                # last entry in the history.
+                feature_row = build_feature_row(pid, target_date, recent,
+                                                prev_open_date=recent[-1]["sale_date"])
                 X = pd.DataFrame([feature_row])
                 X = apply_categorical_dtype(X, known_categories=known_categories)
                 X = X[FEATURE_COLUMNS]
@@ -1039,7 +1048,7 @@ def stage_forecast_horizon(eligible_df: pd.DataFrame, model, known_categories: l
                 })
                 # feed this day's prediction back in as the next day's lag_1 — the
                 # recursive step, mirroring generate_forecast() exactly.
-                recent.append(predicted)
+                recent.append({"sale_date": target_date, "quantity_sold": predicted})
 
     records_df = pd.DataFrame(records)
     if records_df.empty:
@@ -1094,7 +1103,7 @@ def stage_forecast_horizon(eligible_df: pd.DataFrame, model, known_categories: l
     <p>Simulated for both representative products (product {high_id}, high-volume; product
     {low_id}, low-volume) across {n_combos} (product, start date) combination(s) spread evenly
     across the test period.{skipped_note} Each day's prediction is fed back in as the next day's
-    <code>lag_1</code> via <code>build_forecast_feature_row()</code> — the exact function
+    <code>lag_1</code> via <code>build_feature_row()</code> — the exact function
     <code>generate_forecast()</code> calls, not a reimplementation. Known actual values are used
     here only to SCORE the simulation after the fact — they are never fed into the simulation
     itself.</p>

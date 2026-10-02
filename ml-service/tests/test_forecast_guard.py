@@ -76,6 +76,7 @@ def install_stubs(metadata, model):
     )
     flask_app.get_safety_buffer_percentage = lambda: 15.0
     flask_app.get_operating_days = lambda: {0, 1, 2, 3, 4, 5}
+    flask_app.get_confirmed_open_dates = lambda: []
 
 
 print("test_forecast_guard.py")
