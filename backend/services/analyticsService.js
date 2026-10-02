@@ -704,6 +704,22 @@ async function getIngredientDailyNeeds(date) {
   return needs;
 }
 
+// ingredientId set for every ingredient that appears in at least one product
+// recipe. Deliberately independent of forecasts: an ingredient can be mapped
+// yet still read 'No Forecast' when none of its products have a forecast row
+// for the target date, so getIngredientDailyNeeds() cannot stand in for this
+// or an unmapped count derived from it would be wrong.
+async function getMappedIngredientIds() {
+  const recipeMap = await getRecipeMap();
+  const ids = new Set();
+  for (const items of recipeMap.values()) {
+    for (const item of items) {
+      ids.add(item.ingredientId);
+    }
+  }
+  return ids;
+}
+
 async function getIngredientDemandAnalytics({ date, weekStart } = {}) {
   const safetyBufferPct = await getSafetyBufferPercentage();
   const bufferMultiplier = 1 + safetyBufferPct / 100;

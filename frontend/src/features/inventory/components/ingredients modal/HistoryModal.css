@@ -2,6 +2,11 @@
 
 .inventory-history-modal .inventory-history-header {
   display: flex;
+  /* flex-shrink:0 matches .inventory-modal-header. Without it this header is a
+     shrinkable flex child of a card that is forced to height:100dvh on phones,
+     so a long history table squeezed it below its content height and the title
+     overlapped the body underneath. */
+  flex-shrink: 0;
   justify-content: space-between;
   align-items: center;
   padding: 1rem;

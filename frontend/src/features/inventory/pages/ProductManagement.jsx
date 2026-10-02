@@ -72,6 +72,37 @@ const cacheSuffixForFilter = (filter) => {
   return api === 'all' ? '_all' : `_${api}`;
 };
 
+// Rows per page at desktop / tablet widths.
+const ITEMS_PER_PAGE = 10;
+
+// Rows per page once the table becomes one-card-per-row. Kept in step with the
+// 640px tier in ProductManagement.css.
+const COMPACT_ITEMS_PER_PAGE = 5;
+
+// Must match the 640px table tier below.
+const COMPACT_BREAKPOINT = 640;
+
+function readCompactViewport() {
+  if (typeof window === "undefined") return false;
+  return window.matchMedia(`(max-width: ${COMPACT_BREAKPOINT}px)`).matches;
+}
+
+function useCompactViewport() {
+  // Seeded during the first render so a phone never paints ten rows and then
+  // reflows to five, which would land the user past the end of their page.
+  const [isCompact, setIsCompact] = useState(readCompactViewport);
+
+  useEffect(() => {
+    const query = window.matchMedia(`(max-width: ${COMPACT_BREAKPOINT}px)`);
+    const sync = (event) => setIsCompact(event.matches);
+
+    query.addEventListener("change", sync);
+    return () => query.removeEventListener("change", sync);
+  }, []);
+
+  return isCompact;
+}
+
 const ProductManagement = () => {
   const { getToken } = useAuth();
 
@@ -1232,9 +1263,20 @@ const ProductManagement = () => {
   }, [mappingData, searchTerm, selectedCategory, sortBy, statusFilter, foodCostThreshold]);
 
   // ============ PAGINATION ============
-  const itemsPerPage = 10;
+  // Phones get fewer rows: at this width the table switches to one card per row
+  // (see the 640px tier in ProductManagement.css), and each card is roughly
+  // three times the height of a table row, so ten of them is a very long scroll
+  // before reaching the controls. Matches ROWS_PER_PAGE in the analytics tables.
+  const isCompact = useCompactViewport();
+  const itemsPerPage = isCompact ? COMPACT_ITEMS_PER_PAGE : ITEMS_PER_PAGE;
   const totalPages = Math.ceil(getFilteredData.length / itemsPerPage) || 1;
-  const startIndex = (currentPage - 1) * itemsPerPage;
+  // currentPage is restored from sessionStorage and is not reset when the page
+  // size changes, so halving itemsPerPage (or a phone rotating) can leave it
+  // pointing past the end. Deriving the page to render rather than writing back
+  // in an effect keeps this a pure render and stops startIndex from slicing
+  // past the data, which would render an empty table.
+  const activePage = Math.min(currentPage, totalPages);
+  const startIndex = (activePage - 1) * itemsPerPage;
   const currentData = getFilteredData.slice(startIndex, startIndex + itemsPerPage);
 
   const allPageSelected =
@@ -1249,25 +1291,23 @@ const ProductManagement = () => {
       })
       .every((i) => selectedIds.includes(i.id));
 
-  const getPageNumbers = useMemo(() => {
-    const pages = [];
-    if (totalPages <= 7) {
-      for (let i = 1; i <= totalPages; i++) pages.push(i);
-    } else {
-      pages.push(1);
-      if (currentPage > 3) pages.push("...");
-      for (
-        let i = Math.max(2, currentPage - 1);
-        i <= Math.min(totalPages - 1, currentPage + 1);
-        i++
-      ) {
-        pages.push(i);
-      }
-      if (currentPage < totalPages - 2) pages.push("...");
-      pages.push(totalPages);
+  // Up to five plain numbers: first page, last page, and the active page with a
+// neighbour either side. The "..." gap markers this used to push were disabled
+// buttons, which on a phone read as a broken fifth control next to four real
+// ones. A Set handles the short list for free - with five or fewer pages the
+// window covers every one of them, so no separate case is needed - and drops the
+// duplicates that appear when the active page is already the first or last.
+const getPageNumbers = useMemo(() => {
+    const pages = new Set([1, totalPages]);
+    for (
+      let i = Math.max(2, activePage - 1);
+      i <= Math.min(totalPages - 1, activePage + 1);
+      i++
+    ) {
+      pages.add(i);
     }
-    return pages;
-  }, [totalPages, currentPage]);
+    return [...pages].sort((a, b) => a - b);
+  }, [totalPages, activePage]);
 
   const [selectedItem, setSelectedItem] = useState(null);
   const [selectedLowMarginItem, setSelectedLowMarginItem] = useState(null);
@@ -1904,19 +1944,25 @@ const ProductManagement = () => {
               <div className="pagination-left">
                 <button 
                   className="page-btn"
-                  onClick={() => setCurrentPage(Math.max(1, currentPage - 1))}
-                  disabled={currentPage === 1}
+                  onClick={() => setCurrentPage(Math.max(1, activePage - 1))}
+                  disabled={activePage === 1}
+                  aria-label="Previous page"
                 >
-                  <FaChevronLeft /> Previous
+                  <FaChevronLeft />
+                  {/* Wrapped so CSS can drop just the word on narrow screens and
+                      keep the chevron as a ~44px target. A bare text node cannot
+                      be hidden on its own. */}
+                  <span className="page-btn-label">Previous</span>
                 </button>
               </div>
               <div className="pagination-center">
-                {getPageNumbers.map((page, index) => (
+                {getPageNumbers.map((page) => (
                   <button
-                    key={index}
-                    className={`page-number ${page === currentPage ? 'active' : ''} ${page === '...' ? 'dots' : ''}`}
-                    onClick={() => typeof page === 'number' && setCurrentPage(page)}
-                    disabled={page === '...'}
+                    key={page}
+                    className={`page-number ${page === activePage ? 'active' : ''}`}
+                    onClick={() => setCurrentPage(page)}
+                    aria-label={`Page ${page}`}
+                    aria-current={page === activePage ? 'page' : undefined}
                   >
                     {page}
                   </button>
@@ -1925,10 +1971,12 @@ const ProductManagement = () => {
               <div className="pagination-right">
                 <button 
                   className="page-btn"
-                  onClick={() => setCurrentPage(Math.min(totalPages, currentPage + 1))}
-                  disabled={currentPage === totalPages}
+                  onClick={() => setCurrentPage(Math.min(totalPages, activePage + 1))}
+                  disabled={activePage === totalPages}
+                  aria-label="Next page"
                 >
-                  Next <FaChevronRight />
+                  <span className="page-btn-label">Next</span>
+                  <FaChevronRight />
                 </button>
               </div>
             </div>

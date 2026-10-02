@@ -15,9 +15,11 @@
   margin-bottom: 12px;
 }
 
+/* Three columns: label, bar, value. The value sits outside the track so a short
+   bar can never clip or swallow it. */
 .demand-bar-row {
   display: grid;
-  grid-template-columns: 130px 1fr;
+  grid-template-columns: 130px 1fr auto;
   min-width: 0;
   align-items: center;
   gap: 12px;
@@ -40,19 +42,22 @@
 
 .demand-bar-fill {
   height: 100%;
-  display: flex;
-  align-items: center;
-  justify-content: flex-end;
   min-width: 0;
-  padding-right: 10px;
   border-radius: 6px;
   transition: width 0.3s ease;
 }
 
+/* Dark text on the card background rather than white on the fill, so it stays
+   readable whichever demand zone the bar is in. min-width keeps the numbers in
+   one column down the chart; nowrap plus auto-sizing lets a four-figure value
+   widen the column instead of being clipped. */
 .demand-bar-value {
   font-size: 12px;
   font-weight: 700;
-  color: #ffffff;
+  color: var(--color-text-primary);
+  white-space: nowrap;
+  text-align: right;
+  min-width: 78px;
 }
 
 .bar--high { background-color: #e05555; }
@@ -183,7 +188,16 @@
    640px. The recharts container is a flex-column child and needs min-width: 0
    or the responsive SVG pushes the card wider than the viewport. */
 @media (max-width: 1024px) {
-  .demand-bar-row,
+  /* DemandBar keeps its value column; only the label gives up width. */
+  .demand-bar-row {
+    grid-template-columns: 110px 1fr auto;
+    gap: 10px;
+  }
+
+  .demand-bar-value {
+    min-width: 72px;
+  }
+
   .ratio-bar-row {
     grid-template-columns: 110px 1fr;
     gap: 10px;
@@ -194,8 +208,15 @@
   }
 }
 
+/* Phones: 320px has only 272px of usable width once the 12px page padding and
+   12px card padding are off, so the label and the value column both shrink and
+   the bar takes what is left. */
 @media (max-width: 640px) {
-  .demand-bar-row,
+  .demand-bar-row {
+    grid-template-columns: 84px 1fr auto;
+    gap: 8px;
+  }
+
   .ratio-bar-row {
     grid-template-columns: 90px 1fr;
   }
@@ -203,6 +224,11 @@
   .demand-bar-label,
   .ratio-bar-label {
     font-size: 11px;
+  }
+
+  .demand-bar-value {
+    font-size: 11px;
+    min-width: 62px;
   }
 }
 

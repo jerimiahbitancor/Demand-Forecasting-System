@@ -442,7 +442,11 @@ function AccountSettings() {
               </div>
               {errors.confirmPassword && <div className="error-message">{errors.confirmPassword}</div>}
             </div>
-            {password.length > 0 && (
+            {/* Checklist appears once the user starts typing and disappears the
+                moment every rule passes, so a satisfied password leaves a short
+                card instead of a wall of green ticks the user has to scroll
+                past. It comes back if a later keystroke breaks a rule again. */}
+            {password.length > 0 && !rules.every((rule) => rule.test) && (
               <div className="password-requirements">
                 <p className="requirements-heading">Password must include:</p>
                 <ul className="requirements-list">

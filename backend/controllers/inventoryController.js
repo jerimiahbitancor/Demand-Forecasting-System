@@ -118,6 +118,19 @@ const getInventoryItems = async (req, res) => {
       return counts;
     }, { excessStock: 0, normalStock: 0, lowStock: 0, criticalStock: 0 });
 
+    // ---- Unmapped ingredients ----
+    // Ingredients that exist in stock but appear in no product recipe. Counted
+    // against the recipe map rather than dailyNeeds: an ingredient with a
+    // recipe but no forecast row for today also reports 'No Forecast', and
+    // treating that as unmapped would flag healthy ingredients. Archived rows
+    // are excluded unless the caller asked for them, so the card agrees with
+    // the "Active inventory items" framing of the Total Items card.
+    const mappedIngredientIds = await analyticsService.getMappedIngredientIds();
+    const unmappedIngredients = (summaryData || []).filter((item) => {
+      if (item.is_archived) return false;
+      return !mappedIngredientIds.has(item.id);
+    }).length;
+
     // Main query with pagination
     let query = supabaseAdmin
       .from('ingredients')
@@ -231,7 +244,8 @@ const getInventoryItems = async (req, res) => {
         outOfStockItems,
         excessStock: stockCounts.excessStock,
         normalStock: stockCounts.normalStock,
-        criticalStock: stockCounts.criticalStock
+        criticalStock: stockCounts.criticalStock,
+        unmappedIngredients
       }
     });
   } catch (error) {

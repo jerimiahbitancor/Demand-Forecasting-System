@@ -63,7 +63,8 @@ const IngredientManagement = () => {
     excessStock: 0,
     normalStock: 0,
     criticalStock: 0,
-    archivedItems: 0
+    archivedItems: 0,
+    unmappedIngredients: 0
   });
   
   // Modal States
@@ -317,7 +318,8 @@ const IngredientManagement = () => {
           excessStock: summary.excessStock ?? 0,
           normalStock: summary.normalStock ?? 0,
           criticalStock: summary.criticalStock ?? 0,
-          archivedItems: summary.archivedItems ?? 0
+          archivedItems: summary.archivedItems ?? 0,
+          unmappedIngredients: summary.unmappedIngredients ?? 0
         });
       }
     } catch (error) {
@@ -862,7 +864,7 @@ const IngredientManagement = () => {
                 </span>
               </Tippy>
             </div>
-            <p className="inventory-stat-card-value">2</p>
+            <p className="inventory-stat-card-value">{summaryStats.unmappedIngredients}</p>
             <p className="inventory-stat-card-change">not in any products</p>
           </div>
         </div>

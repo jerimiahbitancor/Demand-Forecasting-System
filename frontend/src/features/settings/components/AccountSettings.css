@@ -341,15 +341,33 @@
     font-size: 13px;
   }
 
+  /* Navbar height. Mirrors the fixed 72px on .navbar in
+     frontend/src/features/components/Navbar/Navbar.css, which is the same value
+     that file already hardcodes for its mobile menu's max-height. Declared here
+     because the modal is a sibling of the navbar in a different stylesheet and
+     has no way to read it at runtime. Keep the two in sync if the navbar grows. */
   .account-modal-overlay {
+    --navbar-height: 72px;
+
     position: fixed;
     inset: 0;
     background: rgba(28, 38, 50, 0.55);
     display: flex;
-    align-items: center;
+    /* margin:auto on the card, not align-items:center here: auto margins centre
+       without clipping the top edge when the content is taller than the box. */
     justify-content: center;
     z-index: 1200;
     padding: 24px;
+    /* The navbar is sticky at the top of every authenticated page. Padding the
+       overlay's content box down by its height centres the card in the space
+       BELOW the navbar rather than in the whole viewport, so a tall dialog can
+       never be drawn on top of it. The backdrop itself still spans the full
+       viewport, which keeps the navbar dimmed and stops it being clicked while
+       the dialog is open. */
+    padding-top: calc(var(--navbar-height) + 24px);
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    -webkit-overflow-scrolling: touch;
   }
 
   .account-modal-card {
@@ -364,6 +382,15 @@
     display: flex;
     flex-direction: column;
     gap: 18px;
+    /* Centres within the padded content box and caps the card to the height
+       left below the navbar. The password stage is the tall one (two fields
+       plus the rules checklist), so without this cap it ran off the bottom of
+       a short or landscape screen and the actions row became unreachable. The
+       card scrolls internally instead. */
+    margin: auto;
+    max-height: 100%;
+    overflow-y: auto;
+    -webkit-overflow-scrolling: touch;
   }
 
   .modal-header {
@@ -443,6 +470,89 @@
     align-items: center;
     justify-content: center;
     text-align: center;
+  }
+
+  /* Phones: tighten the card so it takes up less of the already-short space
+     below the navbar. Declared before the 560px tier below so that tier's
+     button rules still win under 560px. */
+  @media (max-width: 640px) {
+    .account-modal-overlay {
+      padding: 16px;
+      padding-top: calc(var(--navbar-height) + 16px);
+    }
+
+    .account-modal-card {
+      padding: 20px 18px;
+      gap: 14px;
+      /* Full-bleed on the narrowest phones: the 16px gutters were pure loss
+         once the card is already 400px wide at most. */
+      border-radius: 14px;
+    }
+
+    .modal-title {
+      font-size: 19px;
+      margin-bottom: 8px;
+    }
+
+    .modal-text {
+      font-size: 13px;
+      line-height: 1.6;
+      margin-bottom: 14px;
+    }
+
+    .form-input {
+      padding: 12px 14px;
+    }
+
+    /* The eye toggle was a ~24px target, which is under the 44px comfortable
+       minimum and awkward to hit next to a keyboard. */
+    .password-toggle {
+      width: 44px;
+      height: 44px;
+      right: 4px;
+    }
+
+    .input-with-icon .form-input {
+      padding-right: 48px;
+    }
+
+    .password-requirements {
+      padding: 12px;
+    }
+  }
+
+  /* Landscape phones and short windows: the navbar eats 72px of a 360-400px
+     tall viewport, so the card is pinned to whatever is left and scrolls. Font
+     and padding steps are trimmed again to claw back vertical room. */
+  @media (max-height: 560px) {
+    .account-modal-overlay {
+      padding-top: calc(var(--navbar-height) + 12px);
+      padding-bottom: 12px;
+    }
+
+    .account-modal-card {
+      padding: 16px;
+      gap: 12px;
+    }
+
+    .modal-title {
+      font-size: 17px;
+      margin-bottom: 6px;
+    }
+
+    .modal-text {
+      font-size: 12px;
+      line-height: 1.5;
+      margin-bottom: 10px;
+    }
+
+    .forgot-password-form {
+      gap: 10px;
+    }
+
+    .form-input {
+      padding: 10px 14px;
+    }
   }
 
   /* Phones: stack the pair, keeping the red action on top and Cancel directly
