@@ -321,6 +321,11 @@ def forecast():
             "current_feature_columns": list(FEATURE_COLUMNS),
         }), 409
 
+    # Loaded once per run and shared by every product. Deliberately AFTER
+    # the feature-set guard above, so a model that must be refused is
+    # refused before any database work.
+    open_dates = get_confirmed_open_dates()
+
     day1_forecasts_by_product = {}
     results = []
 
@@ -344,6 +349,7 @@ def forecast():
             forecast_rows = generate_forecast(
                 product_id, model, model_version, known_categories, horizon_days,
                 operating_days=operating_days,
+                open_dates=open_dates,
             )
 
             forecast_ids = [write_forecast(row) for row in forecast_rows]
