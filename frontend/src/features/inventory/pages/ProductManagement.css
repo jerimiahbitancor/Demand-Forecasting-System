@@ -517,10 +517,11 @@
 
 /* ============ ACTION BUTTONS ============ */
 .product-action-buttons {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  flex-wrap: nowrap;
+display: flex;
+    align-items: center;
+    gap: 4px;
+    flex-wrap: nowrap;
+    justify-content: center;
 }
 
 .product-action-btn {
@@ -648,7 +649,7 @@
   transition: all 0.2s ease;
 }
 
-.page-number:hover:not(.dots):not(:disabled) {
+.page-number:hover:not(:disabled) {
   background: #faf8f7;
   border-color: #e2e8f0;
 }
@@ -659,30 +660,128 @@
   border-color: #a31d1d;
 }
 
-.page-number.dots {
-  border: none;
-  background: transparent;
-  cursor: default;
-  color: #6b7280;
-}
-
 /* ============ RESPONSIVE PAGINATION ============ */
 @media (max-width: 768px) {
+  /* Collapse to ONE column.
+     .pagination is a grid (1fr auto 1fr), so the `flex-wrap` this block used
+     to carry did nothing at all and the 1fr / auto / 1fr tracks stayed. The
+     `auto` track is the controls, which want their full width; the info line
+     was left with whatever was left of the 1fr track. Below roughly 540px that
+     is only a few pixels, so "Showing 1-10 of 48 items" wrapped one character
+     per line and was effectively unreadable. One track per row fixes that, and
+     it is the same treatment Inventory.css already applies to .pagination in
+     its 641-1024px tablet tier. */
   .pagination {
-    flex-wrap: wrap;
-    gap: 8px;
-    justify-content: center;
+    grid-template-columns: 1fr;
+    justify-items: center;
+    gap: 10px;
     padding: 12px 16px;
   }
 
+  /* The empty third track from the 1fr auto 1fr layout. Keeping it would add a
+     whole empty row now that everything is stacked. */
+  .pagination-anchor {
+    display: none;
+  }
+
+  .pagination-info-wrap {
+    justify-content: center;
+    min-width: 0;
+  }
+
+  .pagination-info {
+    text-align: center;
+    /* Same 13px, but #475569 rather than #64748b: the lighter grey on the
+       #faf8f7 strip was hard to read on a phone. */
+    color: #475569;
+    font-size: 13px;
+  }
+
+  .pagination-controls {
+    /* Grid rather than flex-wrap.
+       With flex the row broke wherever it ran out of width, which parked "Next"
+       on a line of its own below "Previous". Three columns pin Previous to the
+       left edge and Next to the right edge at any width, and the page numbers
+       wrap inside the middle column instead of pushing Next down. */
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr) auto;
+    align-items: center;
+    gap: 8px;
+  }
+
+  .pagination-center {
+    /* nowrap, never wrap: this column sits between two fixed-width arrows, so
+       wrapping pushed the numbers onto a second line instead of shrinking
+       them. flex-shrink: 0 on the numbers below keeps them at their full
+       width rather than squashing them mid-digit. */
+    flex-wrap: nowrap;
+    justify-content: center;
+    gap: 3px;
+    min-width: 0;
+  }
+
   .page-btn {
-    padding: 4px 10px;
-    font-size: 12px;
+    /* This tier used to shrink these to padding:4px 10px / 12px, which is a
+       ~28px target and about half the 44px comfortable minimum. Now that the
+       info text no longer shares the row there is width to spend on it. */
+    padding: 9px 14px;
+    font-size: 13px;
+    min-height: 40px;
   }
 
   .page-number {
-    min-width: 28px;
-    height: 28px;
+    min-width: 36px;
+    height: 36px;
+    font-size: 13px;
+    flex-shrink: 0;
+    /* Two-digit page numbers must not break across lines. */
+    white-space: nowrap;
+  }
+}
+
+/* Narrow phones: the arrow buttons drop their word and keep only the chevron,
+   which frees roughly 110px - enough for all five page numbers plus Previous
+   and Next to share one row down to a 320px viewport. */
+@media (max-width: 480px) {
+  .pagination {
+    gap: 8px;
+    padding: 10px 12px;
+    /* Keep the last control clear of the iOS home indicator. */
+    padding-bottom: calc(10px + env(safe-area-inset-bottom, 0px));
+  }
+
+  .pagination-controls {
+    gap: 6px;
+  }
+
+  .page-btn {
+    /* Square-ish icon button, still a 44px target. */
+    min-width: 44px;
+    padding: 8px 10px;
+    justify-content: center;
+  }
+
+  .page-btn-label {
+    display: none;
+  }
+
+  .page-number {
+    min-width: 36px;
+    height: 36px;
+  }
+}
+
+/* 320px-class viewports: at 36px the five numbers plus two arrows leave only a
+   few pixels of slack, so step down once more to keep the row comfortably on
+   one line rather than relying on a near-miss. */
+@media (max-width: 360px) {
+  .pagination-center {
+    gap: 2px;
+  }
+
+  .page-number {
+    min-width: 32px;
+    height: 32px;
     font-size: 12px;
   }
 }
@@ -1640,29 +1739,11 @@
     font-size: 12px;
   }
 
-  .pagination {
-    grid-template-columns: 1fr;
-    justify-items: center;
-    padding: 12px;
-  }
-
-  .pagination-info-wrap {
-    justify-content: center;
-  }
-
-  .pagination-controls {
-    gap: 6px;
-  }
-
-  .page-btn {
-    min-height: 44px;
-    padding: 8px 12px;
-  }
-
-  .page-number {
-    min-width: 44px;
-    height: 44px;
-  }
+  /* .pagination and its parts used to be tuned here as well, at 44px targets.
+     They now live in the RESPONSIVE PAGINATION section above, which owns the
+     whole 768px -> 480px cascade for this control. Duplicating them in two
+     480px blocks meant whichever came later in the file silently won - and this
+     one dropped the padding-bottom that clears the iOS home indicator. */
 
   .product-stat-card-value {
     font-size: 22px;
@@ -2224,5 +2305,166 @@
 .ingredients-table-wrapper::-webkit-scrollbar-thumb {
   background: #adb5bd;
   border-radius: 4px;
+}
+
+/* ============ PHONE: CARD-STACKED DATA TABLES ============
+   Mirrors the technique the inventory table already uses (Inventory.css, the
+   "PHONE: CARD-STACKED DATA TABLES" block) so the two tabs behave the same.
+
+   This block used to live only in Inventory.css, which does name .product-table
+   and .product-table-wrapper - but this file is imported LATER in the module
+   graph, so at equal specificity the base rules here (wrapper overflow-x: auto,
+   table min-width: 1000px) won over the phone rules. The result was a table
+   that had already switched to card layout but was still forced to 1000px
+   wide, i.e. the sideways panning we were trying to remove. Declaring the
+   block here, at the end of this file, settles the order.
+
+   Declared last in the file so it also beats the 480px tier above, which sets
+   padding on .product-table th/td for the old scrolling layout. */
+@media (max-width: 640px) {
+  .product-table-wrapper,
+  .low-margin-table-wrapper {
+    /* Stop clipping; nothing scrolls sideways any more. */
+    overflow-x: visible;
+  }
+
+  .product-table,
+  .low-margin-table {
+    /* min-width:0 is the whole point - it releases the 1000px floor from the
+       base rules above. table-layout:auto + display:block let each row size to
+       the viewport instead of to the column widths. */
+    min-width: 0;
+    width: 100%;
+    display: block;
+    table-layout: auto;
+  }
+
+  /* Hide the header row; the per-cell data-labels replace it. */
+  .product-table thead,
+  .low-margin-table thead {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    padding: 0;
+    margin: -1px;
+    overflow: hidden;
+    clip: rect(0, 0, 0, 0);
+    white-space: nowrap;
+    border: 0;
+  }
+
+  .product-table tbody,
+  .low-margin-table tbody {
+    display: block;
+    width: 100%;
+  }
+
+  .product-table tbody tr,
+  .low-margin-table tbody tr {
+    display: block;
+    width: 100%;
+    margin-bottom: 12px;
+    padding: 12px 14px;
+    border: 1px solid #e2e8f0;
+    border-radius: 10px;
+    background: #ffffff;
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.06);
+  }
+
+  .product-table tbody tr:hover,
+  .low-margin-table tbody tr:hover {
+    background: #ffffff;
+  }
+
+  /* Label on the left, value on the right. width:auto!important overrides the
+     fixed per-column widths (38px / 46px / 220px / 112px / 120px) declared in
+     the base rules, which assume a real table layout. */
+  .product-table tbody td,
+  .low-margin-table tbody td {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 12px;
+    width: auto !important;
+    padding: 7px 0;
+    border-bottom: 1px solid #f1f5f9;
+    text-align: right;
+    font-size: 13px;
+  }
+
+  .product-table tbody td:last-child,
+  .low-margin-table tbody td:last-child {
+    border-bottom: none;
+    padding-bottom: 0;
+  }
+
+  /* Caption from the data-label attribute; invisible on cells without one. */
+  .product-table tbody td[data-label]::before,
+  .low-margin-table tbody td[data-label]::before {
+    content: attr(data-label);
+    flex: 0 0 auto;
+    text-align: left;
+    font-size: 11px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    color: #94a3b8;
+    white-space: nowrap;
+  }
+
+  /* Bulk-select checkbox: full-width row, label on the left. */
+  .product-table tbody td.inventory-checkbox-cell {
+    justify-content: flex-start;
+    padding-top: 0;
+  }
+
+  /* Action buttons get their own line so they stay tappable. */
+  .product-table tbody td[data-label="Actions"],
+  .low-margin-table tbody td[data-label="Actions"] {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 8px;
+    text-align: left;
+  }
+
+  .product-table tbody td[data-label="Actions"]::before,
+  .low-margin-table tbody td[data-label="Actions"]::before {
+    text-align: left;
+  }
+
+  .product-action-buttons {
+    flex-wrap: wrap;
+    gap: 8px;
+  }
+
+  .product-action-btn {
+    width: 40px;
+    height: 40px;
+  }
+
+  /* Status/pill cells read better right-aligned against their label. */
+  .product-table tbody td[data-label="Status"] > *,
+  .low-margin-table tbody td[data-label="Status"] > * {
+    margin-left: auto;
+  }
+
+  .status-pill-group {
+    justify-content: flex-end;
+    flex-wrap: wrap;
+  }
+
+  /* Currency must not wrap mid-amount. */
+  .product-table tbody td.price-cell,
+  .low-margin-table tbody td.price-amount,
+  .low-margin-table tbody td.cost-amount,
+  .low-margin-table tbody td.profit-amount {
+    white-space: nowrap;
+    font-variant-numeric: tabular-nums;
+  }
+
+  .low-margin-table tbody tr.low-margin-row,
+  .low-margin-table tbody tr.very-low-margin-row {
+    border-left-width: 4px;
+  }
 }
 

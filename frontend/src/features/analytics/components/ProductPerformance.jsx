@@ -187,15 +187,23 @@ const pillClass = {
 // Chart Components
 // ---------------------------------------------------------------------
 function DemandBar({ label, qty, maxQty, zone }) {
-  const widthPct = Math.max((qty / maxQty) * 100, 6);
+  // maxQty is 0 when every product forecasts 0 servings, which would make
+  // qty/maxQty NaN and hand the browser an invalid "NaN%" width that silently
+  // collapses the fill to nothing. Floor the divisor so those rows still draw
+  // their minimum sliver.
+  const widthPct = maxQty > 0 ? Math.max((qty / maxQty) * 100, 6) : 6;
   return (
     <div className="demand-bar-row">
       <span className="demand-bar-label">{label}</span>
       <div className="demand-bar-track">
-        <div className={`demand-bar-fill ${zoneClass[zone]}`} style={{ width: `${widthPct}%` }}>
-          <span className="demand-bar-value">{qty} servings</span>
-        </div>
+        <div className={`demand-bar-fill ${zoneClass[zone]}`} style={{ width: `${widthPct}%` }} />
       </div>
+      {/* Outside the track, not inside the fill: the fill is only as wide as
+          this product's share of the maximum, so a low-demand product left the
+          white label spilling onto the light track where it was unreadable.
+          As its own column it is always legible and always the same distance
+          from the bar, so the numbers line up down the chart. */}
+      <span className="demand-bar-value">{qty} servings</span>
     </div>
   );
 }

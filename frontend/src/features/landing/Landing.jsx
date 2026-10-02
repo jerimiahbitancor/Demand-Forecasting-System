@@ -504,37 +504,7 @@ const Landing = () => {
           </div>
         </section>
 
-        {/* ================= OUTCOMES ================= */}
-        <section className="lk-section lk-section--tint">
-          <div className="lk-container">
-            <div className="lk-section-head lk-reveal">
-              <span className="lk-eyebrow">What changes</span>
-              <h2 className="lk-section-title">
-                What planning with data actually changes
-              </h2>
-              <p className="lk-section-sub">
-                The practical difference once prep, purchasing, and stock all read
-                from the same forecast instead of separate guesses.
-              </p>
-            </div>
-
-            <div className="lk-quotes">
-              {OUTCOMES.map((o) => (
-                <article className="lk-quote lk-reveal" key={o.title}>
-                  <span
-                    className="lk-quote-ico"
-                    style={{ background: o.tint }}
-                    aria-hidden="true"
-                  >
-                    {o.icon}
-                  </span>
-                  <h3 className="lk-quote-name">{o.title}</h3>
-                  <p className="lk-quote-text">{o.text}</p>
-                </article>
-              ))}
-            </div>
-          </div>
-        </section>
+       
 
         {/* ================= FAQ ================= */}
         <section className="lk-section lk-section--white" id="faq">

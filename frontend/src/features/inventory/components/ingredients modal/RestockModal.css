@@ -1,6 +1,11 @@
 /* RestockModal.css */
 .inventory-restock-modal .inventory-restock-header {
-display: flex;
+  display: flex;
+    /* flex-shrink:0 matches .inventory-modal-header. Without it this header is a
+       shrinkable flex child of a card that is forced to height:100dvh on
+       phones, so a long restock body squeezed it below its content height and
+       the title overlapped the body underneath. */
+    flex-shrink: 0;
     justify-content: space-between;
     align-items: center;
     padding: 1rem;
@@ -124,6 +129,10 @@ display: flex;
   padding: 0.5rem 1.5rem 0.75rem 1.5rem;
   overflow-y: auto;
   flex: 1;
+  /* Same reason as .inventory-modal-body: without min-height:0 a scrolling flex
+     child keeps its automatic content-size minimum and will not shrink. */
+  min-height: 0;
+  overscroll-behavior: contain;
 }
 
 /* Form */

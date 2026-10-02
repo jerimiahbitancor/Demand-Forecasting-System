@@ -18,65 +18,6 @@
   gap: 4px;
 }
 
-/* Phones: keep the whole control on ONE horizontal line. Pagination that
-   stacks into rows costs vertical space and makes it easy to miss that the
-   page actually changed. nowrap on both levels, tighter targets (40px, a
-   compromise between the 44px ideal and fitting 5 page buttons in ~230px),
-   and pan sideways rather than wrap if a very long page list still doesn't
-   fit. */
-@media (max-width: 640px) {
-  .pagination {
-    flex-wrap: nowrap;
-    justify-content: flex-start;
-    gap: 4px;
-    overflow-x: auto;
-    scrollbar-width: none;
-    -webkit-overflow-scrolling: touch;
-    /* Stop the row bleeding into the card's edge padding. */
-    margin: 0 -4px;
-    padding: 4px;
-  }
-
-  .pagination::-webkit-scrollbar {
-    display: none;
-  }
-
-  .pagination-pages {
-    flex-wrap: nowrap;
-    flex: 0 0 auto;
-    gap: 3px;
-  }
-
-  .pagination-button {
-    min-width: 40px;
-    height: 40px;
-    padding: 0 6px;
-    font-size: 13px;
-  }
-
-  /* Nav buttons show only their chevron at this size; "Previous"/"Next" as
-     words don't fit next to five page buttons. */
-  .pagination-button--navigation {
-    padding: 0;
-    min-width: 40px;
-    width: 40px;
-    font-size: 0;
-    gap: 0;
-  }
-
-  .pagination-button--navigation svg {
-    width: 18px;
-    height: 18px;
-  }
-
-  .pagination-ellipsis {
-    min-width: 18px;
-    width: 18px;
-    height: 40px;
-    font-size: 13px;
-  }
-}
-
 .pagination-button {
   display: inline-flex;
   align-items: center;
@@ -114,6 +55,11 @@
   font-weight: 500;
 }
 
+/* Separate span so phones can hide just the text and keep the chevron. */
+.pagination-button-label {
+  white-space: nowrap;
+}
+
 .pagination-ellipsis {
   display: inline-flex;
   align-items: center;
@@ -125,9 +71,8 @@
   font-size: 13px;
 }
 
-/* Tablet tier, declared before the 640px tier so that one still wins below
-   640px. Long page runs wrap onto a second line instead of overflowing the
-   modal body. */
+/* Tablet tier. Declared before the phone tier so the narrower rule below still
+   wins under 640px. */
 @media (max-width: 1024px) {
   .pagination {
     gap: 6px;
@@ -142,34 +87,128 @@
   }
 }
 
+/* Phones: the whole control stays on ONE horizontal line. Previous and Next
+   must never stack onto their own rows or get pushed out of view, so both nav
+   buttons are fixed-width siblings that stay put and only the page-number
+   block between them is allowed to scroll sideways. nowrap on every level plus
+   flex-shrink: 0 on the nav buttons is what guarantees that.
+
+   Sizing budget for the widest window the JSX will build here (1 … p-1 p p+1 …
+   N = five numbers and two ellipses) on a 375px phone, which leaves 327px once
+   the 12px page padding and 12px card padding are taken off:
+
+     5 x 32px numbers + 2 x 12px ellipses + 6 x 3px gaps = 202px
+     2 x 32px nav buttons + 2 x 4px gaps               =  72px
+                                                        ------
+                                                         274px
+
+   That fits with room to spare, which is what buys back the fourth and fifth
+   page numbers the old 44px three-slot phone window could not afford. If a
+   device is narrower still, the narrow tier below shrinks the controls and the
+   scroller on .pagination-pages remains as a backstop so nothing is ever
+   clipped out of reach. */
 @media (max-width: 640px) {
   .pagination {
+    flex-wrap: nowrap;
+    justify-content: center;
     gap: 4px;
+    width: 100%;
   }
 
-  /* Give each button a comfortable touch target, and let the number block
-     take the majority of a second row if the list is long. */
+  .pagination-pages {
+    flex-wrap: nowrap;
+    flex: 1 1 auto;
+    min-width: 0;
+    /* Centres the numbers in the leftover space instead of pinning them
+       against Previous and leaving a dead gap before Next. `safe` keeps the
+       overflowing end reachable rather than clipped when the row really does
+       run past the viewport; where it is unsupported the plain `center` from
+       the base rule applies. */
+    justify-content: safe center;
+    overflow-x: auto;
+    scrollbar-width: none;
+    -webkit-overflow-scrolling: touch;
+    gap: 3px;
+  }
+
+  .pagination-pages::-webkit-scrollbar {
+    display: none;
+  }
+
+  /* 32px still clears the 24px WCAG 2.5.8 touch-target floor by a third, and
+     44px was making the control taller than the five table rows above it. */
   .pagination-button {
-    min-width: 44px;
-    height: 44px;
-    padding: 0 8px;
-    font-size: 14px;
+    min-width: 32px;
+    height: 32px;
+    padding: 0 6px;
+    font-size: 13px;
   }
 
+  /* Icon-only at this width: the words "Previous"/"Next" don't fit beside the
+     page numbers. Hiding the label span (rather than setting font-size: 0 on
+     the button, which also nukes the SVG's inherited sizing) keeps the chevron
+     crisp, and the explicit aria-label keeps the accessible name. */
   .pagination-button--navigation {
-    padding: 0 8px;
-    font-size: 0;
-    min-width: 44px;
+    flex: 0 0 auto;
+    width: 32px;
+    min-width: 32px;
+    padding: 0;
+    gap: 0;
+  }
+
+  .pagination-button--navigation .pagination-button-label {
+    display: none;
   }
 
   .pagination-button--navigation svg {
-    width: 18px;
-    height: 18px;
+    width: 16px;
+    height: 16px;
   }
 
   .pagination-ellipsis {
-    min-width: 20px;
-    height: 44px;
-    font-size: 14px;
+    min-width: 12px;
+    width: 12px;
+    height: 32px;
+    font-size: 13px;
+  }
+}
+
+/* Narrow phones (320-360px): 48px of the width has already gone on padding, so
+   the controls give up 2px each to keep all five page numbers on screen without
+   the scroller having to kick in:
+
+     5 x 30px numbers + 2 x 10px ellipses + 6 x 3px gaps = 188px
+     2 x 30px nav buttons + 2 x 3px gaps               =  66px
+                                                        ------
+                                                         254px  (272px available)
+
+   Declared after the 640px tier so these values win below 360px. */
+@media (max-width: 360px) {
+  .pagination {
+    gap: 3px;
+  }
+
+  .pagination-button {
+    min-width: 30px;
+    height: 30px;
+    padding: 0 4px;
+    font-size: 12px;
+  }
+
+  .pagination-button--navigation {
+    width: 30px;
+    min-width: 30px;
+  }
+
+  .pagination-button--navigation svg {
+    width: 15px;
+    height: 15px;
+  }
+
+  .pagination-ellipsis {
+    min-width: 10px;
+    width: 10px;
+    height: 30px;
+    font-size: 12px;
   }
 }

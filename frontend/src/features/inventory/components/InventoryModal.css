@@ -38,31 +38,46 @@
   max-height: 60vh;
 }
 
-.inventory-modal-header {
+/* Scoped under .inventory-modal-overlay on purpose. Every one of these elements
+   also carries the generic .modal-header / .modal-body / .modal-footer class,
+   which ProductManagement.css also defines and which is injected LATER (it is
+   imported by ProductManagement.jsx, which comes after this file in the module
+   graph). At equal specificity the later sheet wins, so these modals were
+   silently picking up 24px of side padding, a 2px red header border and a
+   #fafafa background instead of the values below - 48px of extra horizontal
+   padding in the body and footer, which is what made them so much taller than
+   intended. One extra class of specificity settles it regardless of order. */
+.inventory-modal-overlay .inventory-modal-header {
   display: flex;
   flex-shrink: 0;
   align-items: center;
   justify-content: space-between;
   padding: 1.25rem 1.5rem 0.5rem;
   background: #ffffff;
+  border-bottom: none;
 }
 
-.inventory-modal-body {
+.inventory-modal-overlay .inventory-modal-body {
   flex: 1;
+  /* min-height:0 is required on a scrolling flex child: without it the
+     automatic minimum size is the content size, so the body refuses to shrink
+     below its content and pushes the header up out of the card. */
+  min-height: 0;
   padding: 0.5rem 1.5rem 1rem;
   overflow-y: auto;
+  overscroll-behavior: contain;
 }
 
-.inventory-modal-body::-webkit-scrollbar {
+.inventory-modal-overlay .inventory-modal-body::-webkit-scrollbar {
   width: 5px;
 }
 
-.inventory-modal-body::-webkit-scrollbar-thumb {
+.inventory-modal-overlay .inventory-modal-body::-webkit-scrollbar-thumb {
   background: #c1c7cd;
   border-radius: 3px;
 }
 
-.inventory-modal-footer {
+.inventory-modal-overlay .inventory-modal-footer {
   display: flex;
   flex-shrink: 0;
   justify-content: flex-end;
@@ -101,31 +116,21 @@
     border-radius: 8px;
   }
 
-  .inventory-modal-header,
-  .inventory-modal-body,
-  .inventory-modal-footer {
+  .inventory-modal-overlay .inventory-modal-header,
+  .inventory-modal-overlay .inventory-modal-body,
+  .inventory-modal-overlay .inventory-modal-footer {
     padding-left: 1rem;
     padding-right: 1rem;
   }
 }
 
-@media (max-width: 480px) {
-  .inventory-modal-overlay {
-    padding: 0.25rem;
-  }
-
-  .inventory-modal-content,
-  .inventory-modal-content.modal-md,
-  .inventory-modal-content.modal-lg {
-    max-width: 100%;
-    max-height: 98vh;
-    border-radius: 6px;
-  }
-}
-
 /* Phones: go full-bleed and let the body own the scroll. The header and
    footer stay pinned so Cancel/Save are always reachable without scrolling
-   past a long form. */
+   past a long form.
+
+   Declared before the 480px tier so the narrower rules below still win under
+   480px. The order used to be 768 / 480 / 640, which meant the 640 sheet
+   silently overrode everything the 480 tier set. */
 @media (max-width: 640px) {
   .inventory-modal-overlay {
     padding: 0;
@@ -138,34 +143,68 @@
   .inventory-modal-content.market-trend-modal {
     max-width: 100%;
     /* Full-height sheet: avoids the mid-scroll "cut off" feel where a tall
-       dialog is clipped at both ends with no way to see the whole form. */
+       dialog is clipped at both ends with no way to see the whole form.
+       dvh is the important one - 100vh is the LARGEST viewport height on
+       mobile, so it includes the space behind the browser URL bar and the
+       home indicator, which clipped the footer buttons off the bottom of
+       iOS Safari and Android Chrome. The plain vh stays as the fallback for
+       browsers without dvh support. */
     max-height: 100vh;
+    max-height: 100dvh;
     height: 100vh;
+    height: 100dvh;
     border-radius: 0;
   }
 
-  .inventory-modal-header {
+  .inventory-modal-overlay .inventory-modal-header {
     padding: 1rem 1rem 0.75rem;
   }
 
-  .inventory-modal-header .modal-title {
+  .inventory-modal-overlay .inventory-modal-header .modal-title {
     font-size: 1.0625rem;
   }
 
-  .inventory-modal-body {
+  .inventory-modal-overlay .inventory-modal-body {
     padding: 0.5rem 1rem 1rem;
     /* Prevent the iOS rubber-band from revealing the page behind the sheet. */
     -webkit-overflow-scrolling: touch;
   }
 
-  .inventory-modal-footer {
+  .inventory-modal-overlay .inventory-modal-footer {
     padding: 0.875rem 1rem calc(0.875rem + env(safe-area-inset-bottom, 0px));
   }
 
-  /* Tap targets: 44px is the Apple/Google minimum for a comfortable press. */
-  .inventory-modal-close-btn {
+  /* Tap targets: 44px is the Apple/Google minimum for a comfortable press.
+     The rules used to sit on .inventory-modal-close-btn, a class no component
+     ever renders - every close button is .modal-close-btn - so this never
+     applied. Scoping under the overlay outranks the bare .modal-close-btn in
+     Inventory.css and ProductManagement.css, which is what is needed to win. */
+  .inventory-modal-overlay .modal-close-btn {
     width: 44px;
     height: 44px;
+    /* Inventory.css sets this but ProductManagement.css, injected later,
+       overwrites it with a padding-based box; restoring line-height:1 stops the
+       icon picking up descender space that misaligns it in the header. */
+    line-height: 1;
     justify-content: center;
+    flex-shrink: 0;
+  }
+}
+
+/* Narrow phones: the sheet is already full-bleed from the 640 tier, so this
+   block must NOT re-add overlay padding or a border-radius - doing so insets a
+   100dvh card inside its own overlay and clips the top. It only tightens the
+   sheet's own gutters. */
+@media (max-width: 480px) {
+  .inventory-modal-overlay .inventory-modal-header {
+    padding: 0.875rem 0.75rem 0.625rem;
+  }
+
+  .inventory-modal-overlay .inventory-modal-body {
+    padding: 0.5rem 0.75rem 0.875rem;
+  }
+
+  .inventory-modal-overlay .inventory-modal-footer {
+    padding: 0.75rem 0.75rem calc(0.75rem + env(safe-area-inset-bottom, 0px));
   }
 }
