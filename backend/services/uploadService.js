@@ -15,6 +15,34 @@ dayjs.extend(utc);
 dayjs.extend(timezone);
 const PH_TZ = 'Asia/Manila';
 const { convertRecipeQuantity, isMissingColumnError } = require('../utils/recipeUnits');
+const {
+  splitModifiers,
+  aggregateSalesRecords,
+  computeStockDeductions,
+  normalizeKeyword,
+} = require('../utils/salesModifiers');
+
+// modifier_rules is read once per minute at most: a 288-file backfill would
+// otherwise query it 288 times for a table of a handful of rows.
+const MODIFIER_RULES_TTL_MS = 60 * 1000;
+let modifierRulesCache = { rules: null, loadedAt: 0 };
+let warnedMissingModifierTables = false;
+
+// PGRST205 / 42P01 = the table does not exist yet (migration 010 not run).
+function isMissingTableError(error) {
+  if (!error) return false;
+  return error.code === 'PGRST205'
+    || error.code === '42P01'
+    || /does not exist|could not find the table/i.test(error.message || '');
+}
+
+function warnMissingModifierTablesOnce() {
+  if (warnedMissingModifierTables) return;
+  warnedMissingModifierTables = true;
+  console.warn('[MODIFIERS] modifier_rules / daily_sales_modifiers not found. '
+    + 'Run ml-service/migrations/010_add_modifier_rules_and_daily_sales_modifiers.sql. '
+    + 'Until then item names are used as-is (no modifier splitting).');
+}
 
 class UploadService {
   constructor() {
@@ -269,7 +297,51 @@ class UploadService {
       .replace(/\s*[-–—]\s*/g, ' ');
   }
 
-  extractUniqueProductNames(rows = []) {
+  /**
+   * modifier_rules as [{ keyword, ingredient_id }], keyword upper-cased.
+   * Empty list (names used as-is) if the table does not exist yet.
+   */
+  async getModifierRules({ forceRefresh = false } = {}) {
+    const fresh = Date.now() - modifierRulesCache.loadedAt < MODIFIER_RULES_TTL_MS;
+    if (!forceRefresh && modifierRulesCache.rules && fresh) {
+      return modifierRulesCache.rules;
+    }
+    if (!this.isSupabaseReady()) {
+      return [];
+    }
+
+    const { data, error } = await fetchAllRows(() => supabaseAdmin
+      .from('modifier_rules')
+      .select('keyword, ingredient_id')
+      .order('keyword'));
+
+    if (error) {
+      if (isMissingTableError(error)) {
+        warnMissingModifierTablesOnce();
+        modifierRulesCache = { rules: [], loadedAt: Date.now() };
+        return [];
+      }
+      throw error;
+    }
+
+    const rules = (data || [])
+      .map((rule) => ({ keyword: normalizeKeyword(rule.keyword), ingredient_id: rule.ingredient_id }))
+      .filter((rule) => rule.keyword);
+    modifierRulesCache = { rules, loadedAt: Date.now() };
+    return rules;
+  }
+
+  async getModifierKeywords() {
+    return (await this.getModifierRules()).map((rule) => rule.keyword);
+  }
+
+  /**
+   * Unique BASE product names in a file. "Marinated Porksilog NO EGG" is
+   * listed as "Marinated Porksilog" (POS modifiers are not products), and a
+   * name that is only a modifier ("NO RICE") is skipped — processSalesData
+   * reports it as a warning. Pass the keywords from getModifierKeywords().
+   */
+  extractUniqueProductNames(rows = [], modifierKeywords = []) {
     if (!Array.isArray(rows) || rows.length === 0) {
       return [];
     }
@@ -278,11 +350,14 @@ class UploadService {
     const seen = new Set();
 
     for (const row of rows) {
-      const productName = this.normalizeProductName(
-        this.getColumnValueByNames(row, ['Item name', 'Item Name', 'Product', 'Product name'])
+      const { baseName: productName, modifierOnly } = splitModifiers(
+        this.normalizeProductName(
+          this.getColumnValueByNames(row, ['Item name', 'Item Name', 'Product', 'Product name'])
+        ),
+        modifierKeywords
       );
 
-      if (!productName) {
+      if (!productName || modifierOnly) {
         continue;
       }
 
@@ -300,9 +375,17 @@ class UploadService {
 
   async syncProductsFromSales(productNames = [], userId = null) {
     try {
+      // BASE names only: a POS modifier name ("... NO EGG") must never
+      // create its own product, whichever route called this (upload.js
+      // passes names already split; mapping.js passes names from the UI).
+      const modifierKeywords = Array.isArray(productNames) && productNames.length > 0
+        ? await this.getModifierKeywords()
+        : [];
       const normalizedProducts = Array.isArray(productNames)
         ? productNames
-            .map((name) => this.normalizeProductName(name))
+            .map((name) => splitModifiers(this.normalizeProductName(name), modifierKeywords))
+            .filter((split) => !split.modifierOnly)
+            .map((split) => split.baseName)
             .filter((name) => name && name.length > 0)
         : [];
 
@@ -444,7 +527,12 @@ class UploadService {
       const warnings = [];
       let productsDetected = 0;
 
-      const uniqueSalesProductNames = this.extractUniqueProductNames(rows);
+      // POS modifiers ("... NO EGG") — see utils/salesModifiers.js.
+      const modifierRules = await this.getModifierRules();
+      const modifierKeywords = modifierRules.map((rule) => rule.keyword);
+      const ingredientIdByKeyword = new Map(modifierRules.map((rule) => [rule.keyword, rule.ingredient_id]));
+
+      const uniqueSalesProductNames = this.extractUniqueProductNames(rows, modifierKeywords);
       if (uniqueSalesProductNames.length > 0) {
         const syncSummary = await this.syncProductsFromSales(uniqueSalesProductNames, numericId);
         if (Array.isArray(syncSummary.created) && syncSummary.created.length > 0) {
@@ -466,73 +554,45 @@ class UploadService {
         currentCategoryByProductId.set(product.id, product.category);
       }
 
-      // Keyed by `${productId}|${saleDate}`, not just pushed one entry per
-      // CSV row. daily_sales is UNIQUE on (product_id, sale_date), but a
-      // single day's export can legitimately list the same product on more
-      // than one row — e.g. an add-on/modifier item split across two
-      // category rows, or a product whose category changed mid-period so
-      // Loyverse's per-category grouping emits it twice. Pushing one insert
-      // row per CSV row in that case makes the whole batch INSERT fail with
-      // a Postgres 23505 the moment two rows collide — not because of any
-      // earlier upload, but because of duplicate rows within this exact
-      // file, on every single attempt. Summing quantity_sold for matching
-      // (product_id, sale_date) pairs before the insert fixes that: it
-      // mirrors how Loyverse's own "Items sold" figure is already a net
-      // aggregate, not a per-line-item count.
-      const dailySalesByKey = new Map();
-      for (const row of rows) {
-        const rawProductName = this.getColumnValueByNames(row, ['Item name', 'Item Name', 'Product', 'Product name']);
-        const productName = this.normalizeProductName(rawProductName);
-        if (!productName) {
-          continue;
-        }
-
-        const productNameKey = productName.toLowerCase();
-        const productId = productIdByName.get(productNameKey);
-        if (!productId) {
-          continue;
-        }
-
-        const soldRaw = parseFloat(this.getColumnValueByNames(row, ['Items sold', 'Items Sold', 'Quantity', 'Units sold']) || 0);
-        const refundedRaw = parseFloat(this.getColumnValueByNames(row, ['Items refunded', 'Items Refunded']) || 0);
-        const category = this.getColumnValueByNames(row, ['Category', 'Category Name'])?.toString()?.trim() || 'Uncategorized';
-        const saleDate = this.getSaleDateValue(row, fallbackDate);
-        // NET QUANTITY: quantity_sold = max(0, Items sold - Items refunded).
-        // Refunded items were not really sold, so they are not demand.
-        // A missing/blank/non-numeric value becomes 0, never a made-up 1.
-        // The row's net is kept unclamped here so that if the same
-        // product appears on two rows of one file, the refunds on one row
-        // still cancel sales on the other. The max(0, ...) clamp is
-        // applied once, after summing (see below the loop).
-        const sold = Number.isFinite(soldRaw) ? Math.round(soldRaw) : 0;
-        const refunded = Number.isFinite(refundedRaw) ? Math.round(refundedRaw) : 0;
-        const normalizedQuantity = sold - refunded;
-
-        const key = `${productId}|${saleDate}`;
-        const existingRow = dailySalesByKey.get(key);
-        if (existingRow) {
-          existingRow.quantity_sold += normalizedQuantity;
-        } else {
-          dailySalesByKey.set(key, {
-            product_id: productId,
-            sale_date: saleDate,
-            quantity_sold: normalizedQuantity,
-            upload_id: uploadId || null
-          });
-        }
-
-        if (!categoryByProductId.has(productId)) {
-          categoryByProductId.set(productId, category);
-        }
-        productIds.add(productId);
-      }
-
-      // Clamp once per (product, date) after summing: net quantity can't
-      // go below 0 (e.g. a refund logged for an earlier day's sale).
-      const dailySalesRows = [...dailySalesByKey.values()].map((r) => ({
-        ...r,
-        quantity_sold: Math.max(0, r.quantity_sold),
+      // Keyed by `${productId}|${saleDate}`, not one entry per CSV row.
+      // daily_sales is UNIQUE on (product_id, sale_date), and one day's
+      // export can list the same product on several rows — a category split,
+      // and now also its POS modifier rows ("Marinated Porksilog NO EGG"
+      // belongs to Marinated Porksilog). Inserting one row per CSV row made
+      // the batch fail with 23505 on every attempt; summing first fixes it.
+      //
+      // NET QUANTITY: quantity_sold = max(0, Items sold - Items refunded),
+      // summed per product/date INCLUDING modifier rows, clamped once after
+      // summing (a refund on one row can cancel a sale on another). Each
+      // modifier's own net plates go to daily_sales_modifiers.
+      // The rule lives in utils/salesModifiers.js (aggregateSalesRecords).
+      const records = rows.map((row) => ({
+        name: this.normalizeProductName(
+          this.getColumnValueByNames(row, ['Item name', 'Item Name', 'Product', 'Product name'])
+        ),
+        sold: this.getColumnValueByNames(row, ['Items sold', 'Items Sold', 'Quantity', 'Units sold']),
+        refunded: this.getColumnValueByNames(row, ['Items refunded', 'Items Refunded']),
+        category: this.getColumnValueByNames(row, ['Category', 'Category Name'])?.toString()?.trim() || 'Uncategorized',
+        saleDate: this.getSaleDateValue(row, fallbackDate),
       }));
+      const aggregated = aggregateSalesRecords(records, {
+        productIdByName,
+        keywords: modifierKeywords,
+        uploadId,
+      });
+      const { dailySalesRows, modifierRows } = aggregated;
+      for (const [productId, category] of aggregated.categoryByProductId) {
+        categoryByProductId.set(productId, category);
+      }
+      for (const row of dailySalesRows) {
+        productIds.add(row.product_id);
+      }
+      if (aggregated.modifierOnlyNames.length > 0) {
+        warnings.push(
+          `Skipped ${aggregated.modifierOnlyNames.length} row name(s) that are only a modifier, `
+          + `not a dish: ${aggregated.modifierOnlyNames.join(', ')}. Their plates were not counted.`
+        );
+      }
 
       if (dailySalesRows.length > 0) {
         const { error: saleInsertError } = await supabaseAdmin
@@ -541,6 +601,25 @@ class UploadService {
 
         if (saleInsertError) {
           throw saleInsertError;
+        }
+      }
+
+      // Modifier counts are written AFTER daily_sales and never fail the
+      // upload: daily_sales is the training input and is already committed.
+      // Written before it, a later daily_sales failure would leave modifier
+      // rows behind that block the retry on their own unique key.
+      // Missing counts only make ingredient demand assume full recipes.
+      if (modifierRows.length > 0) {
+        const { error: modifierInsertError } = await supabaseAdmin
+          .from('daily_sales_modifiers')
+          .insert(modifierRows);
+        if (modifierInsertError) {
+          if (isMissingTableError(modifierInsertError)) {
+            warnMissingModifierTablesOnce();
+          } else {
+            console.error('Error saving modifier counts:', modifierInsertError);
+          }
+          warnings.push(`Modifier counts (e.g. NO EGG) were not saved: ${modifierInsertError.message}`);
         }
       }
 
@@ -628,22 +707,27 @@ class UploadService {
           const { data: recipeRows, error: recipeError } = recipeResult;
           if (recipeError) throw recipeError;
 
-          const deductions = new Map();
-          for (const sale of dailySalesRows) {
-            if (!activeProductIds.has(sale.product_id)) continue;
-            for (const recipe of (recipeRows || []).filter((row) => row.product_id === sale.product_id)) {
+          // Full recipe for every plate, except a modifier plate leaves out
+          // the one ingredient its rule maps to (and only if that ingredient
+          // is in this recipe). 10 plain + 3 NO EGG + 2 NO RICE -> egg 12,
+          // rice 13. Computed as one net amount per ingredient and deducted
+          // once, so the 0-floor in deduct_ingredient_stock can't distort it.
+          const deductions = computeStockDeductions({
+            dailySalesRows,
+            modifierRows,
+            recipeRows: recipeRows || [],
+            activeProductIds,
+            ingredientIdByKeyword,
+            perServingFor: (recipe) => {
               const ingredientUnit = recipe.ingredients?.unit || recipe.unit || null;
-              const perServing = convertRecipeQuantity(
+              return convertRecipeQuantity(
                 recipe.quantity_per_serving,
                 recipe.unit,
                 ingredientUnit,
                 { gramsPerCup: recipe.ingredients?.grams_per_cup, ingredientName: recipe.ingredients?.name }
               );
-              const amount = Number(perServing) * Number(sale.quantity_sold);
-              if (!Number.isFinite(amount) || amount <= 0) continue;
-              deductions.set(recipe.ingredient_id, (deductions.get(recipe.ingredient_id) || 0) + amount);
-            }
-          }
+            },
+          });
 
           for (const [ingredientId, deduction] of deductions) {
             // Was SELECT quantity, then compute new = max(0, old - deduction)

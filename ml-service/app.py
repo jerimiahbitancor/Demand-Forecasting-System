@@ -21,7 +21,7 @@ from config import ML_SERVICE_SHARED_SECRET, MIN_TRAINING_OBSERVATIONS
 from services.data_loader import (
     get_active_products, get_daily_sales, get_history_gate_inputs, has_trained_model,
     get_confirmed_open_dates, get_latest_confirmed_open_date, get_operating_days,
-    get_recipe_and_stock, get_safety_buffer_percentage,
+    get_recipe_and_stock, get_safety_buffer_percentage, get_modifier_share_inputs,
 )
 from services.history_gate import evaluate_history_gate, describe_failure
 from services.preprocessing import validate_sales_data, clean_sales_data, DataValidationError
@@ -29,7 +29,9 @@ from services.feature_engineering import engineer_features, FEATURE_COLUMNS
 from services.model_service import train_global_model, filter_training_eligible
 from services.model_storage import load_latest_model, load_model_metadata
 from services.forecast_service import generate_forecast, classify_forecast, ModelNotReadyError
-from services.business_logic import estimate_ingredient_demand, estimate_cogs
+from services.business_logic import (
+    estimate_ingredient_demand, estimate_cogs, compute_modifier_shares,
+)
 from services.supabase_writer import (
     write_model_metrics, write_forecast, write_classification, write_forecast_cogs,
     write_forecast_run,
@@ -374,8 +376,23 @@ def forecast():
             logger.warning(f"Forecast skipped for product {product_id}: {e}")
             results.append({"product_id": product_id, "status": "skipped", "reason": str(e)})
 
+    # POS modifiers ("NO EGG"): leave out the share of plates that skip an
+    # ingredient, measured over the store's last 28 confirmed-open days.
+    # Best-effort: if this read fails, ingredient demand falls back to full
+    # recipes (the pre-modifier figure, which over-buys slightly) instead of
+    # failing a run whose forecasts are already written.
+    try:
+        share_inputs = get_modifier_share_inputs(open_dates=open_dates)
+        modifier_shares = compute_modifier_shares(
+            share_inputs["sales"], share_inputs["modifiers"],
+            share_inputs["rules"], share_inputs["window_dates"],
+        )
+    except Exception as e:
+        logger.warning(f"Modifier shares unavailable, using full recipes: {e}")
+        modifier_shares = None
     ingredient_demand_df = estimate_ingredient_demand(
-        day1_forecasts_by_product, recipe_df, safety_buffer
+        day1_forecasts_by_product, recipe_df, safety_buffer,
+        modifier_shares=modifier_shares,
     )
 
     # Freshness: how many confirmed-open days are still missing between
