@@ -33,25 +33,113 @@ def classify_demand(predicted_quantity: float, historical_quantities: pd.Series)
     return {"demand_tier": tier, "p40_threshold": p40, "p80_threshold": p80}
 
 
+def _normalize_keyword(keyword) -> str:
+    return " ".join(str(keyword or "").split()).upper()
+
+
+def compute_modifier_shares(sales, modifiers, rules, window_dates=None) -> pd.DataFrame:
+    """
+    Share of each product's plates that left out a given ingredient,
+    because of a POS modifier ("NO EGG" -> Egg), over the window
+    (data_loader.get_modifier_share_inputs: the store's last 28
+    confirmed-open days).
+
+        modifier_share(product, ingredient)
+            = modifier plates mapped to that ingredient / all plates
+
+    daily_sales.quantity_sold already includes the modifier plates, so
+    "all plates" is the plain daily_sales total. Zero when the product had
+    no plates in the window or no modifiers; capped at 1.
+
+    Returns columns product_id, ingredient_id, modifier_share (one row per
+    pair that has a share; pairs not listed mean 0).
+    """
+    columns = ["product_id", "ingredient_id", "modifier_share"]
+    if not sales or not modifiers or not rules:
+        return pd.DataFrame(columns=columns)
+
+    window = {str(d) for d in window_dates} if window_dates else None
+
+    def in_window(row):
+        return window is None or str(row["sale_date"])[:10] in window
+
+    ingredient_by_keyword = {
+        _normalize_keyword(r["keyword"]): r["ingredient_id"] for r in rules
+    }
+
+    plates = {}
+    for r in sales:
+        if in_window(r):
+            pid = int(r["product_id"])
+            plates[pid] = plates.get(pid, 0) + max(0, float(r["quantity_sold"] or 0))
+
+    without = {}
+    for r in modifiers:
+        if not in_window(r):
+            continue
+        ingredient_id = ingredient_by_keyword.get(_normalize_keyword(r["keyword"]))
+        if ingredient_id is None:
+            continue
+        key = (int(r["product_id"]), int(ingredient_id))
+        without[key] = without.get(key, 0) + max(0, float(r["quantity"] or 0))
+
+    rows = []
+    for (pid, ingredient_id), count in without.items():
+        total = plates.get(pid, 0)
+        if total <= 0 or count <= 0:
+            continue
+        rows.append({
+            "product_id": pid,
+            "ingredient_id": ingredient_id,
+            "modifier_share": min(1.0, count / total),
+        })
+    return pd.DataFrame(rows, columns=columns)
+
+
 def estimate_ingredient_demand(
     forecasts_by_product: dict,
     recipe_df: pd.DataFrame,
     safety_buffer_percentage: float,
+    modifier_shares: pd.DataFrame = None,
 ) -> pd.DataFrame:
     """
-    Implements the paper's ingredient demand formula:
-        Ingredient Needed = (sum over dishes of forecasted_qty * recipe_qty)
-                             * (1 + safety_buffer_%)
+    Ingredient demand, with POS modifiers:
+
+        Need_i = sum over dishes of
+                 forecasted_qty * recipe_qty * (1 - modifier_share)
+                 * (1 + safety_buffer_%)
+
+    modifier_share is the share of that dish's recent plates that left out
+    ingredient i ("NO EGG"), from compute_modifier_shares(); 0 when there
+    is none, which gives back the paper's original formula exactly.
 
     forecasts_by_product: {product_id: predicted_quantity}
     recipe_df: output of data_loader.get_recipe_and_stock()
+    modifier_shares: output of compute_modifier_shares() (optional)
 
     Returns one row per ingredient with total forecasted need,
-    current stock, and how much to buy.
+    current stock, and how much to buy. To Buy and stock status are
+    unchanged.
     """
     recipe_df = recipe_df.copy()
     recipe_df["predicted_quantity"] = recipe_df["product_id"].map(forecasts_by_product).fillna(0)
-    recipe_df["raw_need"] = recipe_df["predicted_quantity"] * recipe_df["qty_per_serving"]
+
+    if modifier_shares is not None and not modifier_shares.empty and not recipe_df.empty:
+        shares = modifier_shares[["product_id", "ingredient_id", "modifier_share"]].copy()
+        shares["product_id"] = shares["product_id"].astype(int)
+        shares["ingredient_id"] = shares["ingredient_id"].astype(int)
+        recipe_df["product_id"] = recipe_df["product_id"].astype(int)
+        recipe_df["ingredient_id"] = recipe_df["ingredient_id"].astype(int)
+        recipe_df = recipe_df.merge(shares, on=["product_id", "ingredient_id"], how="left")
+        recipe_df["modifier_share"] = recipe_df["modifier_share"].fillna(0).clip(0, 1)
+    else:
+        recipe_df["modifier_share"] = 0.0
+
+    recipe_df["raw_need"] = (
+        recipe_df["predicted_quantity"]
+        * recipe_df["qty_per_serving"]
+        * (1 - recipe_df["modifier_share"])
+    )
 
     grouped = recipe_df.groupby(
         ["ingredient_id", "ingredient_name", "unit", "unit_cost", "current_stock"]

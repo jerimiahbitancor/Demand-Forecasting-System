@@ -215,7 +215,12 @@ router.post(
             numericId
           );
 
-          const uniqueProductNames = uploadService.extractUniqueProductNames(processedData.data || []);
+          // Base names only — "Marinated Porksilog NO EGG" is Marinated Porksilog.
+          const modifierKeywords = await uploadService.getModifierKeywords();
+          const uniqueProductNames = uploadService.extractUniqueProductNames(
+            processedData.data || [],
+            modifierKeywords
+          );
 
           console.log('[PRODUCT DISCOVERY] Parsed rows:', JSON.stringify(processedData.data || [], null, 2));
           console.log('[PRODUCT DISCOVERY] Extracted Item names:', JSON.stringify(

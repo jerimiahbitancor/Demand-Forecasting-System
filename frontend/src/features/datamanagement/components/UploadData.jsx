@@ -54,7 +54,12 @@ const runBatched = async (items, concurrency, worker) => {
   return results;
 };
 
-const UPLOAD_CONCURRENCY = 5;
+// 3, not 5: a browser opens at most 6 connections to one server
+// (localhost:5000 here, plain HTTP/1.1), and each upload holds one for its
+// whole processing time. At 5, uploads plus dashboard polling used every
+// slot, so other pages' requests (categories, units, mapping) waited in
+// the browser's queue and hit their 10 s axios timeout. 3 leaves room.
+const UPLOAD_CONCURRENCY = 3;
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 

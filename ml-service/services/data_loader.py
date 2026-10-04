@@ -455,6 +455,81 @@ def get_confirmed_open_dates() -> list:
     return sorted(date.fromisoformat(d) if isinstance(d, str) else d for d in dates)
 
 
+MODIFIER_SHARE_WINDOW_OPEN_DAYS = 28
+
+
+def _is_missing_table_error(exc) -> bool:
+    msg = str(exc).lower()
+    return (
+        "pgrst205" in msg
+        or "42p01" in msg
+        or "could not find the table" in msg
+        or ("relation" in msg and "does not exist" in msg)
+    )
+
+
+def get_modifier_share_inputs(window_open_days: int = MODIFIER_SHARE_WINDOW_OPEN_DAYS,
+                              open_dates=None) -> dict:
+    """
+    Raw inputs for the POS-modifier share used in ingredient demand
+    (business_logic.compute_modifier_shares does the arithmetic).
+
+    Window = the store's last `window_open_days` CONFIRMED-OPEN days.
+    Returns {"sales": [...], "modifiers": [...], "rules": [...],
+    "window_dates": [...]}; every list is empty when there is nothing to
+    share out — no open days, or migration 010 not run yet (the tables are
+    missing), in which case ingredient demand keeps using full recipes.
+
+    Every read is paged (Max rows stays 1,000): 28 days x ~100 products is
+    already ~2,800 daily_sales rows.
+
+    `open_dates`: the sorted confirmed-open dates, when the caller already
+    has them (/forecast loads them once per run); fetched here otherwise.
+    """
+    empty = {"sales": [], "modifiers": [], "rules": [], "window_dates": []}
+    if open_dates is None:
+        open_dates = get_confirmed_open_dates()
+    window_dates = open_dates[-window_open_days:] if window_open_days > 0 else []
+    if not window_dates:
+        return empty
+    start, end = window_dates[0].isoformat(), window_dates[-1].isoformat()
+
+    try:
+        rules = _fetch_all_rows(
+            lambda: supabase.table("modifier_rules")
+            .select("keyword, ingredient_id")
+            .order("keyword")
+        )
+        modifiers = _fetch_all_rows(
+            lambda: supabase.table("daily_sales_modifiers")
+            .select("product_id, sale_date, keyword, quantity")
+            .gte("sale_date", start)
+            .lte("sale_date", end)
+            .order("sale_date")
+            .order("product_id")
+            .order("keyword")
+        )
+    except Exception as exc:
+        if _is_missing_table_error(exc):
+            print("[MODIFIERS] modifier tables not found (migration 010 not run) "
+                  "- ingredient demand uses full recipes.")
+            return empty
+        raise
+
+    if not rules or not modifiers:
+        return {**empty, "rules": rules, "window_dates": window_dates}
+
+    sales = _fetch_all_rows(
+        lambda: supabase.table("daily_sales")
+        .select("product_id, sale_date, quantity_sold")
+        .gte("sale_date", start)
+        .lte("sale_date", end)
+        .order("sale_date")
+        .order("product_id")
+    )
+    return {"sales": sales, "modifiers": modifiers, "rules": rules, "window_dates": window_dates}
+
+
 def get_recipe_and_stock() -> pd.DataFrame:
     """
     Recipe mapping joined to current inventory, for ingredient demand

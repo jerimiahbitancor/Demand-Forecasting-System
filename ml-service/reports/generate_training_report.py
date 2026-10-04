@@ -90,7 +90,9 @@ from services.model_service import (  # noqa: E402
     filter_training_eligible, chronological_split, train_global_model,
     evaluate_predictions, evaluate_per_product,
 )
-from services.model_storage import load_latest_model, load_previous_model  # noqa: E402
+from services.model_storage import (  # noqa: E402
+    load_latest_model, load_previous_model, load_model_metadata,
+)
 from metrics import wmape, smape, mase  # noqa: E402
 
 REPORT_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "output")
@@ -251,6 +253,56 @@ def pick_representative_products(eligible_df: pd.DataFrame):
     return high_id, low_id
 
 
+class SavedModel:
+    """
+    A model plus the product list it was trained with. Every predict()
+    re-encodes product_id against THAT list before calling XGBoost.
+
+    Why: XGBoost stores each product by its POSITION in the category list,
+    not by its ID. This report builds its data from today's active
+    products, so if any product was archived or added since training, the
+    positions shift and every product is scored as a neighbour — silently
+    (reproduced in tests/test_category_order.py). /forecast already reuses
+    the saved list; this makes the report do the same.
+    """
+
+    def __init__(self, model, version: str, metadata: dict):
+        self._model = model
+        self.version = version
+        self.product_categories = [int(c) for c in metadata["product_categories"]]
+        self.trained_product_ids = sorted(int(p) for p in metadata["trained_product_ids"])
+        self.feature_importances_ = model.feature_importances_
+
+    def predict(self, X: pd.DataFrame):
+        X = X.copy()
+        ids = X["product_id"].astype(int)
+        unknown = sorted(set(ids) - set(self.product_categories))
+        if unknown:
+            # Not in the saved list -> would encode as NaN and still return
+            # a plausible-looking number. Refuse instead.
+            raise ValueError(f"{self.version} has no category for product(s) {unknown}")
+        X["product_id"] = pd.Categorical(ids, categories=self.product_categories)
+        return self._model.predict(X)
+
+
+def load_saved_model(version: str, model):
+    """
+    Wraps a model loaded from Storage with its _meta.json. Returns
+    (SavedModel, None) or (None, reason) — the same two refusals /forecast
+    makes: no metadata file (predates sidecars, so necessarily the old
+    feature set) or a feature_columns mismatch, order included, because
+    XGBoost reads columns by position.
+    """
+    metadata = load_model_metadata(version)
+    if metadata is None:
+        return None, f"{version} has no _meta.json, so its product order and feature set are unknown"
+    saved_columns = list(metadata.get("feature_columns") or [])
+    if saved_columns != list(FEATURE_COLUMNS):
+        return None, (f"{version} was trained on features {saved_columns}, "
+                      f"but the current feature list is {list(FEATURE_COLUMNS)}")
+    return SavedModel(model, version, metadata), None
+
+
 def _acquire_report_model(eligible_df: pd.DataFrame, force_train: bool):
     """
     Shared model acquisition. Every section that needs the CURRENT
@@ -286,11 +338,19 @@ def _acquire_report_model(eligible_df: pd.DataFrame, force_train: bool):
             print("  No saved model found in Supabase Storage.")
         print("  Training a new global model now via train_global_model()...")
         print("  *** This uploads a new model_v... file to the ml-models bucket ***")
-        model, metrics, model_version = train_global_model(eligible_df)
+        raw_model, metrics, model_version = train_global_model(eligible_df)
+        model = SavedModel(raw_model, model_version, metrics["metadata"])
         trained_now = True
         feature_importance = metrics["feature_importance"]
     else:
+        model, reason = load_saved_model(model_version, model)
+        if model is None:
+            print(f"\n  REFUSING to score the saved model: {reason}.")
+            print("  Its predictions would be meaningless. Retrain once, or run with --train.")
+            sys.exit(1)
         print(f"  Using latest saved model: {model_version} (read-only — no retraining, no new Storage write)")
+        print(f"  Product order taken from {model_version}_meta.json "
+              f"({len(model.product_categories)} categories, {len(model.trained_product_ids)} trained products)")
         feature_importance = {
             col: float(score) for col, score in zip(FEATURE_COLUMNS, model.feature_importances_)
         }
@@ -743,10 +803,10 @@ def stage_5_and_6(eligible_df: pd.DataFrame, force_train: bool):
         if trained_now else
         f"the latest saved model (<code>{model_version}</code>), loaded read-only from "
         "Supabase Storage — re-evaluated against a freshly pooled dataset rather than "
-        "retrained. If products were added or archived since that model was trained, "
-        "its internal product_id category mapping may not perfectly line up with "
-        "today's pooled categories; pass <code>--train</code> to this script for a "
-        "fully faithful, freshly-trained reproduction instead."
+        "retrained. Product order comes from the model's own <code>_meta.json</code> "
+        "(the same list <code>/forecast</code> uses), and only products the model was "
+        "trained on are scored, so archived or newly added products cannot shift "
+        "one product's predictions onto another."
     )
     body = f"""
     <p>Feature importance from {source_note}.</p>
@@ -795,19 +855,33 @@ def stage_5_and_6(eligible_df: pd.DataFrame, force_train: bool):
     )
     print_table("6. Evaluation Metrics — per product (worst to best MAPE)", per_product_df)
 
-    # NEW: aggregate metrics grouped by volume tier (Stage 1's tiering)
+    # Aggregate metrics by volume tier (Stage 1's tiering), POOLED over
+    # every test row in the tier: WMAPE = sum|error| / sum(actual) across
+    # the whole tier. Averaging per-product WMAPEs instead lets one item
+    # selling ~1 a day (WMAPE in the thousands) swamp the tier. Filled-zero
+    # days stay in, exactly as training and the dashboard score them; the
+    # 7-day-average baseline is scored on the same rows for comparison.
     per_product_df["volume_tier"] = per_product_df["product_id"].map(
+        lambda p: _VOLUME_TIERS_CACHE.get(int(p), "Unknown")
+    )
+    tier_scored = test_df[["product_id", "quantity_sold", "rolling_7", "is_real"]].copy()
+    tier_scored["product_id"] = tier_scored["product_id"].astype(int)
+    tier_scored["predicted"] = predictions
+    tier_scored["volume_tier"] = tier_scored["product_id"].map(
         lambda p: _VOLUME_TIERS_CACHE.get(p, "Unknown")
     )
     tier_rows = []
-    for tier, grp in per_product_df.groupby("volume_tier"):
+    for tier, grp in tier_scored.groupby("volume_tier"):
+        actual = grp["quantity_sold"].values
         tier_rows.append({
             "volume_tier": tier,
-            "n_products": len(grp),
-            "avg_mae": grp["mae"].mean(),
-            "avg_rmse": grp["rmse"].mean(),
-            "avg_mape": grp["mape"].mean(skipna=True),
-            "avg_wmape": grp["wmape"].mean(skipna=True),
+            "n_products": grp["product_id"].nunique(),
+            "test_rows": len(grp),
+            "filled_zero_rows": int((~grp["is_real"].astype(bool)).sum()),
+            "units_sold": float(actual.sum()),
+            "mae": float(np.mean(np.abs(actual - grp["predicted"].values))),
+            "wmape": wmape(actual, grp["predicted"].values),
+            "rolling7_wmape": wmape(actual, grp["rolling_7"].values),
         })
     tier_order = {"High": 0, "Medium": 1, "Low": 2, "Unknown": 3}
     tier_group_df = pd.DataFrame(tier_rows).sort_values(
@@ -847,7 +921,10 @@ def stage_5_and_6(eligible_df: pd.DataFrame, force_train: bool):
     <h3>Aggregate Metrics by Volume Tier</h3>
     <p>Same tiers as Stage 1 (High/Medium/Low average daily quantity) — grouping this way shows
     whether accuracy problems concentrate in low-volume products specifically, rather than being
-    spread evenly across the whole menu.</p>
+    spread evenly across the whole menu. WMAPE here is <strong>pooled</strong>: all units missed in
+    the tier divided by all units sold in the tier, not an average of per-product WMAPEs (which a
+    single item selling one a day can blow up). Filled zero days are included, and
+    <code>rolling7_wmape</code> scores the 7-day average on the same rows.</p>
     {df_to_html_table(tier_group_df)}
     """
     add_section("metrics", "6. Evaluation Metrics", body2)
@@ -1300,18 +1377,37 @@ def stage_production_reality_check(model, model_version: str,
 
     # --- (c) Previous-model comparison ---
     previous_model, previous_version = load_previous_model()
-    if previous_model is None:
+    previous_refusal = None
+    if previous_model is not None:
+        # Same rules as the current model: its OWN product list, and no
+        # scoring at all on a feature-set mismatch.
+        previous_model, previous_refusal = load_saved_model(previous_version, previous_model)
+    if previous_refusal:
+        print(f"  Previous model not compared: {previous_refusal}.")
+        previous_html = (f"<p>Previous model <code>{previous_version}</code> was not compared: "
+                         f"{previous_refusal}. Scoring it would not be meaningful.</p>")
+        warning_html = ""
+    elif previous_model is None:
         print("  No previous model to compare against (only one model has ever been trained).")
         previous_html = "<p>Only one model has ever been trained — there is no previous version to compare against.</p>"
         warning_html = ""
     else:
-        current_predictions = model.predict(test_df[FEATURE_COLUMNS])
-        current_agg = evaluate_predictions(test_df["quantity_sold"].values, current_predictions)
-        current_wmape = wmape(test_df["quantity_sold"].values, current_predictions)
+        # Both models are scored on the same rows: products BOTH of them
+        # were trained on.
+        common_ids = set(model.trained_product_ids) & set(previous_model.trained_product_ids)
+        compare_df_rows = test_df[test_df["product_id"].astype(int).isin(common_ids)]
+        dropped = test_df["product_id"].astype(int).nunique() - compare_df_rows["product_id"].astype(int).nunique()
+        if dropped:
+            print(f"  13c compares {len(common_ids)} products trained in both models ({dropped} left out).")
+        y_cmp = compare_df_rows["quantity_sold"].values
 
-        previous_predictions = previous_model.predict(test_df[FEATURE_COLUMNS])
-        previous_agg = evaluate_predictions(test_df["quantity_sold"].values, previous_predictions)
-        previous_wmape = wmape(test_df["quantity_sold"].values, previous_predictions)
+        current_predictions = model.predict(compare_df_rows[FEATURE_COLUMNS])
+        current_agg = evaluate_predictions(y_cmp, current_predictions)
+        current_wmape = wmape(y_cmp, current_predictions)
+
+        previous_predictions = previous_model.predict(compare_df_rows[FEATURE_COLUMNS])
+        previous_agg = evaluate_predictions(y_cmp, previous_predictions)
+        previous_wmape = wmape(y_cmp, previous_predictions)
 
         compare_df = pd.DataFrame([
             {"model": f"Current ({model_version})", "mae": current_agg["mae"],
@@ -1574,16 +1670,31 @@ def main():
         print(f"  ({len(excluded)} product(s) excluded from training eligibility — see model_service.filter_training_eligible)")
     extend_preprocessing_with_excluded(excluded)
 
+    model, model_version, _metrics, trained_now, feature_importance = _acquire_report_model(
+        eligible_df, args.train
+    )
+    if not trained_now:
+        # Score only products the saved model actually learned — the same
+        # rule /forecast applies. A product that became eligible after
+        # training would otherwise be scored on behaviour the model never saw.
+        today_ids = set(int(p) for p in eligible_df["product_id"].unique())
+        not_learned = sorted(today_ids - set(model.trained_product_ids))
+        if not_learned:
+            print(f"  Not scored — eligible today but not trained in {model_version}: {not_learned}")
+            eligible_df = eligible_df[eligible_df["product_id"].astype(int).isin(model.trained_product_ids)].copy()
+            eligible_df["product_id"] = eligible_df["product_id"].cat.remove_unused_categories()
+        trained_missing = sorted(set(model.trained_product_ids) - today_ids)
+        if trained_missing:
+            print(f"  Trained in {model_version} but not eligible/active today: {trained_missing}")
+
     high_id, low_id = pick_representative_products(eligible_df)
     print(f"  Representative products for this report: high-volume={high_id}, low-volume={low_id}")
 
     train_df, test_df = stage_3_split(eligible_df, high_id, low_id)
     stage_4_features(eligible_df, high_id)
 
-    model, model_version, _metrics, _trained_now, feature_importance = _acquire_report_model(
-        eligible_df, args.train
-    )
-    known_categories = eligible_df["product_id"].cat.categories.tolist()
+    # The model's OWN product list, never today's (see SavedModel).
+    known_categories = model.product_categories
 
     stage_baseline_comparison(model, test_df)
     test_df_s6, predictions_s6 = stage_5_and_6(eligible_df, force_train=args.train)
