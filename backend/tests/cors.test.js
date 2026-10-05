@@ -42,6 +42,7 @@ test('preflight from an allowed origin allows X-Request-ID', async () => {
     assert.ok(allowed.includes('content-type'));
     assert.equal(res.headers.get('access-control-allow-origin'), ALLOWED);
     assert.equal(res.headers.get('access-control-allow-credentials'), 'true');
+    assert.equal(res.headers.get('access-control-max-age'), '600');
   });
 });
 

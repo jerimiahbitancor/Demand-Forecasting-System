@@ -45,6 +45,9 @@ function createCorsOptions({ allowedOrigins = parseAllowedOrigins() } = {}) {
     // Lets the browser app read these response headers: the request ID for
     // error reports, and Retry-After on a 429.
     exposedHeaders: ['X-Request-ID', 'Retry-After'],
+    // Browsers may reuse a preflight answer for 10 minutes instead of
+    // sending an OPTIONS request before nearly every GET.
+    maxAge: 600,
   };
 }
 
