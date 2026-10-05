@@ -62,6 +62,11 @@ const PORT = process.env.PORT || 5000;
 // breaks express-rate-limit's per-IP keying. Trust exactly one hop.
 app.set('trust proxy', 1);
 
+// Request ID + one JSON access-log line per request. First, so every later
+// middleware (and any error it raises) runs with the ID available.
+const requestContext = require('./middleware/requestContext');
+app.use(requestContext);
+
 // ============= SECURITY MIDDLEWARE =============+++++
 
 // Helmet - Secure HTTP headers
@@ -109,14 +114,6 @@ app.use('/api', limiter);
 // Body parsers with limits
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true, limit: '10mb' }));
-
-// ============= LOGGING =============
-if (process.env.NODE_ENV !== 'production') {
-  app.use((req, res, next) => {
-    console.log(`${req.method} ${req.path}`);
-    next();
-  });
-}
 
 // Global audit trail — logs every non-GET request (except routes that
 // already write their own detailed audit entries).
