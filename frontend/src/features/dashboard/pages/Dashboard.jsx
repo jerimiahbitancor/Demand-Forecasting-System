@@ -1,6 +1,9 @@
 // Dashboard.jsx
+import { useEffect } from 'react';
+import toast from 'react-hot-toast';
 import apiClient from '../../../services/apiClient';
 import usePolling from '../../../hooks/usePolling';
+import { describeChange, onDataChanged } from '../../../utils/appEvents';
 import './Dashboard.css';
 
 // Import the 7 state components
@@ -64,6 +67,15 @@ const Dashboard = () => {
   // right after the owner marks dates closed) calls this instead of
   // waiting for the next poll.
   const requestRefresh = refresh;
+
+  // The notification bell signals a new upload / training / forecast
+  // notification (utils/appEvents.js): re-check now instead of waiting up
+  // to 60 s, and say so with one toast (same id, so they never stack).
+  useEffect(() => onDataChanged((detail) => {
+    refresh();
+    const { text, failed } = describeChange(detail);
+    (failed ? toast.error : toast.success)(text, { id: 'dfs-data-changed' });
+  }), [refresh]);
 
   // Configuration for each state with background
   const stateConfig = {
