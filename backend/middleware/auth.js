@@ -137,7 +137,9 @@ const authenticate = async (req, res, next) => {
           // which is exactly the bypass: reject instead, and let a real
           // registration (or an admin fixing the auth_id link) be the
           // only way to get a `user` row.
-          logger.debug('auth_no_custom_user');
+          // Security signal: a valid login with no linked account. auth_id is
+          // the Supabase Auth UUID (not personal data); no email is logged.
+          logger.warn('auth_no_custom_user', { auth_id: authId });
         }
       } catch (err) {
         logger.error('auth_custom_user_lookup_failed', { err });
