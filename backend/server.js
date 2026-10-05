@@ -34,7 +34,6 @@ net.setDefaultAutoSelectFamilyAttemptTimeout(
 const express = require('express');
 const cors = require('cors');
 const helmet = require('helmet');
-const rateLimit = require('express-rate-limit');
 const logger = require('./utils/logger');
 
 // Import routes
@@ -78,16 +77,12 @@ app.use(helmet());
 const { createCorsOptions } = require('./middleware/corsConfig');
 app.use(cors(createCorsOptions()));
 
-// Rate Limiting - Prevent brute force attacks
-const limiter = rateLimit({
-  windowMs: 15 * 60 * 1000,
-  max: process.env.NODE_ENV === 'production' ? 100 : 1000,
-  message: {
-    success: false,
-    error: 'Too many requests, please try again later.'
-  }
-});
-app.use('/api', limiter);
+// Rate Limiting - a strict limit on the OTP/password endpoints (brute-force
+// targets) and a generous one for all other /api traffic, so normal use
+// (dashboard polling) can't lock the owner out. See middleware/rateLimits.js.
+const { createAuthLimiter, createApiLimiter } = require('./middleware/rateLimits');
+app.use('/api', createAuthLimiter());
+app.use('/api', createApiLimiter());
 
 // Body parsers with limits
 app.use(express.json({ limit: '10mb' }));
