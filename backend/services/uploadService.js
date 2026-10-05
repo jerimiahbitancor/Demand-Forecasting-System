@@ -7,6 +7,7 @@ const mappingService = require('./mappingService');
 const mlService = require('./mlService');
 const businessDayService = require('./businessDayService');
 const dataCoverageService = require('./dataCoverageService');
+const logger = require('../utils/logger');
 const { deriveProductStatus } = require('./productStatusService');
 const { PRODUCT_STATUS_NOTES, PRODUCT_DB_STATUS_BY_DERIVED } = require('./productStatusConstants');
 const dayjs = require('dayjs');
@@ -1299,7 +1300,7 @@ class UploadService {
 
       if (numericId) {
         query = query.eq('user_id', numericId);
-        console.log(`Fetching stats for user_id: ${numericId}`);
+        logger.debug('upload_stats_fetch', { user_id: numericId });
       }
 
       // Independent reads, run in parallel: the uploads list, the menu
@@ -1440,7 +1441,10 @@ class UploadService {
         last_sync: uploads[uploads.length - 1]?.upload_date || new Date().toISOString()
       };
 
-      console.log('Stats calculated:', stats);
+      logger.debug('upload_stats_calculated', {
+        total_uploads: stats.total_uploads,
+        actual_days_uploaded: stats.actual_days_uploaded,
+      });
       return stats;
     } catch (error) {
       console.error('Error fetching stats:', error);
