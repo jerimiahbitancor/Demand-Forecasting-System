@@ -6,6 +6,7 @@ const { supabase, isConfigured, supabaseAdmin } = require('../config/supabase');
 const mappingService = require('./mappingService');
 const mlService = require('./mlService');
 const businessDayService = require('./businessDayService');
+const dataCoverageService = require('./dataCoverageService');
 const { deriveProductStatus } = require('./productStatusService');
 const { PRODUCT_STATUS_NOTES, PRODUCT_DB_STATUS_BY_DERIVED } = require('./productStatusConstants');
 const dayjs = require('dayjs');
@@ -1267,7 +1268,10 @@ class UploadService {
     }
   }
 
-  async getUploadStats(userId = null) {
+  // `fingerprintPromise` (optional): a dataCoverageService fingerprint
+  // already being fetched by the caller (getDashboardState), so one check
+  // reads it once. Without it, this function fetches its own.
+  async getUploadStats(userId = null, { fingerprintPromise = null } = {}) {
     try {
       const numericId = await this.getNumericUserId(userId);
 
@@ -1298,7 +1302,38 @@ class UploadService {
         console.log(`Fetching stats for user_id: ${numericId}`);
       }
 
-      const { data: uploads = [], error: uploadError } = await query;
+      // Independent reads, run in parallel: the uploads list, the menu
+      // count, and the data fingerprint. The fingerprint must be read
+      // BEFORE the sale-date computation below starts (see
+      // dataCoverageService.js); awaiting it here guarantees that.
+      const fingerprintRequest = fingerprintPromise || dataCoverageService
+        .getFingerprint(supabaseAdmin)
+        .catch((fingerprintError) => {
+          console.warn('Could not read data fingerprint, computing sale coverage uncached:', fingerprintError.message);
+          return null;
+        });
+
+      let menuQuery = supabaseAdmin.from('products')
+        .select('*', { count: 'exact', head: true });
+
+      const menuCountRequest = (async () => {
+        try {
+          const { count, error: productError } = await menuQuery;
+
+          if (!productError) {
+            return count || 0;
+          }
+        } catch (err) {
+          console.warn('Could not fetch menu items count:', err.message);
+        }
+        return 0;
+      })();
+
+      const [{ data: uploads = [], error: uploadError }, fingerprint, menuItemsCount] = await Promise.all([
+        query,
+        fingerprintRequest,
+        menuCountRequest,
+      ]);
 
       if (uploadError) throw uploadError;
 
@@ -1338,23 +1373,48 @@ class UploadService {
           // exactly 1,000. If it were ever lowered, the first page would
           // come back short and this would stop early, silently
           // under-counting sale days again (the bug described above).
-          const { data: saleDateRows, error: pageError } = await fetchAllRows(() => supabaseAdmin
-            .from('daily_sales')
-            .select('sale_date')
-            .in('upload_id', uploadIds)
-            .order('sale_date')
-            .order('product_id'));
-          if (pageError) throw pageError;
+          //
+          // Same query and calculation as before, but only re-run when the
+          // data fingerprint changes (dataCoverageService.js). The upload
+          // id set is part of the cache fingerprint because the query is
+          // filtered by it and the uploads list was read in parallel with
+          // the data fingerprint.
+          const computeSaleCoverage = async () => {
+            const { data: saleDateRows, error: pageError } = await fetchAllRows(() => supabaseAdmin
+              .from('daily_sales')
+              .select('sale_date')
+              .in('upload_id', uploadIds)
+              .order('sale_date')
+              .order('product_id'));
+            if (pageError) throw pageError;
 
-          const distinctDates = new Set();
-          for (const row of saleDateRows || []) {
-            if (row.sale_date) distinctDates.add(row.sale_date);
+            const distinctDates = new Set();
+            for (const row of saleDateRows || []) {
+              if (row.sale_date) distinctDates.add(row.sale_date);
+            }
+
+            return {
+              distinctSaleDays: distinctDates.size,
+              earliestSaleDate: distinctDates.size > 0 ? [...distinctDates].sort()[0] : null,
+            };
+          };
+
+          let coverage;
+          if (fingerprint) {
+            const minId = uploadIds.reduce((a, b) => (b < a ? b : a), uploadIds[0]);
+            const maxId = uploadIds.reduce((a, b) => (b > a ? b : a), uploadIds[0]);
+            const idKey = `${uploadIds.length}:${minId}:${maxId}`;
+            coverage = await dataCoverageService.cachedByFingerprint(
+              `saleCoverage:${numericId}`,
+              `${fingerprint}|${idKey}`,
+              computeSaleCoverage
+            );
+          } else {
+            coverage = await computeSaleCoverage();
           }
 
-          distinctSaleDays = distinctDates.size;
-          if (distinctDates.size > 0) {
-            earliestSaleDate = [...distinctDates].sort()[0];
-          }
+          distinctSaleDays = coverage.distinctSaleDays;
+          earliestSaleDate = coverage.earliestSaleDate;
         } catch (salesDatesError) {
           console.warn('Could not calculate sales date coverage:', salesDatesError.message);
         }
@@ -1365,20 +1425,6 @@ class UploadService {
         : 0;
       const monthsUploaded = Math.min(Math.floor(daysOfHistory / 30), 12);
       const actualMonthsUploaded = Math.min(Math.floor(distinctSaleDays / 30), 12);
-
-      let menuQuery = supabaseAdmin.from('products')
-        .select('*', { count: 'exact', head: true });
-
-      let menuItemsCount = 0;
-      try {
-        const { count, error: productError } = await menuQuery;
-
-        if (!productError) {
-          menuItemsCount = count || 0;
-        }
-      } catch (err) {
-        console.warn('Could not fetch menu items count:', err.message);
-      }
 
       const stats = {
         total_uploads: uploads.length,
@@ -1568,15 +1614,49 @@ class UploadService {
     return null;
   }
 
+  // One dashboard check. Same decisions, in the same order, as before;
+  // the reads are just grouped so independent ones run in parallel, and
+  // the two whole-table sale-date scans are cached by data fingerprint
+  // (services/dataCoverageService.js).
+  //
+  // Each read is "settled" first and its result (or error) is only taken
+  // at the point the old code awaited it, so an error in a read the old
+  // code would never have reached still cannot change the answer.
   async getDashboardState(userId = null) {
-    const stats = await this.getUploadStats(userId);
-    const progress = await this.getUploadProgress(userId);
+    const settle = (promise) => promise.then(
+      (value) => ({ ok: true, value }),
+      (error) => ({ ok: false, error })
+    );
+    const take = (result) => {
+      if (!result.ok) throw result.error;
+      return result.value;
+    };
+
+    // Resolve the user once; getUploadStats/getUploadProgress accept a number as-is.
+    const numericId = await this.getNumericUserId(userId);
+
+    // One fingerprint read per check, shared by both cached computations.
+    const fingerprintPromise = this.isSupabaseReady()
+      ? dataCoverageService.getFingerprint(supabaseAdmin).catch((fingerprintError) => {
+        console.warn('Could not read data fingerprint, dashboard check runs uncached:', fingerprintError.message);
+        return null;
+      })
+      : Promise.resolve(null);
+
+    // Batch A.
+    const [statsResult, progressResult, latestModelResult] = await Promise.all([
+      settle(this.getUploadStats(numericId, { fingerprintPromise })),
+      settle(this.getUploadProgress(numericId)),
+      settle(this.getLatestModelMetrics()),
+    ]);
+    const stats = take(statsResult);
+    const progress = take(progressResult);
 
     if (stats.total_uploads === 0 && stats.sales_records === 0) {
       return { state: 'no-data', stats, progress };
     }
 
-    const latestModel = await this.getLatestModelMetrics();
+    const latestModel = take(latestModelResult);
 
     // First-use history rule (utils/historyGate.js — ml-service's /train
     // applies the identical rule via services/history_gate.py):
@@ -1590,7 +1670,16 @@ class UploadService {
     // flip a working dashboard back to this onboarding screen; missed
     // uploads after that are reported through forecast_runs.stale_days.
     if (!latestModel && !mlService.isTrainingInFlight()) {
-      const { gate } = await businessDayService.getHistoryCoverage();
+      // Cached by fingerprint. businessDayService.getHistoryCoverage itself
+      // stays uncached, because bulkConfirmClosed uses it to validate writes.
+      const fingerprint = await fingerprintPromise;
+      const { gate } = fingerprint
+        ? await dataCoverageService.cachedByFingerprint(
+          'historyCoverage',
+          fingerprint,
+          () => businessDayService.getHistoryCoverage()
+        )
+        : await businessDayService.getHistoryCoverage();
       if (!gate.passes) {
         return {
           state: 'uploaded-insufficient',
@@ -1623,7 +1712,16 @@ class UploadService {
       return { state: 'ready-to-train', stats, progress };
     }
 
-    const hasForecasts = await this.hasUpcomingForecasts();
+    // Batch B: the remaining reads, in parallel. Each result is taken
+    // where the old code awaited it.
+    const [hasForecastsResult, forecastRunResult, dataQualityResult, unmappedResult] = await Promise.all([
+      settle(this.hasUpcomingForecasts()),
+      settle(this.getLatestForecastRun()),
+      settle(this.getLastUploadDataQualityIssue()),
+      settle(this.getUnmappedActiveProductInfo()),
+    ]);
+
+    const hasForecasts = take(hasForecastsResult);
     if (!hasForecasts) {
       // A model exists but no current forecasts yet (e.g. trained just
       // now, first /forecast run hasn't landed). No dedicated state for
@@ -1653,10 +1751,8 @@ class UploadService {
     // issues can happen to an otherwise-complete dashboard. This is the
     // correct moment for "an operating system just got worse," not a
     // precondition for letting it operate at all.
-    const [forecastRun, dataQualityIssue] = await Promise.all([
-      this.getLatestForecastRun(),
-      this.getLastUploadDataQualityIssue(),
-    ]);
+    const forecastRun = take(forecastRunResult);
+    const dataQualityIssue = take(dataQualityResult);
 
     const staleDays = forecastRun?.stale_days || 0;
     const isStale = staleDays > 0;
@@ -1693,7 +1789,7 @@ class UploadService {
       };
     }
 
-    const { hasUnmapped, unmappedCount, activeCount } = await this.getUnmappedActiveProductInfo();
+    const { hasUnmapped, unmappedCount, activeCount } = take(unmappedResult);
     if (hasUnmapped) {
       return {
         state: 'forecasts-ready-recipes-pending',
