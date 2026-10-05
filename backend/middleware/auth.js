@@ -1,5 +1,6 @@
 // backend/middleware/auth.js
 const { supabaseAdmin } = require('../config/supabase');
+const logger = require('../utils/logger');
 
 // Caches auth_id -> { customUser, customUserId } for CUSTOM_USER_CACHE_TTL_MS.
 // Verifying the JWT locally (below) already removes the per-request network
@@ -123,7 +124,7 @@ const authenticate = async (req, res, next) => {
         if (!userError && userData) {
           customUser = userData;
           customUserId = userData.id;
-          console.log('Custom user found:', customUserId);
+          logger.debug('auth_custom_user_found', { user_id: customUserId });
         } else {
           // A valid Supabase Auth JWT with no matching `user` row means
           // this auth_id was never linked through the app's own
@@ -136,10 +137,10 @@ const authenticate = async (req, res, next) => {
           // which is exactly the bypass: reject instead, and let a real
           // registration (or an admin fixing the auth_id link) be the
           // only way to get a `user` row.
-          console.log('No custom user found for auth_id:', authId);
+          logger.debug('auth_no_custom_user');
         }
       } catch (err) {
-        console.error('Error fetching custom user:', err);
+        logger.error('auth_custom_user_lookup_failed', { err });
       }
 
       if (!customUserId) {
@@ -164,13 +165,11 @@ const authenticate = async (req, res, next) => {
     // a user-scoped Supabase client (so RLS policies run in user context)
     req.accessToken = token;
 
-    console.log('User authenticated:', req.user.email);
-    console.log('User ID (auth):', req.user.id);
-    console.log('User user_id (custom):', req.user.user_id);
+    logger.debug('auth_ok', { user_id: req.user.user_id });
     next();
 
   } catch (error) {
-    console.error('Auth error:', error);
+    logger.error('auth_failed', { err: error });
     return res.status(500).json({
       success: false,
       error: 'Authentication failed'

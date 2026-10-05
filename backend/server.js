@@ -35,6 +35,7 @@ const express = require('express');
 const cors = require('cors');
 const helmet = require('helmet');
 const rateLimit = require('express-rate-limit');
+const logger = require('./utils/logger');
 
 // Import routes
 const authRoutes = require('./routes/auth');
@@ -133,30 +134,11 @@ app.get('/', (req, res) => {
 });
 
 // ============= ERROR HANDLING =============
-// 404 handler
-app.use((req, res) => {
-  res.status(404).json({ 
-    success: false,
-    error: 'Route not found'
-  });
-});
-
-// Global error handler
-app.use((err, req, res, next) => {
-  console.error('Error:', err.message);
-  
-  const status = err.status || 500;
-  const message = err.message || 'Internal Server Error';
-  
-  const response = {
-    success: false,
-    error: status === 500 && process.env.NODE_ENV === 'production' 
-      ? 'Something went wrong' 
-      : message
-  };
-
-  res.status(status).json(response);
-});
+// 404 handler + global error handler (see middleware/errorHandlers.js).
+// Both include the request ID in the response body.
+const { notFoundHandler, errorHandler } = require('./middleware/errorHandlers');
+app.use(notFoundHandler);
+app.use(errorHandler);
 
 // ============= CRASH SAFETY NET =============
 // Express 4 does NOT catch a rejected promise returned from an async route
@@ -177,8 +159,8 @@ app.use((err, req, res, next) => {
 // is strictly worse. This is a safety net for bugs we haven't found yet —
 // it is not a substitute for fixing a missing try/catch or .catch() once
 // the log below points at one.
-process.on('unhandledRejection', (reason, promise) => {
-  console.error('🔥 Unhandled Promise Rejection:', reason);
+process.on('unhandledRejection', (reason) => {
+  logger.error('unhandled_rejection', { err: reason });
 });
 
 // uncaughtException: a thrown error outside any promise/async context is a
@@ -189,7 +171,7 @@ process.on('unhandledRejection', (reason, promise) => {
 // Docker's restart policy) to bring it back up; in local dev, nodemon will
 // pick this up as an exit and restart on the next file save same as before.
 process.on('uncaughtException', (err) => {
-  console.error('🔥 Uncaught Exception:', err);
+  logger.error('uncaught_exception', { err });
   process.exit(1);
 });
 

@@ -19,6 +19,9 @@ function parseAllowedOrigins(value = process.env.ALLOWED_ORIGINS) {
 // THIS project specifically, rather than any *.vercel.app site.
 const vercelPreviewPattern = /^https:\/\/demand-forecasting-system-[a-z0-9]+-[a-z0-9]+\.vercel\.app$/;
 
+// Marker on the error passed for a refused origin (see errorHandlers.js).
+const CORS_REJECTED = 'CORS_REJECTED';
+
 function createCorsOptions({ allowedOrigins = parseAllowedOrigins() } = {}) {
   return {
     origin: (origin, callback) => {
@@ -26,7 +29,14 @@ function createCorsOptions({ allowedOrigins = parseAllowedOrigins() } = {}) {
       if (!origin || allowedOrigins.includes(origin) || vercelPreviewPattern.test(origin)) {
         callback(null, true);
       } else {
-        callback(new Error(`Not allowed by CORS: ${origin}`));
+        // Still an error, so the request stops here and never reaches a
+        // route. The marker lets the global error handler answer 403
+        // "Origin not allowed" instead of a generic 500.
+        const err = new Error(`Not allowed by CORS: ${origin}`);
+        err.code = CORS_REJECTED;
+        err.status = 403;
+        err.origin = origin;
+        callback(err);
       }
     },
     credentials: true,
@@ -38,4 +48,4 @@ function createCorsOptions({ allowedOrigins = parseAllowedOrigins() } = {}) {
   };
 }
 
-module.exports = { createCorsOptions, parseAllowedOrigins, vercelPreviewPattern };
+module.exports = { createCorsOptions, parseAllowedOrigins, vercelPreviewPattern, CORS_REJECTED };
