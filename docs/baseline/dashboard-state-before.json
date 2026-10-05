@@ -1,0 +1,34 @@
+{
+    "success": true,
+    "data": {
+        "state": "uploaded-insufficient",
+        "stats": {
+            "total_uploads": 335,
+            "processed": 335,
+            "pending": 0,
+            "failed": 0,
+            "sales_records": 17541,
+            "days_of_history": 452,
+            "months_uploaded": 12,
+            "actual_days_uploaded": 335,
+            "actual_months_uploaded": 11,
+            "menu_items": 113,
+            "last_sync": "2026-10-03T10:14:48.67"
+        },
+        "progress": {
+            "progress": 100,
+            "status": "processed"
+        },
+        "insufficientReason": "unconfirmed",
+        "history": {
+            "firstSaleDate": "2025-07-10",
+            "lastSaleDate": "2026-09-28",
+            "spanDays": 446,
+            "spanMonths": 14.7,
+            "requiredSpanDays": 365,
+            "openDays": 335,
+            "closedDays": 0,
+            "unconfirmedDays": 111
+        }
+    }
+}

@@ -35,6 +35,37 @@ Dashboard state at the time: **Uploaded Insufficient**.
 - `GET /api/upload/dashboard-state` response time: **min 0.3 s, max 4.93 s**.
 - `NODE_ENV` on the Railway api service: **production**. So the current rate limit is **100 requests / 15 min per IP**.
 
+### Deployment
+
+- Backend (api) and ml-service run on **Railway**: 1 replica each, **0.5 GB RAM per service**. Free plan limits apply after the trial. Frontend runs on Vercel.
+- Railway trial started **2026-09-18**. It ends on **2026-10-18**, or sooner if the **$5 credit** runs out.
+
+### ML state
+
+- **0** `model_metrics` rows, **0** `forecast_runs`, **0** `forecasts`. No model has been trained yet.
+
+### Supabase API log, 2026-10-05 18:35:39–18:37:43 UTC
+
+228 requests, all HTTP 200.
+
+- About **85 Supabase requests/min with the tab hidden**. Chrome throttled the background timers to once per minute, so the bursts land in the same second each minute.
+- About **43 Supabase calls per dashboard check**. That includes two full paged reads of `daily_sales.sale_date`, 19 pages each: offsets 0 to 17000, plus an empty page at 17312.
+- One check took about **4.6 s** from first call to last (60–120 ms per page, run one after another). This explains the measured 4.93 s maximum.
+- **Two dashboard checks ran in the same seconds.** This is proof of overlap (bug #2).
+- Estimate with the tab visible: about 12 checks/min × ~43 calls = **~500 Supabase calls/min**.
+
+### Rate limit seen in production (2026-10-06)
+
+- With only the dashboard open, some `dashboard-state` requests got **HTTP 429** `{"success":false,"error":"Too many requests, please try again later."}`. The production limit (100 / 15 min) blocks the only user.
+- On a 429 the dashboard falls back to a business state (bug #1). A rate-limit error looks like real data.
+
+### Production `dashboard-state` (from `dashboard-state-before.json`)
+
+- `state`: `uploaded-insufficient`, `insufficientReason`: `unconfirmed`
+- `spanDays` 446, `openDays` 335, `closedDays` 0, `unconfirmedDays` 111, `lastSaleDate` 2026-09-28
+
+**Comparison rule for later phases:** ignore only `stats.days_of_history` and `stats.months_uploaded` (both depend on today's date) and `stats.last_sync` (it comes from an unordered query). Every other field, including `progress`, must match exactly. Compare only against production. The local database is not production.
+
 ## 4. Static analysis (from reading the code)
 
 State: Uploaded Insufficient.
@@ -56,12 +87,7 @@ State: Uploaded Insufficient.
 
 ## 5. To fill by owner
 
-- Supabase API requests per minute with only the dashboard open: `TO FILL BY OWNER`
 - Railway deployed commit hash, api service: `TO FILL BY OWNER`
 - Railway deployed commit hash, ml service: `TO FILL BY OWNER`
-- Memory per service (api / ml): `TO FILL BY OWNER`
-- Railway trial end date: `TO FILL BY OWNER`
-- Latest `model_metrics` row (version, date, wmape, baseline_wmape): `TO FILL BY OWNER`
-- Last 5 `forecast_runs` (run_at, run_type, stale_days): `TO FILL BY OWNER`
-- Forecast rows for today: `TO FILL BY OWNER`
-- **`docs/baseline/dashboard-state-before.json`**: paste the full JSON response of `/api/upload/dashboard-state`, copied from DevTools. It is used to prove that Task 1.12 returns the same answer. `TO FILL BY OWNER`
+
+Filled above: Supabase request rate, memory, trial dates, ML state, and `dashboard-state-before.json` (production, HTTP 200).
