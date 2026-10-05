@@ -11,6 +11,8 @@ import ReadyToTrain from '../states/ReadyToTrain.jsx';
 import TrainingInProgress from '../states/TrainingInProgress.jsx';
 import ForecastsReady from '../states/ForecastsReady.jsx';
 import DataNeedsAttention from '../states/DataNeedsAttention.jsx';
+import ConnectionProblem from '../states/ConnectionProblem.jsx';
+import Navbar from '../../components/Navbar/Navbar';
 
 // Import the image directly
 import dashboardBg from '../../../assets/images/Dashboard.png';
@@ -30,43 +32,34 @@ const stateMap = {
 };
 
 // One dashboard check. Resolves to a stateConfig key.
+//
+// A failed check THROWS. It must never pick a business state: the old
+// fallback here turned a timeout, a 429 or a 500 into "Uploaded
+// Insufficient" or "No Data", which looked exactly like real data.
+// usePolling keeps the last good state and reports the error instead.
 const loadDashboardState = async (signal) => {
-  try {
-    const response = await apiClient.get('/upload/dashboard-state', { signal });
-    let state = response.data.success ? response.data.data.state : 'no-data';
+  const response = await apiClient.get('/upload/dashboard-state', { signal });
+  let state = response.data.success ? response.data.data.state : 'no-data';
 
-    if (state === 'no-data') {
-      const uploadsResponse = await apiClient.get('/upload?limit=1', { signal });
-      const uploadCount = uploadsResponse.data.count
-        || uploadsResponse.data.data?.length
-        || 0;
+  if (state === 'no-data') {
+    const uploadsResponse = await apiClient.get('/upload?limit=1', { signal });
+    const uploadCount = uploadsResponse.data.count
+      || uploadsResponse.data.data?.length
+      || 0;
 
-      if (uploadCount > 0) {
-        state = 'uploaded-insufficient';
-      }
-    }
-
-    return stateMap[state] || 'NoData';
-  } catch (error) {
-    if (error?.apiError?.kind === 'canceled') throw error;
-    console.error('Error loading dashboard state:', error);
-    try {
-      const uploadsResponse = await apiClient.get('/upload?limit=1', { signal });
-      const uploadCount = uploadsResponse.data.count
-        || uploadsResponse.data.data?.length
-        || 0;
-      return uploadCount > 0 ? 'UploadedInsufficient' : 'NoData';
-    } catch (fallbackError) {
-      if (fallbackError?.apiError?.kind === 'canceled') throw fallbackError;
-      console.error('Error loading upload fallback:', fallbackError);
-      return 'NoData';
+    if (uploadCount > 0) {
+      state = 'uploaded-insufficient';
     }
   }
+
+  return stateMap[state] || 'NoData';
 };
 
 const Dashboard = () => {
-  const { data, refresh } = usePolling(loadDashboardState, DASHBOARD_POLL_MS);
-  const selectedState = data || 'NoData';
+  const {
+    data, error, lastSuccessAt, lastErrorAt, refresh,
+  } = usePolling(loadDashboardState, DASHBOARD_POLL_MS);
+  const selectedState = data;
   // A state screen that wants the dashboard re-checked right away (e.g.
   // right after the owner marks dates closed) calls this instead of
   // waiting for the next poll.
@@ -125,8 +118,40 @@ const Dashboard = () => {
     }
   };
 
+  // Login problem (401/403): polling has stopped (see usePolling). Show the
+  // log-in screen even if data loaded before; never log out automatically.
+  // Never loaded in this visit + any failure: the full problem screen.
+  // Still loading the first time: a neutral loading card, not "No Data".
+  if (error?.kind === 'auth' || (!selectedState && error)) {
+    return (
+      <div className="dashboard-wrapper" style={{ backgroundImage: `url(${dashboardBg})`, backgroundSize: 'cover', backgroundPosition: 'center', minHeight: '100vh' }}>
+        <Navbar />
+        <ConnectionProblem mode="full" error={error} onRetry={refresh} />
+      </div>
+    );
+  }
+
+  if (!selectedState) {
+    return (
+      <div className="route-guard-loading">
+        <div className="route-guard-card">
+          <div className="route-guard-spinner">
+            <div className="route-guard-spinner-ring"></div>
+          </div>
+          <h3 className="route-guard-title">Loading</h3>
+          <p className="route-guard-subtitle route-guard-dots">
+            Checking your dashboard
+          </p>
+        </div>
+      </div>
+    );
+  }
+
   const CurrentDashboard = stateConfig[selectedState].component;
   const currentState = stateConfig[selectedState];
+  // Loaded before, but the latest check failed: keep showing the last good
+  // state, with a banner saying so.
+  const showStaleBanner = Boolean(error) && lastErrorAt && (!lastSuccessAt || lastErrorAt > lastSuccessAt);
 
   const getBackgroundStyle = () => {
     if (currentState.backgroundImage) {
@@ -151,6 +176,15 @@ const Dashboard = () => {
       style={getBackgroundStyle()}
     >
       <CurrentDashboard onRefreshState={requestRefresh} />
+      {showStaleBanner && (
+        <ConnectionProblem
+          mode="banner"
+          error={error}
+          onRetry={refresh}
+          lastSuccessAt={lastSuccessAt}
+          lastErrorAt={lastErrorAt}
+        />
+      )}
     </div>
   );
 };
