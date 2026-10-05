@@ -1,6 +1,6 @@
 // Dashboard.jsx
-import { useCallback, useEffect, useState } from 'react';
-import axios from 'axios';
+import apiClient from '../../../services/apiClient';
+import usePolling from '../../../hooks/usePolling';
 import './Dashboard.css';
 
 // Import the 7 state components
@@ -15,70 +15,62 @@ import DataNeedsAttention from '../states/DataNeedsAttention.jsx';
 // Import the image directly
 import dashboardBg from '../../../assets/images/Dashboard.png';
 
-const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:5000/api';
+// How often the dashboard re-checks its state. One check at a time, paused
+// while the tab is hidden (see hooks/usePolling.js).
+const DASHBOARD_POLL_MS = 60000;
+
+const stateMap = {
+  'no-data': 'NoData',
+  'uploaded-insufficient': 'UploadedInsufficient',
+  'ready-to-train': 'ReadyToTrain',
+  'training-in-progress': 'TrainingInProgress',
+  'forecasts-ready-recipes-pending': 'ForecastsReady',
+  'data-needs-attention': 'DataNeedsAttention',
+  'fully-operational': 'FullyOperational'
+};
+
+// One dashboard check. Resolves to a stateConfig key.
+const loadDashboardState = async (signal) => {
+  try {
+    const response = await apiClient.get('/upload/dashboard-state', { signal });
+    let state = response.data.success ? response.data.data.state : 'no-data';
+
+    if (state === 'no-data') {
+      const uploadsResponse = await apiClient.get('/upload?limit=1', { signal });
+      const uploadCount = uploadsResponse.data.count
+        || uploadsResponse.data.data?.length
+        || 0;
+
+      if (uploadCount > 0) {
+        state = 'uploaded-insufficient';
+      }
+    }
+
+    return stateMap[state] || 'NoData';
+  } catch (error) {
+    if (error?.apiError?.kind === 'canceled') throw error;
+    console.error('Error loading dashboard state:', error);
+    try {
+      const uploadsResponse = await apiClient.get('/upload?limit=1', { signal });
+      const uploadCount = uploadsResponse.data.count
+        || uploadsResponse.data.data?.length
+        || 0;
+      return uploadCount > 0 ? 'UploadedInsufficient' : 'NoData';
+    } catch (fallbackError) {
+      if (fallbackError?.apiError?.kind === 'canceled') throw fallbackError;
+      console.error('Error loading upload fallback:', fallbackError);
+      return 'NoData';
+    }
+  }
+};
 
 const Dashboard = () => {
-  const [selectedState, setSelectedState] = useState('NoData');
-  // Bumped by a state screen that wants the dashboard re-checked right away
-  // (e.g. right after the owner marks dates closed) instead of waiting up
-  // to 5 seconds for the next poll. The effect below re-runs on change.
-  const [refreshKey, setRefreshKey] = useState(0);
-  const requestRefresh = useCallback(() => setRefreshKey((k) => k + 1), []);
-
-  useEffect(() => {
-    const loadDashboardState = async () => {
-      try {
-        const token = sessionStorage.getItem('access_token') || localStorage.getItem('token');
-        const config = {
-          headers: token ? { Authorization: `Bearer ${token}` } : undefined
-        };
-        const response = await axios.get(`${API_URL}/upload/dashboard-state`, config);
-        let state = response.data.success ? response.data.data.state : 'no-data';
-
-        if (state === 'no-data') {
-          const uploadsResponse = await axios.get(`${API_URL}/upload?limit=1`, config);
-          const uploadCount = uploadsResponse.data.count
-            || uploadsResponse.data.data?.length
-            || 0;
-
-          if (uploadCount > 0) {
-            state = 'uploaded-insufficient';
-          }
-        }
-
-        const stateMap = {
-          'no-data': 'NoData',
-          'uploaded-insufficient': 'UploadedInsufficient',
-          'ready-to-train': 'ReadyToTrain',
-          'training-in-progress': 'TrainingInProgress',
-          'forecasts-ready-recipes-pending': 'ForecastsReady',
-          'data-needs-attention': 'DataNeedsAttention',
-          'fully-operational': 'FullyOperational'
-        };
-        setSelectedState(stateMap[state] || 'NoData');
-      } catch (error) {
-        console.error('Error loading dashboard state:', error);
-        try {
-          const token = sessionStorage.getItem('access_token') || localStorage.getItem('token');
-          const uploadsResponse = await axios.get(`${API_URL}/upload?limit=1`, {
-            headers: token ? { Authorization: `Bearer ${token}` } : undefined
-          });
-          const uploadCount = uploadsResponse.data.count
-            || uploadsResponse.data.data?.length
-            || 0;
-          setSelectedState(uploadCount > 0 ? 'UploadedInsufficient' : 'NoData');
-        } catch (fallbackError) {
-          console.error('Error loading upload fallback:', fallbackError);
-          setSelectedState('NoData');
-        }
-      }
-    };
-
-    loadDashboardState();
-
-    const stateInterval = setInterval(loadDashboardState, 5000);
-    return () => clearInterval(stateInterval);
-  }, [refreshKey]);
+  const { data, refresh } = usePolling(loadDashboardState, DASHBOARD_POLL_MS);
+  const selectedState = data || 'NoData';
+  // A state screen that wants the dashboard re-checked right away (e.g.
+  // right after the owner marks dates closed) calls this instead of
+  // waiting for the next poll.
+  const requestRefresh = refresh;
 
   // Configuration for each state with background
   const stateConfig = {
