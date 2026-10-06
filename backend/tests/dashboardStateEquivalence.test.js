@@ -23,6 +23,16 @@ process.env.LOG_LEVEL = 'error';
 // ---------- fake supabase (installed before the service loads) ----------
 let db = {};
 let calls = 0;
+// 'present': the daily_sales_date_summary view exists (computed from
+// db.daily_sales like Postgres would). 'missing': PostgREST's real
+// "not in schema cache" error, which forces the fallback scan.
+let viewMode = 'present';
+function sourceRows(table) {
+  if (table !== 'daily_sales_date_summary') return db[table] || [];
+  const counts = new Map();
+  for (const r of db.daily_sales || []) counts.set(r.sale_date, (counts.get(r.sale_date) || 0) + 1);
+  return [...counts.entries()].map(([sale_date, sale_rows]) => ({ sale_date, sale_rows }));
+}
 const cmp = (a, b) => (a < b ? -1 : a > b ? 1 : 0);
 function makeBuilder(table) {
   const st = { filters: [], orders: [], limit: null, range: null, head: false, count: false, single: false };
@@ -37,7 +47,13 @@ function makeBuilder(table) {
     maybeSingle() { st.single = true; return b; },
     then(res, rej) {
       calls++;
-      let rows = (db[table] || []).filter((r) => st.filters.every((f) => f(r)));
+      if (table === 'daily_sales_date_summary' && viewMode === 'missing') {
+        return Promise.resolve({
+          data: null, count: null,
+          error: { code: 'PGRST205', message: "Could not find the table 'public.daily_sales_date_summary' in the schema cache" },
+        }).then(res, rej);
+      }
+      let rows = sourceRows(table).filter((r) => st.filters.every((f) => f(r)));
       if (st.orders.length) {
         rows = [...rows].sort((x, y) => {
           for (const o of st.orders) {
@@ -434,7 +450,20 @@ const SCENARIOS = [
   ['fully operational', 'fully-operational', () => mapAll(withForecast(build({ days: 50 })), 3)],
   ['production size, fully operational', 'fully-operational', () => mapAll(withForecast(build({ days: 446, products: 52, gapEvery: 4 })), 52)],
   ['no baseline (unknown, not bad)', 'fully-operational', () => mapAll(withForecast(build({ days: 50 }), { baseline_wmape: null }), 3)],
+  // Sales rows that are NOT this user's: one on another user's upload, one
+  // with no upload_id. The stats count only this user's rows; the history
+  // rule counts all rows. The view path must notice and fall back for the
+  // stats (Task 2.0 guard), and still match the baseline exactly.
+  ["sales rows outside this user's uploads", 'uploaded-insufficient', () => {
+    const t = build({ days: 446, products: 3, gapEvery: 7 });
+    t.uploads.push({ id: 7777, user_id: 8, filename: 'other.csv', status: 'processed', row_count: 1, upload_date: '2026-09-01T07:00:00', error_message: null });
+    t.daily_sales.push({ id: 900001, upload_id: 7777, product_id: 1, sale_date: '2025-07-13', quantity_sold: 2 });
+    t.daily_sales.push({ id: 900002, upload_id: null, product_id: 2, sale_date: '2025-07-20', quantity_sold: 1 });
+    return t;
+  }],
 ];
+
+const VIEW_MODES = ['present', 'missing'];
 
 // Owner's comparison rule ignores stats.last_sync (new Date() with no uploads).
 const comparable = (r) => {
@@ -457,8 +486,10 @@ async function run(fn) {
   }
 }
 
+for (const mode of VIEW_MODES)
 for (const [name, expected, make, inFlight = false] of SCENARIOS) {
-  test(`same answer as baseline: ${name}`, async () => {
+  test(`same answer as baseline (view ${mode}): ${name}`, async () => {
+    viewMode = mode;
     for (const userId of [7, 'x'.repeat(36), null]) {
       trainingInFlight = inFlight;
       db = make();
@@ -487,6 +518,25 @@ test('production size: a cached check makes far fewer Supabase calls', async () 
   assert.ok(warm.calls <= 9, `cached check used ${warm.calls} calls`);
 });
 
+// A cache refill (first check after a redeploy, or after the data changed):
+// the expensive case the view is for. Production HAR: ~10 s before.
+test('production size: a cache refill makes far fewer calls with the view', async (t) => {
+  trainingInFlight = false;
+  const counts = {};
+  for (const mode of VIEW_MODES) {
+    viewMode = mode;
+    db = build({ days: 446, products: 52, gapEvery: 4 });
+    coverage.clearCache();
+    counts[mode] = (await run(() => newSvc.getDashboardState(7))).calls;
+  }
+  viewMode = 'present';
+  t.diagnostic(`refill calls, Uploaded Insufficient: Phase 1A refill 48, view missing ${counts.missing}, view present ${counts.present}`);
+  // Without the view the fallback still pages every daily_sales row, but
+  // only ONCE per refill (shared by the stats and the history rule), not twice.
+  assert.ok(counts.missing < 48 && counts.missing > 20, `fallback refill used ${counts.missing} calls`);
+  assert.ok(counts.present <= 16, `refill with the view used ${counts.present} calls`);
+});
+
 const CHANGES = [
   ['all gap days marked closed', (t) => {
     const have = new Set(t.business_days.map((r) => r.business_date));
@@ -511,8 +561,10 @@ const CHANGES = [
   }],
 ];
 
+for (const mode of VIEW_MODES)
 for (const [name, mutate, visible = true] of CHANGES) {
-  test(`still the same answer after the data changes: ${name}`, async () => {
+  test(`still the same answer after the data changes (view ${mode}): ${name}`, async () => {
+    viewMode = mode;
     trainingInFlight = false;
     db = build({ days: 446, products: 3, gapEvery: 7 });
     coverage.clearCache();

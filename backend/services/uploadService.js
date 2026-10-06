@@ -1400,6 +1400,20 @@ class UploadService {
             };
           };
 
+          // Fast path: the daily_sales_date_summary view (one row per sale
+          // date). It is used only when every daily_sales row belongs to
+          // these uploads, so the answer is the same as the filtered scan
+          // above; otherwise (or with no fingerprint) the scan runs.
+          const computeCoverage = async () => {
+            if (fingerprint) {
+              const fromSummary = await dataCoverageService.getUserSaleCoverageFromSummary(
+                supabaseAdmin, uploadIds, fingerprint
+              );
+              if (fromSummary) return fromSummary;
+            }
+            return computeSaleCoverage();
+          };
+
           let coverage;
           if (fingerprint) {
             const minId = uploadIds.reduce((a, b) => (b < a ? b : a), uploadIds[0]);
@@ -1408,10 +1422,10 @@ class UploadService {
             coverage = await dataCoverageService.cachedByFingerprint(
               `saleCoverage:${numericId}`,
               `${fingerprint}|${idKey}`,
-              computeSaleCoverage
+              computeCoverage
             );
           } else {
-            coverage = await computeSaleCoverage();
+            coverage = await computeCoverage();
           }
 
           distinctSaleDays = coverage.distinctSaleDays;
@@ -1674,14 +1688,18 @@ class UploadService {
     // flip a working dashboard back to this onboarding screen; missed
     // uploads after that are reported through forecast_runs.stale_days.
     if (!latestModel && !mlService.isTrainingInFlight()) {
-      // Cached by fingerprint. businessDayService.getHistoryCoverage itself
-      // stays uncached, because bulkConfirmClosed uses it to validate writes.
+      // Cached by fingerprint, with the sale dates read from the
+      // daily_sales_date_summary view (the same evaluateHistoryGate rule;
+      // see dataCoverageService.getHistoryCoverageFromSummary).
+      // businessDayService.getHistoryCoverage itself stays as it is,
+      // because bulkConfirmClosed uses it to validate writes; it is still
+      // the path when the fingerprint could not be read.
       const fingerprint = await fingerprintPromise;
       const { gate } = fingerprint
         ? await dataCoverageService.cachedByFingerprint(
           'historyCoverage',
           fingerprint,
-          () => businessDayService.getHistoryCoverage()
+          () => dataCoverageService.getHistoryCoverageFromSummary(supabaseAdmin, fingerprint)
         )
         : await businessDayService.getHistoryCoverage();
       if (!gate.passes) {
