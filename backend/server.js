@@ -53,6 +53,7 @@ const analyticsRoutes = require('./routes/analytics');
 const forecastSummaryRoutes = require('./routes/forecastSummary');
 const marketPriceRoutes = require('./routes/marketPrice');
 const auditRoutes = require('./routes/audit');
+const statusRoutes = require('./routes/status');
 
 const app = express();
 const PORT = process.env.PORT || 5000;
@@ -110,6 +111,7 @@ app.use('/api/analytics', analyticsRoutes);
 app.use('/api/forecast', forecastSummaryRoutes);
 app.use('/api/market-prices', marketPriceRoutes);
 app.use('/api/audit', auditRoutes);
+app.use('/api/status', statusRoutes);
 
 // ============= HEALTH CHECK =============
 app.get('/health', (req, res) => {
