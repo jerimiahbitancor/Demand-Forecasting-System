@@ -1776,7 +1776,28 @@ class UploadService {
     const forecastRun = take(forecastRunResult);
     const dataQualityIssue = take(dataQualityResult);
 
-    const staleDays = forecastRun?.stale_days || 0;
+    // Stale data = days the store was EXPECTED to be open (per
+    // business_profile.operating_days) with no upload and no closed mark,
+    // since the last confirmed open day (utils/staleDays.js).
+    // forecast_runs.stale_days counts closed days too (a normal Sunday made
+    // every Monday "stale"); it is still returned as rawStaleDays. If the
+    // new count cannot be read, fall back to the raw number, as before.
+    const rawStaleDays = forecastRun?.stale_days || 0;
+    const lastConfirmedDate = forecastRun?.last_confirmed_date || null;
+    let missingOperatingDays = null;
+    let operatingDaysSource = null;
+    try {
+      const missing = await dataCoverageService.getMissingOperatingDays(supabaseAdmin, {
+        lastConfirmedDate,
+        today: dayjs().tz(PH_TZ).format('YYYY-MM-DD'),
+        fingerprint: await fingerprintPromise,
+      });
+      missingOperatingDays = missing.missingOperatingDays;
+      operatingDaysSource = missing.operatingDaysSource;
+    } catch (missingError) {
+      console.warn('Could not count missing operating days, using forecast_runs.stale_days:', missingError.message);
+    }
+    const staleDays = missingOperatingDays ?? rawStaleDays;
     const isStale = staleDays > 0;
 
     // Accuracy is WMAPE-based now, and "is it good enough?" is answered by
@@ -1803,7 +1824,8 @@ class UploadService {
         stats,
         progress,
         attention: {
-          isStale, staleDays, lastConfirmedDate: forecastRun?.last_confirmed_date || null,
+          isStale, staleDays, lastConfirmedDate,
+          rawStaleDays, missingOperatingDays, operatingDaysSource,
           isLowAccuracy, accuracy, baselineAccuracy, beatsBaseline: beatsBaselineFlag,
           needsRetraining, daysSinceTraining,
           dataQualityIssue,

@@ -26,6 +26,7 @@
 
 const { fetchAllRows } = require('../utils/fetchAllRows');
 const { evaluateHistoryGate } = require('../utils/historyGate');
+const { countMissingOperatingDays, resolveOperatingDays } = require('../utils/staleDays');
 
 const DEFAULT_MAX_AGE_MS = 10 * 60 * 1000;
 
@@ -201,6 +202,57 @@ async function getHistoryCoverageFromSummary(client, fingerprint) {
   return { saleDates, closedDates, gate: evaluateHistoryGate({ saleDates, closedDates }) };
 }
 
+// ---------------------------------------------------------------------------
+// Missing expected operating days since the last confirmed open day
+// (utils/staleDays.js has the rule and why forecast_runs.stale_days is not
+// used directly).
+//
+// Cost per dashboard check: business_profile is read every time (1 request;
+// it is not covered by the data fingerprint, so an edited schedule shows at
+// once). The business_days rows in the window are cached by fingerprint.
+// ---------------------------------------------------------------------------
+
+async function getOperatingDays(client) {
+  const { data, error } = await client.from('business_profile').select('operating_days').limit(1);
+  if (error) throw error;
+  return resolveOperatingDays(data && data[0] ? data[0].operating_days : null);
+}
+
+// Dates strictly between `after` and `before` that have a confirmed
+// business_days row (open or closed).
+async function getRecordedBusinessDates(client, after, before, fingerprint) {
+  const load = async () => {
+    const { data, error } = await fetchAllRows(() => client
+      .from('business_days')
+      .select('business_date')
+      .in('status', ['confirmed_open', 'confirmed_closed'])
+      .gt('business_date', after)
+      .lt('business_date', before)
+      .order('business_date'));
+    if (error) throw error;
+    return (data || []).map((r) => r.business_date).filter(Boolean);
+  };
+  if (!fingerprint) return load();
+  return cachedByFingerprint(`recordedDays:${after}:${before}`, fingerprint, load);
+}
+
+// Returns { missingOperatingDays, missingDates, operatingDaysSource }.
+// Throws on a read error; callers decide what to fall back to.
+async function getMissingOperatingDays(client, { lastConfirmedDate, today, fingerprint = null }) {
+  if (!lastConfirmedDate) {
+    const { source } = await getOperatingDays(client);
+    return { missingOperatingDays: 0, missingDates: [], operatingDaysSource: source };
+  }
+  const [operating, recordedDates] = await Promise.all([
+    getOperatingDays(client),
+    getRecordedBusinessDates(client, lastConfirmedDate, today, fingerprint),
+  ]);
+  const { missingOperatingDays, missingDates } = countMissingOperatingDays({
+    lastConfirmedDate, today, operatingDays: operating.days, recordedDates,
+  });
+  return { missingOperatingDays, missingDates, operatingDaysSource: operating.source };
+}
+
 // Test hook: lets a test reset the "warn once" latch.
 function _resetFallbackWarning() { warnedAboutFallback = false; }
 
@@ -212,6 +264,8 @@ module.exports = {
   getSaleDateSummaryCached,
   getUserSaleCoverageFromSummary,
   getHistoryCoverageFromSummary,
+  getOperatingDays,
+  getMissingOperatingDays,
   _resetFallbackWarning,
   DEFAULT_MAX_AGE_MS,
 };
