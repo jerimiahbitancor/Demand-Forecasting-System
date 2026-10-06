@@ -3,7 +3,8 @@ import { useState, useEffect, useCallback, useMemo } from "react";
 import { 
   FiDownload,
   FiSearch,
-  FiRefreshCw
+  FiRefreshCw,
+  FiLoader
 } from "react-icons/fi";
 import { FaArrowLeft, FaArrowRight } from "react-icons/fa";
 import axios from 'axios';
@@ -22,6 +23,40 @@ const STORAGE_KEYS = {
   LAST_FETCH: 'historical_last_fetch'
 };
 
+// The download endpoint answers with file bytes, not JSON, so the saved name
+// has to come from Content-Disposition - the RFC 5987 UTF-8 form first, the
+// plain filename as fallback.
+const fileNameFromDisposition = (disposition) => {
+  if (!disposition) return null;
+
+  const utf8 = disposition.match(/filename\*=UTF-8''([^;]+)/i);
+  if (utf8) {
+    try {
+      return decodeURIComponent(utf8[1]);
+    } catch {
+      // malformed percent-encoding - fall through to the plain filename
+    }
+  }
+
+  const plain = disposition.match(/filename="?([^";]+)"?/i);
+  return plain ? plain[1] : null;
+};
+
+// With responseType: 'blob' an error body arrives as a Blob too, so the JSON
+// payload has to be read back out before its message can be shown.
+const readDownloadError = async (error) => {
+  try {
+    const data = error.response?.data;
+    if (data instanceof Blob) {
+      const parsed = JSON.parse(await data.text());
+      return parsed.error || parsed.message || 'Failed to download file';
+    }
+    return data?.error || data?.message || 'Failed to download file';
+  } catch {
+    return 'Failed to download file';
+  }
+};
+
 const HistoricalData = () => {
   const { getToken } = useAuth();
 
@@ -38,6 +73,7 @@ const HistoricalData = () => {
   });
   
   const [loading, setLoading] = useState(true);
+  const [downloadingId, setDownloadingId] = useState(null);
   const [historicalData, setHistoricalData] = useState(() => {
     const stored = sessionStorage.getItem(STORAGE_KEYS.HISTORICAL_DATA);
     return stored ? JSON.parse(stored) : [];
@@ -249,16 +285,41 @@ const HistoricalData = () => {
     }
   };
 
+  // The server streams the file itself (original upload, or a CSV rebuilt
+  // from that upload's rows), so the response is read as a blob and handed to
+  // a temporary <a download> link instead of window.open - a popup opened
+  // after `await` gets blocked by the browser.
   const handleDownload = async (item) => {
+    if (downloadingId) return;
+    setDownloadingId(item.id);
+
     try {
-      const response = await apiClient.get(`/upload/${item.id}/download`);
-      if (response.data.success && response.data.url) {
-        window.open(response.data.url, '_blank');
-      } else {
-        toast.error(response.data.error || 'Download failed');
-      }
+      const response = await apiClient.get(`/upload/${item.id}/download`, {
+        responseType: 'blob'
+      });
+
+      const fileName =
+        fileNameFromDisposition(response.headers['content-disposition']) ||
+        item.fileName ||
+        'upload.csv';
+
+      const objectUrl = URL.createObjectURL(
+        new Blob([response.data], { type: response.headers['content-type'] })
+      );
+      const link = document.createElement('a');
+      link.href = objectUrl;
+      link.download = fileName;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      // Revoking synchronously can cancel the download in some browsers.
+      setTimeout(() => URL.revokeObjectURL(objectUrl), 1000);
+
+      toast.success(`Downloaded ${fileName}`);
     } catch (error) {
-      toast.error(error.response?.data?.error || 'Failed to download file');
+      toast.error(await readDownloadError(error));
+    } finally {
+      setDownloadingId(null);
     }
   };
 
@@ -339,8 +400,11 @@ const HistoricalData = () => {
                         className="action-btn download"
                         onClick={() => handleDownload(item)}
                         title="Download file"
+                        disabled={downloadingId === item.id}
                       >
-                        <FiDownload size={16} />
+                        {downloadingId === item.id
+                          ? <FiLoader size={16} className="spinning" />
+                          : <FiDownload size={16} />}
                       </button>
                     </td>
                   </tr>
