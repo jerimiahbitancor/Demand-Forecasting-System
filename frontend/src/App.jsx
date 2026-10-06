@@ -1,6 +1,6 @@
 // frontend/src/App.jsx
 import { Routes, Route, Navigate, useSearchParams, useLocation } from 'react-router-dom';
-import { useEffect } from 'react';
+import { Suspense, lazy, useEffect } from 'react';
 import { Toaster } from 'react-hot-toast';
 import Register from './features/auth/pages/register/Register';
 import VerifyEmail from './features/auth/pages/register/VerifyEmail';
@@ -12,7 +12,6 @@ import { TEMPORARY_ACCESS_BYPASS } from './config/accessControl';
 import ForgotPassword from './features/auth/pages/forgotpass/ForgotPassword';
 import ResetPassword from './features/auth/pages/forgotpass/ResetPassword';
 import ChefDuoLanding from './features/landing/ChefDuoLanding';
-import Dashboard from './features/dashboard/pages/Dashboard';
 import DataManagement from './features/datamanagement/pages/DataManagement';
 import Forecasting from './features/analytics/components/Forecasting';
 import ProductPerformance from './features/analytics/components/ProductPerformance';
@@ -22,6 +21,7 @@ import Analytics from './features/analytics/pages/Analytics';
 import InventoryManagement from './features/inventory/pages/InventoryManagement';
 import IngredientManagement from './features/inventory/pages/IngredientManagement';
 import NotificationsPage from './features/components/Notification/NotificationsPage';
+import DashboardLoading from './features/dashboard/components/DashboardLoading';
 import './App.css';
 import './RouteGuard.css';
 import Landing from './features/landing/Landing';
@@ -30,13 +30,17 @@ import Features from './features/landing/pages/Features';
 import About from './features/landing/pages/About';
 import Contact from './features/landing/pages/Contact';
 
-// Import individual state components
-import FullyOperational from './features/dashboard/states/FullyOperational';
-import NoData from './features/dashboard/states/NoData';
-import UploadedInsufficient from './features/dashboard/states/UploadedInsufficient';
-import TrainingInProgress from './features/dashboard/states/TrainingInProgress';
-import ForecastsReady from './features/dashboard/states/ForecastsReady';
-import DataNeedsAttention from './features/dashboard/states/DataNeedsAttention';
+// The dashboard and its states are all lazy. Statically importing them here
+// pulled the fully-operational dashboard — recharts plus a 1MB background
+// photo — into the initial bundle of every visitor, including the ones who
+// only ever see the public landing page.
+const Dashboard = lazy(() => import('./features/dashboard/pages/Dashboard'));
+const FullyOperational = lazy(() => import('./features/dashboard/states/FullyOperational'));
+const NoData = lazy(() => import('./features/dashboard/states/NoData'));
+const UploadedInsufficient = lazy(() => import('./features/dashboard/states/UploadedInsufficient'));
+const TrainingInProgress = lazy(() => import('./features/dashboard/states/TrainingInProgress'));
+const ForecastsReady = lazy(() => import('./features/dashboard/states/ForecastsReady'));
+const DataNeedsAttention = lazy(() => import('./features/dashboard/states/DataNeedsAttention'));
 
 function RouteGuard({ children, mode }) {
   const checking = useSetupGuard(mode);
@@ -245,7 +249,7 @@ function App() {
         <Route path="/data-management" element={<ProtectedRoute><DataManagement /></ProtectedRoute>} />
 
         {/* Main App Routes - Protected + Gated */}
-        <Route path="/dashboard" element={<DashboardWrapper />} />
+        <Route path="/dashboard" element={<Suspense fallback={<DashboardLoading />}><DashboardWrapper /></Suspense>} />
         <Route path="/analytics" element={<Gated><Analytics /></Gated>} />
         <Route path="/inventory-management" element={<InventoryManagement />} />
         <Route path="/ingredient-management" element={<IngredientManagement />} />
@@ -267,24 +271,25 @@ function App() {
         {/* ============================================================ */}
         {/* DIRECT ROUTES - Access individual dashboard states */}
         {/* These work in all environments */}
+        {/* Each screen is a separate chunk now, so they need a boundary. */}
         {/* ============================================================ */}
         <Route path="/dashboard/fully-operational" element={
-          <Gated><FullyOperational /></Gated>
+          <Gated><Suspense fallback={<DashboardLoading />}><FullyOperational /></Suspense></Gated>
         } />
         <Route path="/dashboard/no-data" element={
-          <Gated><NoData /></Gated>
+          <Gated><Suspense fallback={<DashboardLoading />}><NoData /></Suspense></Gated>
         } />
         <Route path="/dashboard/uploaded-insufficient" element={
-          <Gated><UploadedInsufficient /></Gated>
+          <Gated><Suspense fallback={<DashboardLoading />}><UploadedInsufficient /></Suspense></Gated>
         } />
         <Route path="/dashboard/training" element={
-          <Gated><TrainingInProgress /></Gated>
+          <Gated><Suspense fallback={<DashboardLoading />}><TrainingInProgress /></Suspense></Gated>
         } />
         <Route path="/dashboard/forecasts-ready" element={
-          <Gated><ForecastsReady /></Gated>
+          <Gated><Suspense fallback={<DashboardLoading />}><ForecastsReady /></Suspense></Gated>
         } />
         <Route path="/dashboard/data-needs-attention" element={
-          <Gated><DataNeedsAttention /></Gated>
+          <Gated><Suspense fallback={<DashboardLoading />}><DataNeedsAttention /></Suspense></Gated>
         } />
         
         {/* Catch-all - redirect to landing */}

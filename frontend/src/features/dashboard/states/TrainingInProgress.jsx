@@ -1,11 +1,29 @@
 // states/TrainingInProgress.jsx
+//
+// State 4 of 7 — ml-service is actively training. Because ml-service's
+// /train is a single blocking HTTP call (no job queue), there is no real
+// incremental percentage or ETA to report: the bar below is an
+// indeterminate shimmer, not a fabricated number. Dashboard.jsx's 5s poll
+// of /upload/dashboard-state moves the owner on as soon as the in-flight
+// flag clears, so this component never navigates by itself.
+import { useState, useEffect } from "react";
+import axios from "axios";
 import Navbar from "../../components/Navbar/Navbar";
 import "../states/statescss/TrainingInProgress.css";
 import { useState, useRef } from "react";
 import { useNavigate } from "react-router-dom";
+import { FaArrowRight, FaCheckCircle, FaSpinner } from "react-icons/fa";
 import trainingInProgressImage from "../../../assets/images/Rene.png";
-import { FaInfoCircle, FaCheckCircle, FaSpinner } from "react-icons/fa";
 import { useHelp } from "../../../hooks/useHelp";
+import {
+  StateShell,
+  StateBanner,
+  SetupStep,
+  Illustration,
+  ProgressMeter,
+  Meter,
+  ProductsDetected,
+} from "../components/DashboardStateKit.jsx";
 import apiClient from "../../../services/apiClient";
 import usePolling from "../../../hooks/usePolling";
 
@@ -15,17 +33,28 @@ const TRAINING_STATUS_POLL_MS = 15000;
 const UPLOAD_PROGRESS_POLL_MS = 60000;
 const PRODUCTS_POLL_MS = 60000;
 
+const TrainingInProgress = ({ initialState }) => {
 const TrainingInProgress = ({ onRefreshState }) => {
   const navigate = useNavigate();
   const { openHelp } = useHelp();
-  const [progressPercentage, setProgressPercentage] = useState(50);
-  const [dataProgress, setDataProgress] = useState(100);
-  const [uploadedMonths, setUploadedMonths] = useState(12);
+  // Seeded from the Dashboard's dashboard-state response: `stats` is the same
+  // getUploadStats() payload /upload/stats/summary returns, and `progress` the
+  // same getUploadProgress() payload /upload/progress returns. Both used to be
+  // re-requested on mount, so the bars sat at their defaults for a beat after
+  // the screen appeared.
+  const seedStats = initialState?.stats;
+  const seedMonths = Math.min(seedStats?.months_uploaded || 0, 12);
+  const [progressPercentage, setProgressPercentage] = useState(
+    initialState?.progress?.progress ?? 50
+  );
+  const [dataProgress, setDataProgress] = useState(
+    seedStats ? Math.min((seedMonths / 12) * 100, 100) : 100
+  );
+  const [uploadedMonths, setUploadedMonths] = useState(seedMonths || 12);
   const [totalMonthsNeeded] = useState(12);
-  const [isLoading, setIsLoading] = useState(false);
-  const [hasData, setHasData] = useState(true);
   const [isTrainingComplete, setIsTrainingComplete] = useState(false);
   const [products, setProducts] = useState([]);
+  const [totalProducts, setTotalProducts] = useState(0);
   const [productsWithRecipes, setProductsWithRecipes] = useState(3);
   const [totalProducts, setTotalProducts] = useState(12);
   // Last known "training running?" answer, to spot the true -> false change.
@@ -45,6 +74,21 @@ const TrainingInProgress = ({ onRefreshState }) => {
     navigate("/inventory-management", { state: { product: productName } });
   };
 
+  const getAuthToken = () => sessionStorage.getItem("access_token") || localStorage.getItem("token");
+
+  const apiClient = axios.create({
+    baseURL: API_URL,
+    headers: { "Content-Type": "application/json" },
+  });
+
+  apiClient.interceptors.request.use(
+    (config) => {
+      const token = getAuthToken();
+      if (token) config.headers.Authorization = `Bearer ${token}`;
+      return config;
+    },
+    (error) => Promise.reject(error),
+  );
   const formatDate = (date) => {
     const months = [
       "JANUARY", "FEBRUARY", "MARCH", "APRIL", "MAY", "JUNE",
@@ -85,6 +129,7 @@ const TrainingInProgress = ({ onRefreshState }) => {
   // Fetch data status
   const fetchDataStatus = async (signal) => {
     try {
+      const statusResponse = await apiClient.get("/upload/stats/summary");
       setIsLoading(true);
 
       const statusResponse = await apiClient.get("/upload/stats/summary", { signal });
@@ -94,6 +139,8 @@ const TrainingInProgress = ({ onRefreshState }) => {
 
         const totalRows = data.sales_records || data.total_rows || 0;
         const totalUploads = data.total_uploads || 0;
+        let months = data.months_uploaded || 12;
+
         const monthsUploaded = data.months_uploaded || 12;
 
         let months = monthsUploaded;
@@ -106,6 +153,21 @@ const TrainingInProgress = ({ onRefreshState }) => {
         }
 
         setUploadedMonths(months);
+        setDataProgress(Math.min((months / totalMonthsNeeded) * 100, 100));
+      }
+    } catch (error) {
+      console.error("Error fetching data status:", error);
+      setUploadedMonths(12);
+      setDataProgress(100);
+    }
+  };
+
+  // Fetch upload progress
+  const fetchUploadProgress = async () => {
+    try {
+      const response = await apiClient.get("/upload/progress");
+      if (response.data.success) {
+        setProgressPercentage(response.data.data.progress || 50);
         setHasData(totalRows > 0 || totalUploads > 0);
 
         const progressPercent = (months / totalMonthsNeeded) * 100;
@@ -131,6 +193,16 @@ const TrainingInProgress = ({ onRefreshState }) => {
     }
   };
 
+  // Fetch training status. mlService.isTrainingInFlight() only knows "still
+  // running" vs "finished" — see the note at the top of this file.
+  const fetchTrainingStatus = async () => {
+    try {
+      const response = await apiClient.get("/ml/training-status");
+      if (response.data.success) {
+        setIsTrainingComplete(!response.data.data.isTraining);
+      }
+    } catch (error) {
+      console.error("Error fetching training status:", error);
   // Fetch training status. ml-service's /train is a single blocking HTTP
   // call (no job queue), so there's no real incremental percentage or ETA
   // to report — mlService.isTrainingInFlight() only knows "still running"
@@ -154,6 +226,47 @@ const TrainingInProgress = ({ onRefreshState }) => {
   };
 
   // Fetch products data
+  const fetchProducts = async () => {
+    try {
+      const [activeResponse, inactiveResponse] = await Promise.all([
+        apiClient.get("/mapping/products", { params: { status: "active", forceRefresh: "true" } }),
+        apiClient.get("/mapping/products", { params: { status: "inactive", forceRefresh: "true" } }),
+      ]);
+      const activeProducts = activeResponse.data.success ? activeResponse.data.data || [] : [];
+      const inactiveProducts = inactiveResponse.data.success ? inactiveResponse.data.data || [] : [];
+      const productsData = [...activeProducts, ...inactiveProducts];
+      setProducts(productsData);
+      setTotalProducts(productsData.length);
+    } catch (error) {
+      console.error("Error fetching products:", error);
+    }
+  };
+
+  useEffect(() => {
+    // Parallel, and only for what dashboard-state doesn't already carry. This
+    // used to await four requests one after another before showing anything.
+    async function load() {
+      if (!seedStats) {
+        // Unseeded (direct visit): no stats or progress to start from.
+        fetchDataStatus();
+        fetchUploadProgress();
+      }
+      fetchTrainingStatus();
+      fetchProducts();
+    }
+
+    load();
+
+    const uploadInterval = setInterval(fetchUploadProgress, 5000);
+    const trainingInterval = setInterval(fetchTrainingStatus, 3000);
+    const productsInterval = setInterval(fetchProducts, 10000);
+
+    return () => {
+      clearInterval(uploadInterval);
+      clearInterval(trainingInterval);
+      clearInterval(productsInterval);
+    };
+  }, []);
   const fetchProducts = async (signal) => {
     const [activeResponse, inactiveResponse] = await Promise.all([
       apiClient.get("/mapping/products", { params: { status: "active", forceRefresh: "true" }, signal }),
@@ -173,282 +286,210 @@ const TrainingInProgress = ({ onRefreshState }) => {
   usePolling(fetchTrainingStatus, TRAINING_STATUS_POLL_MS);
   usePolling(fetchProducts, PRODUCTS_POLL_MS);
 
-  const getMonths = () => {
-    return Math.min(uploadedMonths, totalMonthsNeeded);
-  };
-
-  const isDataSufficient = uploadedMonths >= totalMonthsNeeded;
-
-  const getProductsNeedingRecipes = () => {
-    const needsRecipe = products.filter(p => !p.product_ingredients?.length && !p.hasRecipe);
-    return needsRecipe.slice(0, 3);
-  };
-
-  const productsNeedingRecipes = getProductsNeedingRecipes();
-  const productsWithoutRecipes = products.filter(
-    p => !p.product_ingredients?.length && !p.hasRecipe
-  ).length;
+  const getMonths = () => Math.min(uploadedMonths, totalMonthsNeeded);
+  const productsNeedingRecipes = products.filter((p) => !p.product_ingredients?.length);
+  const productsWithoutRecipes = productsNeedingRecipes.length;
 
   return (
-    <div className="training-container">
-      <Navbar />
-      <main className="training-main">
-        {/* Header Section */}
-        <div className="training-header">
-          <div className="training-date-info">
-            <span>{formattedDate}</span>
-            <span className="training-date-separator">|</span>
-            <span>{formattedDay}</span>
-            <span className="training-date-separator">|</span>
-            <span>{formattedTime}</span>
+    <StateShell
+      eyebrow="Step 2 of 2"
+      eyebrowTone="info"
+      title={<>Model training <em>in progress</em></>}
+      lede="ChefDuo Forecast is analysing your historical sales patterns. Your forecasting dashboard unlocks automatically the moment training finishes."
+      progress={{
+        value: progressPercentage,
+        tone: "info",
+        caption: "Setup progress across the whole system",
+      }}
+      status={
+        <StateBanner
+          tone="info"
+          icon={
+            isTrainingComplete ? (
+              <FaCheckCircle size={20} />
+            ) : (
+              <FaSpinner className="sk-spinner" size={20} />
+            )
+          }
+          title={isTrainingComplete ? "Training complete" : "Model Training In Progress"}
+          text={
+            isTrainingComplete
+              ? "Forecasts are ready — the dashboard will move to your results in a moment."
+              : "This may take a few minutes. You can leave this page open or keep working — the dashboard switches over on its own once training is done."
+          }
+        />
+      }
+    >
+      <Illustration
+        src={trainingInProgressImage}
+        alt="Model training illustration"
+        copy={
+          <div>
+            <h2 className="sk-section-title">What's happening right now</h2>
+            <p className="sk-section-sub">
+              The forecasting engine is reading your sales history and learning the
+              patterns behind it — weekday versus weekend, seasonal swings and
+              payday-related demand changes.
+            </p>
+            <button
+              type="button"
+              className="sk-btn sk-btn--secondary sk-btn--sm"
+              style={{ marginTop: 20 }}
+              onClick={() => openHelp("how-it-works")}
+            >
+              Learn how ChefDuo Forecast works
+            </button>
           </div>
+        }
+      />
 
-          {/* Progress Bar */}
-          <div className="training-progress-container">
-            <div className="training-progress-bar-wrapper">
-              <div
-                className="training-progress-fill"
-                style={{
-                  width: `${Math.min(progressPercentage, 100)}%`,
-                  backgroundColor: "rgba(122, 1, 1, 0.5)",
-                }}
-              />
-              <div className="training-progress-text">
-                <span>System Status Progress</span>
-                <span>{Math.round(progressPercentage)}%</span>
+      <section className="sk-section">
+        <div className="sk-card sk-card--info">
+          <div className="sk-card-head">
+            <span className="sk-card-ico sk-card-ico--info">
+              {isTrainingComplete ? (
+                <FaCheckCircle size={20} />
+              ) : (
+                <FaSpinner className="sk-spinner" size={20} />
+              )}
+            </span>
+            <div style={{ minWidth: 0, flex: 1 }}>
+              <h2 className="sk-card-title">
+                {isTrainingComplete ? "Training Complete" : "Still training…"}
+              </h2>
+              <p className="sk-card-text">
+                {isTrainingComplete
+                  ? "Ready to view forecasts."
+                  : "Analysing the pattern. You can keep working — recipes and stock levels can be edited while this runs."}
+              </p>
+
+              <div className="sk-live" style={{ marginTop: 16 }}>
+                <span className={`sk-dot${isTrainingComplete ? " sk-dot--done" : ""}`} />
+                <span className={`sk-live-text${isTrainingComplete ? " sk-live-text--done" : ""}`}>
+                  {isTrainingComplete ? "Training Complete" : "Still training..."}
+                </span>
+                <span className="sk-live-sub">
+                  {isTrainingComplete
+                    ? "Ready to view forecasts"
+                    : "Analyzing the pattern..."}
+                </span>
               </div>
-            </div>
-          </div>
-        </div>
 
-        {/* Main Content */}
-        <div className="training-content">
-          <div className="training-welcome-wrapper">
-            {/* Left Side - Text Content */}
-            <div className="training-welcome-section">
-              <h3 className="training-welcome-title">
-                Welcome to ChefDuo Forecast
-              </h3>
-              <p className="training-welcome-description">
-                Let's get your dashboard ready.
-                <br />
-                Your dashboard will display demand forecasts, sales trends,
-                product performance, ingredient requirements, and replenishment
-                insights once you upload your historical sales data.
-              </p>
-              <p className="training-welcome-note">
-                Your dashboard will become available once you have completed the
-                steps requirements.
-              </p>
-              <button
-                type="button"
-                className="training-welcome-link"
-                onClick={() => openHelp('how-it-works')}
-              >
-                Learn How ChefDuo Forecast Works →
-              </button>
-            </div>
-
-            {/* Right Side - Image */}
-            <div className="training-welcome-image">
-              <img
-                src={trainingInProgressImage}
-                alt="Training In Progress Illustration"
-                className="training-welcome-img"
-              />
-            </div>
-          </div>
-
-          {/* Model Training In Progress Section */}
-          <div className="training-model-section">
-            <div className="training-model-left">
-              <div className="training-model-image">
-                <img 
-                  src={trainingInProgressImage} 
-                  alt="Model Training Illustration" 
-                  className="training-model-img"
+              <div style={{ marginTop: 18 }}>
+                <ProgressMeter
+                  label="Model Training"
+                  tone="info"
+                  indeterminate={!isTrainingComplete}
+                  caption={
+                    isTrainingComplete
+                      ? "Complete — your dashboard is updating now."
+                      : "Training in progress — this can take a few minutes."
+                  }
                 />
               </div>
-              <div className="training-model-content">
-                <h3 className="training-model-title">Model Training In Progress</h3>
-                <p className="training-model-description">
-                  ChefDuo Forecast is analyzing your historical sales patterns and training your demand forecasting model. 
-                  This may take a few minutes. Your forecasting dashboard will unlock automatically when training is complete.
-                </p>
-                <div className="training-model-status">
-                  <div className="training-model-status-item">
-                    <span className="training-model-status-dot"></span>
-                    <span className="training-model-status-text">
-                      {isTrainingComplete ? "Training Complete" : "Still training..."}
-                    </span>
-                    <span className="training-model-status-sub">
-                      {isTrainingComplete ? "Ready to view forecasts" : "Analyzing the pattern..."}
-                    </span>
-                  </div>
-                </div>
-                <div className="training-model-progress">
-                  <div className="training-model-progress-bar">
-                    {/* ml-service's /train is one blocking call with no
-                        incremental progress to report, so this is an
-                        indeterminate indicator, not a real percentage. */}
-                    <div
-                      className={`training-model-progress-fill${isTrainingComplete ? "" : " training-model-progress-fill--indeterminate"}`}
-                      style={{ width: isTrainingComplete ? "100%" : "100%" }}
-                    />
-                  </div>
-                  <div className="training-model-progress-info">
-                    <span className="training-model-progress-time">
-                      {isTrainingComplete ? "Complete" : "Training in progress — this can take a few minutes"}
-                    </span>
-                  </div>
-                </div>
-              </div>
-            </div>
-          </div>
-
-          {/* Step Cards */}
-          <div className="training-step-cards">
-            {/* Step 1 - Green Card */}
-            <div className="training-step-card training-step-card-complete">
-              <div className="training-step-number training-step-number-complete">1</div>
-              <div className="training-step-content">
-                <h4 className="training-step-title training-step-title-complete">
-                  Upload Historical Sales Data
-                </h4>
-                <p className="training-step-description">
-                  Upload at least 1 year of historical sales data exported from
-                  your POS system. This is what the forecasting model uses to
-                  learn your business's demand patterns and generate reliable
-                  forecasts.
-                </p>
-
-                {/* Data Progress - Complete */}
-                <div className="training-data-progress-wrapper1">
-                  <div className="training-data-progress-wrapper2-complete">
-                    <div
-                      style={{
-                        display: "flex",
-                        alignItems: "flex-start",
-                        gap: "10px",
-                      }}
-                    >
-                      <FaCheckCircle
-                        style={{
-                          color: "#0F9918",
-                          fontSize: "18px",
-                          marginTop: "2px",
-                          flexShrink: 0,
-                        }}
-                      />
-                      <p className="training-step-description1">
-                        Historical data upload complete. All {getMonths()} months of data
-                        have been successfully uploaded and validated.
-                      </p>
-                    </div>
-                  </div>
-
-                  <div className="training-data-progress-wrapper">
-                    <div className="training-data-progress-label">
-                      <span>Historical Data</span>
-                      <span className="training-data-progress-text-complete">
-                        {getMonths()} / {totalMonthsNeeded} months Complete
-                      </span>
-                    </div>
-                    <div className="training-data-progress-bar">
-                      <div
-                        className="training-data-progress-fill-complete"
-                        style={{
-                          width: `${Math.min(dataProgress, 100)}%`,
-                          backgroundColor: "#0F9918",
-                        }}
-                      />
-                    </div>
-                  </div>
-                </div>
-
-                <button
-                  className="training-step-btn training-step-btn-complete"
-                  onClick={handleUploadData}
-                >
-                  Upload Complete
-                </button>
-              </div>
-            </div>
-
-            {/* Step 2 - Products Detected */}
-            <div className="training-step-card">
-              <div className="training-step-number">2</div>
-              <div className="training-step-content">
-                <h4 className="training-step-title">
-                  Add Ingredient Recipes to Your Products
-                </h4>
-                <p className="training-step-description">
-                  Your menu products will be automatically detected when you
-                  upload your sales data. After uploading, add the ingredient
-                  recipe for each product so the system can estimate how much of
-                  each ingredient you'll need to prepare.
-                </p>
-
-                {/* Products Detected Section */}
-                <div className="training-products-detected">
-                  <div className="training-products-header">
-                    <h5 className="training-products-title">Products Detected from Your Sales Data</h5>
-                    <div className="training-products-summary">
-                      <p className="training-products-total">{totalProducts} products were found in your sales data.</p>
-                      <p className="training-products-missing">{productsWithoutRecipes} still need ingredient recipes added.</p>
-                    </div>
-                    <p className="training-products-note">
-                      Products without recipes will still be forecasted, but will not appear in the ingredient demand shopping list.
-                    </p>
-                  </div>
-
-                  {/* Product Table */}
-                  <div className="training-products-table">
-                    <div className="training-products-table-header">
-                      <span>Product Name</span>
-                      <span>Action</span>
-                    </div>
-                    {productsNeedingRecipes.length > 0 ? (
-                      productsNeedingRecipes.map((product, index) => (
-                        <div className="training-products-table-row" key={index}>
-                          <span>{product.name}</span>
-                          <button 
-                            className="training-products-add-btn"
-                            onClick={() => handleAddRecipe(product.name)}
-                          >
-                            Add Recipe
-                          </button>
-                        </div>
-                      ))
-                    ) : (
-                      <div className="training-products-table-row">
-                        <span style={{ color: '#0F9918', fontWeight: 600 }}>
-                          All products have recipes added
-                        </span>
-                        <span style={{ color: '#0F9918' }}>Complete</span>
-                      </div>
-                    )}
-                    {productsWithoutRecipes > 3 && (
-                      <div className="training-products-table-row" style={{ fontStyle: 'italic', color: '#6b7280' }}>
-                        <span>+ {productsWithoutRecipes - 3} more products needing recipes</span>
-                        <span></span>
-                      </div>
-                    )}
-                  </div>
-                </div>
-
-                <button
-                  className="training-step-btn training-step-btn-secondary"
-                  onClick={handleInventoryManagement}
-                >
-                  Go to Inventory Management 
-                </button>
-              </div>
             </div>
           </div>
         </div>
-      </main>
-    </div>
+      </section>
+
+      <section className="sk-section">
+        <div className="sk-section-head">
+          <div>
+            <h2 className="sk-section-title">While you wait</h2>
+            <p className="sk-section-sub">
+              Recipes and stock levels can be edited while training runs, so the
+              shopping list is ready the moment forecasting does.
+            </p>
+          </div>
+        </div>
+
+        <div className="sk-grid-2">
+          <SetupStep
+            index={1}
+            tone="ok"
+            title="Upload Historical Sales Data"
+            tag={<span className="sk-tag sk-tag--ok">Complete</span>}
+            foot={
+              <button type="button" className="sk-btn sk-btn--ghost" onClick={handleUploadData}>
+                Upload More Data
+                <FaArrowRight size={15} />
+              </button>
+            }
+          >
+            <div className="sk-note sk-note--ok">
+              <FaCheckCircle size={16} style={{ color: "var(--sk-success)", marginRight: 8, verticalAlign: -3 }} />
+              Historical data upload complete. All {getMonths()} months of data have been
+              successfully uploaded and validated.
+            </div>
+
+            <div style={{ marginTop: 16 }}>
+              <Meter
+                tone="ok"
+                label="Historical Data"
+                value={`${getMonths()} / ${totalMonthsNeeded} months Complete`}
+                percent={dataProgress}
+              />
+            </div>
+          </SetupStep>
+
+          <SetupStep
+            index={2}
+            title="Add Ingredient Recipes to Your Products"
+            tag={
+              products.length === 0 ? (
+                <span className="sk-tag">Checking…</span>
+              ) : productsWithoutRecipes > 0 ? (
+                <span className="sk-tag sk-tag--warn">
+                  {productsWithoutRecipes} need recipes
+                </span>
+              ) : (
+                <span className="sk-tag sk-tag--ok">Complete</span>
+              )
+            }
+            foot={
+              <button
+                type="button"
+                className="sk-btn sk-btn--secondary"
+                onClick={handleInventoryManagement}
+              >
+                Go to Inventory Management
+                <FaArrowRight size={15} />
+              </button>
+            }
+          >
+            <p className="sk-card-text">
+              Your menu products were automatically detected when you uploaded your sales
+              data. Add the ingredient recipe for each product so the system can estimate
+              how much of each ingredient you'll need to prepare.
+            </p>
+
+            <div className="sk-subcard" style={{ marginTop: 18 }}>
+              <div className="sk-subcard-title">Products detected from your sales data</div>
+              <p className="sk-subcard-text">
+                {products.length === 0 ? (
+                  "Looking for the products detected in your sales data…"
+                ) : (
+                  <>
+                    <strong>{totalProducts}</strong> products were found in your sales data.{" "}
+                    <strong>{productsWithoutRecipes}</strong> still need ingredient recipes
+                    added.
+                  </>
+                )}
+              </p>
+
+              <div style={{ marginTop: 14 }}>
+                <ProductsDetected products={products} onAddRecipe={handleAddRecipe} />
+              </div>
+
+              <p className="sk-subcard-foot">
+                Products without recipes will still be forecasted, but will not appear
+                in the ingredient demand shopping list.
+              </p>
+            </div>
+          </SetupStep>
+        </div>
+      </section>
+    </StateShell>
   );
 };
 
