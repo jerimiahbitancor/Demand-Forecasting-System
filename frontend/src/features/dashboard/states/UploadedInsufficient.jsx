@@ -8,6 +8,9 @@
 //   'both' / 'no_data'
 import { useState, useEffect, useRef } from "react";
 import axios from "axios";
+import Navbar from "../../components/Navbar/Navbar";
+import "../states/statescss/UploadedInsufficient.css";
+import { useState, useRef } from "react";
 import { useNavigate } from "react-router-dom";
 import { FaArrowRight, FaInfoCircle } from "react-icons/fa";
 import uploadedInsufficientImage from "../../../assets/images/NoData.png";
@@ -21,8 +24,13 @@ import {
   Meter,
   ProductsDetected,
 } from "../components/DashboardStateKit.jsx";
+import apiClient from "../../../services/apiClient";
+import usePolling from "../../../hooks/usePolling";
 
-const API_URL = import.meta.env.VITE_API_URL || "http://localhost:5000/api";
+// One check at a time, paused while the tab is hidden (hooks/usePolling.js).
+// Was 5 s (state) and 10 s (products).
+const STATE_POLL_MS = 60000;
+const PRODUCTS_POLL_MS = 60000;
 
 const UploadedInsufficient = ({ onRefreshState, initialState }) => {
   const navigate = useNavigate();
@@ -56,7 +64,9 @@ const UploadedInsufficient = ({ onRefreshState, initialState }) => {
   // the span; today's date does not.
   const [history, setHistory] = useState(seed.history || null);
   const [products, setProducts] = useState([]);
-  const isMountedRef = useRef(true);
+  // The first successful status load fills this screen's numbers; later
+  // polls only watch for the state changing (same as before).
+  const statusLoadedRef = useRef(false);
 
   // Navigation handlers
   const handleUploadData = () => {
@@ -113,6 +123,47 @@ const UploadedInsufficient = ({ onRefreshState, initialState }) => {
       setIsLoading(true);
 
       const statusResponse = await apiClient.get("/upload/dashboard-state");
+  const formatDate = (date) => {
+    const months = [
+      "JANUARY", "FEBRUARY", "MARCH", "APRIL", "MAY", "JUNE",
+      "JULY", "AUGUST", "SEPTEMBER", "OCTOBER", "NOVEMBER", "DECEMBER",
+    ];
+    const month = months[date.getMonth()];
+    const day = String(date.getDate()).padStart(2, "0");
+    const year = date.getFullYear();
+    return `${month}-${day}-${year}`;
+  };
+
+  const formatDay = (date) => {
+    const days = [
+      "SUNDAY", "MONDAY", "TUESDAY", "WEDNESDAY", "THURSDAY", "FRIDAY", "SATURDAY",
+    ];
+    return days[date.getDay()];
+  };
+
+  const formatTime = (date) => {
+    let hours = date.getHours();
+    const minutes = String(date.getMinutes()).padStart(2, "0");
+    const ampm = hours >= 12 ? "PM" : "AM";
+    hours = hours % 12;
+    hours = hours ? hours : 12;
+    return `${hours}:${minutes} ${ampm}`;
+  };
+
+  const now = new Date();
+  const formattedDate = formatDate(now);
+  const formattedDay = formatDay(now);
+  const formattedTime = formatTime(now);
+
+  // Fetch data status and upload progress.
+  // A failed request throws: the screen keeps its last numbers (usePolling
+  // records the error). It no longer invents "months uploaded" from the
+  // upload count, which on a failed check could read 12/12.
+  const loadDataStatus = async (signal) => {
+    try {
+      setIsLoading(true);
+
+      const statusResponse = await apiClient.get("/upload/dashboard-state", { signal });
 
       if (statusResponse.data.success) {
         const {
@@ -148,6 +199,7 @@ const UploadedInsufficient = ({ onRefreshState, initialState }) => {
           ? (historyData.spanDays / historyData.requiredSpanDays) * 100
           : (months / totalMonthsNeeded) * 100;
         setDataProgress(Math.min(progressPercent, 100));
+        statusLoadedRef.current = true;
 
         if (isMountedRef.current && state !== "uploaded-insufficient") {
           navigate("/dashboard", { replace: true });
@@ -166,6 +218,10 @@ const UploadedInsufficient = ({ onRefreshState, initialState }) => {
         setHasData(totalUploads > 0);
       } catch (fallbackError) {
         console.error("Error fetching upload fallback:", fallbackError);
+      }
+        if (state !== 'uploaded-insufficient') {
+          navigate('/dashboard', { replace: true });
+        }
       }
     } finally {
       setIsLoading(false);
@@ -193,23 +249,32 @@ const UploadedInsufficient = ({ onRefreshState, initialState }) => {
       } catch (fallbackError) {
         console.error("Error fetching upload progress fallback:", fallbackError);
         setProgressPercentage(20);
+  // Used after the owner marks dates closed; never throws.
+  const fetchDataStatus = () => loadDataStatus().catch((error) => {
+    console.error("Error fetching data status:", error);
+  });
+
+  const fetchUploadProgress = async (signal) => {
+    const response = await apiClient.get("/upload/dashboard-state", { signal });
+    if (response.data.success) {
+      const { state } = response.data.data;
+      setProgressPercentage(20);
+
+      if (state === 'fully-operational') {
+        await loadDataStatus(signal);
       }
     }
   };
 
-  const fetchProducts = async () => {
-    try {
-      const [activeResponse, inactiveResponse] = await Promise.all([
-        apiClient.get("/mapping/products", { params: { status: "active", forceRefresh: "true" } }),
-        apiClient.get("/mapping/products", { params: { status: "inactive", forceRefresh: "true" } }),
-      ]);
+  const fetchProducts = async (signal) => {
+    const [activeResponse, inactiveResponse] = await Promise.all([
+      apiClient.get("/mapping/products", { params: { status: "active", forceRefresh: "true" }, signal }),
+      apiClient.get("/mapping/products", { params: { status: "inactive", forceRefresh: "true" }, signal }),
+    ]);
 
-      const activeProducts = activeResponse.data.success ? activeResponse.data.data || [] : [];
-      const inactiveProducts = inactiveResponse.data.success ? inactiveResponse.data.data || [] : [];
-      setProducts([...activeProducts, ...inactiveProducts]);
-    } catch (error) {
-      console.error("Error fetching products:", error);
-    }
+    const activeProducts = activeResponse.data.success ? activeResponse.data.data || [] : [];
+    const inactiveProducts = inactiveResponse.data.success ? inactiveResponse.data.data || [] : [];
+    setProducts([...activeProducts, ...inactiveProducts]);
   };
 
   // Initial fetch and polling
@@ -239,6 +304,16 @@ const UploadedInsufficient = ({ onRefreshState, initialState }) => {
       clearInterval(productsInterval);
     };
   }, []);
+  // Polling. Before: a 5 s state check plus a 10 s products load (two
+  // requests each), all on setInterval. Now 60 s each, never overlapping.
+  // This screen still checks /upload/dashboard-state itself, on top of
+  // Dashboard.jsx (it is also mounted on its own route); merging the two is
+  // left for later.
+  usePolling(
+    (signal) => (statusLoadedRef.current ? fetchUploadProgress(signal) : loadDataStatus(signal)),
+    STATE_POLL_MS
+  );
+  usePolling(fetchProducts, PRODUCTS_POLL_MS);
 
   const getMonths = () => Math.min(uploadedMonths, totalMonthsNeeded);
 

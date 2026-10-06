@@ -12,6 +12,17 @@ import { useHelp } from "../../../hooks/useHelp";
 import { StateShell, SetupStep, Illustration } from "../components/DashboardStateKit.jsx";
 
 const API_URL = import.meta.env.VITE_API_URL || "http://localhost:5000/api";
+import Navbar from "../../components/Navbar/Navbar";
+import "../states/statescss/NoData.css";
+import { useState } from "react";
+import { useNavigate } from "react-router-dom"; // Import useNavigate
+import noDataImage from "../../../assets/images/NoData.png";
+import { useHelp } from "../../../hooks/useHelp";
+import apiClient from "../../../services/apiClient";
+import usePolling from "../../../hooks/usePolling";
+
+// One check at a time, paused while the tab is hidden (hooks/usePolling.js).
+const NO_DATA_POLL_MS = 60000;
 
 const NoData = ({ initialState }) => {
   const navigate = useNavigate();
@@ -24,6 +35,7 @@ const NoData = ({ initialState }) => {
     initialState?.progress?.progress || 0
   );
   const isMountedRef = useRef(true);
+  const [progressPercentage, setProgressPercentage] = useState(0);
 
   // Navigation handlers
   const handleUploadData = () => {
@@ -104,6 +116,27 @@ const NoData = ({ initialState }) => {
       clearInterval(interval);
     };
   }, [navigate]);
+  const now = new Date();
+  const formattedDate = formatDate(now);
+  const formattedDay = formatDay(now);
+  const formattedTime = formatTime(now);
+
+  // A failed check throws (usePolling keeps the last values and records the
+  // error). It no longer guesses a progress value from the upload count.
+  const fetchDataStatus = async (signal) => {
+    const stateResult = await apiClient.get('/upload/dashboard-state', { signal });
+
+    if (!stateResult.data.success) return;
+
+    const { state, progress } = stateResult.data.data;
+    setProgressPercentage(progress?.progress || 0);
+
+    if (state !== 'no-data') {
+      navigate('/dashboard', { replace: true });
+    }
+  };
+
+  usePolling(fetchDataStatus, NO_DATA_POLL_MS);
 
   return (
     <StateShell

@@ -4,6 +4,7 @@ const { supabase, isConfigured, supabaseAdmin } = require('../config/supabase');
 const { deriveProductStatus } = require('./productStatusService');
 const { PRODUCT_DB_STATUS_BY_DERIVED } = require('./productStatusConstants');
 const { isMissingColumnError } = require('../utils/recipeUnits');
+const logger = require('../utils/logger');
 
 class MappingService {
   constructor() {
@@ -133,7 +134,7 @@ class MappingService {
         return [];
       }
 
-      console.log(`Fetching products from products table${forceRefresh ? ' (forced refresh)' : ''}${status ? ` status=${status}` : ''}`);
+      logger.debug('products_db_fetch', { forceRefresh: Boolean(forceRefresh), status: status || null });
 
       // Query from products table
       let query = supabaseAdmin.from('products')
@@ -286,7 +287,7 @@ class MappingService {
         this.saveToSession(numericId, 'categories', categories);
       }
 
-      console.log(`Fetched ${transformedData.length || 0} products from database`);
+      logger.debug('products_db_fetched', { count: transformedData.length || 0 });
       return transformedData;
 
     } catch (error) {

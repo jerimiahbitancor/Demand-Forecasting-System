@@ -1,6 +1,7 @@
 // routes/mapping.js
 const express = require('express');
 const router = express.Router();
+const logger = require('../utils/logger');
 const authenticate = require('../middleware/auth');
 const mappingService = require('../services/mappingService');
 const uploadService = require('../services/uploadService');
@@ -22,8 +23,7 @@ router.get('/products', authenticate, async (req, res) => {
     const { category, search, status, forceRefresh } = req.query;
     const userId = req.user?.user_id || req.user?.id;
     
-    console.log('Fetching products for user:', userId);
-    console.log('User object:', JSON.stringify(req.user, null, 2));
+    logger.debug('products_fetch', { user_id: userId });
     
     const force = forceRefresh === 'true';
     const products = await mappingService.getProducts(userId, category, search, force, status || 'active');
@@ -366,7 +366,6 @@ router.put('/products/:id', authenticate, async (req, res) => {
     console.log('===== UPDATE PRODUCT REQUEST =====');
     console.log('Product ID:', productId);
     console.log('User ID:', userId);
-    console.log('User object:', JSON.stringify(req.user, null, 2));
     console.log('Request body:', JSON.stringify(req.body, null, 2));
     
     if (!userId) {
