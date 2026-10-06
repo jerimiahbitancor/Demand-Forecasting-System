@@ -1,19 +1,20 @@
 // states/NoData.jsx
 import Navbar from "../../components/Navbar/Navbar";
 import "../states/statescss/NoData.css";
-import { useState, useEffect, useRef } from "react";
-import axios from 'axios';
+import { useState } from "react";
 import { useNavigate } from "react-router-dom"; // Import useNavigate
 import noDataImage from "../../../assets/images/NoData.png";
 import { useHelp } from "../../../hooks/useHelp";
+import apiClient from "../../../services/apiClient";
+import usePolling from "../../../hooks/usePolling";
 
-const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:5000/api';
+// One check at a time, paused while the tab is hidden (hooks/usePolling.js).
+const NO_DATA_POLL_MS = 60000;
 
 const NoData = () => {
   const navigate = useNavigate(); // Initialize navigate
   const { openHelp } = useHelp();
   const [progressPercentage, setProgressPercentage] = useState(0);
-  const isMountedRef = useRef(true);
 
   // Navigation handlers
   const handleUploadData = () => {
@@ -52,72 +53,22 @@ const NoData = () => {
   const formattedDay = formatDay(now);
   const formattedTime = formatTime(now);
 
-  const getAuthToken = () => sessionStorage.getItem('access_token') || localStorage.getItem('token');
+  // A failed check throws (usePolling keeps the last values and records the
+  // error). It no longer guesses a progress value from the upload count.
+  const fetchDataStatus = async (signal) => {
+    const stateResult = await apiClient.get('/upload/dashboard-state', { signal });
 
-  const apiClient = axios.create({
-    baseURL: API_URL,
-    headers: { 'Content-Type': 'application/json' }
-  });
+    if (!stateResult.data.success) return;
 
-  apiClient.interceptors.request.use(
-    (config) => {
-      const token = getAuthToken();
-      if (token) config.headers.Authorization = `Bearer ${token}`;
-      return config;
-    },
-    (error) => Promise.reject(error)
-  );
+    const { state, progress } = stateResult.data.data;
+    setProgressPercentage(progress?.progress || 0);
 
-  const fetchDataStatus = async () => {
-    try {
-      const stateResult = await apiClient.get('/upload/dashboard-state');
-
-      if (!stateResult.data.success) return;
-
-      const { state, progress } = stateResult.data.data;
-      if (!isMountedRef.current) return;
-      setProgressPercentage(progress?.progress || 0);
-
-      if (isMountedRef.current && state !== 'no-data') {
-        navigate('/dashboard', { replace: true });
-      }
-    } catch (error) {
-      console.error('Error fetching upload progress:', error);
-      try {
-        const uploadsResponse = await apiClient.get('/upload?limit=1');
-        const uploadCount = uploadsResponse.data.count
-          || uploadsResponse.data.data?.length
-          || 0;
-
-        if (uploadCount > 0) {
-          if (!isMountedRef.current) return;
-          setProgressPercentage(Math.min((uploadCount / 12) * 100, 100));
-          navigate('/dashboard', { replace: true });
-        } else {
-          if (!isMountedRef.current) return;
-          setProgressPercentage(0);
-        }
-      } catch (fallbackError) {
-        console.error('Error fetching upload fallback:', fallbackError);
-        if (isMountedRef.current) setProgressPercentage(0);
-      }
+    if (state !== 'no-data') {
+      navigate('/dashboard', { replace: true });
     }
   };
 
-  useEffect(() => {
-    isMountedRef.current = true;
-
-    const initialFetch = setTimeout(fetchDataStatus, 0);
-    const interval = setInterval(() => {
-      fetchDataStatus();
-    }, 3000);
-
-    return () => {
-      isMountedRef.current = false;
-      clearTimeout(initialFetch);
-      clearInterval(interval);
-    };
-  }, [navigate]);
+  usePolling(fetchDataStatus, NO_DATA_POLL_MS);
 
   return (
     <div className="no-data-container">

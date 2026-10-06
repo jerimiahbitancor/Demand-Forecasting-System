@@ -1,15 +1,19 @@
 // states/UploadedInsufficient.jsx
 import Navbar from "../../components/Navbar/Navbar";
 import "../states/statescss/UploadedInsufficient.css";
-import { useState, useEffect, useRef } from "react";
-import axios from "axios";
+import { useState, useRef } from "react";
 import { useNavigate } from "react-router-dom";
 import uploadedInsufficientImage from "../../../assets/images/NoData.png";
 import { FaInfoCircle } from "react-icons/fa";
 import HistoryGapReview from "../components/HistoryGapReview.jsx";
 import { useHelp } from "../../../hooks/useHelp";
+import apiClient from "../../../services/apiClient";
+import usePolling from "../../../hooks/usePolling";
 
-const API_URL = import.meta.env.VITE_API_URL || "http://localhost:5000/api";
+// One check at a time, paused while the tab is hidden (hooks/usePolling.js).
+// Was 5 s (state) and 10 s (products).
+const STATE_POLL_MS = 60000;
+const PRODUCTS_POLL_MS = 60000;
 
 const UploadedInsufficient = ({ onRefreshState }) => {
   const navigate = useNavigate();
@@ -31,7 +35,9 @@ const UploadedInsufficient = ({ onRefreshState }) => {
   // the span; today's date does not.
   const [history, setHistory] = useState(null);
   const [products, setProducts] = useState([]);
-  const isMountedRef = useRef(true);
+  // The first successful status load fills this screen's numbers; later
+  // polls only watch for the state changing (same as before).
+  const statusLoadedRef = useRef(false);
 
   // Navigation handlers
   const handleUploadData = () => {
@@ -96,34 +102,20 @@ const UploadedInsufficient = ({ onRefreshState }) => {
   const formattedDay = formatDay(now);
   const formattedTime = formatTime(now);
 
-  const getAuthToken = () => sessionStorage.getItem("access_token") || localStorage.getItem("token");
-
-  const apiClient = axios.create({
-    baseURL: API_URL,
-    headers: { "Content-Type": "application/json" },
-  });
-
-  apiClient.interceptors.request.use(
-    (config) => {
-      const token = getAuthToken();
-      if (token) config.headers.Authorization = `Bearer ${token}`;
-      return config;
-    },
-    (error) => Promise.reject(error)
-  );
-
-  // Fetch data status and upload progress
-  const fetchDataStatus = async () => {
+  // Fetch data status and upload progress.
+  // A failed request throws: the screen keeps its last numbers (usePolling
+  // records the error). It no longer invents "months uploaded" from the
+  // upload count, which on a failed check could read 12/12.
+  const loadDataStatus = async (signal) => {
     try {
       setIsLoading(true);
-      
-      const statusResponse = await apiClient.get("/upload/dashboard-state");
-      
+
+      const statusResponse = await apiClient.get("/upload/dashboard-state", { signal });
+
       if (statusResponse.data.success) {
         const {
           state, stats: data, insufficientReason: reason, history: historyData,
         } = statusResponse.data.data;
-        console.log("Data status response:", data);
         setProgressPercentage(20);
         setInsufficientReason(reason || null);
         setHistory(historyData || null);
@@ -153,94 +145,55 @@ const UploadedInsufficient = ({ onRefreshState }) => {
           ? (historyData.spanDays / historyData.requiredSpanDays) * 100
           : (months / totalMonthsNeeded) * 100;
         setDataProgress(Math.min(progressPercent, 100));
+        statusLoadedRef.current = true;
 
-        if (isMountedRef.current && state !== 'uploaded-insufficient') {
+        if (state !== 'uploaded-insufficient') {
           navigate('/dashboard', { replace: true });
         }
-      }
-    } catch (error) {
-      console.error("Error fetching data status:", error);
-      try {
-        const uploadsResponse = await apiClient.get('/upload?limit=1');
-        const totalUploads = uploadsResponse.data.count
-          || uploadsResponse.data.data?.length
-          || 0;
-        const months = Math.min(totalUploads, totalMonthsNeeded);
-        setProgressPercentage(totalUploads > 0 ? 20 : 0);
-        setUploadedMonths(months);
-        setDataProgress(Math.min((months / totalMonthsNeeded) * 100, 100));
-        setHasData(totalUploads > 0);
-      } catch (fallbackError) {
-        console.error("Error fetching upload fallback:", fallbackError);
       }
     } finally {
       setIsLoading(false);
     }
   };
 
-  const fetchUploadProgress = async () => {
-    try {
-      const response = await apiClient.get("/upload/dashboard-state");
-      if (response.data.success) {
-        const { state } = response.data.data;
-        setProgressPercentage(20);
-        
-        if (state === 'fully-operational') {
-          await fetchDataStatus();
-        }
-      }
-    } catch (error) {
-      console.error("Error fetching upload progress:", error);
-      try {
-        const uploadsResponse = await apiClient.get('/upload?limit=1');
-        const totalUploads = uploadsResponse.data.count
-          || uploadsResponse.data.data?.length
-          || 0;
-        setProgressPercentage(totalUploads > 0 ? 20 : 0);
-      } catch (fallbackError) {
-        console.error("Error fetching upload progress fallback:", fallbackError);
-        setProgressPercentage(20);
+  // Used after the owner marks dates closed; never throws.
+  const fetchDataStatus = () => loadDataStatus().catch((error) => {
+    console.error("Error fetching data status:", error);
+  });
+
+  const fetchUploadProgress = async (signal) => {
+    const response = await apiClient.get("/upload/dashboard-state", { signal });
+    if (response.data.success) {
+      const { state } = response.data.data;
+      setProgressPercentage(20);
+
+      if (state === 'fully-operational') {
+        await loadDataStatus(signal);
       }
     }
   };
 
-  const fetchProducts = async () => {
-    try {
-      const [activeResponse, inactiveResponse] = await Promise.all([
-        apiClient.get("/mapping/products", { params: { status: "active", forceRefresh: "true" } }),
-        apiClient.get("/mapping/products", { params: { status: "inactive", forceRefresh: "true" } }),
-      ]);
+  const fetchProducts = async (signal) => {
+    const [activeResponse, inactiveResponse] = await Promise.all([
+      apiClient.get("/mapping/products", { params: { status: "active", forceRefresh: "true" }, signal }),
+      apiClient.get("/mapping/products", { params: { status: "inactive", forceRefresh: "true" }, signal }),
+    ]);
 
-      const activeProducts = activeResponse.data.success ? activeResponse.data.data || [] : [];
-      const inactiveProducts = inactiveResponse.data.success ? inactiveResponse.data.data || [] : [];
-      setProducts([...activeProducts, ...inactiveProducts]);
-    } catch (error) {
-      console.error("Error fetching products:", error);
-    }
+    const activeProducts = activeResponse.data.success ? activeResponse.data.data || [] : [];
+    const inactiveProducts = inactiveResponse.data.success ? inactiveResponse.data.data || [] : [];
+    setProducts([...activeProducts, ...inactiveProducts]);
   };
 
-  // Initial fetch and polling
-  useEffect(() => {
-    isMountedRef.current = true;
-    const loadData = async () => {
-      await fetchDataStatus();
-      await fetchUploadProgress();
-      await fetchProducts();
-    };
-    
-    loadData();
-
-    const interval = setInterval(() => {
-      fetchUploadProgress();
-    }, 5000);
-    const productsInterval = setInterval(fetchProducts, 10000);
-
-    return () => {
-      isMountedRef.current = false;
-      clearInterval(interval);
-      clearInterval(productsInterval);
-    };
-  }, []);
+  // Polling. Before: a 5 s state check plus a 10 s products load (two
+  // requests each), all on setInterval. Now 60 s each, never overlapping.
+  // This screen still checks /upload/dashboard-state itself, on top of
+  // Dashboard.jsx (it is also mounted on its own route); merging the two is
+  // left for later.
+  usePolling(
+    (signal) => (statusLoadedRef.current ? fetchUploadProgress(signal) : loadDataStatus(signal)),
+    STATE_POLL_MS
+  );
+  usePolling(fetchProducts, PRODUCTS_POLL_MS);
 
   // Calculate months to display
   const getMonths = () => {

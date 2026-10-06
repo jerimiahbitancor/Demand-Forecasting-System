@@ -1,0 +1,156 @@
+/* states/statescss/ConnectionProblem.css */
+
+/* ---------- Full screen ---------- */
+.connection-problem {
+  min-height: calc(100vh - 72px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 32px 16px;
+  box-sizing: border-box;
+}
+
+.connection-problem-card {
+  width: 100%;
+  max-width: 480px;
+  background: rgba(255, 255, 255, 0.95);
+  border: 1px solid var(--color-border-light, #e8e0dd);
+  border-radius: 16px;
+  padding: 32px 28px;
+  box-shadow: 0 10px 30px rgba(28, 38, 50, 0.12);
+  text-align: center;
+  backdrop-filter: blur(4px);
+}
+
+.connection-problem-icon {
+  font-size: 36px;
+  line-height: 1;
+  margin-bottom: 12px;
+}
+
+.connection-problem-title {
+  margin: 0 0 8px;
+  font-size: 22px;
+  font-weight: 700;
+  color: var(--color-text-primary, #1c2632);
+}
+
+.connection-problem-message {
+  margin: 0 0 8px;
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--color-red-primary, #7a0101);
+}
+
+.connection-problem-note {
+  margin: 0 0 20px;
+  font-size: 14px;
+  color: var(--color-text-secondary, #5c403c);
+  line-height: 1.5;
+}
+
+.connection-problem-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  justify-content: center;
+}
+
+.connection-btn {
+  min-width: 120px;
+  padding: 10px 20px;
+  border-radius: 8px;
+  font-size: 14px;
+  font-weight: 600;
+  font-family: inherit;
+  cursor: pointer;
+  transition: background-color 0.15s ease, border-color 0.15s ease;
+}
+
+.connection-btn.primary {
+  background: var(--color-red-primary, #7a0101);
+  border: 1px solid var(--color-red-primary, #7a0101);
+  color: #ffffff;
+}
+
+.connection-btn.primary:hover {
+  background: #5e0101;
+}
+
+.connection-btn.secondary {
+  background: #ffffff;
+  border: 1px solid var(--color-border, #ced4da);
+  color: var(--color-text-primary, #1c2632);
+}
+
+.connection-btn.secondary:hover {
+  border-color: var(--color-border-hover, #adb5bd);
+}
+
+.connection-btn:focus-visible,
+.connection-banner-retry:focus-visible {
+  outline: 2px solid var(--color-secondary, #feb161);
+  outline-offset: 2px;
+}
+
+.connection-ref {
+  margin: 16px 0 0;
+  font-size: 12px;
+  color: var(--color-text-light, #6c757d);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+
+/* ---------- Banner (data loaded before) ---------- */
+.connection-banner {
+  position: fixed;
+  top: 80px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 60;
+  width: calc(100% - 32px);
+  max-width: 720px;
+  box-sizing: border-box;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 14px;
+  background: #fef3c7;
+  border: 1px solid #f59e0b;
+  border-radius: 10px;
+  box-shadow: 0 6px 16px rgba(28, 38, 50, 0.12);
+  color: #78350f;
+  font-size: 14px;
+  font-weight: 500;
+}
+
+.connection-banner .connection-ref {
+  margin: 0;
+  color: #92400e;
+}
+
+.connection-banner-retry {
+  flex-shrink: 0;
+  padding: 6px 14px;
+  border-radius: 6px;
+  border: 1px solid #b45309;
+  background: #ffffff;
+  color: #78350f;
+  font-size: 13px;
+  font-weight: 600;
+  font-family: inherit;
+  cursor: pointer;
+}
+
+.connection-banner-retry:hover {
+  background: #fffbeb;
+}
+
+/* Inside a page (not floating), e.g. the health page. */
+.connection-banner.inline {
+  position: static;
+  transform: none;
+  width: 100%;
+  max-width: none;
+  margin-bottom: 16px;
+}

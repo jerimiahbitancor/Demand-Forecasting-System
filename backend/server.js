@@ -34,7 +34,7 @@ net.setDefaultAutoSelectFamilyAttemptTimeout(
 const express = require('express');
 const cors = require('cors');
 const helmet = require('helmet');
-const rateLimit = require('express-rate-limit');
+const logger = require('./utils/logger');
 
 // Import routes
 const authRoutes = require('./routes/auth');
@@ -62,61 +62,31 @@ const PORT = process.env.PORT || 5000;
 // breaks express-rate-limit's per-IP keying. Trust exactly one hop.
 app.set('trust proxy', 1);
 
+// Request ID + one JSON access-log line per request. First, so every later
+// middleware (and any error it raises) runs with the ID available.
+const requestContext = require('./middleware/requestContext');
+app.use(requestContext);
+
 // ============= SECURITY MIDDLEWARE =============+++++
 
 // Helmet - Secure HTTP headers
 app.use(helmet());
 
-// CORS - Configured for security
-// ALLOWED_ORIGINS is a comma-separated list of exact origins (the prod
-// domain, local dev). Falls back to the local Vite dev server.
-const allowedOrigins = (process.env.ALLOWED_ORIGINS || 'http://localhost:5173')
-  .split(',')
-  .map((origin) => origin.trim())
-  .filter(Boolean);
+// CORS - Configured for security. Origins, the Vercel preview pattern and
+// the allowed headers live in middleware/corsConfig.js.
+const { createCorsOptions } = require('./middleware/corsConfig');
+app.use(cors(createCorsOptions()));
 
-// Vercel gives every preview deployment its own unique hashed subdomain
-// (e.g. demand-forecasting-system-<hash>-<team>.vercel.app), so a static
-// ALLOWED_ORIGINS entry can never match them. Allow any preview URL for
-// THIS project specifically, rather than any *.vercel.app site.
-const vercelPreviewPattern = /^https:\/\/demand-forecasting-system-[a-z0-9]+-[a-z0-9]+\.vercel\.app$/;
-
-app.use(cors({
-  origin: (origin, callback) => {
-    // Same-origin / non-browser requests (curl, server-to-server) send no origin.
-    if (!origin || allowedOrigins.includes(origin) || vercelPreviewPattern.test(origin)) {
-      callback(null, true);
-    } else {
-      callback(new Error(`Not allowed by CORS: ${origin}`));
-    }
-  },
-  credentials: true,
-  methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH'],
-  allowedHeaders: ['Content-Type', 'Authorization']
-}));
-
-// Rate Limiting - Prevent brute force attacks
-const limiter = rateLimit({
-  windowMs: 15 * 60 * 1000,
-  max: process.env.NODE_ENV === 'production' ? 100 : 1000,
-  message: {
-    success: false,
-    error: 'Too many requests, please try again later.'
-  }
-});
-app.use('/api', limiter);
+// Rate Limiting - a strict limit on the OTP/password endpoints (brute-force
+// targets) and a generous one for all other /api traffic, so normal use
+// (dashboard polling) can't lock the owner out. See middleware/rateLimits.js.
+const { createAuthLimiter, createApiLimiter } = require('./middleware/rateLimits');
+app.use('/api', createAuthLimiter());
+app.use('/api', createApiLimiter());
 
 // Body parsers with limits
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true, limit: '10mb' }));
-
-// ============= LOGGING =============
-if (process.env.NODE_ENV !== 'production') {
-  app.use((req, res, next) => {
-    console.log(`${req.method} ${req.path}`);
-    next();
-  });
-}
 
 // Global audit trail — logs every non-GET request (except routes that
 // already write their own detailed audit entries).
@@ -159,30 +129,11 @@ app.get('/', (req, res) => {
 });
 
 // ============= ERROR HANDLING =============
-// 404 handler
-app.use((req, res) => {
-  res.status(404).json({ 
-    success: false,
-    error: 'Route not found'
-  });
-});
-
-// Global error handler
-app.use((err, req, res, next) => {
-  console.error('Error:', err.message);
-  
-  const status = err.status || 500;
-  const message = err.message || 'Internal Server Error';
-  
-  const response = {
-    success: false,
-    error: status === 500 && process.env.NODE_ENV === 'production' 
-      ? 'Something went wrong' 
-      : message
-  };
-
-  res.status(status).json(response);
-});
+// 404 handler + global error handler (see middleware/errorHandlers.js).
+// Both include the request ID in the response body.
+const { notFoundHandler, errorHandler } = require('./middleware/errorHandlers');
+app.use(notFoundHandler);
+app.use(errorHandler);
 
 // ============= CRASH SAFETY NET =============
 // Express 4 does NOT catch a rejected promise returned from an async route
@@ -203,8 +154,8 @@ app.use((err, req, res, next) => {
 // is strictly worse. This is a safety net for bugs we haven't found yet —
 // it is not a substitute for fixing a missing try/catch or .catch() once
 // the log below points at one.
-process.on('unhandledRejection', (reason, promise) => {
-  console.error('🔥 Unhandled Promise Rejection:', reason);
+process.on('unhandledRejection', (reason) => {
+  logger.error('unhandled_rejection', { err: reason });
 });
 
 // uncaughtException: a thrown error outside any promise/async context is a
@@ -215,7 +166,7 @@ process.on('unhandledRejection', (reason, promise) => {
 // Docker's restart policy) to bring it back up; in local dev, nodemon will
 // pick this up as an exit and restart on the next file save same as before.
 process.on('uncaughtException', (err) => {
-  console.error('🔥 Uncaught Exception:', err);
+  logger.error('uncaught_exception', { err });
   process.exit(1);
 });
 

@@ -13,6 +13,9 @@ import {
 import { useNavigate } from 'react-router-dom';
 import axios from 'axios';
 import toast from 'react-hot-toast';
+import sharedApiClient from '../../../services/apiClient';
+import usePolling from '../../../hooks/usePolling';
+import { createChangeDetector, emitDataChanged } from '../../../utils/appEvents';
 import './NotificationDropdown.css';
 
 const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:5000/api';
@@ -23,6 +26,16 @@ const STORAGE_KEYS = {
   UNREAD_COUNT: 'notifications_unread_count',
   LAST_FETCH: 'notifications_last_fetch'
 };
+
+// How often the bell checks for new notifications.
+const NOTIFICATION_POLL_MS = 30000;
+
+// Spots a NEW upload / training / forecast notification and tells the
+// dashboard to refresh (utils/appEvents.js). Kept outside the component on
+// purpose: the bell is re-created whenever the dashboard switches screens,
+// and a per-mount baseline could miss the very notification that caused
+// the switch.
+const detectDataChange = createChangeDetector();
 
 const NotificationDropdown = () => {
   const [isOpen, setIsOpen] = useState(false);
@@ -119,19 +132,26 @@ const NotificationDropdown = () => {
     }
   }, [apiClient]);
 
-  // Fetch unread count only (lighter request)
-  const fetchUnreadCount = useCallback(async () => {
-    try {
-      const response = await apiClient.get('/notifications/unread-count');
-      if (response.data.success) {
-        const count = response.data.count || 0;
-        setUnreadCount(count);
-        sessionStorage.setItem(STORAGE_KEYS.UNREAD_COUNT, count.toString());
-      }
-    } catch (error) {
-      console.error('Error fetching unread count:', error);
-    }
-  }, [apiClient]);
+  // Every 30 s: the newest notification plus the unread count, in one
+  // request. Replaces the old unread-count interval. usePolling runs one
+  // check at a time, pauses while the tab is hidden (and checks once when
+  // it is shown again), and stops on a login problem.
+  const checkNewest = useCallback(async (signal) => {
+    const response = await sharedApiClient.get('/notifications', {
+      params: { limit: 1 },
+      signal,
+    });
+    if (!response.data.success) return;
+
+    const count = response.data.unreadCount || 0;
+    setUnreadCount(count);
+    sessionStorage.setItem(STORAGE_KEYS.UNREAD_COUNT, count.toString());
+
+    const change = detectDataChange((response.data.data || [])[0] || null);
+    if (change) emitDataChanged(change);
+  }, []);
+
+  usePolling(checkNewest, NOTIFICATION_POLL_MS);
 
   // Initial load
   useEffect(() => {
@@ -148,14 +168,7 @@ const NotificationDropdown = () => {
     } else {
       fetchNotifications(false);
     }
-
-    // Poll for new notifications every 30 seconds
-    const interval = setInterval(() => {
-      fetchUnreadCount();
-    }, 30000);
-
-    return () => clearInterval(interval);
-  }, [fetchNotifications, fetchUnreadCount]);
+  }, [fetchNotifications]);
 
   // Close dropdown when clicking outside
   useEffect(() => {
@@ -167,24 +180,6 @@ const NotificationDropdown = () => {
     document.addEventListener('mousedown', handleClickOutside);
     return () => document.removeEventListener('mousedown', handleClickOutside);
   }, [isOpen]);
-
-  // Refresh when tab becomes visible
-  useEffect(() => {
-    const handleVisibilityChange = () => {
-      if (!document.hidden) {
-        const lastFetch = sessionStorage.getItem(STORAGE_KEYS.LAST_FETCH);
-        const cacheValid = lastFetch && (Date.now() - parseInt(lastFetch)) < 30000;
-        if (!cacheValid) {
-          fetchUnreadCount();
-        }
-      }
-    };
-
-    document.addEventListener('visibilitychange', handleVisibilityChange);
-    return () => {
-      document.removeEventListener('visibilitychange', handleVisibilityChange);
-    };
-  }, [fetchUnreadCount]);
 
   const toggleNotifications = () => {
     setIsOpen(!isOpen);

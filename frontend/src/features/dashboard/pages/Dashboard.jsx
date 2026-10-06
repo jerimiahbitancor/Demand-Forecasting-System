@@ -1,6 +1,9 @@
 // Dashboard.jsx
-import { useCallback, useEffect, useState } from 'react';
-import axios from 'axios';
+import { useEffect } from 'react';
+import toast from 'react-hot-toast';
+import apiClient from '../../../services/apiClient';
+import usePolling from '../../../hooks/usePolling';
+import { describeChange, onDataChanged } from '../../../utils/appEvents';
 import './Dashboard.css';
 
 // Import the 7 state components
@@ -11,74 +14,68 @@ import ReadyToTrain from '../states/ReadyToTrain.jsx';
 import TrainingInProgress from '../states/TrainingInProgress.jsx';
 import ForecastsReady from '../states/ForecastsReady.jsx';
 import DataNeedsAttention from '../states/DataNeedsAttention.jsx';
+import ConnectionProblem from '../states/ConnectionProblem.jsx';
+import Navbar from '../../components/Navbar/Navbar';
 
 // Import the image directly
 import dashboardBg from '../../../assets/images/Dashboard.png';
 
-const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:5000/api';
+// How often the dashboard re-checks its state. One check at a time, paused
+// while the tab is hidden (see hooks/usePolling.js).
+const DASHBOARD_POLL_MS = 60000;
+
+const stateMap = {
+  'no-data': 'NoData',
+  'uploaded-insufficient': 'UploadedInsufficient',
+  'ready-to-train': 'ReadyToTrain',
+  'training-in-progress': 'TrainingInProgress',
+  'forecasts-ready-recipes-pending': 'ForecastsReady',
+  'data-needs-attention': 'DataNeedsAttention',
+  'fully-operational': 'FullyOperational'
+};
+
+// One dashboard check. Resolves to a stateConfig key.
+//
+// A failed check THROWS. It must never pick a business state: the old
+// fallback here turned a timeout, a 429 or a 500 into "Uploaded
+// Insufficient" or "No Data", which looked exactly like real data.
+// usePolling keeps the last good state and reports the error instead.
+const loadDashboardState = async (signal) => {
+  const response = await apiClient.get('/upload/dashboard-state', { signal });
+  let state = response.data.success ? response.data.data.state : 'no-data';
+
+  if (state === 'no-data') {
+    const uploadsResponse = await apiClient.get('/upload?limit=1', { signal });
+    const uploadCount = uploadsResponse.data.count
+      || uploadsResponse.data.data?.length
+      || 0;
+
+    if (uploadCount > 0) {
+      state = 'uploaded-insufficient';
+    }
+  }
+
+  return stateMap[state] || 'NoData';
+};
 
 const Dashboard = () => {
-  const [selectedState, setSelectedState] = useState('NoData');
-  // Bumped by a state screen that wants the dashboard re-checked right away
-  // (e.g. right after the owner marks dates closed) instead of waiting up
-  // to 5 seconds for the next poll. The effect below re-runs on change.
-  const [refreshKey, setRefreshKey] = useState(0);
-  const requestRefresh = useCallback(() => setRefreshKey((k) => k + 1), []);
+  const {
+    data, error, lastSuccessAt, lastErrorAt, refresh,
+  } = usePolling(loadDashboardState, DASHBOARD_POLL_MS);
+  const selectedState = data;
+  // A state screen that wants the dashboard re-checked right away (e.g.
+  // right after the owner marks dates closed) calls this instead of
+  // waiting for the next poll.
+  const requestRefresh = refresh;
 
-  useEffect(() => {
-    const loadDashboardState = async () => {
-      try {
-        const token = sessionStorage.getItem('access_token') || localStorage.getItem('token');
-        const config = {
-          headers: token ? { Authorization: `Bearer ${token}` } : undefined
-        };
-        const response = await axios.get(`${API_URL}/upload/dashboard-state`, config);
-        let state = response.data.success ? response.data.data.state : 'no-data';
-
-        if (state === 'no-data') {
-          const uploadsResponse = await axios.get(`${API_URL}/upload?limit=1`, config);
-          const uploadCount = uploadsResponse.data.count
-            || uploadsResponse.data.data?.length
-            || 0;
-
-          if (uploadCount > 0) {
-            state = 'uploaded-insufficient';
-          }
-        }
-
-        const stateMap = {
-          'no-data': 'NoData',
-          'uploaded-insufficient': 'UploadedInsufficient',
-          'ready-to-train': 'ReadyToTrain',
-          'training-in-progress': 'TrainingInProgress',
-          'forecasts-ready-recipes-pending': 'ForecastsReady',
-          'data-needs-attention': 'DataNeedsAttention',
-          'fully-operational': 'FullyOperational'
-        };
-        setSelectedState(stateMap[state] || 'NoData');
-      } catch (error) {
-        console.error('Error loading dashboard state:', error);
-        try {
-          const token = sessionStorage.getItem('access_token') || localStorage.getItem('token');
-          const uploadsResponse = await axios.get(`${API_URL}/upload?limit=1`, {
-            headers: token ? { Authorization: `Bearer ${token}` } : undefined
-          });
-          const uploadCount = uploadsResponse.data.count
-            || uploadsResponse.data.data?.length
-            || 0;
-          setSelectedState(uploadCount > 0 ? 'UploadedInsufficient' : 'NoData');
-        } catch (fallbackError) {
-          console.error('Error loading upload fallback:', fallbackError);
-          setSelectedState('NoData');
-        }
-      }
-    };
-
-    loadDashboardState();
-
-    const stateInterval = setInterval(loadDashboardState, 5000);
-    return () => clearInterval(stateInterval);
-  }, [refreshKey]);
+  // The notification bell signals a new upload / training / forecast
+  // notification (utils/appEvents.js): re-check now instead of waiting up
+  // to 60 s, and say so with one toast (same id, so they never stack).
+  useEffect(() => onDataChanged((detail) => {
+    refresh();
+    const { text, failed } = describeChange(detail);
+    (failed ? toast.error : toast.success)(text, { id: 'dfs-data-changed' });
+  }), [refresh]);
 
   // Configuration for each state with background
   const stateConfig = {
@@ -133,8 +130,40 @@ const Dashboard = () => {
     }
   };
 
+  // Login problem (401/403): polling has stopped (see usePolling). Show the
+  // log-in screen even if data loaded before; never log out automatically.
+  // Never loaded in this visit + any failure: the full problem screen.
+  // Still loading the first time: a neutral loading card, not "No Data".
+  if (error?.kind === 'auth' || (!selectedState && error)) {
+    return (
+      <div className="dashboard-wrapper" style={{ backgroundImage: `url(${dashboardBg})`, backgroundSize: 'cover', backgroundPosition: 'center', minHeight: '100vh' }}>
+        <Navbar />
+        <ConnectionProblem mode="full" error={error} onRetry={refresh} />
+      </div>
+    );
+  }
+
+  if (!selectedState) {
+    return (
+      <div className="route-guard-loading">
+        <div className="route-guard-card">
+          <div className="route-guard-spinner">
+            <div className="route-guard-spinner-ring"></div>
+          </div>
+          <h3 className="route-guard-title">Loading</h3>
+          <p className="route-guard-subtitle route-guard-dots">
+            Checking your dashboard
+          </p>
+        </div>
+      </div>
+    );
+  }
+
   const CurrentDashboard = stateConfig[selectedState].component;
   const currentState = stateConfig[selectedState];
+  // Loaded before, but the latest check failed: keep showing the last good
+  // state, with a banner saying so.
+  const showStaleBanner = Boolean(error) && lastErrorAt && (!lastSuccessAt || lastErrorAt > lastSuccessAt);
 
   const getBackgroundStyle = () => {
     if (currentState.backgroundImage) {
@@ -159,6 +188,15 @@ const Dashboard = () => {
       style={getBackgroundStyle()}
     >
       <CurrentDashboard onRefreshState={requestRefresh} />
+      {showStaleBanner && (
+        <ConnectionProblem
+          mode="banner"
+          error={error}
+          onRetry={refresh}
+          lastSuccessAt={lastSuccessAt}
+          lastErrorAt={lastErrorAt}
+        />
+      )}
     </div>
   );
 };

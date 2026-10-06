@@ -1,16 +1,21 @@
 // states/TrainingInProgress.jsx
 import Navbar from "../../components/Navbar/Navbar";
 import "../states/statescss/TrainingInProgress.css";
-import { useState, useEffect } from "react";
-import axios from "axios";
+import { useState, useRef } from "react";
 import { useNavigate } from "react-router-dom";
 import trainingInProgressImage from "../../../assets/images/Rene.png";
 import { FaInfoCircle, FaCheckCircle, FaSpinner } from "react-icons/fa";
 import { useHelp } from "../../../hooks/useHelp";
+import apiClient from "../../../services/apiClient";
+import usePolling from "../../../hooks/usePolling";
 
-const API_URL = import.meta.env.VITE_API_URL || "http://localhost:5000/api";
+// One request at a time, paused while the tab is hidden (hooks/usePolling.js).
+// Was 3 s (training status), 5 s (upload progress) and 10 s (products).
+const TRAINING_STATUS_POLL_MS = 15000;
+const UPLOAD_PROGRESS_POLL_MS = 60000;
+const PRODUCTS_POLL_MS = 60000;
 
-const TrainingInProgress = () => {
+const TrainingInProgress = ({ onRefreshState }) => {
   const navigate = useNavigate();
   const { openHelp } = useHelp();
   const [progressPercentage, setProgressPercentage] = useState(50);
@@ -23,6 +28,9 @@ const TrainingInProgress = () => {
   const [products, setProducts] = useState([]);
   const [productsWithRecipes, setProductsWithRecipes] = useState(3);
   const [totalProducts, setTotalProducts] = useState(12);
+  // Last known "training running?" answer, to spot the true -> false change.
+  const wasTrainingRef = useRef(null);
+  const dataStatusLoadedRef = useRef(false);
 
   // Navigation handlers
   const handleUploadData = () => {
@@ -69,77 +77,57 @@ const TrainingInProgress = () => {
   const formattedDay = formatDay(now);
   const formattedTime = formatTime(now);
 
-  const getAuthToken = () => sessionStorage.getItem("access_token") || localStorage.getItem("token");
-
-  const apiClient = axios.create({
-    baseURL: API_URL,
-    headers: { "Content-Type": "application/json" },
-  });
-
-  apiClient.interceptors.request.use(
-    (config) => {
-      const token = getAuthToken();
-      if (token) config.headers.Authorization = `Bearer ${token}`;
-      return config;
-    },
-    (error) => Promise.reject(error)
-  );
+  // A failed request throws: the screen keeps its last values (usePolling
+  // records the error). The old catch blocks filled in invented values
+  // (12/12 months, 50% progress, and a hardcoded list of 12 product names),
+  // which looked like real data.
 
   // Fetch data status
-  const fetchDataStatus = async () => {
+  const fetchDataStatus = async (signal) => {
     try {
       setIsLoading(true);
-      
-      const statusResponse = await apiClient.get("/upload/stats/summary");
-      
+
+      const statusResponse = await apiClient.get("/upload/stats/summary", { signal });
+
       if (statusResponse.data.success) {
         const data = statusResponse.data.data;
-        console.log("Data status response:", data);
-        
+
         const totalRows = data.sales_records || data.total_rows || 0;
         const totalUploads = data.total_uploads || 0;
         const monthsUploaded = data.months_uploaded || 12;
-        
+
         let months = monthsUploaded;
         if (months === 0 && totalUploads > 0) {
           months = Math.min(totalUploads, totalMonthsNeeded);
         }
-        
+
         if (totalRows > 0 && months === 0) {
           months = 1;
         }
-        
+
         setUploadedMonths(months);
         setHasData(totalRows > 0 || totalUploads > 0);
-        
+
         const progressPercent = (months / totalMonthsNeeded) * 100;
         setDataProgress(Math.min(progressPercent, 100));
+        dataStatusLoadedRef.current = true;
       }
-    } catch (error) {
-      console.error("Error fetching data status:", error);
-      setUploadedMonths(12);
-      setDataProgress(100);
-      setHasData(true);
     } finally {
       setIsLoading(false);
     }
   };
 
-  // Fetch upload progress
-  const fetchUploadProgress = async () => {
-    try {
-      const response = await apiClient.get("/upload/progress");
-      if (response.data.success) {
-        const progress = response.data.data.progress || 50;
-        setProgressPercentage(progress);
-        
-        if (progress >= 100) {
-          await fetchDataStatus();
-        }
+  // Fetch upload progress. The data status is loaded on the first run (as
+  // the old mount sequence did) and whenever processing is complete.
+  const fetchUploadProgress = async (signal) => {
+    const response = await apiClient.get("/upload/progress", { signal });
+    if (response.data.success) {
+      const progress = response.data.data.progress || 50;
+      setProgressPercentage(progress);
+
+      if (progress >= 100 || !dataStatusLoadedRef.current) {
+        await fetchDataStatus(signal);
       }
-    } catch (error) {
-      console.error("Error fetching upload progress:", error);
-      setProgressPercentage(50);
     }
   };
 
@@ -147,81 +135,43 @@ const TrainingInProgress = () => {
   // call (no job queue), so there's no real incremental percentage or ETA
   // to report — mlService.isTrainingInFlight() only knows "still running"
   // vs "finished". The percentage bar below is intentionally left as a
-  // generic in-progress indicator, not a fabricated number. Once
-  // isTraining flips false, Dashboard.jsx's own 5s poll of
-  // /upload/dashboard-state will naturally move the owner to whichever
-  // state actually follows (forecasts-ready-recipes-pending,
-  // fully-operational, or data-needs-attention) — this component doesn't
-  // need to navigate anywhere itself.
-  const fetchTrainingStatus = async () => {
-    try {
-      const response = await apiClient.get("/ml/training-status");
-      if (response.data.success) {
-        setIsTrainingComplete(!response.data.data.isTraining);
+  // generic in-progress indicator, not a fabricated number. When
+  // isTraining flips from true to false, this asks the Dashboard to
+  // re-check its state right away (onRefreshState) instead of waiting for
+  // its next poll, so the owner moves on to whichever state follows
+  // (forecasts-ready-recipes-pending, fully-operational, or
+  // data-needs-attention).
+  const fetchTrainingStatus = async (signal) => {
+    const response = await apiClient.get("/ml/training-status", { signal });
+    if (response.data.success) {
+      const isTraining = Boolean(response.data.data.isTraining);
+      setIsTrainingComplete(!isTraining);
+      if (wasTrainingRef.current === true && !isTraining && onRefreshState) {
+        onRefreshState();
       }
-    } catch (error) {
-      console.error("Error fetching training status:", error);
-      // Keep default values
+      wasTrainingRef.current = isTraining;
     }
   };
 
   // Fetch products data
-  const fetchProducts = async () => {
-    try {
-      const [activeResponse, inactiveResponse] = await Promise.all([
-        apiClient.get("/mapping/products", { params: { status: "active", forceRefresh: "true" } }),
-        apiClient.get("/mapping/products", { params: { status: "inactive", forceRefresh: "true" } }),
-      ]);
-      const activeProducts = activeResponse.data.success ? activeResponse.data.data || [] : [];
-      const inactiveProducts = inactiveResponse.data.success ? inactiveResponse.data.data || [] : [];
-      const productsData = [...activeProducts, ...inactiveProducts];
-      setProducts(productsData);
-      setTotalProducts(productsData.length);
+  const fetchProducts = async (signal) => {
+    const [activeResponse, inactiveResponse] = await Promise.all([
+      apiClient.get("/mapping/products", { params: { status: "active", forceRefresh: "true" }, signal }),
+      apiClient.get("/mapping/products", { params: { status: "inactive", forceRefresh: "true" }, signal }),
+    ]);
+    const activeProducts = activeResponse.data.success ? activeResponse.data.data || [] : [];
+    const inactiveProducts = inactiveResponse.data.success ? inactiveResponse.data.data || [] : [];
+    const productsData = [...activeProducts, ...inactiveProducts];
+    setProducts(productsData);
+    setTotalProducts(productsData.length);
 
-      const withRecipes = productsData.filter(p => p.product_ingredients?.length).length;
-      setProductsWithRecipes(withRecipes);
-    } catch (error) {
-      console.error("Error fetching products:", error);
-      // Use fallback data
-      setProducts([
-        { name: "Coated Tonkatsu", hasRecipe: false },
-        { name: "Breaded Porkchop", hasRecipe: false },
-        { name: "Sisig", hasRecipe: false },
-        { name: "Poppers Series", hasRecipe: true },
-        { name: "Cheesy Spicy Tocino", hasRecipe: false },
-        { name: "OG Tapsilog", hasRecipe: true },
-        { name: "Lechon Kawali", hasRecipe: false },
-        { name: "Chicken Sriracha", hasRecipe: true },
-        { name: "Sizzling Sisig", hasRecipe: false },
-        { name: "Herb Chicken", hasRecipe: false },
-        { name: "Breaded Porkchop", hasRecipe: false },
-        { name: "Tocino", hasRecipe: false },
-      ]);
-      setTotalProducts(12);
-      setProductsWithRecipes(3);
-    }
+    const withRecipes = productsData.filter(p => p.product_ingredients?.length).length;
+    setProductsWithRecipes(withRecipes);
   };
 
-  useEffect(() => {
-    const loadData = async () => {
-      await fetchDataStatus();
-      await fetchUploadProgress();
-      await fetchTrainingStatus();
-      await fetchProducts();
-    };
-    
-    loadData();
-
-    const uploadInterval = setInterval(fetchUploadProgress, 5000);
-    const trainingInterval = setInterval(fetchTrainingStatus, 3000);
-    const productsInterval = setInterval(fetchProducts, 10000);
-
-    return () => {
-      clearInterval(uploadInterval);
-      clearInterval(trainingInterval);
-      clearInterval(productsInterval);
-    };
-  }, []);
+  usePolling(fetchUploadProgress, UPLOAD_PROGRESS_POLL_MS);
+  usePolling(fetchTrainingStatus, TRAINING_STATUS_POLL_MS);
+  usePolling(fetchProducts, PRODUCTS_POLL_MS);
 
   const getMonths = () => {
     return Math.min(uploadedMonths, totalMonthsNeeded);
