@@ -35,6 +35,9 @@ const UploadedInsufficient = ({ onRefreshState }) => {
   // the span; today's date does not.
   const [history, setHistory] = useState(null);
   const [products, setProducts] = useState([]);
+  // True after the first successful status load. Until then the months
+  // label shows "—", not "0 / 12 months".
+  const [statusLoaded, setStatusLoaded] = useState(false);
   // The first successful status load fills this screen's numbers; later
   // polls only watch for the state changing (same as before).
   const statusLoadedRef = useRef(false);
@@ -146,6 +149,7 @@ const UploadedInsufficient = ({ onRefreshState }) => {
           : (months / totalMonthsNeeded) * 100;
         setDataProgress(Math.min(progressPercent, 100));
         statusLoadedRef.current = true;
+        setStatusLoaded(true);
 
         if (state !== 'uploaded-insufficient') {
           navigate('/dashboard', { replace: true });
@@ -354,7 +358,9 @@ const UploadedInsufficient = ({ onRefreshState }) => {
                       <span className="insufficient-data-progress-text">
                         {history
                           ? `${Math.min(history.spanMonths, totalMonthsNeeded)} / ${totalMonthsNeeded} months`
-                          : `${getMonths()} / ${totalMonthsNeeded} months`}
+                          : statusLoaded
+                            ? `${getMonths()} / ${totalMonthsNeeded} months`
+                            : `— / ${totalMonthsNeeded} months`}
                       </span>
                     </div>
                     <div className="insufficient-data-progress-bar">

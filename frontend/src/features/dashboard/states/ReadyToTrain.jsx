@@ -28,12 +28,14 @@ const ReadyToTrain = () => {
   // upload is old relative to today. Tracking the real count here too
   // means the owner isn't shown a bare "12/12 months" that doesn't match
   // what they actually uploaded.
-  const [uploadedMonths, setUploadedMonths] = useState(0);
-  const [uploadedDays, setUploadedDays] = useState(0);
+  // null = not loaded yet (shown as "—"), so a slow or failed load never
+  // reads as "0 days / 0 products".
+  const [uploadedMonths, setUploadedMonths] = useState(null);
+  const [uploadedDays, setUploadedDays] = useState(null);
   const [totalMonthsNeeded] = useState(12);
   const [products, setProducts] = useState([]);
-  const [totalProducts, setTotalProducts] = useState(0);
-  const [productsWithoutRecipes, setProductsWithoutRecipes] = useState(0);
+  const [totalProducts, setTotalProducts] = useState(null);
+  const [productsWithoutRecipes, setProductsWithoutRecipes] = useState(null);
   const [isStarting, setIsStarting] = useState(false);
 
   const getAuthToken = () => sessionStorage.getItem("access_token") || localStorage.getItem("token");
@@ -224,15 +226,19 @@ const ReadyToTrain = () => {
 
                     <div className="training-data-progress-wrapper">
                       <div className="training-data-progress-label">
-                        <span>Sales data actually uploaded ({uploadedDays} day{uploadedDays === 1 ? '' : 's'})</span>
+                        <span>
+                          {uploadedDays == null
+                            ? "Sales data actually uploaded (—)"
+                            : `Sales data actually uploaded (${uploadedDays} day${uploadedDays === 1 ? '' : 's'})`}
+                        </span>
                         <span className="training-data-progress-text-complete">
-                          {uploadedMonths} / {totalMonthsNeeded} months
+                          {uploadedMonths == null ? "—" : `${uploadedMonths} / ${totalMonthsNeeded} months`}
                         </span>
                       </div>
                       <div className="training-data-progress-bar">
                         <div
                           className="training-data-progress-fill-complete"
-                          style={{ width: `${Math.min((uploadedMonths / totalMonthsNeeded) * 100, 100)}%` }}
+                          style={{ width: `${Math.min(((uploadedMonths ?? 0) / totalMonthsNeeded) * 100, 100)}%` }}
                         />
                       </div>
                     </div>
@@ -297,8 +303,12 @@ const ReadyToTrain = () => {
                   <div className="training-products-header">
                     <h5 className="training-products-title">Products Detected from Your Sales Data</h5>
                     <div className="training-products-summary">
-                      <p className="training-products-total">{totalProducts} products were found in your uploaded sales data.</p>
-                      <p className="training-products-missing">{productsWithoutRecipes} products need ingredient recipes added.</p>
+                      <p className="training-products-total">
+                        {totalProducts == null ? "Checking your products…" : `${totalProducts} products were found in your uploaded sales data.`}
+                      </p>
+                      {totalProducts != null && (
+                        <p className="training-products-missing">{productsWithoutRecipes} products need ingredient recipes added.</p>
+                      )}
                     </div>
                     <p className="training-products-note">
                       Products without recipes will still be forecasted, but will not
@@ -323,6 +333,11 @@ const ReadyToTrain = () => {
                           </button>
                         </div>
                       ))
+                    ) : totalProducts == null ? (
+                      <div className="training-products-table-row">
+                        <span style={{ color: "#6b7280" }}>Checking your products…</span>
+                        <span></span>
+                      </div>
                     ) : (
                       <div className="training-products-table-row">
                         <span style={{ color: "#0F9918", fontWeight: 600 }}>All products have recipes added</span>

@@ -18,16 +18,18 @@ const PRODUCTS_POLL_MS = 60000;
 const TrainingInProgress = ({ onRefreshState }) => {
   const navigate = useNavigate();
   const { openHelp } = useHelp();
-  const [progressPercentage, setProgressPercentage] = useState(50);
-  const [dataProgress, setDataProgress] = useState(100);
-  const [uploadedMonths, setUploadedMonths] = useState(12);
+  // null = not loaded yet: the screen shows "—" instead of an invented
+  // number (these used to start at 50%, 100% and 12/12 months).
+  const [progressPercentage, setProgressPercentage] = useState(null);
+  const [dataProgress, setDataProgress] = useState(null);
+  const [uploadedMonths, setUploadedMonths] = useState(null);
   const [totalMonthsNeeded] = useState(12);
   const [isLoading, setIsLoading] = useState(false);
   const [hasData, setHasData] = useState(true);
   const [isTrainingComplete, setIsTrainingComplete] = useState(false);
   const [products, setProducts] = useState([]);
-  const [productsWithRecipes, setProductsWithRecipes] = useState(3);
-  const [totalProducts, setTotalProducts] = useState(12);
+  const [productsWithRecipes, setProductsWithRecipes] = useState(null);
+  const [totalProducts, setTotalProducts] = useState(null);
   // Last known "training running?" answer, to spot the true -> false change.
   const wasTrainingRef = useRef(null);
   const dataStatusLoadedRef = useRef(false);
@@ -94,16 +96,9 @@ const TrainingInProgress = ({ onRefreshState }) => {
 
         const totalRows = data.sales_records || data.total_rows || 0;
         const totalUploads = data.total_uploads || 0;
-        const monthsUploaded = data.months_uploaded || 12;
-
-        let months = monthsUploaded;
-        if (months === 0 && totalUploads > 0) {
-          months = Math.min(totalUploads, totalMonthsNeeded);
-        }
-
-        if (totalRows > 0 && months === 0) {
-          months = 1;
-        }
+        // The server's own number, as is. This used to turn 0 into 12
+        // (`|| 12`), then count uploads as months, then round 0 up to 1.
+        const months = Number(data.months_uploaded) || 0;
 
         setUploadedMonths(months);
         setHasData(totalRows > 0 || totalUploads > 0);
@@ -122,7 +117,8 @@ const TrainingInProgress = ({ onRefreshState }) => {
   const fetchUploadProgress = async (signal) => {
     const response = await apiClient.get("/upload/progress", { signal });
     if (response.data.success) {
-      const progress = response.data.data.progress || 50;
+      // The real upload progress (was `|| 50`, an invented fallback).
+      const progress = Number(response.data.data.progress) || 0;
       setProgressPercentage(progress);
 
       if (progress >= 100 || !dataStatusLoadedRef.current) {
@@ -174,7 +170,7 @@ const TrainingInProgress = ({ onRefreshState }) => {
   usePolling(fetchProducts, PRODUCTS_POLL_MS);
 
   const getMonths = () => {
-    return Math.min(uploadedMonths, totalMonthsNeeded);
+    return uploadedMonths == null ? null : Math.min(uploadedMonths, totalMonthsNeeded);
   };
 
   const isDataSufficient = uploadedMonths >= totalMonthsNeeded;
@@ -209,13 +205,13 @@ const TrainingInProgress = ({ onRefreshState }) => {
               <div
                 className="training-progress-fill"
                 style={{
-                  width: `${Math.min(progressPercentage, 100)}%`,
+                  width: `${Math.min(progressPercentage ?? 0, 100)}%`,
                   backgroundColor: "rgba(122, 1, 1, 0.5)",
                 }}
               />
               <div className="training-progress-text">
                 <span>System Status Progress</span>
-                <span>{Math.round(progressPercentage)}%</span>
+                <span>{progressPercentage == null ? "—" : `${Math.round(progressPercentage)}%`}</span>
               </div>
             </div>
           </div>
@@ -341,8 +337,9 @@ const TrainingInProgress = ({ onRefreshState }) => {
                         }}
                       />
                       <p className="training-step-description1">
-                        Historical data upload complete. All {getMonths()} months of data
-                        have been successfully uploaded and validated.
+                        {getMonths() == null
+                          ? "Checking your uploaded sales data…"
+                          : `Historical data upload complete. All ${getMonths()} months of data have been successfully uploaded and validated.`}
                       </p>
                     </div>
                   </div>
@@ -351,14 +348,14 @@ const TrainingInProgress = ({ onRefreshState }) => {
                     <div className="training-data-progress-label">
                       <span>Historical Data</span>
                       <span className="training-data-progress-text-complete">
-                        {getMonths()} / {totalMonthsNeeded} months Complete
+                        {getMonths() == null ? "—" : `${getMonths()} / ${totalMonthsNeeded} months Complete`}
                       </span>
                     </div>
                     <div className="training-data-progress-bar">
                       <div
                         className="training-data-progress-fill-complete"
                         style={{
-                          width: `${Math.min(dataProgress, 100)}%`,
+                          width: `${Math.min(dataProgress ?? 0, 100)}%`,
                           backgroundColor: "#0F9918",
                         }}
                       />
@@ -394,8 +391,12 @@ const TrainingInProgress = ({ onRefreshState }) => {
                   <div className="training-products-header">
                     <h5 className="training-products-title">Products Detected from Your Sales Data</h5>
                     <div className="training-products-summary">
-                      <p className="training-products-total">{totalProducts} products were found in your sales data.</p>
-                      <p className="training-products-missing">{productsWithoutRecipes} still need ingredient recipes added.</p>
+                      <p className="training-products-total">
+                        {totalProducts == null ? "Checking your products…" : `${totalProducts} products were found in your sales data.`}
+                      </p>
+                      {totalProducts != null && (
+                        <p className="training-products-missing">{productsWithoutRecipes} still need ingredient recipes added.</p>
+                      )}
                     </div>
                     <p className="training-products-note">
                       Products without recipes will still be forecasted, but will not appear in the ingredient demand shopping list.

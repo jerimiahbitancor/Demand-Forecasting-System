@@ -1,7 +1,13 @@
 // states/ForecastsReady.jsx
-import { FaArrowUp, FaCheckCircle } from 'react-icons/fa';
+import { FaCheckCircle } from 'react-icons/fa';
 import Navbar from "../../components/Navbar/Navbar";
 import "../states/statescss/ForecastsReady.css";
+
+// The four cards below used to show invented numbers (P52,500, +8.5%,
+// 12 items, a "94% confidence score" and 5 recommendations). None came from
+// any data. They now say "Not available yet" until they are wired to real
+// endpoints (e.g. /api/forecast/summary).
+const NOT_YET = 'Not available yet';
 
 const ForecastsReady = () => {
   return (
@@ -44,13 +50,9 @@ const ForecastsReady = () => {
               <h3 className="card-title">Predicted Sales</h3>
             </div>
             <div className="metric-value-group">
-              <span className="metric-value">₱52,500</span>
-              <div className="badge-success">
-                <FaArrowUp className="badge-icon" />
-                +8.5%
-              </div>
+              <span className="metric-value">—</span>
             </div>
-            <p className="metric-subtext">Next 7 days forecast</p>
+            <p className="metric-subtext">{NOT_YET}</p>
           </div>
 
           <div className="metric-card border-blue">
@@ -58,9 +60,9 @@ const ForecastsReady = () => {
               <h3 className="card-title">Top Predicted Items</h3>
             </div>
             <div className="metric-value-group">
-              <span className="metric-value">12</span>
+              <span className="metric-value">—</span>
             </div>
-            <p className="metric-subtext">Items with high demand</p>
+            <p className="metric-subtext">{NOT_YET}</p>
           </div>
 
           <div className="metric-card border-purple">
@@ -68,9 +70,9 @@ const ForecastsReady = () => {
               <h3 className="card-title">Confidence Score</h3>
             </div>
             <div className="metric-value-group">
-              <span className="metric-value">94%</span>
+              <span className="metric-value">—</span>
             </div>
-            <p className="metric-subtext">Model confidence level</p>
+            <p className="metric-subtext">{NOT_YET}</p>
           </div>
 
           <div className="metric-card border-indigo">
@@ -78,9 +80,9 @@ const ForecastsReady = () => {
               <h3 className="card-title">Recommendations</h3>
             </div>
             <div className="metric-value-group">
-              <span className="metric-value">5</span>
+              <span className="metric-value">—</span>
             </div>
-            <p className="metric-subtext">Actionable insights</p>
+            <p className="metric-subtext">{NOT_YET}</p>
           </div>
         </div>
 
