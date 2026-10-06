@@ -13,6 +13,7 @@ import ForgotPassword from './features/auth/pages/forgotpass/ForgotPassword';
 import ResetPassword from './features/auth/pages/forgotpass/ResetPassword';
 import ChefDuoLanding from './features/landing/ChefDuoLanding';
 import Dashboard from './features/dashboard/pages/Dashboard';
+import HealthPage from './features/admin/pages/HealthPage';
 import DataManagement from './features/datamanagement/pages/DataManagement';
 import Forecasting from './features/analytics/components/Forecasting';
 import ProductPerformance from './features/analytics/components/ProductPerformance';
@@ -257,6 +258,9 @@ function App() {
 
         {/* Settings - Protected */}
         <Route path="/settings" element={<ProtectedRoute><Settings /></ProtectedRoute>} />
+
+        {/* System health (GET /api/status) - Protected */}
+        <Route path="/admin/health" element={<ProtectedRoute><HealthPage /></ProtectedRoute>} />
 
         {/* Notifications */}
         <Route path="/notifications" element={<ProtectedRoute><NotificationsPage /></ProtectedRoute>} />
