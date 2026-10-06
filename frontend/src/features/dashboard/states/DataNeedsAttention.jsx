@@ -1,35 +1,50 @@
 // states/DataNeedsAttention.jsx
+//
+// State 6 of 7 — the model is trained and forecasts exist, but something
+// about the data or the model has degraded. This state is only reachable
+// when the backend's getDashboardState() already computed real reasons
+// (isStale / isLowAccuracy / needsRetraining / dataQualityIssue — see
+// backend/services/uploadService.js), so every card below is built from a
+// flag that was actually true rather than a hardcoded list.
 import { useState, useEffect } from "react";
-import { FaCalendarAlt } from "react-icons/fa";
-import Navbar from "../../components/Navbar/Navbar";
-import "../states/statescss/DataNeedsAttention.css";
-import { useNavigate } from "react-router-dom";
-import { RiErrorWarningLine } from "react-icons/ri";
 import axios from "axios";
 import toast from "react-hot-toast";
-import Swal from '../../../utils/swal';
+import { useNavigate } from "react-router-dom";
+import {
+  FaArrowRight,
+  FaCalendarAlt,
+  FaCheckCircle,
+  FaDatabase,
+  FaRedo,
+  FaUpload,
+} from "react-icons/fa";
+import { RiErrorWarningLine, RiLightbulbLine } from "react-icons/ri";
+import Swal from "../../../utils/swal";
+import {
+  StateShell,
+  StateBanner,
+  MonthPicker,
+} from "../components/DashboardStateKit.jsx";
 
 const API_URL = import.meta.env.VITE_API_URL || "http://localhost:5000/api";
 
 const getAuthToken = () => sessionStorage.getItem("access_token") || localStorage.getItem("token");
 
-const DataNeedsAttention = () => {
+const DataNeedsAttention = ({ initialState }) => {
   const navigate = useNavigate();
   const [showCalendar, setShowCalendar] = useState(false);
-  const [selectedDate, setSelectedDate] = useState(new Date());
-  const [attention, setAttention] = useState(null);
-  const [isLoading, setIsLoading] = useState(true);
+  const [selectedDate, setSelectedDate] = useState(null);
+  // Seeded from the Dashboard's dashboard-state response — the `attention`
+  // block is exactly what this screen renders. Fetching it again on mount meant
+  // the cards appeared a beat after the screen did.
+  const [attention, setAttention] = useState(initialState?.attention || null);
+  const [isLoading, setIsLoading] = useState(!initialState);
   const [isRetraining, setIsRetraining] = useState(false);
 
-  // This state is only reachable when the backend's getDashboardState()
-  // already computed real reasons (isStale/isLowAccuracy/needsRetraining/
-  // dataQualityIssue — see backend/services/uploadService.js) — this used
-  // to be a fully hardcoded card list ("45 days ago", "68%", etc.) that
-  // never matched what actually triggered the state, including a top
-  // banner describing the UNRELATED "insufficient data" scenario. Fetching
-  // the real dashboard-state response here is what makes every number
-  // below true.
   useEffect(() => {
+    // Nothing to re-fetch when the Dashboard just handed us the reasons.
+    if (initialState) return undefined;
+
     let cancelled = false;
     async function loadAttention() {
       setIsLoading(true);
@@ -46,8 +61,10 @@ const DataNeedsAttention = () => {
       }
     }
     loadAttention();
-    return () => { cancelled = true; };
-  }, []);
+    return () => {
+      cancelled = true;
+    };
+  }, [initialState]);
 
   // Same Swal-confirm -> single-toast-id lifecycle pattern as
   // ReadyToTrain.jsx's handleStartTraining — the one existing way to
@@ -83,268 +100,220 @@ const DataNeedsAttention = () => {
     }
   };
 
-  const formatDate = (date) => {
-    const months = [
-      "JANUARY", "FEBRUARY", "MARCH", "APRIL", "MAY", "JUNE",
-      "JULY", "AUGUST", "SEPTEMBER", "OCTOBER", "NOVEMBER", "DECEMBER",
-    ];
-    const month = months[date.getMonth()];
-    const day = String(date.getDate()).padStart(2, "0");
-    const year = date.getFullYear();
-    return `${month}-${day}-${year}`;
-  };
-
-  const formatDay = (date) => {
-    const days = [
-      "SUNDAY", "MONDAY", "TUESDAY", "WEDNESDAY", "THURSDAY", "FRIDAY", "SATURDAY",
-    ];
-    return days[date.getDay()];
-  };
-
-  const formatTime = (date) => {
-    let hours = date.getHours();
-    const minutes = String(date.getMinutes()).padStart(2, "0");
-    const ampm = hours >= 12 ? "PM" : "AM";
-    hours = hours % 12;
-    hours = hours ? hours : 12;
-    return `${hours}:${minutes} ${ampm}`;
-  };
-
-  const now = new Date();
-  const formattedDate = formatDate(now);
-  const formattedDay = formatDay(now);
-  const formattedTime = formatTime(now);
-
-  // Navigation handlers
-  const handleUploadData = () => {
-    navigate("/data-management");
-  };
-
-  const handleGoToDataManagement = () => {
-    navigate("/data-management");
-  };
-
-  // Calendar component
-  const CalendarPopup = ({ onClose, onSelect }) => {
-    const [viewDate, setViewDate] = useState(new Date());
-    
-    const daysInMonth = new Date(viewDate.getFullYear(), viewDate.getMonth() + 1, 0).getDate();
-    const firstDayOfMonth = new Date(viewDate.getFullYear(), viewDate.getMonth(), 1).getDay();
-    
-    const handleDateClick = (day) => {
-      const newDate = new Date(viewDate.getFullYear(), viewDate.getMonth(), day);
-      onSelect(newDate);
-      onClose();
-    };
-
-    const changeMonth = (delta) => {
-      setViewDate(new Date(viewDate.getFullYear(), viewDate.getMonth() + delta, 1));
-    };
-
-    return (
-      <div style={{
-        position: 'absolute',
-        top: '100%',
-        right: 0,
-        marginTop: '8px',
-        background: 'white',
-        borderRadius: '12px',
-        boxShadow: '0 10px 40px rgba(0,0,0,0.2)',
-        padding: '16px',
-        zIndex: 1000,
-        minWidth: '280px'
-      }}>
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '12px' }}>
-          <button onClick={() => changeMonth(-1)} style={{ background: 'none', border: 'none', cursor: 'pointer', fontSize: '18px' }}>‹</button>
-          <span style={{ fontWeight: 'bold' }}>
-            {viewDate.toLocaleDateString('en-US', { month: 'long', year: 'numeric' })}
-          </span>
-          <button onClick={() => changeMonth(1)} style={{ background: 'none', border: 'none', cursor: 'pointer', fontSize: '18px' }}>›</button>
-        </div>
-        
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(7, 1fr)', gap: '4px', textAlign: 'center' }}>
-          {['Su', 'Mo', 'Tu', 'We', 'Th', 'Fr', 'Sa'].map(day => (
-            <div key={day} style={{ fontSize: '11px', color: '#6b7280', fontWeight: 'bold' }}>{day}</div>
-          ))}
-          {Array.from({ length: firstDayOfMonth }, (_, i) => (
-            <div key={`empty-${i}`} />
-          ))}
-          {Array.from({ length: daysInMonth }, (_, i) => {
-            const day = i + 1;
-            const isToday = day === new Date().getDate() && 
-                           viewDate.getMonth() === new Date().getMonth() && 
-                           viewDate.getFullYear() === new Date().getFullYear();
-            return (
-              <button
-                key={day}
-                onClick={() => handleDateClick(day)}
-                style={{
-                  padding: '6px',
-                  background: isToday ? '#ef4444' : 'transparent',
-                  color: isToday ? 'white' : '#1f2937',
-                  border: 'none',
-                  borderRadius: '4px',
-                  cursor: 'pointer',
-                  fontSize: '13px',
-                  fontWeight: isToday ? 'bold' : 'normal'
-                }}
-                onMouseEnter={(e) => {
-                  if (!isToday) e.target.style.background = '#f3f4f6';
-                }}
-                onMouseLeave={(e) => {
-                  if (!isToday) e.target.style.background = 'transparent';
-                }}
-              >
-                {day}
-              </button>
-            );
-          })}
-        </div>
-      </div>
-    );
-  };
+  const handleUploadData = () => navigate("/data-management");
+  const handleGoToDataManagement = () => navigate("/data-management");
 
   // Built only from real attention flags — a reason only appears here if
   // backend/services/uploadService.js's getDashboardState() actually found
   // it true. "Model Needs Retraining" and "Low Forecast Accuracy" both
   // offer Retrain Model, since retraining (not re-uploading data that's
   // already there) is the real remedy for both.
-  const daysSinceTrainingLabel = attention?.daysSinceTraining != null
-    ? `${attention.daysSinceTraining} day${attention.daysSinceTraining === 1 ? "" : "s"}`
-    : "an unknown number of days";
-  const staleDaysLabel = attention?.staleDays != null
-    ? `${attention.staleDays} day${attention.staleDays === 1 ? "" : "s"}`
-    : "some days";
+  const daysSinceTrainingLabel =
+    attention?.daysSinceTraining != null
+      ? `${attention.daysSinceTraining} day${attention.daysSinceTraining === 1 ? "" : "s"}`
+      : "an unknown number of days";
+  const staleDaysLabel =
+    attention?.staleDays != null
+      ? `${attention.staleDays} day${attention.staleDays === 1 ? "" : "s"}`
+      : "some days";
 
   const issues = [];
   if (attention?.isStale) {
     issues.push({
       key: "stale",
+      tone: "warn",
+      icon: <FaUpload size={20} />,
       title: "Stale Sales Data",
-      text: `Your most recent confirmed sales data is ${staleDaysLabel} behind today` +
-            (attention.lastConfirmedDate ? ` (as of ${attention.lastConfirmedDate})` : "") +
-            ". Upload recent sales data to keep your forecasts accurate.",
+      text:
+        `Your most recent confirmed sales data is ${staleDaysLabel} behind today` +
+        (attention.lastConfirmedDate ? ` (as of ${attention.lastConfirmedDate})` : "") +
+        ". Upload recent sales data to keep your forecasts accurate.",
       actionLabel: "Upload Sales Data",
       onAction: handleUploadData,
-      primary: false,
     });
   }
   if (attention?.needsRetraining) {
     issues.push({
       key: "retraining",
+      tone: "danger",
+      icon: <FaRedo size={20} />,
       title: "Model Needs Retraining",
-      text: `Your forecasting model was last trained ${daysSinceTrainingLabel} ago. ` +
-            "Retrain it on your current sales data to keep forecasts up to date.",
+      text:
+        `Your forecasting model was last trained ${daysSinceTrainingLabel} ago. ` +
+        "Retrain it on your current sales data to keep forecasts up to date.",
       actionLabel: isRetraining ? "Retraining…" : "Retrain Model",
       onAction: handleRetrain,
       disabled: isRetraining,
-      primary: true,
     });
   }
   if (attention?.isLowAccuracy) {
+    const modelAccuracy =
+      typeof attention.accuracy === "number" ? attention.accuracy.toFixed(1) : null;
+    const baselineAccuracy =
+      typeof attention.baselineAccuracy === "number" ? attention.baselineAccuracy.toFixed(1) : null;
+
     issues.push({
       key: "accuracy",
+      tone: "danger",
+      icon: <RiErrorWarningLine size={20} />,
       title: "Low Forecast Accuracy",
-      text: `Your current forecast accuracy is ${attention.accuracy?.toFixed(1)}%, below the ` +
-            "70% reliable threshold. Retraining on your latest uploaded sales data may help.",
+      text:
+        modelAccuracy && baselineAccuracy
+          ? `Your model currently scores ${modelAccuracy}% accuracy on held-out data, ` +
+            `below the ${baselineAccuracy}% a simple 7-day average would have scored on the ` +
+            "same days. Retraining on your latest sales data is the fix worth trying first."
+          : "Your model is currently scoring worse than a simple 7-day average on recent data. " +
+            "Retraining on your latest sales data is the fix worth trying first.",
       actionLabel: isRetraining ? "Retraining…" : "Retrain Model",
       onAction: handleRetrain,
       disabled: isRetraining,
-      primary: true,
     });
   }
   if (attention?.dataQualityIssue) {
     issues.push({
       key: "data-quality",
+      tone: "danger",
+      icon: <FaDatabase size={20} />,
       title: "Data Quality Issue",
       text: `An issue was detected in your uploaded sales data: ${attention.dataQualityIssue}. Review your upload history for details.`,
       actionLabel: "Go to Data Management",
       onAction: handleGoToDataManagement,
-      primary: false,
     });
   }
 
-  return (
-    <div className="data-attention-container">
-      <Navbar />
-      <main className="data-attention-main">
-        {/* Dashboard Title & Date */}
-        <div className="data-attention-title-section">
-          <h1 className="data-attention-title">Dashboard</h1>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '12px', position: 'relative' }}>
-            <div className="data-attention-date-info">
-              <button
-                onClick={() => setShowCalendar(!showCalendar)}
-                style={{
-                  background: 'none',
-                  border: '1px solid #e5e7eb',
-                  borderRadius: '8px',
-                  padding: '6px 10px',
-                  cursor: 'pointer',
-                  color: '#6b7280',
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: '6px',
-                  fontSize: '14px'
-                }}
-                onMouseEnter={(e) => e.target.style.background = '#f3f4f6'}
-                onMouseLeave={(e) => e.target.style.background = 'none'}
-              >
-                <FaCalendarAlt />
-                <span></span>
-              </button>
-              {showCalendar && (
-                <CalendarPopup
-                  onClose={() => setShowCalendar(false)}
-                  onSelect={(date) => {
-                    setSelectedDate(date);
-                    console.log('Selected date:', date);
-                  }}
-                />
-              )}
-              <span>{formattedTime}</span>
-              <span className="data-attention-date-separator">{formattedDay}</span>
-              <span className="data-attention-date-separator">{formattedDate}</span>
-            </div>
-          </div>
-        </div>
-        <div className="data-attention-issues-list">
-          <div className="data-attention-issue-card1">
-             <div className="data-attention-issue-body">
-              <div className="data-attention-issue-icon-wrapper">
-                <RiErrorWarningLine  className="data-attention-issue-warning-icon" />
-              </div>
-              <p className="data-attention-issue-text">
-                {isLoading
-                  ? "Checking what needs your attention…"
-                  : issues.length > 0
-                    ? `${issues.length} issue${issues.length === 1 ? "" : "s"} need${issues.length === 1 ? "s" : ""} your attention below.`
-                    : "The issue that triggered this view has since cleared — this page will update shortly."}
-              </p>
-            </div>
-          </div>
+  const summaryText = isLoading
+    ? "Checking what needs your attention…"
+    : issues.length > 0
+      ? `${issues.length} issue${issues.length === 1 ? "" : "s"} need${
+          issues.length === 1 ? "s" : ""
+        } your attention below.`
+      : "The issue that triggered this view has since cleared — this page will update shortly.";
 
-          {!isLoading && issues.map((issue, index) => (
-            <div className="data-attention-issue-card" key={issue.key}>
-              <div className="data-attention-issue-number">{index + 1}</div>
-              <div className="data-attention-issue-body">
-                <div className="data-attention-issue-content">
-                  <h4 className="data-attention-issue-title">{issue.title}</h4>
-                  <p className="data-attention-issue-text">{issue.text}</p>
-                </div>
-                <button
-                  className={`data-attention-issue-btn ${issue.primary ? "" : "data-attention-issue-btn-secondary"}`}
-                  onClick={issue.onAction}
-                  disabled={issue.disabled}
-                >
-                  {issue.actionLabel}
-                </button>
-              </div>
-            </div>
-          ))}
+  const clockSlot = (
+    <span className="sk-clock-slot">
+      <button
+        type="button"
+        className="sk-clock-action"
+        onClick={() => setShowCalendar((open) => !open)}
+      >
+        <FaCalendarAlt size={13} />
+        {selectedDate ? "Change date" : "Pick a date"}
+      </button>
+      {showCalendar ? (
+        <MonthPicker
+          onSelect={(date) => {
+            setSelectedDate(date);
+            setShowCalendar(false);
+          }}
+        />
+      ) : null}
+      {selectedDate ? (
+        <button
+          type="button"
+          className="sk-clock-reset"
+          onClick={() => {
+            setSelectedDate(null);
+            setShowCalendar(false);
+          }}
+        >
+          Back to today
+        </button>
+      ) : null}
+    </span>
+  );
+
+  return (
+    <StateShell
+      eyebrow="Needs attention"
+      eyebrowTone="danger"
+      title={<>Your forecasts need <em>your attention</em></>}
+      lede="Forecasts are still available, but one or more things behind them have changed since the model was last trained. Fixing these keeps the numbers you plan with trustworthy."
+      progress={{
+        value: isLoading ? 90 : 100,
+        tone: "danger",
+        caption: "Forecasts are live — but these items reduce their reliability",
+      }}
+      clockSlot={clockSlot}
+      selectedDate={selectedDate}
+      status={
+        <StateBanner
+          tone={issues.length > 0 && !isLoading ? "danger" : "warn"}
+          icon={<RiErrorWarningLine size={20} />}
+          title={isLoading ? "Checking your data" : `${issues.length} item${issues.length === 1 ? "" : "s"} to resolve`}
+          text={summaryText}
+        />
+      }
+    >
+      <section className="sk-section">
+        <div className="sk-section-head">
+          <div>
+            <h2 className="sk-section-title">What to do</h2>
+            <p className="sk-section-sub">
+              Each card below corresponds to something the system actually detected.
+              Working through them in order will bring the dashboard back to fully
+              operational.
+            </p>
+          </div>
+          {issues.length > 0 ? (
+            <span className="sk-tag sk-tag--warn">
+              {issues.length} open {issues.length === 1 ? "item" : "items"}
+            </span>
+          ) : null}
         </div>
-      </main>
-    </div>
+
+        {issues.length > 0 ? (
+          <div className="sk-grid-2">
+            {issues.map((issue, index) => (
+              <article
+                className={`sk-card sk-card--hover sk-card--${issue.tone}`}
+                key={issue.key}
+              >
+                <div className="sk-card-head">
+                  <span className={`sk-card-ico sk-card-ico--${issue.tone}`}>
+                    {issue.icon}
+                  </span>
+                  <div style={{ minWidth: 0 }}>
+                    <div className="sk-step-num" style={{ marginBottom: 10 }}>
+                      {index + 1}
+                    </div>
+                    <h3 className="sk-card-title">{issue.title}</h3>
+                  </div>
+                </div>
+                <p className="sk-card-text">{issue.text}</p>
+                <div className="sk-card-foot">
+                  <button
+                    type="button"
+                    className="sk-btn sk-btn--primary"
+                    onClick={issue.onAction}
+                    disabled={issue.disabled}
+                  >
+                    {issue.actionLabel}
+                    <FaArrowRight size={15} />
+                  </button>
+                </div>
+              </article>
+            ))}
+          </div>
+        ) : (
+          <div className="sk-note sk-note--ok">
+            <FaCheckCircle size={16} style={{ color: "var(--sk-success)", marginRight: 8, verticalAlign: -3 }} />
+            {isLoading
+              ? "Loading the checks behind this view…"
+              : "Nothing needs your attention right now. This view clears itself once training catches up."}
+          </div>
+        )}
+      </section>
+
+      <section className="sk-section">
+        <div className="sk-note">
+          <RiLightbulbLine size={17} style={{ color: "var(--sk-burgundy)", marginRight: 8, verticalAlign: -3 }} />
+          <strong>Why this matters.</strong> Forecasts are estimates. Stale sales data,
+          an overdue model and a flagged upload each reduce how close those estimates
+          land to your actual demand — which is exactly what ingredient purchasing is
+          planned from.
+        </div>
+      </section>
+    </StateShell>
   );
 };
 

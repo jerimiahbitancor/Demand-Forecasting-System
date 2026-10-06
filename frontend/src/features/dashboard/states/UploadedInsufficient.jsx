@@ -1,35 +1,60 @@
 // states/UploadedInsufficient.jsx
-import Navbar from "../../components/Navbar/Navbar";
-import "../states/statescss/UploadedInsufficient.css";
+//
+// State 2 of 7 — data has been uploaded but the history doesn't clear the
+// training gate yet (see backend/utils/historyGate.js):
+//   'span'        — the sales history covers fewer than 365 days
+//   'unconfirmed' — it is long enough, but some dates inside it have no
+//                   sales and aren't marked closed
+//   'both' / 'no_data'
 import { useState, useEffect, useRef } from "react";
 import axios from "axios";
 import { useNavigate } from "react-router-dom";
+import { FaArrowRight, FaInfoCircle } from "react-icons/fa";
 import uploadedInsufficientImage from "../../../assets/images/NoData.png";
-import { FaInfoCircle } from "react-icons/fa";
 import HistoryGapReview from "../components/HistoryGapReview.jsx";
 import { useHelp } from "../../../hooks/useHelp";
+import {
+  StateShell,
+  StateBanner,
+  SetupStep,
+  Illustration,
+  Meter,
+  ProductsDetected,
+} from "../components/DashboardStateKit.jsx";
 
 const API_URL = import.meta.env.VITE_API_URL || "http://localhost:5000/api";
 
-const UploadedInsufficient = ({ onRefreshState }) => {
+const UploadedInsufficient = ({ onRefreshState, initialState }) => {
   const navigate = useNavigate();
   const { openHelp } = useHelp();
-  const [progressPercentage, setProgressPercentage] = useState(20); // Set to 20%
-  const [dataProgress, setDataProgress] = useState(0);
-  const [uploadedMonths, setUploadedMonths] = useState(0);
+  // Seeded from the dashboard-state response the Dashboard already has in hand
+  // (it contains this exact stats/progress/history shape — same service methods
+  // as /upload/stats/summary and /upload/progress). Without this the screen
+  // mounted with zeros and a loading flag, then visibly filled in a moment
+  // later, which is the "loading finished, now it's still loading" effect.
+  const seed = initialState || {};
+  const seedMonths = seed.stats?.actual_months_uploaded || 0;
+  const seedProgress = seed.history?.requiredSpanDays
+    ? (seed.history.spanDays / seed.history.requiredSpanDays) * 100
+    : (seedMonths / 12) * 100;
+
+  const [progressPercentage, setProgressPercentage] = useState(20);
+  const [dataProgress, setDataProgress] = useState(
+    initialState ? Math.min(seedProgress, 100) : 0
+  );
+  const [uploadedMonths, setUploadedMonths] = useState(seedMonths);
   const [totalMonthsNeeded] = useState(12);
-  const [isLoading, setIsLoading] = useState(true);
-  const [hasData, setHasData] = useState(false);
-  // Why this screen is still showing (backend/utils/historyGate.js):
-  //   'span'        — the sales history covers fewer than 365 days
-  //   'unconfirmed' — it's long enough, but some dates inside it have no
-  //                   sales and aren't marked closed
-  //   'both' / 'no_data'
-  const [insufficientReason, setInsufficientReason] = useState(null);
+  const [isLoading, setIsLoading] = useState(!initialState);
+  const [hasData, setHasData] = useState(
+    initialState ? (seed.stats?.sales_records > 0 || seed.stats?.total_uploads > 0) : false
+  );
+  const [insufficientReason, setInsufficientReason] = useState(
+    seed.insufficientReason || null
+  );
   // { firstSaleDate, lastSaleDate, spanDays, spanMonths, requiredSpanDays,
   //   openDays, closedDays, unconfirmedDays } — closed days count toward
   // the span; today's date does not.
-  const [history, setHistory] = useState(null);
+  const [history, setHistory] = useState(seed.history || null);
   const [products, setProducts] = useState([]);
   const isMountedRef = useRef(true);
 
@@ -60,41 +85,11 @@ const UploadedInsufficient = ({ onRefreshState }) => {
     if (!dateStr) return "";
     const [y, m, d] = dateStr.split("-").map(Number);
     return new Date(y, m - 1, d).toLocaleDateString("en-US", {
-      month: "short", day: "numeric", year: "numeric",
+      month: "short",
+      day: "numeric",
+      year: "numeric",
     });
   };
-
-  const formatDate = (date) => {
-    const months = [
-      "JANUARY", "FEBRUARY", "MARCH", "APRIL", "MAY", "JUNE",
-      "JULY", "AUGUST", "SEPTEMBER", "OCTOBER", "NOVEMBER", "DECEMBER",
-    ];
-    const month = months[date.getMonth()];
-    const day = String(date.getDate()).padStart(2, "0");
-    const year = date.getFullYear();
-    return `${month}-${day}-${year}`;
-  };
-
-  const formatDay = (date) => {
-    const days = [
-      "SUNDAY", "MONDAY", "TUESDAY", "WEDNESDAY", "THURSDAY", "FRIDAY", "SATURDAY",
-    ];
-    return days[date.getDay()];
-  };
-
-  const formatTime = (date) => {
-    let hours = date.getHours();
-    const minutes = String(date.getMinutes()).padStart(2, "0");
-    const ampm = hours >= 12 ? "PM" : "AM";
-    hours = hours % 12;
-    hours = hours ? hours : 12;
-    return `${hours}:${minutes} ${ampm}`;
-  };
-
-  const now = new Date();
-  const formattedDate = formatDate(now);
-  const formattedDay = formatDay(now);
-  const formattedTime = formatTime(now);
 
   const getAuthToken = () => sessionStorage.getItem("access_token") || localStorage.getItem("token");
 
@@ -109,21 +104,23 @@ const UploadedInsufficient = ({ onRefreshState }) => {
       if (token) config.headers.Authorization = `Bearer ${token}`;
       return config;
     },
-    (error) => Promise.reject(error)
+    (error) => Promise.reject(error),
   );
 
   // Fetch data status and upload progress
   const fetchDataStatus = async () => {
     try {
       setIsLoading(true);
-      
+
       const statusResponse = await apiClient.get("/upload/dashboard-state");
-      
+
       if (statusResponse.data.success) {
         const {
-          state, stats: data, insufficientReason: reason, history: historyData,
+          state,
+          stats: data,
+          insufficientReason: reason,
+          history: historyData,
         } = statusResponse.data.data;
-        console.log("Data status response:", data);
         setProgressPercentage(20);
         setInsufficientReason(reason || null);
         setHistory(historyData || null);
@@ -139,8 +136,6 @@ const UploadedInsufficient = ({ onRefreshState }) => {
         // that number can read "12/12 months" from a handful of rows
         // dated over a year ago, which is accurate for "would training
         // be allowed" but not for "how much data did I actually upload."
-        // No "at least 1 month" or "1 month per upload" fallback: a
-        // single day of data is genuinely 0/12 months, not 1.
         const months = data.actual_months_uploaded || 0;
 
         setUploadedMonths(months);
@@ -154,17 +149,16 @@ const UploadedInsufficient = ({ onRefreshState }) => {
           : (months / totalMonthsNeeded) * 100;
         setDataProgress(Math.min(progressPercent, 100));
 
-        if (isMountedRef.current && state !== 'uploaded-insufficient') {
-          navigate('/dashboard', { replace: true });
+        if (isMountedRef.current && state !== "uploaded-insufficient") {
+          navigate("/dashboard", { replace: true });
         }
       }
     } catch (error) {
       console.error("Error fetching data status:", error);
       try {
-        const uploadsResponse = await apiClient.get('/upload?limit=1');
-        const totalUploads = uploadsResponse.data.count
-          || uploadsResponse.data.data?.length
-          || 0;
+        const uploadsResponse = await apiClient.get("/upload?limit=1");
+        const totalUploads =
+          uploadsResponse.data.count || uploadsResponse.data.data?.length || 0;
         const months = Math.min(totalUploads, totalMonthsNeeded);
         setProgressPercentage(totalUploads > 0 ? 20 : 0);
         setUploadedMonths(months);
@@ -184,18 +178,17 @@ const UploadedInsufficient = ({ onRefreshState }) => {
       if (response.data.success) {
         const { state } = response.data.data;
         setProgressPercentage(20);
-        
-        if (state === 'fully-operational') {
+
+        if (state === "fully-operational") {
           await fetchDataStatus();
         }
       }
     } catch (error) {
       console.error("Error fetching upload progress:", error);
       try {
-        const uploadsResponse = await apiClient.get('/upload?limit=1');
-        const totalUploads = uploadsResponse.data.count
-          || uploadsResponse.data.data?.length
-          || 0;
+        const uploadsResponse = await apiClient.get("/upload?limit=1");
+        const totalUploads =
+          uploadsResponse.data.count || uploadsResponse.data.data?.length || 0;
         setProgressPercentage(totalUploads > 0 ? 20 : 0);
       } catch (fallbackError) {
         console.error("Error fetching upload progress fallback:", fallbackError);
@@ -222,13 +215,18 @@ const UploadedInsufficient = ({ onRefreshState }) => {
   // Initial fetch and polling
   useEffect(() => {
     isMountedRef.current = true;
-    const loadData = async () => {
-      await fetchDataStatus();
-      await fetchUploadProgress();
-      await fetchProducts();
-    };
-    
-    loadData();
+
+    // Parallel, not sequential: these used to be awaited one after another, so
+    // three round trips stacked up before anything was on screen.
+    async function load() {
+      // Only re-check the state itself when there was nothing to seed from (a
+      // direct visit to /dashboard/uploaded-insufficient). The seeded values
+      // are from the same endpoint moments earlier.
+      if (!initialState) fetchDataStatus();
+      fetchProducts();
+    }
+
+    load();
 
     const interval = setInterval(() => {
       fetchUploadProgress();
@@ -242,279 +240,234 @@ const UploadedInsufficient = ({ onRefreshState }) => {
     };
   }, []);
 
-  // Calculate months to display
-  const getMonths = () => {
-    return Math.min(uploadedMonths, totalMonthsNeeded);
-  };
+  const getMonths = () => Math.min(uploadedMonths, totalMonthsNeeded);
 
-  // Determine if data is sufficient
   const isDataSufficient = uploadedMonths >= totalMonthsNeeded;
   const productsNeedingRecipes = products.filter(
-    (product) => !product.product_ingredients?.length
+    (product) => !product.product_ingredients?.length,
   );
-  const visibleProductsNeedingRecipes = productsNeedingRecipes.slice(0, 3);
+
+  // The one-paragraph explanation of WHY training is still blocked, derived
+  // from the reason backend/utils/historyGate.js reported.
+  const blockerText = (() => {
+    if (isLoading) return "Loading data status…";
+    if (!hasData || !history || insufficientReason === "no_data") {
+      return "Upload your sales data to get started with forecasting.";
+    }
+    if (insufficientReason === "unconfirmed") {
+      return (
+        <>
+          Your sales history is long enough ({history.spanMonths} months). But{" "}
+          {history.unconfirmedDays} date{history.unconfirmedDays === 1 ? "" : "s"} in it{" "}
+          {history.unconfirmedDays === 1 ? "has" : "have"} no sales and{" "}
+          {history.unconfirmedDays === 1 ? "is" : "are"} not marked as closed. Please
+          check those dates below before training can start.
+        </>
+      );
+    }
+    if (insufficientReason === "both") {
+      return (
+        <>
+          You need at least {totalMonthsNeeded} months of sales history. You have{" "}
+          {history.spanMonths} months so far. Also, {history.unconfirmedDays} date
+          {history.unconfirmedDays === 1 ? "" : "s"} with no sales still need checking
+          (see below).
+        </>
+      );
+    }
+    return (
+      <>
+        You need at least {totalMonthsNeeded} months of sales history before
+        forecasting can start. You have {history.spanMonths} months so far (
+        {history.spanDays} of {history.requiredSpanDays} days). Days your store was
+        closed count too.
+      </>
+    );
+  })();
 
   return (
-    <div className="insufficient-container">
-    <Navbar />
-      <main className="insufficient-main">
-        {/* Header Section */}
-        <div className="insufficient-header">
-          <div className="insufficient-date-info">
-            <span>{formattedDate}</span>
-            <span className="insufficient-date-separator">|</span>
-            <span>{formattedDay}</span>
-            <span className="insufficient-date-separator">|</span>
-            <span>{formattedTime}</span>
+    <StateShell
+      eyebrow="Step 1 in progress"
+      eyebrowTone="warn"
+      title={<>Sales data uploaded, <em>history not complete</em></>}
+      lede="Your files are in and your menu products have been detected. Training starts once the history covers 12 months and every day inside it is accounted for."
+      progress={{
+        value: progressPercentage,
+        tone: "warn",
+        caption: "Setup progress across the whole system",
+      }}
+      status={
+        <StateBanner
+          tone="warn"
+          icon={<FaInfoCircle size={20} />}
+          title="Forecasting starts once your history clears the 12-month rule"
+          text={blockerText}
+        />
+      }
+    >
+      <Illustration
+        src={uploadedInsufficientImage}
+        alt="ChefDuo Forecast illustration"
+        copy={
+          <div>
+            <h2 className="sk-section-title">Let's get your dashboard ready</h2>
+            <p className="sk-section-sub">
+              Once your history is complete this page turns into live demand
+              forecasts, sales trends, product performance, ingredient requirements and
+              replenishment insights. Two things are left to do below.
+            </p>
+            <button
+              type="button"
+              className="sk-btn sk-btn--secondary sk-btn--sm"
+              style={{ marginTop: 20 }}
+              onClick={() => openHelp("how-it-works")}
+            >
+              Learn how ChefDuo Forecast works
+            </button>
           </div>
+        }
+      />
 
-          {/* Progress Bar - Now shows 20% */}
-          <div className="insufficient-progress-container">
-            <div className="insufficient-progress-bar-wrapper">
-              <div
-                className="insufficient-progress-fill"
-                style={{
-                  width: `${Math.min(progressPercentage, 100)}%`,
-                  backgroundColor: "rgba(122, 1, 1, 0.5)",
-                }}
-              />
-              <div className="insufficient-progress-text">
-                <span>System Status Progress</span>
-                <span>{Math.round(progressPercentage)}%</span>
-              </div>
-            </div>
+      <section className="sk-section">
+        <div className="sk-section-head">
+          <div>
+            <h2 className="sk-section-title">Finish setting up</h2>
+            <p className="sk-section-sub">
+              Days your store was closed count toward the 12 months, so mark them as
+              closed rather than leaving them blank.
+            </p>
           </div>
         </div>
 
-        {/* Main Content */}
-        <div className="insufficient-content">
-          <div className="insufficient-welcome-wrapper">
-            {/* Left Side - Text Content */}
-            <div className="insufficient-welcome-section">
-              <h3 className="insufficient-welcome-title">
-                Welcome to ChefDuo Forecast
-              </h3>
-              <p className="insufficient-welcome-description">
-                Let's get your dashboard ready.
-                <br />
-                Your dashboard will display demand forecasts, sales trends,
-                product performance, ingredient requirements, and replenishment
-                insights once you upload your historical sales data.
-              </p>
-              <p className="insufficient-welcome-note">
-                Your dashboard will become available once you have completed the
-                steps requirements.
-              </p>
+        <div className="sk-grid-2">
+          <SetupStep
+            index={1}
+            title="Upload Historical Sales Data"
+            tag={<span className="sk-tag sk-tag--warn">In progress</span>}
+            foot={
               <button
                 type="button"
-                className="insufficient-welcome-link"
-                onClick={() => openHelp('how-it-works')}
+                className="sk-btn sk-btn--secondary"
+                onClick={handleUploadData}
               >
-                Learn How ChefDuo Forecast Works →
+                {hasData ? "Upload More Data" : "Upload Sales Data"}
+                <FaArrowRight size={15} />
               </button>
-            </div>
+            }
+          >
+            <p className="sk-card-text">
+              Upload at least 1 year of historical sales data exported from your POS
+              system. This is what the forecasting model uses to learn your business's
+              demand patterns and generate reliable forecasts.
+            </p>
 
-            {/* Right Side - Image */}
-            <div className="insufficient-welcome-image">
-              <img
-                src={uploadedInsufficientImage}
-                alt="ChefDuo Forecast Illustration"
-                className="insufficient-welcome-img"
+            <div style={{ marginTop: 18 }}>
+              <Meter
+                label={`Sales history${
+                  history?.firstSaleDate
+                    ? ` (${formatShortDate(history.firstSaleDate)} – ${formatShortDate(
+                        history.lastSaleDate,
+                      )})`
+                    : ""
+                }`}
+                value={
+                  history
+                    ? `${Math.min(history.spanMonths, totalMonthsNeeded)} / ${totalMonthsNeeded} months`
+                    : `${getMonths()} / ${totalMonthsNeeded} months`
+                }
+                percent={dataProgress}
+                tone={isDataSufficient || dataProgress >= 100 ? "ok" : ""}
               />
             </div>
-          </div>
 
-          {/* Step Cards */}
-          <div className="insufficient-step-cards">
-            {/* Step 1 */}
-            <div className="insufficient-step-card">
-              <div className="insufficient-step-number">1</div>
-              <div className="insufficient-step-content">
-                <h4 className="insufficient-step-title">
-                  Upload Historical Sales Data
-                </h4>
-                <p className="insufficient-step-description">
-                  Upload at least 1 year of historical sales data exported from
-                  your POS system. This is what the forecasting model uses to
-                  learn your business's demand patterns and generate reliable
-                  forecasts.
-                </p>
-
-                {/* Data Progress */}
-                <div className="insufficient-data-progress-wrapper1">
-                  <div className="insufficient-data-progress-wrapper2">
-                    <div
-                      style={{
-                        display: "flex",
-                        alignItems: "flex-start",
-                        gap: "10px",
-                      }}
-                    >
-                      <FaInfoCircle
-                        style={{
-                          color: "#6B000B",
-                          fontSize: "18px",
-                          marginTop: "2px",
-                          flexShrink: 0,
-                        }}
-                      />
-                      <p className="insufficient-step-description1">
-                        {isLoading ? (
-                          "Loading data status..."
-                        ) : !hasData || !history || insufficientReason === 'no_data' ? (
-                          "Upload your sales data to get started with forecasting."
-                        ) : insufficientReason === 'unconfirmed' ? (
-                          <>
-                            Your sales history is long enough ({history.spanMonths} months).
-                            But {history.unconfirmedDays} date{history.unconfirmedDays === 1 ? "" : "s"} in
-                            it {history.unconfirmedDays === 1 ? "has" : "have"} no sales and{" "}
-                            {history.unconfirmedDays === 1 ? "is" : "are"} not marked as closed.
-                            Please check those dates below before training can start.
-                          </>
-                        ) : insufficientReason === 'both' ? (
-                          <>
-                            You need at least {totalMonthsNeeded} months of sales history.
-                            You have {history.spanMonths} months so far. Also,{" "}
-                            {history.unconfirmedDays} date{history.unconfirmedDays === 1 ? "" : "s"} with
-                            no sales still need checking (see below).
-                          </>
-                        ) : (
-                          <>
-                            You need at least {totalMonthsNeeded} months of sales history
-                            before forecasting can start. You have {history.spanMonths} months
-                            so far ({history.spanDays} of {history.requiredSpanDays} days). Days
-                            your store was closed count too.
-                          </>
-                        )}
-                      </p>
-                    </div>
-                  </div>
-
-                  <div className="insufficient-data-progress-wrapper">
-                    <div className="insufficient-data-progress-label">
-                      <span>
-                        Sales history
-                        {history?.firstSaleDate
-                          ? ` (${formatShortDate(history.firstSaleDate)} – ${formatShortDate(history.lastSaleDate)})`
-                          : ""}
-                      </span>
-                      <span className="insufficient-data-progress-text">
-                        {history
-                          ? `${Math.min(history.spanMonths, totalMonthsNeeded)} / ${totalMonthsNeeded} months`
-                          : `${getMonths()} / ${totalMonthsNeeded} months`}
-                      </span>
-                    </div>
-                    <div className="insufficient-data-progress-bar">
-                      <div
-                        className="insufficient-data-progress-fill"
-                        style={{
-                          width: `${Math.min(dataProgress, 100)}%`,
-                          backgroundColor:
-                            isDataSufficient || dataProgress >= 100
-                              ? "#22c55e"
-                              : "rgba(122, 1, 1, 0.5)",
-                        }}
-                      />
-                    </div>
-                  </div>
+            {history && history.spanDays > 0 ? (
+              <div className="sk-counts" style={{ marginTop: 14 }}>
+                <div className="sk-count">
+                  <div className="sk-count-label">Days in history</div>
+                  <div className="sk-count-value">{history.spanDays}</div>
                 </div>
-
-                {history && history.spanDays > 0 && (
-                  <div className="insufficient-history-counts">
-                    <span><strong>{history.spanDays}</strong> days in history</span>
-                    <span><strong>{history.openDays}</strong> open (with sales)</span>
-                    <span><strong>{history.closedDays}</strong> marked closed</span>
-                    <span className={history.unconfirmedDays > 0 ? "insufficient-history-counts--warn" : ""}>
-                      <strong>{history.unconfirmedDays}</strong> not yet checked
-                    </span>
-                  </div>
-                )}
-
-                {history && history.unconfirmedDays > 0 && (
-                  <HistoryGapReview onSaved={handleGapsSaved} />
-                )}
-
-                <button
-                  className="insufficient-step-btn insufficient-step-btn-secondary"
-                  onClick={handleUploadData}
-                >
-                  {hasData ? "Upload More Data" : "Upload Sales Data"}
-                </button>
-              </div>
-            </div>
-
-            {/* Step 2 */}
-            <div className="insufficient-step-card">
-              <div className="insufficient-step-number">2</div>
-              <div className="insufficient-step-content">
-                <h4 className="insufficient-step-title">
-                  Add Ingredient Recipes to Your Products
-                </h4>
-                <p className="insufficient-step-description">
-                  Your menu products will be automatically detected when you
-                  upload your sales data. After uploading, add the ingredient
-                  recipe for each product so the system can estimate how much of
-                  each ingredient you'll need to prepare.
-                </p>
-                <div className="insufficient-products-detected">
-                  <div className="insufficient-products-header">
-                    <h5 className="insufficient-products-title">Products Detected from Your Sales Data</h5>
-                    <div className="insufficient-products-summary">
-                      <p className="insufficient-products-total">
-                        {products.length} products were found in your sales data.
-                      </p>
-                      <p className="insufficient-products-missing">
-                        {productsNeedingRecipes.length} still need ingredient recipes added.
-                      </p>
-                    </div>
-                    <p className="insufficient-products-note">
-                      Products without recipes will still be forecasted, but will not appear in the ingredient demand shopping list.
-                    </p>
-                  </div>
-
-                  <div className="insufficient-products-table">
-                    <div className="insufficient-products-table-header">
-                      <span>Product Name</span>
-                      <span>Action</span>
-                    </div>
-                    {visibleProductsNeedingRecipes.length > 0 ? (
-                      visibleProductsNeedingRecipes.map((product, index) => (
-                        <div className="insufficient-products-table-row" key={product.id || `${product.name}-${index}`}>
-                          <span>{product.name}</span>
-                          <button
-                            className="insufficient-products-add-btn"
-                            onClick={() => handleAddRecipe(product.name)}
-                          >
-                            Add Recipe
-                          </button>
-                        </div>
-                      ))
-                    ) : (
-                      <div className="insufficient-products-table-row">
-                        <span className="insufficient-products-complete">All products have recipes added</span>
-                        <span className="insufficient-products-complete">Complete</span>
-                      </div>
-                    )}
-                    {productsNeedingRecipes.length > 3 && (
-                      <div className="insufficient-products-table-row insufficient-products-more">
-                        <span>+ {productsNeedingRecipes.length - 3} more products needing recipes</span>
-                        <span></span>
-                      </div>
-                    )}
-                  </div>
+                <div className="sk-count">
+                  <div className="sk-count-label">Open, with sales</div>
+                  <div className="sk-count-value">{history.openDays}</div>
                 </div>
-                <button
-                  className="insufficient-step-btn insufficient-step-btn-secondary"
-                  onClick={handleInventoryManagement}
+                <div className="sk-count sk-count--ok">
+                  <div className="sk-count-label">Marked closed</div>
+                  <div className="sk-count-value">{history.closedDays}</div>
+                </div>
+                <div
+                  className={`sk-count${history.unconfirmedDays > 0 ? " sk-count--warn" : ""}`}
                 >
-                  Go to Inventory Management
-                </button>
+                  <div className="sk-count-label">Not yet checked</div>
+                  <div className="sk-count-value">{history.unconfirmedDays}</div>
+                </div>
               </div>
+            ) : null}
+
+            {history && history.unconfirmedDays > 0 ? (
+              <div style={{ marginTop: 16 }}>
+                <HistoryGapReview onSaved={handleGapsSaved} />
+              </div>
+            ) : null}
+          </SetupStep>
+
+          <SetupStep
+            index={2}
+            title="Add Ingredient Recipes to Your Products"
+            tag={
+              products.length === 0 ? (
+                <span className="sk-tag">Checking…</span>
+              ) : productsNeedingRecipes.length > 0 ? (
+                <span className="sk-tag sk-tag--warn">
+                  {productsNeedingRecipes.length} need recipes
+                </span>
+              ) : (
+                <span className="sk-tag sk-tag--ok">Complete</span>
+              )
+            }
+            foot={
+              <button
+                type="button"
+                className="sk-btn sk-btn--secondary"
+                onClick={handleInventoryManagement}
+              >
+                Go to Inventory Management
+                <FaArrowRight size={15} />
+              </button>
+            }
+          >
+            <p className="sk-card-text">
+              Your menu products were automatically detected when you uploaded your
+              sales data. Add the ingredient recipe for each product so the system can
+              estimate how much of each ingredient you'll need to prepare.
+            </p>
+
+            <div className="sk-subcard" style={{ marginTop: 18 }}>
+              <div className="sk-subcard-title">Products detected from your sales data</div>
+              <p className="sk-subcard-text">
+                {products.length === 0 ? (
+                  "Looking for the products detected in your sales data…"
+                ) : (
+                  <>
+                    <strong>{products.length}</strong> products were found.{" "}
+                    <strong>{productsNeedingRecipes.length}</strong> still need ingredient
+                    recipes added.
+                  </>
+                )}
+              </p>
+
+              <div style={{ marginTop: 14 }}>
+                <ProductsDetected products={products} onAddRecipe={handleAddRecipe} />
+              </div>
+
+              <p className="sk-subcard-foot">
+                Products without recipes will still be forecasted, but will not appear
+                in the ingredient demand shopping list.
+              </p>
             </div>
-          </div>
+          </SetupStep>
         </div>
-      </main>
-    </div>
+      </section>
+    </StateShell>
   );
 };
 
