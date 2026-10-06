@@ -943,4 +943,5 @@ module.exports = {
   getProductPerformanceAnalytics,
   getIngredientDemandAnalytics,
   getForecastSummary,
+  getMappedIngredientIds,
 };
