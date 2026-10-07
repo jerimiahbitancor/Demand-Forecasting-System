@@ -64,6 +64,9 @@ const UploadedInsufficient = ({ onRefreshState, initialState }) => {
   // the span; today's date does not.
   const [history, setHistory] = useState(seed.history || null);
   const [products, setProducts] = useState([]);
+  // True after the first successful status load. Until then the months
+  // label shows "—", not "0 / 12 months".
+  const [statusLoaded, setStatusLoaded] = useState(false);
   // The first successful status load fills this screen's numbers; later
   // polls only watch for the state changing (same as before).
   const statusLoadedRef = useRef(false);
@@ -200,6 +203,7 @@ const UploadedInsufficient = ({ onRefreshState, initialState }) => {
           : (months / totalMonthsNeeded) * 100;
         setDataProgress(Math.min(progressPercent, 100));
         statusLoadedRef.current = true;
+        setStatusLoaded(true);
 
         if (isMountedRef.current && state !== "uploaded-insufficient") {
           navigate("/dashboard", { replace: true });
@@ -455,6 +459,101 @@ const UploadedInsufficient = ({ onRefreshState, initialState }) => {
               />
             </div>
 
+          {/* Step Cards */}
+          <div className="insufficient-step-cards">
+            {/* Step 1 */}
+            <div className="insufficient-step-card">
+              <div className="insufficient-step-number">1</div>
+              <div className="insufficient-step-content">
+                <h4 className="insufficient-step-title">
+                  Upload Historical Sales Data
+                </h4>
+                <p className="insufficient-step-description">
+                  Upload at least 1 year of historical sales data exported from
+                  your POS system. This is what the forecasting model uses to
+                  learn your business's demand patterns and generate reliable
+                  forecasts.
+                </p>
+
+                {/* Data Progress */}
+                <div className="insufficient-data-progress-wrapper1">
+                  <div className="insufficient-data-progress-wrapper2">
+                    <div
+                      style={{
+                        display: "flex",
+                        alignItems: "flex-start",
+                        gap: "10px",
+                      }}
+                    >
+                      <FaInfoCircle
+                        style={{
+                          color: "#6B000B",
+                          fontSize: "18px",
+                          marginTop: "2px",
+                          flexShrink: 0,
+                        }}
+                      />
+                      <p className="insufficient-step-description1">
+                        {isLoading ? (
+                          "Loading data status..."
+                        ) : !hasData || !history || insufficientReason === 'no_data' ? (
+                          "Upload your sales data to get started with forecasting."
+                        ) : insufficientReason === 'unconfirmed' ? (
+                          <>
+                            Your sales history is long enough ({history.spanMonths} months).
+                            But {history.unconfirmedDays} date{history.unconfirmedDays === 1 ? "" : "s"} in
+                            it {history.unconfirmedDays === 1 ? "has" : "have"} no sales and{" "}
+                            {history.unconfirmedDays === 1 ? "is" : "are"} not marked as closed.
+                            Please check those dates below before training can start.
+                          </>
+                        ) : insufficientReason === 'both' ? (
+                          <>
+                            You need at least {totalMonthsNeeded} months of sales history.
+                            You have {history.spanMonths} months so far. Also,{" "}
+                            {history.unconfirmedDays} date{history.unconfirmedDays === 1 ? "" : "s"} with
+                            no sales still need checking (see below).
+                          </>
+                        ) : (
+                          <>
+                            You need at least {totalMonthsNeeded} months of sales history
+                            before forecasting can start. You have {history.spanMonths} months
+                            so far ({history.spanDays} of {history.requiredSpanDays} days). Days
+                            your store was closed count too.
+                          </>
+                        )}
+                      </p>
+                    </div>
+                  </div>
+
+                  <div className="insufficient-data-progress-wrapper">
+                    <div className="insufficient-data-progress-label">
+                      <span>
+                        Sales history
+                        {history?.firstSaleDate
+                          ? ` (${formatShortDate(history.firstSaleDate)} – ${formatShortDate(history.lastSaleDate)})`
+                          : ""}
+                      </span>
+                      <span className="insufficient-data-progress-text">
+                        {history
+                          ? `${Math.min(history.spanMonths, totalMonthsNeeded)} / ${totalMonthsNeeded} months`
+                          : statusLoaded
+                            ? `${getMonths()} / ${totalMonthsNeeded} months`
+                            : `— / ${totalMonthsNeeded} months`}
+                      </span>
+                    </div>
+                    <div className="insufficient-data-progress-bar">
+                      <div
+                        className="insufficient-data-progress-fill"
+                        style={{
+                          width: `${Math.min(dataProgress, 100)}%`,
+                          backgroundColor:
+                            isDataSufficient || dataProgress >= 100
+                              ? "#22c55e"
+                              : "rgba(122, 1, 1, 0.5)",
+                        }}
+                      />
+                    </div>
+                  </div>
             {history && history.spanDays > 0 ? (
               <div className="sk-counts" style={{ marginTop: 14 }}>
                 <div className="sk-count">

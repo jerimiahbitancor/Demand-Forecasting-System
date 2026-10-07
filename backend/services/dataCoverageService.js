@@ -24,6 +24,10 @@
 // gets recomputed on the next check. The other order could store old
 // numbers under a new fingerprint.
 
+const { fetchAllRows } = require('../utils/fetchAllRows');
+const { evaluateHistoryGate } = require('../utils/historyGate');
+const { countMissingOperatingDays, resolveOperatingDays } = require('../utils/staleDays');
+
 const DEFAULT_MAX_AGE_MS = 10 * 60 * 1000;
 
 const cache = new Map(); // key -> { fingerprint, value, storedAt }
@@ -78,4 +82,190 @@ function clearCache() {
   inFlight.clear();
 }
 
-module.exports = { getFingerprint, cachedByFingerprint, clearCache, DEFAULT_MAX_AGE_MS };
+// ---------------------------------------------------------------------------
+// "Which dates have sales?" from the daily_sales_date_summary view
+// (backend/sql/2026-10-06_daily_sales_date_summary.sql): one row per sale
+// date, ~450 rows in 1 page, instead of paging all ~17,800 daily_sales rows.
+//
+// FALLBACK (same pattern as utils/productSalesSummary.js): if the view does
+// not exist yet (PGRST205 / 42P01), use the old paged scan and warn ONCE, so
+// the code can ship before the SQL is run. Any OTHER error is thrown.
+// ---------------------------------------------------------------------------
+
+let warnedAboutFallback = false;
+
+// Codes only: PostgREST's "table not in schema cache" and Postgres's
+// "relation does not exist". Matching the view NAME in the message would
+// also catch "permission denied for view ...", which must fail loudly.
+function isMissingViewError(error) {
+  if (!error) return false;
+  return error.code === 'PGRST205' || error.code === '42P01';
+}
+
+async function summaryFromView(client) {
+  return fetchAllRows(() => client
+    .from('daily_sales_date_summary')
+    .select('sale_date, sale_rows')
+    .order('sale_date'));
+}
+
+// The slow path the view replaces. Remove once the SQL is applied everywhere.
+async function summaryFromFullScan(client) {
+  const { data, error } = await fetchAllRows(() => client
+    .from('daily_sales')
+    .select('sale_date')
+    .order('sale_date')
+    .order('product_id'));
+  if (error) return { data: null, error };
+  const counts = new Map();
+  for (const row of data || []) {
+    if (row.sale_date) counts.set(row.sale_date, (counts.get(row.sale_date) || 0) + 1);
+  }
+  return {
+    data: [...counts.entries()].map(([sale_date, sale_rows]) => ({ sale_date, sale_rows })),
+    error: null,
+  };
+}
+
+// Returns { rows: [{ sale_date, sale_rows }] sorted by date, source }.
+// source is 'view' or 'scan'. Throws on a real error.
+async function getSaleDateSummary(client) {
+  let source = 'view';
+  let result = await summaryFromView(client);
+  if (result.error && isMissingViewError(result.error)) {
+    if (!warnedAboutFallback) {
+      warnedAboutFallback = true;
+      console.warn(
+        'daily_sales_date_summary view not found -- falling back to a full daily_sales scan, '
+        + 'so the dashboard is slow after a cache refill. Run backend/sql/2026-10-06_daily_sales_date_summary.sql.'
+      );
+    }
+    source = 'scan';
+    result = await summaryFromFullScan(client);
+  }
+  if (result.error) throw result.error;
+  const rows = [...(result.data || [])]
+    .filter((r) => r.sale_date)
+    .sort((a, b) => (a.sale_date < b.sale_date ? -1 : a.sale_date > b.sale_date ? 1 : 0));
+  return { rows, source };
+}
+
+// Same, but shared within a dashboard check (and across checks) by the data
+// fingerprint, so the stats and the history rule read it once.
+function getSaleDateSummaryCached(client, fingerprint) {
+  if (!fingerprint) return getSaleDateSummary(client);
+  return cachedByFingerprint('saleDateSummary', fingerprint, () => getSaleDateSummary(client));
+}
+
+// For uploadService.getUploadStats: distinct sale days + earliest sale date,
+// counted over daily_sales rows whose upload_id is in `uploadIds`.
+//
+// The view counts ALL daily_sales rows. That is only the same answer when
+// every row belongs to one of these uploads, so this checks it first with
+// two head counts (all rows vs this user's rows). Equal -> the view's date
+// set is exactly the filtered date set. Not equal (another user's uploads,
+// or rows with no upload_id) -> returns null and the caller runs its old
+// filtered scan.
+async function getUserSaleCoverageFromSummary(client, uploadIds, fingerprint) {
+  const [all, mine] = await Promise.all([
+    client.from('daily_sales').select('id', { count: 'exact', head: true }),
+    client.from('daily_sales').select('id', { count: 'exact', head: true }).in('upload_id', uploadIds),
+  ]);
+  if (all.error) throw all.error;
+  if (mine.error) throw mine.error;
+  if ((all.count ?? -1) !== (mine.count ?? -2)) return null;
+
+  const { rows } = await getSaleDateSummaryCached(client, fingerprint);
+  return {
+    distinctSaleDays: rows.length,
+    earliestSaleDate: rows.length > 0 ? rows[0].sale_date : null,
+  };
+}
+
+// For the dashboard's 12-month history rule. Same result as
+// businessDayService.getHistoryCoverage() (which stays as it is: /gaps and
+// bulk-close use it to validate writes), but the sale dates come from the
+// view. Both read ALL daily_sales rows, with no user filter.
+async function getHistoryCoverageFromSummary(client, fingerprint) {
+  const [summary, closed] = await Promise.all([
+    getSaleDateSummaryCached(client, fingerprint),
+    fetchAllRows(() => client
+      .from('business_days')
+      .select('business_date')
+      .eq('status', 'confirmed_closed')
+      .order('business_date')),
+  ]);
+  if (closed.error) throw closed.error;
+
+  const saleDates = [...new Set(summary.rows.map((r) => r.sale_date).filter(Boolean))].sort();
+  const closedDates = [...new Set((closed.data || []).map((r) => r.business_date).filter(Boolean))].sort();
+  return { saleDates, closedDates, gate: evaluateHistoryGate({ saleDates, closedDates }) };
+}
+
+// ---------------------------------------------------------------------------
+// Missing expected operating days since the last confirmed open day
+// (utils/staleDays.js has the rule and why forecast_runs.stale_days is not
+// used directly).
+//
+// Cost per dashboard check: business_profile is read every time (1 request;
+// it is not covered by the data fingerprint, so an edited schedule shows at
+// once). The business_days rows in the window are cached by fingerprint.
+// ---------------------------------------------------------------------------
+
+async function getOperatingDays(client) {
+  const { data, error } = await client.from('business_profile').select('operating_days').limit(1);
+  if (error) throw error;
+  return resolveOperatingDays(data && data[0] ? data[0].operating_days : null);
+}
+
+// Dates strictly between `after` and `before` that have a confirmed
+// business_days row (open or closed).
+async function getRecordedBusinessDates(client, after, before, fingerprint) {
+  const load = async () => {
+    const { data, error } = await fetchAllRows(() => client
+      .from('business_days')
+      .select('business_date')
+      .in('status', ['confirmed_open', 'confirmed_closed'])
+      .gt('business_date', after)
+      .lt('business_date', before)
+      .order('business_date'));
+    if (error) throw error;
+    return (data || []).map((r) => r.business_date).filter(Boolean);
+  };
+  if (!fingerprint) return load();
+  return cachedByFingerprint(`recordedDays:${after}:${before}`, fingerprint, load);
+}
+
+// Returns { missingOperatingDays, missingDates, operatingDaysSource }.
+// Throws on a read error; callers decide what to fall back to.
+async function getMissingOperatingDays(client, { lastConfirmedDate, today, fingerprint = null }) {
+  if (!lastConfirmedDate) {
+    const { source } = await getOperatingDays(client);
+    return { missingOperatingDays: 0, missingDates: [], operatingDaysSource: source };
+  }
+  const [operating, recordedDates] = await Promise.all([
+    getOperatingDays(client),
+    getRecordedBusinessDates(client, lastConfirmedDate, today, fingerprint),
+  ]);
+  const { missingOperatingDays, missingDates } = countMissingOperatingDays({
+    lastConfirmedDate, today, operatingDays: operating.days, recordedDates,
+  });
+  return { missingOperatingDays, missingDates, operatingDaysSource: operating.source };
+}
+
+// Test hook: lets a test reset the "warn once" latch.
+function _resetFallbackWarning() { warnedAboutFallback = false; }
+
+module.exports = {
+  getFingerprint,
+  cachedByFingerprint,
+  clearCache,
+  getSaleDateSummary,
+  getSaleDateSummaryCached,
+  getUserSaleCoverageFromSummary,
+  getHistoryCoverageFromSummary,
+  getOperatingDays,
+  getMissingOperatingDays,
+  _resetFallbackWarning,
+  DEFAULT_MAX_AGE_MS,
+};

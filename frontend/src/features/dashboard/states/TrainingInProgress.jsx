@@ -37,6 +37,11 @@ const TrainingInProgress = ({ initialState }) => {
 const TrainingInProgress = ({ onRefreshState }) => {
   const navigate = useNavigate();
   const { openHelp } = useHelp();
+  // null = not loaded yet: the screen shows "—" instead of an invented
+  // number (these used to start at 50%, 100% and 12/12 months).
+  const [progressPercentage, setProgressPercentage] = useState(null);
+  const [dataProgress, setDataProgress] = useState(null);
+  const [uploadedMonths, setUploadedMonths] = useState(null);
   // Seeded from the Dashboard's dashboard-state response: `stats` is the same
   // getUploadStats() payload /upload/stats/summary returns, and `progress` the
   // same getUploadProgress() payload /upload/progress returns. Both used to be
@@ -54,6 +59,8 @@ const TrainingInProgress = ({ onRefreshState }) => {
   const [totalMonthsNeeded] = useState(12);
   const [isTrainingComplete, setIsTrainingComplete] = useState(false);
   const [products, setProducts] = useState([]);
+  const [productsWithRecipes, setProductsWithRecipes] = useState(null);
+  const [totalProducts, setTotalProducts] = useState(null);
   const [totalProducts, setTotalProducts] = useState(0);
   const [productsWithRecipes, setProductsWithRecipes] = useState(3);
   const [totalProducts, setTotalProducts] = useState(12);
@@ -139,6 +146,9 @@ const TrainingInProgress = ({ onRefreshState }) => {
 
         const totalRows = data.sales_records || data.total_rows || 0;
         const totalUploads = data.total_uploads || 0;
+        // The server's own number, as is. This used to turn 0 into 12
+        // (`|| 12`), then count uploads as months, then round 0 up to 1.
+        const months = Number(data.months_uploaded) || 0;
         let months = data.months_uploaded || 12;
 
         const monthsUploaded = data.months_uploaded || 12;
@@ -184,7 +194,8 @@ const TrainingInProgress = ({ onRefreshState }) => {
   const fetchUploadProgress = async (signal) => {
     const response = await apiClient.get("/upload/progress", { signal });
     if (response.data.success) {
-      const progress = response.data.data.progress || 50;
+      // The real upload progress (was `|| 50`, an invented fallback).
+      const progress = Number(response.data.data.progress) || 0;
       setProgressPercentage(progress);
 
       if (progress >= 100 || !dataStatusLoadedRef.current) {
@@ -286,6 +297,21 @@ const TrainingInProgress = ({ onRefreshState }) => {
   usePolling(fetchTrainingStatus, TRAINING_STATUS_POLL_MS);
   usePolling(fetchProducts, PRODUCTS_POLL_MS);
 
+  const getMonths = () => {
+    return uploadedMonths == null ? null : Math.min(uploadedMonths, totalMonthsNeeded);
+  };
+
+  const isDataSufficient = uploadedMonths >= totalMonthsNeeded;
+
+  const getProductsNeedingRecipes = () => {
+    const needsRecipe = products.filter(p => !p.product_ingredients?.length && !p.hasRecipe);
+    return needsRecipe.slice(0, 3);
+  };
+
+  const productsNeedingRecipes = getProductsNeedingRecipes();
+  const productsWithoutRecipes = products.filter(
+    p => !p.product_ingredients?.length && !p.hasRecipe
+  ).length;
   const getMonths = () => Math.min(uploadedMonths, totalMonthsNeeded);
   const productsNeedingRecipes = products.filter((p) => !p.product_ingredients?.length);
   const productsWithoutRecipes = productsNeedingRecipes.length;
@@ -363,6 +389,19 @@ const TrainingInProgress = ({ onRefreshState }) => {
                   : "Analysing the pattern. You can keep working — recipes and stock levels can be edited while this runs."}
               </p>
 
+          {/* Progress Bar */}
+          <div className="training-progress-container">
+            <div className="training-progress-bar-wrapper">
+              <div
+                className="training-progress-fill"
+                style={{
+                  width: `${Math.min(progressPercentage ?? 0, 100)}%`,
+                  backgroundColor: "rgba(122, 1, 1, 0.5)",
+                }}
+              />
+              <div className="training-progress-text">
+                <span>System Status Progress</span>
+                <span>{progressPercentage == null ? "—" : `${Math.round(progressPercentage)}%`}</span>
               <div className="sk-live" style={{ marginTop: 16 }}>
                 <span className={`sk-dot${isTrainingComplete ? " sk-dot--done" : ""}`} />
                 <span className={`sk-live-text${isTrainingComplete ? " sk-live-text--done" : ""}`}>
@@ -477,10 +516,150 @@ const TrainingInProgress = ({ onRefreshState }) => {
                 )}
               </p>
 
+          {/* Step Cards */}
+          <div className="training-step-cards">
+            {/* Step 1 - Green Card */}
+            <div className="training-step-card training-step-card-complete">
+              <div className="training-step-number training-step-number-complete">1</div>
+              <div className="training-step-content">
+                <h4 className="training-step-title training-step-title-complete">
+                  Upload Historical Sales Data
+                </h4>
+                <p className="training-step-description">
+                  Upload at least 1 year of historical sales data exported from
+                  your POS system. This is what the forecasting model uses to
+                  learn your business's demand patterns and generate reliable
+                  forecasts.
+                </p>
+
+                {/* Data Progress - Complete */}
+                <div className="training-data-progress-wrapper1">
+                  <div className="training-data-progress-wrapper2-complete">
+                    <div
+                      style={{
+                        display: "flex",
+                        alignItems: "flex-start",
+                        gap: "10px",
+                      }}
+                    >
+                      <FaCheckCircle
+                        style={{
+                          color: "#0F9918",
+                          fontSize: "18px",
+                          marginTop: "2px",
+                          flexShrink: 0,
+                        }}
+                      />
+                      <p className="training-step-description1">
+                        {getMonths() == null
+                          ? "Checking your uploaded sales data…"
+                          : `Historical data upload complete. All ${getMonths()} months of data have been successfully uploaded and validated.`}
+                      </p>
+                    </div>
+                  </div>
+
+                  <div className="training-data-progress-wrapper">
+                    <div className="training-data-progress-label">
+                      <span>Historical Data</span>
+                      <span className="training-data-progress-text-complete">
+                        {getMonths() == null ? "—" : `${getMonths()} / ${totalMonthsNeeded} months Complete`}
+                      </span>
+                    </div>
+                    <div className="training-data-progress-bar">
+                      <div
+                        className="training-data-progress-fill-complete"
+                        style={{
+                          width: `${Math.min(dataProgress ?? 0, 100)}%`,
+                          backgroundColor: "#0F9918",
+                        }}
+                      />
+                    </div>
+                  </div>
+                </div>
+
+                <button
+                  className="training-step-btn training-step-btn-complete"
+                  onClick={handleUploadData}
+                >
+                  Upload Complete
+                </button>
               <div style={{ marginTop: 14 }}>
                 <ProductsDetected products={products} onAddRecipe={handleAddRecipe} />
               </div>
 
+            {/* Step 2 - Products Detected */}
+            <div className="training-step-card">
+              <div className="training-step-number">2</div>
+              <div className="training-step-content">
+                <h4 className="training-step-title">
+                  Add Ingredient Recipes to Your Products
+                </h4>
+                <p className="training-step-description">
+                  Your menu products will be automatically detected when you
+                  upload your sales data. After uploading, add the ingredient
+                  recipe for each product so the system can estimate how much of
+                  each ingredient you'll need to prepare.
+                </p>
+
+                {/* Products Detected Section */}
+                <div className="training-products-detected">
+                  <div className="training-products-header">
+                    <h5 className="training-products-title">Products Detected from Your Sales Data</h5>
+                    <div className="training-products-summary">
+                      <p className="training-products-total">
+                        {totalProducts == null ? "Checking your products…" : `${totalProducts} products were found in your sales data.`}
+                      </p>
+                      {totalProducts != null && (
+                        <p className="training-products-missing">{productsWithoutRecipes} still need ingredient recipes added.</p>
+                      )}
+                    </div>
+                    <p className="training-products-note">
+                      Products without recipes will still be forecasted, but will not appear in the ingredient demand shopping list.
+                    </p>
+                  </div>
+
+                  {/* Product Table */}
+                  <div className="training-products-table">
+                    <div className="training-products-table-header">
+                      <span>Product Name</span>
+                      <span>Action</span>
+                    </div>
+                    {productsNeedingRecipes.length > 0 ? (
+                      productsNeedingRecipes.map((product, index) => (
+                        <div className="training-products-table-row" key={index}>
+                          <span>{product.name}</span>
+                          <button 
+                            className="training-products-add-btn"
+                            onClick={() => handleAddRecipe(product.name)}
+                          >
+                            Add Recipe
+                          </button>
+                        </div>
+                      ))
+                    ) : (
+                      <div className="training-products-table-row">
+                        <span style={{ color: '#0F9918', fontWeight: 600 }}>
+                          All products have recipes added
+                        </span>
+                        <span style={{ color: '#0F9918' }}>Complete</span>
+                      </div>
+                    )}
+                    {productsWithoutRecipes > 3 && (
+                      <div className="training-products-table-row" style={{ fontStyle: 'italic', color: '#6b7280' }}>
+                        <span>+ {productsWithoutRecipes - 3} more products needing recipes</span>
+                        <span></span>
+                      </div>
+                    )}
+                  </div>
+                </div>
+
+                <button
+                  className="training-step-btn training-step-btn-secondary"
+                  onClick={handleInventoryManagement}
+                >
+                  Go to Inventory Management 
+                </button>
+              </div>
               <p className="sk-subcard-foot">
                 Products without recipes will still be forecasted, but will not appear
                 in the ingredient demand shopping list.

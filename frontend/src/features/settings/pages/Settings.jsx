@@ -1,5 +1,6 @@
 // frontend/src/features/settings/Settings.jsx
 import { useState } from 'react';
+import { Link } from 'react-router-dom';
 import { 
   FiUser, 
   FiBriefcase, 
@@ -7,6 +8,7 @@ import {
   FiDatabase,
   FiBookOpen,
   FiShield,
+  FiActivity,
 } from 'react-icons/fi';
 import Navbar from '../../components/Navbar/Navbar.jsx';
 import BusinessProfile from '../components/BusinessProfile.jsx';
@@ -61,6 +63,10 @@ const Settings = () => {
               Manage your business profile, account preferences, and system configurations.
             </p>
           </div>
+          <Link to="/admin/health" className="settings-health-link">
+            <FiActivity size={16} aria-hidden="true" />
+            System Health
+          </Link>
         </div>
 
         <div className="content-grid">

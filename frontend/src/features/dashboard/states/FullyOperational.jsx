@@ -24,19 +24,37 @@ import "../pages/Dashboard.css";
 
 const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:5000/api';
 
+// Neutral "not available yet" look for panels with no real data source.
+const NOT_AVAILABLE_STYLE = {
+  height: 350,
+  display: 'flex',
+  alignItems: 'center',
+  justifyContent: 'center',
+  textAlign: 'center',
+  padding: '0 24px',
+  color: '#6b7280',
+  fontSize: 14,
+  border: '1px dashed #d1d5db',
+  borderRadius: 12,
+  background: '#f9fafb',
+};
+const NOT_AVAILABLE_TEXT_STYLE = { color: '#6b7280', fontSize: 13, margin: '8px 0', lineHeight: 1.5 };
+
 const FullyOperational = () => {
   const [selectedChart, setSelectedChart] = useState("line");
   const [selectedPeriod, setSelectedPeriod] = useState("week");
   const [loading, setLoading] = useState(true);
   const [showCalendar, setShowCalendar] = useState(false);
   const [selectedDate, setSelectedDate] = useState(new Date());
+  // null = not loaded (or failed to load): the KPI cards show "—", never
+  // an invented 0.
   const [dashboardData, setDashboardData] = useState({
-    predictedSales: 0,
-    actualSales: 0,
+    predictedSales: null,
+    actualSales: null,
     forecastAccuracy: null,
     forecastAccuracyTier: null,
-    stockAlert: 0,
-    salesTrend: 0,
+    stockAlert: null,
+    salesTrend: null,
     accuracyTrend: 0,
     bestSellers: [],
     ingredients: [],
@@ -74,48 +92,11 @@ const FullyOperational = () => {
     return `Forecast for ${dayOfWeek}`;
   };
 
-  const generateChartData = (period) => {
-    const days = period === 'week' ? 7 : 30;
-    const data = [];
-    const now = new Date();
-    for (let i = days - 1; i >= 0; i--) {
-      const date = new Date(now);
-      date.setDate(date.getDate() - i);
-      const actual = Math.floor(Math.random() * 100) + 50;
-      const forecast = Math.floor(actual * (0.85 + Math.random() * 0.3));
-      const future = Math.floor(Math.random() * 80) + 40;
-      data.push({
-        date: date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' }),
-        actual: actual,
-        forecast: forecast,
-        future: future,
-        day: date.toLocaleDateString('en-US', { weekday: 'short' })
-      });
-    }
-    return data;
-  };
-
-  const getDefaultBestSellers = () => [
-    { name: "Poppers Series", sold: 245, ratio: 1.8 },
-    { name: "Cheesy Spicy Tocino", sold: 189, ratio: 1.4 },
-    { name: "OG Tapsilog", sold: 156, ratio: 1.1 },
-    { name: "Breaded Porkchop", sold: 143, ratio: 1.0 },
-    { name: "Chicken Sriracha", sold: 134, ratio: 0.9 },
-    { name: "Lechon Kawali", sold: 112, ratio: 0.8 },
-    { name: "Sizzling Sisig", sold: 98, ratio: 0.7 },
-    { name: "Herb Chicken", sold: 87, ratio: 0.6 },
-  ];
-
-  const generateIngredients = () => [
-    { name: "Beef Patty", qty: "5.2 kg", status: "urgent" },
-    { name: "Pork Belly", qty: "4.8 kg", status: "urgent" },
-    { name: "Chicken Breast", qty: "3.5 kg", status: "low" },
-    { name: "Rice", qty: "3.2 kg", status: "low" },
-    { name: "Cheese", qty: "2.8 kg", status: "low" },
-    { name: "Cabbage", qty: "2.1 kg", status: "ok" },
-    { name: "Eggs", qty: "1.8 kg", status: "ok" },
-    { name: "Tomatoes", qty: "1.2 kg", status: "ok" },
-  ];
+  // The demand chart, Top Best Sellers and Top Ingredients to Prepare used
+  // to show invented data (Math.random() and two hardcoded lists). No
+  // endpoint feeds them yet (the Performance Ratio date default is still an
+  // open decision), so they now show an honest "not available yet" panel
+  // instead. Wire them to real data before showing them again.
 
  const fetchDashboardData = async () => {
   try {
@@ -133,9 +114,9 @@ const FullyOperational = () => {
     // never wired to it — predictedSales/actualSales/forecastAccuracy/
     // stockAlert were all fabricated from Math.random() and unrelated
     // upload-count arithmetic instead. This call replaces that with the
-    // real numbers; the chart/best-sellers/ingredients panels below are
-    // NOT part of this fix (see the comment above generateChartData) —
-    // they still render placeholder data.
+    // real numbers. The chart/best-sellers/ingredients panels have no real
+    // source yet and show "not available yet" (see the note above this
+    // function).
     const summaryResponse = await apiClient.get('/forecast/summary');
     Swal.close();
 
@@ -149,14 +130,11 @@ const FullyOperational = () => {
       const stockAlerts = summary.stockAlerts || { Critical: 0, Low: 0, Normal: 0, Excess: 0 };
       const stockAlert = (stockAlerts.Critical || 0) + (stockAlerts.Low || 0);
 
-      // These three panels are still placeholder/mock data — real sourcing
-      // needs the Performance Ratio evaluation-date default decided first
-      // (see CLAUDE.md's "Still needs my decision" note) and a chart-range
-      // endpoint choice this pass didn't make. Left as-is on purpose
-      // rather than silently wiring to a guessed default.
-      const chartData = generateChartData(selectedPeriod);
-      const bestSellers = getDefaultBestSellers();
-      const ingredients = generateIngredients();
+      // Chart, best sellers and ingredients: no real source yet (see the
+      // note above fetchDashboardData), so they stay empty.
+      const chartData = [];
+      const bestSellers = [];
+      const ingredients = [];
       const stockBreakdown = [
         { count: stockAlerts.Critical || 0, label: 'Critical', color: '#ef4444' },
         { count: stockAlerts.Low || 0, label: 'Low', color: '#eab308' },
@@ -170,7 +148,7 @@ const FullyOperational = () => {
         forecastAccuracy,
         forecastAccuracyTier,
         stockAlert,
-        salesTrend: actualSales ? Math.round((predictedSales - actualSales) / actualSales * 100) : 0,
+        salesTrend: actualSales ? Math.round((predictedSales - actualSales) / actualSales * 100) : null,
         accuracyTrend: 0,
         bestSellers,
         ingredients,
@@ -188,24 +166,23 @@ const FullyOperational = () => {
       confirmButtonColor: '#7A0101'
     });
 
-    const ingredients = generateIngredients();
-
+    // Failed to load: show "—" everywhere, never zeros that look like data.
     setDashboardData({
-      predictedSales: 0,
-      actualSales: 0,
+      predictedSales: null,
+      actualSales: null,
       forecastAccuracy: null,
       forecastAccuracyTier: null,
-      stockAlert: 0,
-      salesTrend: 0,
+      stockAlert: null,
+      salesTrend: null,
       accuracyTrend: 0,
-      bestSellers: getDefaultBestSellers(),
-      ingredients,
-      chartData: generateChartData(selectedPeriod),
+      bestSellers: [],
+      ingredients: [],
+      chartData: [],
       stockBreakdown: [
-        { count: 0, label: 'Critical', color: '#ef4444' },
-        { count: 0, label: 'Low', color: '#eab308' },
-        { count: 0, label: 'Normal', color: '#22c55e' },
-        { count: 0, label: 'Excess', color: '#3b82f6' }
+        { count: null, label: 'Critical', color: '#ef4444' },
+        { count: null, label: 'Low', color: '#eab308' },
+        { count: null, label: 'Normal', color: '#22c55e' },
+        { count: null, label: 'Excess', color: '#3b82f6' }
       ]
     });
   } finally {
@@ -538,11 +515,13 @@ const FullyOperational = () => {
               </Tippy>
             </div>
             <div className="metric-value-group">
-              <span className="metric-value">{formatCurrency(dashboardData.predictedSales)}</span>
-              <div className={dashboardData.salesTrend >= 0 ? 'badge-success' : 'badge-danger'}>
-                {dashboardData.salesTrend >= 0 ? <FaArrowUp className="badge-icon" /> : <FaArrowDown className="badge-icon" />}
-                {dashboardData.salesTrend >= 0 ? '+' : ''}{dashboardData.salesTrend}%
-              </div>
+              <span className="metric-value">{dashboardData.predictedSales != null ? formatCurrency(dashboardData.predictedSales) : '—'}</span>
+              {dashboardData.salesTrend != null && (
+                <div className={dashboardData.salesTrend >= 0 ? 'badge-success' : 'badge-danger'}>
+                  {dashboardData.salesTrend >= 0 ? <FaArrowUp className="badge-icon" /> : <FaArrowDown className="badge-icon" />}
+                  {dashboardData.salesTrend >= 0 ? '+' : ''}{dashboardData.salesTrend}%
+                </div>
+              )}
             </div>
             <p className="metric-subtext">{comparisonMessage}</p>
           </div>
@@ -556,9 +535,13 @@ const FullyOperational = () => {
               </Tippy>
             </div>
             <div className="metric-value-group">
-              <span className="metric-value">{formatCurrency(dashboardData.actualSales)}</span>
+              <span className="metric-value">{dashboardData.actualSales != null ? formatCurrency(dashboardData.actualSales) : '—'}</span>
             </div>
-            <p className="metric-subtext">{Math.round((dashboardData.actualSales / (dashboardData.predictedSales || 1)) * 100)}% of predicted target</p>
+            <p className="metric-subtext">
+              {dashboardData.actualSales != null && dashboardData.predictedSales
+                ? `${Math.round((dashboardData.actualSales / dashboardData.predictedSales) * 100)}% of predicted target`
+                : 'No comparison available yet'}
+            </p>
           </div>
 
           {/* 3. Forecast Accuracy */}
@@ -592,7 +575,7 @@ const FullyOperational = () => {
   </div>
   
   <div className="metric-value-group">
-    <span className="metric-value" style={{ color: stockColor }}>{dashboardData.stockAlert}</span>
+    <span className="metric-value" style={{ color: stockColor }}>{dashboardData.stockAlert ?? '—'}</span>
   </div>
   
   {/* Dynamic Stock Alert Breakdown */}
@@ -615,14 +598,14 @@ const FullyOperational = () => {
           fontWeight: 'bold', 
           color: item.color,
           lineHeight: '1'
-        }}>{item.count}</span>
+        }}>{item.count ?? '—'}</span>
         <span style={{ fontSize: '10px', color: '#9ca3af' }}>{item.label}</span>
       </div>
     ))}
   </div>
   
   <p className="metric-subtext" style={{ marginTop: '4px' }}>
-    Based on {dashboardData.ingredients.length} of 12 products
+    {dashboardData.stockAlert != null ? 'Ingredients compared with the latest forecast' : 'No stock data yet'}
   </p>
 </div>
         </div>
@@ -657,6 +640,12 @@ const FullyOperational = () => {
             </div>
 
             <div className="chart-container">
+              {dashboardData.chartData.length === 0 ? (
+                <div style={NOT_AVAILABLE_STYLE}>
+                  The demand chart is not available yet. It will show your real sales and
+                  forecasts once it is connected to your data.
+                </div>
+              ) : (
               <ResponsiveContainer width="100%" height={350}>
                 {selectedChart === 'line' ? (
                   <LineChart data={dashboardData.chartData}>
@@ -693,6 +682,7 @@ const FullyOperational = () => {
                   </ComposedChart>
                 )}
               </ResponsiveContainer>
+              )}
             </div>
           </div>
 
@@ -706,6 +696,9 @@ const FullyOperational = () => {
                 </Tippy>
               </div>
               <div className="scrollable-content">
+                {dashboardData.bestSellers.length === 0 && (
+                  <p style={NOT_AVAILABLE_TEXT_STYLE}>Not available yet. This panel is not connected to your sales data yet.</p>
+                )}
                 {dashboardData.bestSellers.map((item, index) => (
                   <div key={index} className="best-seller-item">
                     <span className="product-name">{item.name}</span>
@@ -727,6 +720,9 @@ const FullyOperational = () => {
                 </Tippy>
               </div>
               <div className="scrollable-content">
+                {dashboardData.ingredients.length === 0 && (
+                  <p style={NOT_AVAILABLE_TEXT_STYLE}>Not available yet. See Analytics, Ingredient Demand for real figures.</p>
+                )}
                 {dashboardData.ingredients.map((item, index) => (
                   <div key={index} className="ingredient-item">
                     <span className="ingredient-name">{item.name}</span>
