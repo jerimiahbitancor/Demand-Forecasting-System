@@ -1,4 +1,8 @@
 // states/ForecastsReady.jsx
+<<<<<<< HEAD
+<<<<<<< HEAD
+=======
+>>>>>>> ec2d3d462b46e067e1942d6168838c81e4cd6480
 import { FaCheckCircle } from 'react-icons/fa';
 import Navbar from "../../components/Navbar/Navbar";
 import "../states/statescss/ForecastsReady.css";
@@ -10,6 +14,9 @@ import "../states/statescss/ForecastsReady.css";
 const NOT_YET = 'Not available yet';
 
 const ForecastsReady = () => {
+<<<<<<< HEAD
+=======
+=======
   return (
     <div className="dashboard-container">
       <Navbar />
@@ -22,6 +29,7 @@ const ForecastsReady = () => {
             <span className="date-separator">{new Date().toLocaleDateString()}</span>
           </div>
         </div>
+>>>>>>> ec2d3d462b46e067e1942d6168838c81e4cd6480
 //
 // State 5 of 7 — the model is trained and forecast runs exist, but some
 // active products still have no ingredient recipe, so the ingredient
@@ -117,6 +125,10 @@ const ForecastsReady = ({ initialState }) => {
   const recipeProgress = activeCount > 0 ? ((activeCount - unmappedCount) / activeCount) * 100 : 100;
   const allDone = unmappedCount === 0;
 
+<<<<<<< HEAD
+>>>>>>> 4c5708cc8ec29f389bce56fbd7a4bb2bca5093f6
+=======
+>>>>>>> ec2d3d462b46e067e1942d6168838c81e4cd6480
   return (
     <StateShell
       eyebrow="Forecasts ready"
@@ -191,11 +203,18 @@ const ForecastsReady = ({ initialState }) => {
             <div className="sk-stat-value sk-stat-value--ok">
               {Math.max(activeCount - unmappedCount, 0)}
             </div>
+<<<<<<< HEAD
+<<<<<<< HEAD
+=======
+>>>>>>> ec2d3d462b46e067e1942d6168838c81e4cd6480
             <div className="metric-value-group">
               <span className="metric-value">—</span>
             </div>
             <p className="metric-subtext">{NOT_YET}</p>
           </div>
+<<<<<<< HEAD
+=======
+=======
 
           <div className="metric-card border-purple">
             <div className="card-header">
@@ -205,6 +224,7 @@ const ForecastsReady = ({ initialState }) => {
               <span className="metric-value">—</span>
             </div>
             <p className="metric-subtext">{NOT_YET}</p>
+>>>>>>> ec2d3d462b46e067e1942d6168838c81e4cd6480
             <div className="sk-stat-note">Included in the shopping list</div>
           </div>
           <div className="sk-stat">
@@ -296,6 +316,10 @@ const ForecastsReady = ({ initialState }) => {
               </p>
             </div>
           </SetupStep>
+<<<<<<< HEAD
+>>>>>>> 4c5708cc8ec29f389bce56fbd7a4bb2bca5093f6
+=======
+>>>>>>> ec2d3d462b46e067e1942d6168838c81e4cd6480
 
           <SetupStep
             index={2}
@@ -333,7 +357,39 @@ const ForecastsReady = ({ initialState }) => {
               Ingredient Demand turns recipes plus forecasts into preparation and reorder
               quantities.
             </div>
+<<<<<<< HEAD
+<<<<<<< HEAD
+            <div className="metric-value-group">
+              <span className="metric-value">—</span>
+            </div>
+            <p className="metric-subtext">{NOT_YET}</p>
+          </div>
+
+          <div className="metric-card border-purple">
+            <div className="card-header">
+              <h3 className="card-title">Confidence Score</h3>
+            </div>
+            <div className="metric-value-group">
+              <span className="metric-value">—</span>
+            </div>
+            <p className="metric-subtext">{NOT_YET}</p>
+          </div>
+
+          <div className="metric-card border-indigo">
+            <div className="card-header">
+              <h3 className="card-title">Recommendations</h3>
+            </div>
+            <div className="metric-value-group">
+              <span className="metric-value">—</span>
+            </div>
+            <p className="metric-subtext">{NOT_YET}</p>
+          </div>
+=======
           </SetupStep>
+>>>>>>> 4c5708cc8ec29f389bce56fbd7a4bb2bca5093f6
+=======
+          </SetupStep>
+>>>>>>> ec2d3d462b46e067e1942d6168838c81e4cd6480
         </div>
       </section>
     </StateShell>
