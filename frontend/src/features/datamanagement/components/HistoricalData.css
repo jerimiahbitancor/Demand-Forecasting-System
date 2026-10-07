@@ -184,6 +184,11 @@
   color: var(--color-uploading);
 }
 
+.action-btn:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
 /* Pagination */
 .pagination {
   display: flex;

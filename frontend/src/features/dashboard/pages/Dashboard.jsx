@@ -1,29 +1,45 @@
 // Dashboard.jsx
-import { useEffect } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import toast from 'react-hot-toast';
 import apiClient from '../../../services/apiClient';
 import usePolling from '../../../hooks/usePolling';
 import { describeChange, onDataChanged } from '../../../utils/appEvents';
 import './Dashboard.css';
 
-// Import the 7 state components
-import FullyOperational from '../states/FullyOperational';
-import NoData from '../states/NoData.jsx';
-import UploadedInsufficient from '../states/UploadedInsufficient.jsx';
-import ReadyToTrain from '../states/ReadyToTrain.jsx';
-import TrainingInProgress from '../states/TrainingInProgress.jsx';
-import ForecastsReady from '../states/ForecastsReady.jsx';
-import DataNeedsAttention from '../states/DataNeedsAttention.jsx';
+import DashboardLoading from '../components/DashboardLoading.jsx';
 import ConnectionProblem from '../states/ConnectionProblem.jsx';
 import Navbar from '../../components/Navbar/Navbar';
 
 // Import the image directly
 import dashboardBg from '../../../assets/images/Dashboard.png';
 
+// Code-split per state. FullyOperational alone is ~1MB (recharts plus the
+// Dashboard background photo), and eagerly importing all seven meant an owner
+// on the "no data" screen paid for the fully-operational dashboard's
+// JavaScript before the first paint.
+//
+// Plain loader functions rather than React.lazy on purpose. lazy() resolves its
+// component on first *render*, which meant the sequence was: splash, state
+// answer arrives, swap, lazy suspends again, splash again, chunk lands, screen
+// finally paints — the double "loading" this file used to cause. Here the chunk
+// is awaited during the splash, so the resolved screen mounts with its code
+// already in hand and there is nothing left to wait for.
+const STATE_LOADERS = {
+  FullyOperational: () => import('../states/FullyOperational'),
+  NoData: () => import('../states/NoData.jsx'),
+  UploadedInsufficient: () => import('../states/UploadedInsufficient.jsx'),
+  ReadyToTrain: () => import('../states/ReadyToTrain.jsx'),
+  TrainingInProgress: () => import('../states/TrainingInProgress.jsx'),
+  ForecastsReady: () => import('../states/ForecastsReady.jsx'),
+  DataNeedsAttention: () => import('../states/DataNeedsAttention.jsx')
+};
+
 // How often the dashboard re-checks its state. One check at a time, paused
 // while the tab is hidden (see hooks/usePolling.js).
 const DASHBOARD_POLL_MS = 60000;
 
+// Backend state name -> screen. Frozen at module scope: this never changes, and
+// rebuilding seven objects on every poll would be pure waste.
 const stateMap = {
   'no-data': 'NoData',
   'uploaded-insufficient': 'UploadedInsufficient',
@@ -34,16 +50,105 @@ const stateMap = {
   'fully-operational': 'FullyOperational'
 };
 
-// One dashboard check. Resolves to a stateConfig key.
+// Configuration for each state with background
+const STATE_CONFIG = {
+  FullyOperational: {
+    label: '✅ Fully Operational',
+    color: '#22c55e',
+    description: 'All systems running normally',
+    backgroundImage: dashboardBg
+  },
+  NoData: {
+    label: '📭 No Data',
+    color: '#6b7280',
+    description: 'No data uploaded yet',
+    backgroundColor: '#ffffff'
+  },
+  UploadedInsufficient: {
+    label: '⚠️ Insufficient Data',
+    color: '#eab308',
+    description: 'Data uploaded but insufficient',
+    backgroundColor: '#fffbeb'
+  },
+  ReadyToTrain: {
+    label: '🟢 Ready to Train',
+    color: '#0F9918',
+    description: 'Enough data uploaded — training not started yet',
+    backgroundColor: '#f0fdf4'
+  },
+  TrainingInProgress: {
+    label: '🔄 Training in Progress',
+    color: '#06b6d4',
+    description: 'Model is currently training',
+    backgroundColor: '#ecfdf5'
+  },
+  ForecastsReady: {
+    label: '📊 Forecasts Ready',
+    color: '#3b82f6',
+    description: 'Forecasts are ready to view',
+    backgroundColor: '#eff6ff'
+  },
+  DataNeedsAttention: {
+    label: '🔴 Needs Attention',
+    color: '#ef4444',
+    description: 'Data issues require attention',
+    backgroundColor: '#fef2f2'
+  }
+};
+
+const getBackgroundStyle = (stateKey) => {
+  const state = STATE_CONFIG[stateKey];
+  if (state.backgroundImage) {
+    return {
+      backgroundImage: `url(${state.backgroundImage})`,
+      backgroundSize: 'cover',
+      backgroundPosition: 'center',
+      backgroundRepeat: 'no-repeat',
+      backgroundAttachment: 'fixed',
+      minHeight: '100vh'
+    };
+  }
+  return {
+    backgroundColor: state.backgroundColor,
+    minHeight: '100vh'
+  };
+};
+
+// Loads a screen's chunk, falling back to the "no data" screen if that
+// download fails. Without the fallback a single failed chunk request would
+// leave the owner staring at the splash forever, which is worse than
+// showing them the wrong screen. Retrying the same specifier is not useful
+// — the module loader caches the rejected promise — so the fallback goes to
+// a different module.
+const loadScreen = async (nextKey) => {
+  try {
+    return (await STATE_LOADERS[nextKey]()).default;
+  } catch (err) {
+    console.error(`Failed to load the ${nextKey} screen:`, err);
+    if (nextKey === 'NoData') return null;
+    try {
+      return (await STATE_LOADERS.NoData()).default;
+    } catch (fallbackErr) {
+      console.error('Failed to load the fallback screen:', fallbackErr);
+      return null;
+    }
+  }
+};
+
+// One dashboard check. Resolves to { key, payload } for the state screens.
 //
-// A failed check THROWS. It must never pick a business state: the old
-// fallback here turned a timeout, a 429 or a 500 into "Uploaded
-// Insufficient" or "No Data", which looked exactly like real data.
-// usePolling keeps the last good state and reports the error instead.
+// A failed check THROWS. It must never pick a business state: a timeout, a
+// 429 or a 500 must not look like "Uploaded Insufficient" or "No Data",
+// which are real answers. usePolling keeps the last good state and reports
+// the error instead.
 const loadDashboardState = async (signal) => {
   const response = await apiClient.get('/upload/dashboard-state', { signal });
-  let state = response.data.success ? response.data.data.state : 'no-data';
+  const payload = response.data.success ? response.data.data : null;
+  let state = payload ? payload.state : 'no-data';
 
+  // The backend only knows about uploads it has ingested, so a file the
+  // owner just dropped can still read as 'no-data' here. Ask whether an
+  // upload exists at all before believing that.
   if (state === 'no-data') {
     const uploadsResponse = await apiClient.get('/upload?limit=1', { signal });
     const uploadCount = uploadsResponse.data.count
@@ -55,17 +160,26 @@ const loadDashboardState = async (signal) => {
     }
   }
 
-  return stateMap[state] || 'NoData';
+  return { key: stateMap[state] || 'NoData', payload };
 };
 
 const Dashboard = () => {
   const {
     data, error, lastSuccessAt, lastErrorAt, refresh,
   } = usePolling(loadDashboardState, DASHBOARD_POLL_MS);
-  const selectedState = data;
+  const stateKey = data ? data.key : null;
+  const payload = data ? data.payload : null;
+
+  // { key, Component, payload } — null until the state answer has landed *and*
+  // the matching screen's code has finished downloading. The payload is the
+  // one that came with the answer for this key: each screen seeds itself from
+  // it on mount and then polls its own live numbers, so holding it costs
+  // nothing and keeps the identity stable across refreshes.
+  const [resolved, setResolved] = useState(null);
+
   // A state screen that wants the dashboard re-checked right away (e.g.
-  // right after the owner marks dates closed) calls this instead of
-  // waiting for the next poll.
+  // right after the owner marks dates closed) calls this instead of waiting
+  // for the next poll.
   const requestRefresh = refresh;
 
   // The notification bell signals a new upload / training / forecast
@@ -77,64 +191,38 @@ const Dashboard = () => {
     (failed ? toast.error : toast.success)(text, { id: 'dfs-data-changed' });
   }), [refresh]);
 
-  // Configuration for each state with background
-  const stateConfig = {
-    FullyOperational: {
-      component: FullyOperational,
-      label: '✅ Fully Operational',
-      color: '#22c55e',
-      description: 'All systems running normally',
-      backgroundImage: dashboardBg
-    },
-    NoData: {
-      component: NoData,
-      label: '📭 No Data',
-      color: '#6b7280',
-      description: 'No data uploaded yet',
-      backgroundColor: '#ffffff'
-    },
-    UploadedInsufficient: {
-      component: UploadedInsufficient,
-      label: '⚠️ Insufficient Data',
-      color: '#eab308',
-      description: 'Data uploaded but insufficient',
-      backgroundColor: '#fffbeb'
-    },
-    ReadyToTrain: {
-      component: ReadyToTrain,
-      label: '🟢 Ready to Train',
-      color: '#0F9918',
-      description: 'Enough data uploaded — training not started yet',
-      backgroundColor: '#f0fdf4'
-    },
-    TrainingInProgress: {
-      component: TrainingInProgress,
-      label: '🔄 Training in Progress',
-      color: '#06b6d4',
-      description: 'Model is currently training',
-      backgroundColor: '#ecfdf5'
-    },
-    ForecastsReady: {
-      component: ForecastsReady,
-      label: '📊 Forecasts Ready',
-      color: '#3b82f6',
-      description: 'Forecasts are ready to view',
-      backgroundColor: '#eff6ff'
-    },
-    DataNeedsAttention: {
-      component: DataNeedsAttention,
-      label: '🔴 Needs Attention',
-      color: '#ef4444',
-      description: 'Data issues require attention',
-      backgroundColor: '#fef2f2'
-    }
-  };
+  // Downloads the screen's chunk as soon as its key is known (and again only
+  // when the key changes — `loadScreen` caches, and setResolved bails out
+  // below when nothing moved).
+  useEffect(() => {
+    if (!stateKey) return undefined;
+    let cancelled = false;
+
+    loadScreen(stateKey).then((Component) => {
+      if (!Component || cancelled) return;
+      setResolved((current) => (
+        current && current.key === stateKey
+          ? current
+          : { key: stateKey, Component, payload }
+      ));
+    });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [stateKey, payload]);
+
+  // Memoised on the resolved state: a new object identity every render would
+  // make React rewrite the wrapper's inline style on every poll.
+  const backgroundStyle = useMemo(
+    () => (resolved ? getBackgroundStyle(resolved.key) : null),
+    [resolved]
+  );
 
   // Login problem (401/403): polling has stopped (see usePolling). Show the
   // log-in screen even if data loaded before; never log out automatically.
   // Never loaded in this visit + any failure: the full problem screen.
-  // Still loading the first time: a neutral loading card, not "No Data".
-  if (error?.kind === 'auth' || (!selectedState && error)) {
+  if (error?.kind === 'auth' || (!stateKey && error)) {
     return (
       <div className="dashboard-wrapper" style={{ backgroundImage: `url(${dashboardBg})`, backgroundSize: 'cover', backgroundPosition: 'center', minHeight: '100vh' }}>
         <Navbar />
@@ -143,51 +231,26 @@ const Dashboard = () => {
     );
   }
 
-  if (!selectedState) {
-    return (
-      <div className="route-guard-loading">
-        <div className="route-guard-card">
-          <div className="route-guard-spinner">
-            <div className="route-guard-spinner-ring"></div>
-          </div>
-          <h3 className="route-guard-title">Loading</h3>
-          <p className="route-guard-subtitle route-guard-dots">
-            Checking your dashboard
-          </p>
-        </div>
-      </div>
-    );
+  // Still resolving: state answer or the screen's own chunk. Either way there
+  // is nothing to paint yet, so the splash stays up rather than flashing a
+  // half-built screen.
+  if (!resolved) {
+    return <DashboardLoading />;
   }
 
-  const CurrentDashboard = stateConfig[selectedState].component;
-  const currentState = stateConfig[selectedState];
   // Loaded before, but the latest check failed: keep showing the last good
   // state, with a banner saying so.
   const showStaleBanner = Boolean(error) && lastErrorAt && (!lastSuccessAt || lastErrorAt > lastSuccessAt);
 
-  const getBackgroundStyle = () => {
-    if (currentState.backgroundImage) {
-      return {
-        backgroundImage: `url(${currentState.backgroundImage})`,
-        backgroundSize: 'cover',
-        backgroundPosition: 'center',
-        backgroundRepeat: 'no-repeat',
-        backgroundAttachment: 'fixed',
-        minHeight: '100vh'
-      };
-    }
-    return {
-      backgroundColor: currentState.backgroundColor,
-      minHeight: '100vh'
-    };
-  };
+  const { Component, payload: initialState } = resolved;
 
   return (
-    <div 
-      className="dashboard-wrapper"
-      style={getBackgroundStyle()}
-    >
-      <CurrentDashboard onRefreshState={requestRefresh} />
+    <div className="dashboard-wrapper" style={backgroundStyle}>
+      {/* No Suspense here on purpose: the chunk was awaited during the splash,
+          so this render is synchronous and the screen appears fully painted.
+          The wrapper stays mounted across a state change, so the page
+          background never flashes on the way between states. */}
+      <Component onRefreshState={requestRefresh} initialState={initialState} />
       {showStaleBanner && (
         <ConnectionProblem
           mode="banner"

@@ -33,9 +33,12 @@
   padding: 0 28px 24px !important;
 }
 
+/* Buttons stack on small screens. Not column-reverse: with reverseButtons
+   the DOM order is already cancel, confirm, so `column` keeps the same
+   reading order as desktop — cancel on top, confirm below it. */
 @media (max-width: 480px) {
   .swal2-actions {
-    flex-direction: column-reverse !important;
+    flex-direction: column !important;
     align-items: stretch !important;
   }
 }
