@@ -35,11 +35,17 @@ const ReadyToTrain = ({ initialState }) => {
   // means the owner isn't shown a bare "12/12 months" that doesn't match
   // what they actually uploaded.
 <<<<<<< HEAD
+<<<<<<< HEAD
+=======
+>>>>>>> ec2d3d462b46e067e1942d6168838c81e4cd6480
   // null = not loaded yet (shown as "—"), so a slow or failed load never
   // reads as "0 days / 0 products".
   const [uploadedMonths, setUploadedMonths] = useState(null);
   const [uploadedDays, setUploadedDays] = useState(null);
+<<<<<<< HEAD
 =======
+=======
+>>>>>>> ec2d3d462b46e067e1942d6168838c81e4cd6480
   // Seeded from the Dashboard's dashboard-state response, whose `stats` block
   // is the same getUploadStats() payload /upload/stats/summary returns — so the
   // month/day counters are correct on the first frame rather than counting up
@@ -49,7 +55,10 @@ const ReadyToTrain = ({ initialState }) => {
     Math.min(seedStats?.actual_months_uploaded || 0, 12)
   );
   const [uploadedDays, setUploadedDays] = useState(seedStats?.actual_days_uploaded || 0);
+<<<<<<< HEAD
 >>>>>>> 4c5708cc8ec29f389bce56fbd7a4bb2bca5093f6
+=======
+>>>>>>> ec2d3d462b46e067e1942d6168838c81e4cd6480
   const [totalMonthsNeeded] = useState(12);
   const [products, setProducts] = useState([]);
   const [totalProducts, setTotalProducts] = useState(null);
@@ -235,6 +244,44 @@ const ReadyToTrain = ({ initialState }) => {
           </div>
         </div>
 
+          <div className="training-step-cards">
+            <div className="training-step-card training-step-card-complete">
+              <div className="training-step-number training-step-number-complete">1</div>
+              <div className="training-step-content">
+                <h4 className="training-step-title training-step-title-complete">
+                  Upload Historical Sales Data
+                </h4>
+                <div className="training-data-progress-wrapper1">
+                  <div className="training-data-progress-wrapper2-complete">
+                    <div style={{ display: "flex", alignItems: "flex-start", gap: "10px" }}>
+                      <FaCheckCircle style={{ color: "#0F9918", fontSize: "18px", marginTop: "2px", flexShrink: 0 }} />
+                      <p className="training-step-description1">
+                        Requirement met — your sales history covers at least {totalMonthsNeeded} months,
+                        and every day in it is accounted for (open with sales, or marked
+                        closed). Training is available.
+                      </p>
+                    </div>
+
+                    <div className="training-data-progress-wrapper">
+                      <div className="training-data-progress-label">
+                        <span>
+                          {uploadedDays == null
+                            ? "Sales data actually uploaded (—)"
+                            : `Sales data actually uploaded (${uploadedDays} day${uploadedDays === 1 ? '' : 's'})`}
+                        </span>
+                        <span className="training-data-progress-text-complete">
+                          {uploadedMonths == null ? "—" : `${uploadedMonths} / ${totalMonthsNeeded} months`}
+                        </span>
+                      </div>
+                      <div className="training-data-progress-bar">
+                        <div
+                          className="training-data-progress-fill-complete"
+                          style={{ width: `${Math.min(((uploadedMonths ?? 0) / totalMonthsNeeded) * 100, 100)}%` }}
+                        />
+                      </div>
+                    </div>
+                  </div>
+                </div>
         <div className="sk-grid-2">
           <SetupStep
             index={1}
@@ -286,6 +333,7 @@ const ReadyToTrain = ({ initialState }) => {
             </div>
           </SetupStep>
 
+<<<<<<< HEAD
           <SetupStep
             index={2}
             title="Add Ingredient Recipes to Your Products"
@@ -438,6 +486,8 @@ const ReadyToTrain = ({ initialState }) => {
                   You can start adding ingredient recipes now, or while training runs.
                 </p>
 
+=======
+>>>>>>> ec2d3d462b46e067e1942d6168838c81e4cd6480
                 <div className="training-products-detected">
                   <div className="training-products-header">
                     <h5 className="training-products-title">Products Detected from Your Sales Data</h5>
@@ -491,19 +541,67 @@ const ReadyToTrain = ({ initialState }) => {
                     )}
                   </div>
                 </div>
+          <SetupStep
+            index={2}
+            title="Add Ingredient Recipes to Your Products"
+            tag={
+              products.length === 0 ? (
+                <span className="sk-tag">Checking…</span>
+              ) : productsWithoutRecipes > 0 ? (
+                <span className="sk-tag sk-tag--warn">
+                  {productsWithoutRecipes} need recipes
+                </span>
+              ) : (
+                <span className="sk-tag sk-tag--ok">Complete</span>
+              )
+            }
+            foot={
+              <button
+                type="button"
+                className="sk-btn sk-btn--secondary"
+                onClick={() => navigate("/inventory-management")}
+              >
+                Go to Inventory Management
+                <FaArrowRight size={15} />
+              </button>
+            }
+          >
+            <p className="sk-card-text">
+              Your menu products have been automatically detected from your sales data.
+              You can start adding ingredient recipes now, or while training runs.
+            </p>
 
-                <button
-                  className="training-step-btn training-step-btn-secondary"
-                  onClick={() => navigate("/inventory-management")}
-                >
-                  Go to Inventory Management
-                </button>
+            <div className="sk-subcard" style={{ marginTop: 18 }}>
+              <div className="sk-subcard-title">Products detected from your sales data</div>
+              <p className="sk-subcard-text">
+                {products.length === 0 ? (
+                  "Looking for the products detected in your sales data…"
+                ) : (
+                  <>
+                    <strong>{totalProducts}</strong> products were found in your uploaded
+                    sales data. <strong>{productsWithoutRecipes}</strong> need ingredient
+                    recipes added.
+                  </>
+                )}
+              </p>
+
+              <div style={{ marginTop: 14 }}>
+                <ProductsDetected products={products} onAddRecipe={handleAddRecipe} />
               </div>
+
+              <p className="sk-subcard-foot">
+                Products without recipes will still be forecasted, but will not appear
+                in the ingredient demand shopping list.
+              </p>
             </div>
+<<<<<<< HEAD
           </div>
 =======
           </SetupStep>
 >>>>>>> 4c5708cc8ec29f389bce56fbd7a4bb2bca5093f6
+=======
+          </SetupStep>
+>>>>>>> ec2d3d462b46e067e1942d6168838c81e4cd6480
         </div>
       </section>
     </StateShell>

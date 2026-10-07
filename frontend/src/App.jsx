@@ -13,10 +13,15 @@ import ForgotPassword from './features/auth/pages/forgotpass/ForgotPassword';
 import ResetPassword from './features/auth/pages/forgotpass/ResetPassword';
 import ChefDuoLanding from './features/landing/ChefDuoLanding';
 <<<<<<< HEAD
+<<<<<<< HEAD
 import Dashboard from './features/dashboard/pages/Dashboard';
 import HealthPage from './features/admin/pages/HealthPage';
 =======
 >>>>>>> 4c5708cc8ec29f389bce56fbd7a4bb2bca5093f6
+=======
+import Dashboard from './features/dashboard/pages/Dashboard';
+import HealthPage from './features/admin/pages/HealthPage';
+>>>>>>> ec2d3d462b46e067e1942d6168838c81e4cd6480
 import DataManagement from './features/datamanagement/pages/DataManagement';
 import Forecasting from './features/analytics/components/Forecasting';
 import ProductPerformance from './features/analytics/components/ProductPerformance';

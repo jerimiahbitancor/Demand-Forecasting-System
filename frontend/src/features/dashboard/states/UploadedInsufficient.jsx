@@ -460,6 +460,9 @@ const UploadedInsufficient = ({ onRefreshState, initialState }) => {
             </div>
 
 <<<<<<< HEAD
+<<<<<<< HEAD
+=======
+>>>>>>> ec2d3d462b46e067e1942d6168838c81e4cd6480
           {/* Step Cards */}
           <div className="insufficient-step-cards">
             {/* Step 1 */}
@@ -555,13 +558,19 @@ const UploadedInsufficient = ({ onRefreshState, initialState }) => {
                       />
                     </div>
                   </div>
+<<<<<<< HEAD
 =======
+=======
+>>>>>>> ec2d3d462b46e067e1942d6168838c81e4cd6480
             {history && history.spanDays > 0 ? (
               <div className="sk-counts" style={{ marginTop: 14 }}>
                 <div className="sk-count">
                   <div className="sk-count-label">Days in history</div>
                   <div className="sk-count-value">{history.spanDays}</div>
+<<<<<<< HEAD
 >>>>>>> 4c5708cc8ec29f389bce56fbd7a4bb2bca5093f6
+=======
+>>>>>>> ec2d3d462b46e067e1942d6168838c81e4cd6480
                 </div>
                 <div className="sk-count">
                   <div className="sk-count-label">Open, with sales</div>
