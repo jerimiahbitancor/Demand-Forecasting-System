@@ -6,16 +6,18 @@
 //   'unconfirmed' — it is long enough, but some dates inside it have no
 //                   sales and aren't marked closed
 //   'both' / 'no_data'
-import { useState, useEffect, useRef } from "react";
-import axios from "axios";
-import Navbar from "../../components/Navbar/Navbar";
-import "../states/statescss/UploadedInsufficient.css";
+//
+// Layout: the shared state kit (components/DashboardStateKit.jsx).
+// Data: services/apiClient + hooks/usePolling — one check at a time, paused
+// while the tab is hidden, stopped on a login problem.
 import { useState, useRef } from "react";
 import { useNavigate } from "react-router-dom";
 import { FaArrowRight, FaInfoCircle } from "react-icons/fa";
 import uploadedInsufficientImage from "../../../assets/images/NoData.png";
 import HistoryGapReview from "../components/HistoryGapReview.jsx";
 import { useHelp } from "../../../hooks/useHelp";
+import apiClient from "../../../services/apiClient";
+import usePolling from "../../../hooks/usePolling";
 import {
   StateShell,
   StateBanner,
@@ -24,10 +26,7 @@ import {
   Meter,
   ProductsDetected,
 } from "../components/DashboardStateKit.jsx";
-import apiClient from "../../../services/apiClient";
-import usePolling from "../../../hooks/usePolling";
 
-// One check at a time, paused while the tab is hidden (hooks/usePolling.js).
 // Was 5 s (state) and 10 s (products).
 const STATE_POLL_MS = 60000;
 const PRODUCTS_POLL_MS = 60000;
@@ -35,43 +34,42 @@ const PRODUCTS_POLL_MS = 60000;
 const UploadedInsufficient = ({ onRefreshState, initialState }) => {
   const navigate = useNavigate();
   const { openHelp } = useHelp();
-  // Seeded from the dashboard-state response the Dashboard already has in hand
-  // (it contains this exact stats/progress/history shape — same service methods
-  // as /upload/stats/summary and /upload/progress). Without this the screen
-  // mounted with zeros and a loading flag, then visibly filled in a moment
-  // later, which is the "loading finished, now it's still loading" effect.
-  const seed = initialState || {};
-  const seedMonths = seed.stats?.actual_months_uploaded || 0;
-  const seedProgress = seed.history?.requiredSpanDays
+
+  // Seeded from the dashboard-state response the Dashboard already has in
+  // hand (same stats/history shape this screen asks for), so the numbers are
+  // right on the first frame. Without a seed nothing is known yet, and the
+  // screen says so ("—", "Checking…") instead of showing 0 / 12 months.
+  const seed = initialState || null;
+  const seedMonths = seed?.stats?.actual_months_uploaded || 0;
+  const seedProgress = seed?.history?.requiredSpanDays
     ? (seed.history.spanDays / seed.history.requiredSpanDays) * 100
     : (seedMonths / 12) * 100;
 
   const [progressPercentage, setProgressPercentage] = useState(20);
-  const [dataProgress, setDataProgress] = useState(
-    initialState ? Math.min(seedProgress, 100) : 0
-  );
+  const [dataProgress, setDataProgress] = useState(seed ? Math.min(seedProgress, 100) : 0);
   const [uploadedMonths, setUploadedMonths] = useState(seedMonths);
   const [totalMonthsNeeded] = useState(12);
-  const [isLoading, setIsLoading] = useState(!initialState);
+  const [isLoading, setIsLoading] = useState(!seed);
   const [hasData, setHasData] = useState(
-    initialState ? (seed.stats?.sales_records > 0 || seed.stats?.total_uploads > 0) : false
+    seed ? (seed.stats?.sales_records > 0 || seed.stats?.total_uploads > 0) : false
   );
-  const [insufficientReason, setInsufficientReason] = useState(
-    seed.insufficientReason || null
-  );
+  const [insufficientReason, setInsufficientReason] = useState(seed?.insufficientReason || null);
   // { firstSaleDate, lastSaleDate, spanDays, spanMonths, requiredSpanDays,
   //   openDays, closedDays, unconfirmedDays } — closed days count toward
   // the span; today's date does not.
-  const [history, setHistory] = useState(seed.history || null);
+  const [history, setHistory] = useState(seed?.history || null);
   const [products, setProducts] = useState([]);
-  // True after the first successful status load. Until then the months
-  // label shows "—", not "0 / 12 months".
-  const [statusLoaded, setStatusLoaded] = useState(false);
+  // null until the product list has loaded once.
+  const [productsLoaded, setProductsLoaded] = useState(false);
+  // True after the first successful status load (or a seed). Until then the
+  // months label shows "—", not "0 / 12 months".
+  const [statusLoaded, setStatusLoaded] = useState(Boolean(seed));
   // The first successful status load fills this screen's numbers; later
-  // polls only watch for the state changing (same as before).
-  const statusLoadedRef = useRef(false);
+  // polls only watch for the state changing.
+  const statusLoadedRef = useRef(Boolean(seed));
+  // The Dashboard asked /upload/dashboard-state moments ago; skip the first poll.
+  const skipFirstStatePollRef = useRef(Boolean(seed));
 
-  // Navigation handlers
   const handleUploadData = () => {
     navigate("/data-management");
   };
@@ -104,60 +102,6 @@ const UploadedInsufficient = ({ onRefreshState, initialState }) => {
     });
   };
 
-  const getAuthToken = () => sessionStorage.getItem("access_token") || localStorage.getItem("token");
-
-  const apiClient = axios.create({
-    baseURL: API_URL,
-    headers: { "Content-Type": "application/json" },
-  });
-
-  apiClient.interceptors.request.use(
-    (config) => {
-      const token = getAuthToken();
-      if (token) config.headers.Authorization = `Bearer ${token}`;
-      return config;
-    },
-    (error) => Promise.reject(error),
-  );
-
-  // Fetch data status and upload progress
-  const fetchDataStatus = async () => {
-    try {
-      setIsLoading(true);
-
-      const statusResponse = await apiClient.get("/upload/dashboard-state");
-  const formatDate = (date) => {
-    const months = [
-      "JANUARY", "FEBRUARY", "MARCH", "APRIL", "MAY", "JUNE",
-      "JULY", "AUGUST", "SEPTEMBER", "OCTOBER", "NOVEMBER", "DECEMBER",
-    ];
-    const month = months[date.getMonth()];
-    const day = String(date.getDate()).padStart(2, "0");
-    const year = date.getFullYear();
-    return `${month}-${day}-${year}`;
-  };
-
-  const formatDay = (date) => {
-    const days = [
-      "SUNDAY", "MONDAY", "TUESDAY", "WEDNESDAY", "THURSDAY", "FRIDAY", "SATURDAY",
-    ];
-    return days[date.getDay()];
-  };
-
-  const formatTime = (date) => {
-    let hours = date.getHours();
-    const minutes = String(date.getMinutes()).padStart(2, "0");
-    const ampm = hours >= 12 ? "PM" : "AM";
-    hours = hours % 12;
-    hours = hours ? hours : 12;
-    return `${hours}:${minutes} ${ampm}`;
-  };
-
-  const now = new Date();
-  const formattedDate = formatDate(now);
-  const formattedDay = formatDay(now);
-  const formattedTime = formatTime(now);
-
   // Fetch data status and upload progress.
   // A failed request throws: the screen keeps its last numbers (usePolling
   // records the error). It no longer invents "months uploaded" from the
@@ -186,10 +130,9 @@ const UploadedInsufficient = ({ onRefreshState, initialState }) => {
         // uploadService.js's getUploadStats) — the honest "how much have
         // I uploaded" number. This is deliberately NOT months_uploaded/
         // days_of_history, which measure elapsed calendar time since the
-        // earliest sale date purely to match ml-service's training gate;
-        // that number can read "12/12 months" from a handful of rows
-        // dated over a year ago, which is accurate for "would training
-        // be allowed" but not for "how much data did I actually upload."
+        // earliest sale date purely to match ml-service's training gate.
+        // No "at least 1 month" or "1 month per upload" fallback: a
+        // single day of data is genuinely 0/12 months, not 1.
         const months = data.actual_months_uploaded || 0;
 
         setUploadedMonths(months);
@@ -205,26 +148,8 @@ const UploadedInsufficient = ({ onRefreshState, initialState }) => {
         statusLoadedRef.current = true;
         setStatusLoaded(true);
 
-        if (isMountedRef.current && state !== "uploaded-insufficient") {
+        if (state !== "uploaded-insufficient") {
           navigate("/dashboard", { replace: true });
-        }
-      }
-    } catch (error) {
-      console.error("Error fetching data status:", error);
-      try {
-        const uploadsResponse = await apiClient.get("/upload?limit=1");
-        const totalUploads =
-          uploadsResponse.data.count || uploadsResponse.data.data?.length || 0;
-        const months = Math.min(totalUploads, totalMonthsNeeded);
-        setProgressPercentage(totalUploads > 0 ? 20 : 0);
-        setUploadedMonths(months);
-        setDataProgress(Math.min((months / totalMonthsNeeded) * 100, 100));
-        setHasData(totalUploads > 0);
-      } catch (fallbackError) {
-        console.error("Error fetching upload fallback:", fallbackError);
-      }
-        if (state !== 'uploaded-insufficient') {
-          navigate('/dashboard', { replace: true });
         }
       }
     } finally {
@@ -232,31 +157,11 @@ const UploadedInsufficient = ({ onRefreshState, initialState }) => {
     }
   };
 
-  const fetchUploadProgress = async () => {
-    try {
-      const response = await apiClient.get("/upload/dashboard-state");
-      if (response.data.success) {
-        const { state } = response.data.data;
-        setProgressPercentage(20);
-
-        if (state === "fully-operational") {
-          await fetchDataStatus();
-        }
-      }
-    } catch (error) {
-      console.error("Error fetching upload progress:", error);
-      try {
-        const uploadsResponse = await apiClient.get("/upload?limit=1");
-        const totalUploads =
-          uploadsResponse.data.count || uploadsResponse.data.data?.length || 0;
-        setProgressPercentage(totalUploads > 0 ? 20 : 0);
-      } catch (fallbackError) {
-        console.error("Error fetching upload progress fallback:", fallbackError);
-        setProgressPercentage(20);
   // Used after the owner marks dates closed; never throws.
-  const fetchDataStatus = () => loadDataStatus().catch((error) => {
-    console.error("Error fetching data status:", error);
-  });
+  const fetchDataStatus = () =>
+    loadDataStatus().catch((error) => {
+      console.error("Error fetching data status:", error);
+    });
 
   const fetchUploadProgress = async (signal) => {
     const response = await apiClient.get("/upload/dashboard-state", { signal });
@@ -264,7 +169,7 @@ const UploadedInsufficient = ({ onRefreshState, initialState }) => {
       const { state } = response.data.data;
       setProgressPercentage(20);
 
-      if (state === 'fully-operational') {
+      if (state === "fully-operational") {
         await loadDataStatus(signal);
       }
     }
@@ -279,44 +184,19 @@ const UploadedInsufficient = ({ onRefreshState, initialState }) => {
     const activeProducts = activeResponse.data.success ? activeResponse.data.data || [] : [];
     const inactiveProducts = inactiveResponse.data.success ? inactiveResponse.data.data || [] : [];
     setProducts([...activeProducts, ...inactiveProducts]);
+    setProductsLoaded(true);
   };
 
-  // Initial fetch and polling
-  useEffect(() => {
-    isMountedRef.current = true;
-
-    // Parallel, not sequential: these used to be awaited one after another, so
-    // three round trips stacked up before anything was on screen.
-    async function load() {
-      // Only re-check the state itself when there was nothing to seed from (a
-      // direct visit to /dashboard/uploaded-insufficient). The seeded values
-      // are from the same endpoint moments earlier.
-      if (!initialState) fetchDataStatus();
-      fetchProducts();
+  // 60 s each, never overlapping. This screen still checks
+  // /upload/dashboard-state itself, on top of Dashboard.jsx (it is also
+  // mounted on its own route); merging the two is left for later.
+  usePolling((signal) => {
+    if (skipFirstStatePollRef.current) {
+      skipFirstStatePollRef.current = false;
+      return undefined;
     }
-
-    load();
-
-    const interval = setInterval(() => {
-      fetchUploadProgress();
-    }, 5000);
-    const productsInterval = setInterval(fetchProducts, 10000);
-
-    return () => {
-      isMountedRef.current = false;
-      clearInterval(interval);
-      clearInterval(productsInterval);
-    };
-  }, []);
-  // Polling. Before: a 5 s state check plus a 10 s products load (two
-  // requests each), all on setInterval. Now 60 s each, never overlapping.
-  // This screen still checks /upload/dashboard-state itself, on top of
-  // Dashboard.jsx (it is also mounted on its own route); merging the two is
-  // left for later.
-  usePolling(
-    (signal) => (statusLoadedRef.current ? fetchUploadProgress(signal) : loadDataStatus(signal)),
-    STATE_POLL_MS
-  );
+    return statusLoadedRef.current ? fetchUploadProgress(signal) : loadDataStatus(signal);
+  }, STATE_POLL_MS);
   usePolling(fetchProducts, PRODUCTS_POLL_MS);
 
   const getMonths = () => Math.min(uploadedMonths, totalMonthsNeeded);
@@ -329,7 +209,9 @@ const UploadedInsufficient = ({ onRefreshState, initialState }) => {
   // The one-paragraph explanation of WHY training is still blocked, derived
   // from the reason backend/utils/historyGate.js reported.
   const blockerText = (() => {
-    if (isLoading) return "Loading data status…";
+    // Not loaded yet, or the first check failed: say so, never claim there
+    // is no data.
+    if (!statusLoaded) return isLoading ? "Loading data status…" : "Checking your sales history…";
     if (!hasData || !history || insufficientReason === "no_data") {
       return "Upload your sales data to get started with forecasting.";
     }
@@ -452,125 +334,20 @@ const UploadedInsufficient = ({ onRefreshState, initialState }) => {
                 value={
                   history
                     ? `${Math.min(history.spanMonths, totalMonthsNeeded)} / ${totalMonthsNeeded} months`
-                    : `${getMonths()} / ${totalMonthsNeeded} months`
+                    : statusLoaded
+                      ? `${getMonths()} / ${totalMonthsNeeded} months`
+                      : `— / ${totalMonthsNeeded} months`
                 }
                 percent={dataProgress}
                 tone={isDataSufficient || dataProgress >= 100 ? "ok" : ""}
               />
             </div>
 
-<<<<<<< HEAD
-<<<<<<< HEAD
-=======
->>>>>>> ec2d3d462b46e067e1942d6168838c81e4cd6480
-          {/* Step Cards */}
-          <div className="insufficient-step-cards">
-            {/* Step 1 */}
-            <div className="insufficient-step-card">
-              <div className="insufficient-step-number">1</div>
-              <div className="insufficient-step-content">
-                <h4 className="insufficient-step-title">
-                  Upload Historical Sales Data
-                </h4>
-                <p className="insufficient-step-description">
-                  Upload at least 1 year of historical sales data exported from
-                  your POS system. This is what the forecasting model uses to
-                  learn your business's demand patterns and generate reliable
-                  forecasts.
-                </p>
-
-                {/* Data Progress */}
-                <div className="insufficient-data-progress-wrapper1">
-                  <div className="insufficient-data-progress-wrapper2">
-                    <div
-                      style={{
-                        display: "flex",
-                        alignItems: "flex-start",
-                        gap: "10px",
-                      }}
-                    >
-                      <FaInfoCircle
-                        style={{
-                          color: "#6B000B",
-                          fontSize: "18px",
-                          marginTop: "2px",
-                          flexShrink: 0,
-                        }}
-                      />
-                      <p className="insufficient-step-description1">
-                        {isLoading ? (
-                          "Loading data status..."
-                        ) : !hasData || !history || insufficientReason === 'no_data' ? (
-                          "Upload your sales data to get started with forecasting."
-                        ) : insufficientReason === 'unconfirmed' ? (
-                          <>
-                            Your sales history is long enough ({history.spanMonths} months).
-                            But {history.unconfirmedDays} date{history.unconfirmedDays === 1 ? "" : "s"} in
-                            it {history.unconfirmedDays === 1 ? "has" : "have"} no sales and{" "}
-                            {history.unconfirmedDays === 1 ? "is" : "are"} not marked as closed.
-                            Please check those dates below before training can start.
-                          </>
-                        ) : insufficientReason === 'both' ? (
-                          <>
-                            You need at least {totalMonthsNeeded} months of sales history.
-                            You have {history.spanMonths} months so far. Also,{" "}
-                            {history.unconfirmedDays} date{history.unconfirmedDays === 1 ? "" : "s"} with
-                            no sales still need checking (see below).
-                          </>
-                        ) : (
-                          <>
-                            You need at least {totalMonthsNeeded} months of sales history
-                            before forecasting can start. You have {history.spanMonths} months
-                            so far ({history.spanDays} of {history.requiredSpanDays} days). Days
-                            your store was closed count too.
-                          </>
-                        )}
-                      </p>
-                    </div>
-                  </div>
-
-                  <div className="insufficient-data-progress-wrapper">
-                    <div className="insufficient-data-progress-label">
-                      <span>
-                        Sales history
-                        {history?.firstSaleDate
-                          ? ` (${formatShortDate(history.firstSaleDate)} – ${formatShortDate(history.lastSaleDate)})`
-                          : ""}
-                      </span>
-                      <span className="insufficient-data-progress-text">
-                        {history
-                          ? `${Math.min(history.spanMonths, totalMonthsNeeded)} / ${totalMonthsNeeded} months`
-                          : statusLoaded
-                            ? `${getMonths()} / ${totalMonthsNeeded} months`
-                            : `— / ${totalMonthsNeeded} months`}
-                      </span>
-                    </div>
-                    <div className="insufficient-data-progress-bar">
-                      <div
-                        className="insufficient-data-progress-fill"
-                        style={{
-                          width: `${Math.min(dataProgress, 100)}%`,
-                          backgroundColor:
-                            isDataSufficient || dataProgress >= 100
-                              ? "#22c55e"
-                              : "rgba(122, 1, 1, 0.5)",
-                        }}
-                      />
-                    </div>
-                  </div>
-<<<<<<< HEAD
-=======
-=======
->>>>>>> ec2d3d462b46e067e1942d6168838c81e4cd6480
             {history && history.spanDays > 0 ? (
               <div className="sk-counts" style={{ marginTop: 14 }}>
                 <div className="sk-count">
                   <div className="sk-count-label">Days in history</div>
                   <div className="sk-count-value">{history.spanDays}</div>
-<<<<<<< HEAD
->>>>>>> 4c5708cc8ec29f389bce56fbd7a4bb2bca5093f6
-=======
->>>>>>> ec2d3d462b46e067e1942d6168838c81e4cd6480
                 </div>
                 <div className="sk-count">
                   <div className="sk-count-label">Open, with sales</div>
@@ -600,7 +377,7 @@ const UploadedInsufficient = ({ onRefreshState, initialState }) => {
             index={2}
             title="Add Ingredient Recipes to Your Products"
             tag={
-              products.length === 0 ? (
+              !productsLoaded ? (
                 <span className="sk-tag">Checking…</span>
               ) : productsNeedingRecipes.length > 0 ? (
                 <span className="sk-tag sk-tag--warn">
@@ -630,8 +407,8 @@ const UploadedInsufficient = ({ onRefreshState, initialState }) => {
             <div className="sk-subcard" style={{ marginTop: 18 }}>
               <div className="sk-subcard-title">Products detected from your sales data</div>
               <p className="sk-subcard-text">
-                {products.length === 0 ? (
-                  "Looking for the products detected in your sales data…"
+                {!productsLoaded ? (
+                  "Checking your products…"
                 ) : (
                   <>
                     <strong>{products.length}</strong> products were found.{" "}

@@ -110,12 +110,16 @@ export const ProgressMeter = ({
   indeterminate = false,
 }) => {
   const pct = Math.max(0, Math.min(value ?? 0, 100));
+  // A value that isn't known yet (null/undefined) reads "—", never "0%".
+  const unknown = value == null && !indeterminate;
 
   return (
     <div className={`sk-progress${tone ? ` sk-progress--${tone}` : ""}`}>
       <div className="sk-progress-top">
         <span className="sk-progress-label">{label}</span>
-        <span className="sk-progress-value">{indeterminate ? "…" : `${Math.round(pct)}%`}</span>
+        <span className="sk-progress-value">
+          {indeterminate ? "…" : unknown ? "—" : `${Math.round(pct)}%`}
+        </span>
       </div>
       <div className="sk-progress-track">
         <div

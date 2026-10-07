@@ -1,35 +1,4 @@
 // states/ForecastsReady.jsx
-<<<<<<< HEAD
-<<<<<<< HEAD
-=======
->>>>>>> ec2d3d462b46e067e1942d6168838c81e4cd6480
-import { FaCheckCircle } from 'react-icons/fa';
-import Navbar from "../../components/Navbar/Navbar";
-import "../states/statescss/ForecastsReady.css";
-
-// The four cards below used to show invented numbers (P52,500, +8.5%,
-// 12 items, a "94% confidence score" and 5 recommendations). None came from
-// any data. They now say "Not available yet" until they are wired to real
-// endpoints (e.g. /api/forecast/summary).
-const NOT_YET = 'Not available yet';
-
-const ForecastsReady = () => {
-<<<<<<< HEAD
-=======
-=======
-  return (
-    <div className="dashboard-container">
-      <Navbar />
-      <main className="dashboard-main">
-        <div className="dashboard-title-section">
-          <h1 className="dashboard-title">Dashboard</h1>
-          <div className="date-info">
-            <span>{new Date().toLocaleTimeString()}</span>
-            <span className="date-separator">{new Date().toLocaleDateString('en-US', { weekday: 'long' })}</span>
-            <span className="date-separator">{new Date().toLocaleDateString()}</span>
-          </div>
-        </div>
->>>>>>> ec2d3d462b46e067e1942d6168838c81e4cd6480
 //
 // State 5 of 7 — the model is trained and forecast runs exist, but some
 // active products still have no ingredient recipe, so the ingredient
@@ -38,10 +7,12 @@ const ForecastsReady = () => {
 //
 // Everything on this screen is read from the API: the counts come from
 // /upload/dashboard-state's `mapping` block and the product list from
-// /mapping/products. Nothing here is a placeholder number.
+// /mapping/products. Nothing here is a placeholder number: when a count isn't
+// known (the product list failed and the state call had no mapping block)
+// the screen shows "—", never 0 or "Everything is mapped".
 import { useState, useEffect } from "react";
-import axios from "axios";
 import { useNavigate } from "react-router-dom";
+import apiClient from "../../../services/apiClient";
 import { FaArrowRight, FaCheckCircle, FaClipboardList } from "react-icons/fa";
 import {
   StateShell,
@@ -51,7 +22,7 @@ import {
   ProductsDetected,
 } from "../components/DashboardStateKit.jsx";
 
-const API_URL = import.meta.env.VITE_API_URL || "http://localhost:5000/api";
+const UNKNOWN = "—";
 
 const ForecastsReady = ({ initialState }) => {
   const navigate = useNavigate();
@@ -61,27 +32,12 @@ const ForecastsReady = ({ initialState }) => {
   // below; isLoading only tracks that, so the screen never blanks.
   const mapping = initialState?.mapping || null;
   const [products, setProducts] = useState([]);
+  const [activeProducts, setActiveProducts] = useState([]);
   const [isLoading, setIsLoading] = useState(true);
   const [loadError, setLoadError] = useState(false);
 
-  const getAuthToken = () => sessionStorage.getItem("access_token") || localStorage.getItem("token");
-
-  const apiClient = axios.create({
-    baseURL: API_URL,
-    headers: { "Content-Type": "application/json" },
-  });
-
-  apiClient.interceptors.request.use(
-    (config) => {
-      const token = getAuthToken();
-      if (token) config.headers.Authorization = `Bearer ${token}`;
-      return config;
-    },
-    (error) => Promise.reject(error),
-  );
-
   useEffect(() => {
-    let cancelled = false;
+    const controller = new AbortController();
 
     async function load() {
       setIsLoading(true);
@@ -89,46 +45,49 @@ const ForecastsReady = ({ initialState }) => {
         // Only the product list is missing; the mapping counts came with the
         // Dashboard's own request.
         const [activeRes, inactiveRes] = await Promise.all([
-          apiClient.get("/mapping/products", { params: { status: "active", forceRefresh: "true" } }),
-          apiClient.get("/mapping/products", { params: { status: "inactive", forceRefresh: "true" } }),
+          apiClient.get("/mapping/products", {
+            params: { status: "active", forceRefresh: "true" },
+            signal: controller.signal,
+          }),
+          apiClient.get("/mapping/products", {
+            params: { status: "inactive", forceRefresh: "true" },
+            signal: controller.signal,
+          }),
         ]);
-        if (cancelled) return;
 
         const active = activeRes.data.success ? activeRes.data.data || [] : [];
         const inactive = inactiveRes.data.success ? inactiveRes.data.data || [] : [];
+        setActiveProducts(active);
         setProducts([...active, ...inactive]);
         setLoadError(false);
       } catch (error) {
+        if (controller.signal.aborted) return;
         console.error("Error loading forecast readiness:", error);
-        if (!cancelled) setLoadError(true);
+        setLoadError(true);
       } finally {
-        if (!cancelled) setIsLoading(false);
+        if (!controller.signal.aborted) setIsLoading(false);
       }
     }
 
     load();
-    return () => {
-      cancelled = true;
-    };
+    return () => controller.abort();
   }, []);
 
   const handleAddRecipe = (productName) => {
     navigate("/inventory-management", { state: { product: productName } });
   };
 
-  // Backend counts are authoritative; the fetched product list is the
-  // fallback so the screen still shows something real if the state call
-  // didn't include the mapping block.
-  const unmapped = products.filter((p) => !p.product_ingredients?.length);
-  const activeCount = mapping?.activeCount ?? products.length;
-  const unmappedCount = mapping?.unmappedCount ?? unmapped.length;
+  // Backend counts are authoritative; the fetched ACTIVE product list is the
+  // fallback if the state call didn't include the mapping block. With neither
+  // (still loading, or the list failed) the counts are unknown.
+  const countsKnown = mapping != null || (!isLoading && !loadError);
+  const activeCount = mapping?.activeCount ?? activeProducts.length;
+  const unmappedCount =
+    mapping?.unmappedCount ?? activeProducts.filter((p) => !p.product_ingredients?.length).length;
   const recipeProgress = activeCount > 0 ? ((activeCount - unmappedCount) / activeCount) * 100 : 100;
-  const allDone = unmappedCount === 0;
+  const allDone = countsKnown && unmappedCount === 0;
+  const show = (n) => (countsKnown ? n : UNKNOWN);
 
-<<<<<<< HEAD
->>>>>>> 4c5708cc8ec29f389bce56fbd7a4bb2bca5093f6
-=======
->>>>>>> ec2d3d462b46e067e1942d6168838c81e4cd6480
   return (
     <StateShell
       eyebrow="Forecasts ready"
@@ -136,7 +95,7 @@ const ForecastsReady = ({ initialState }) => {
       title={<>Forecasts are ready, <em>recipes still pending</em></>}
       lede="Your model is trained and daily and weekly forecasts are available. Adding ingredient recipes is what turns those forecasts into a purchasing decision."
       progress={{
-        value: isLoading ? 90 : 90 + (recipeProgress / 100) * 10,
+        value: countsKnown ? 90 + (recipeProgress / 100) * 10 : 90,
         tone: allDone ? "ok" : "warn",
         caption: "Setup progress across the whole system",
       }}
@@ -145,8 +104,10 @@ const ForecastsReady = ({ initialState }) => {
           tone={allDone ? "ok" : "warn"}
           icon={allDone ? <FaCheckCircle size={20} /> : <FaClipboardList size={20} />}
           title={
-            isLoading
-              ? "Checking which products still need recipes…"
+            !countsKnown
+              ? loadError
+                ? "We couldn't check which products still need recipes"
+                : "Checking which products still need recipes…"
               : allDone
                 ? "Everything is mapped"
                 : `${unmappedCount} of ${activeCount} active products still need an ingredient recipe`
@@ -182,55 +143,23 @@ const ForecastsReady = ({ initialState }) => {
           </div>
         </div>
 
-        {/* Metrics */}
-        <div className="metrics-grid">
-          <div className="metric-card border-green">
-            <div className="card-header">
-              <h3 className="card-title">Predicted Sales</h3>
-            </div>
-            <div className="metric-value-group">
-              <span className="metric-value">—</span>
-            </div>
-            <p className="metric-subtext">{NOT_YET}</p>
         <div className="sk-stats">
           <div className="sk-stat">
             <div className="sk-stat-label">Active products</div>
-            <div className="sk-stat-value sk-stat-value--ink">{activeCount}</div>
+            <div className="sk-stat-value sk-stat-value--ink">{show(activeCount)}</div>
             <div className="sk-stat-note">Detected from your sales data</div>
           </div>
           <div className="sk-stat">
             <div className="sk-stat-label">With recipes</div>
             <div className="sk-stat-value sk-stat-value--ok">
-              {Math.max(activeCount - unmappedCount, 0)}
+              {show(Math.max(activeCount - unmappedCount, 0))}
             </div>
-<<<<<<< HEAD
-<<<<<<< HEAD
-=======
->>>>>>> ec2d3d462b46e067e1942d6168838c81e4cd6480
-            <div className="metric-value-group">
-              <span className="metric-value">—</span>
-            </div>
-            <p className="metric-subtext">{NOT_YET}</p>
-          </div>
-<<<<<<< HEAD
-=======
-=======
-
-          <div className="metric-card border-purple">
-            <div className="card-header">
-              <h3 className="card-title">Confidence Score</h3>
-            </div>
-            <div className="metric-value-group">
-              <span className="metric-value">—</span>
-            </div>
-            <p className="metric-subtext">{NOT_YET}</p>
->>>>>>> ec2d3d462b46e067e1942d6168838c81e4cd6480
             <div className="sk-stat-note">Included in the shopping list</div>
           </div>
           <div className="sk-stat">
             <div className="sk-stat-label">Still missing</div>
             <div className={`sk-stat-value${allDone ? " sk-stat-value--ok" : " sk-stat-value--warn"}`}>
-              {unmappedCount}
+              {show(unmappedCount)}
             </div>
             <div className="sk-stat-note">Need a recipe before they can be prepared</div>
           </div>
@@ -241,21 +170,15 @@ const ForecastsReady = ({ initialState }) => {
           </div>
         </div>
 
-          <div className="metric-card border-indigo">
-            <div className="card-header">
-              <h3 className="card-title">Recommendations</h3>
-            </div>
-            <div className="metric-value-group">
-              <span className="metric-value">—</span>
-            </div>
-            <p className="metric-subtext">{NOT_YET}</p>
         <div style={{ marginTop: 22 }}>
           <ProgressMeter
             label="Ingredient recipe coverage"
-            value={`${Math.round(recipeProgress)}%`}
+            value={countsKnown ? recipeProgress : null}
             tone={allDone ? "ok" : "warn"}
             caption={
-              allDone
+              !countsKnown
+                ? "Recipe coverage can't be checked right now."
+                : allDone
                 ? "Every active product maps to a recipe, so ingredient demand is complete."
                 : `${unmappedCount} product${unmappedCount === 1 ? "" : "s"} still missing a recipe — ingredient demand is partial until they are added.`
             }
@@ -278,7 +201,9 @@ const ForecastsReady = ({ initialState }) => {
             index={1}
             title="Add Ingredient Recipes"
             tag={
-              allDone ? (
+              !countsKnown ? (
+                <span className="sk-tag">{UNKNOWN}</span>
+              ) : allDone ? (
                 <span className="sk-tag sk-tag--ok">Complete</span>
               ) : (
                 <span className="sk-tag sk-tag--warn">{unmappedCount} remaining</span>
@@ -316,10 +241,6 @@ const ForecastsReady = ({ initialState }) => {
               </p>
             </div>
           </SetupStep>
-<<<<<<< HEAD
->>>>>>> 4c5708cc8ec29f389bce56fbd7a4bb2bca5093f6
-=======
->>>>>>> ec2d3d462b46e067e1942d6168838c81e4cd6480
 
           <SetupStep
             index={2}
@@ -357,39 +278,7 @@ const ForecastsReady = ({ initialState }) => {
               Ingredient Demand turns recipes plus forecasts into preparation and reorder
               quantities.
             </div>
-<<<<<<< HEAD
-<<<<<<< HEAD
-            <div className="metric-value-group">
-              <span className="metric-value">—</span>
-            </div>
-            <p className="metric-subtext">{NOT_YET}</p>
-          </div>
-
-          <div className="metric-card border-purple">
-            <div className="card-header">
-              <h3 className="card-title">Confidence Score</h3>
-            </div>
-            <div className="metric-value-group">
-              <span className="metric-value">—</span>
-            </div>
-            <p className="metric-subtext">{NOT_YET}</p>
-          </div>
-
-          <div className="metric-card border-indigo">
-            <div className="card-header">
-              <h3 className="card-title">Recommendations</h3>
-            </div>
-            <div className="metric-value-group">
-              <span className="metric-value">—</span>
-            </div>
-            <p className="metric-subtext">{NOT_YET}</p>
-          </div>
-=======
           </SetupStep>
->>>>>>> 4c5708cc8ec29f389bce56fbd7a4bb2bca5093f6
-=======
-          </SetupStep>
->>>>>>> ec2d3d462b46e067e1942d6168838c81e4cd6480
         </div>
       </section>
     </StateShell>
