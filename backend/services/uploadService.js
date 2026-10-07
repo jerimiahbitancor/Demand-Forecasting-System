@@ -1269,6 +1269,132 @@ class UploadService {
     }
   }
 
+  // -------------------------------------------------------------------------
+  // Original-file storage — the raw bytes behind an `uploads` row.
+  //
+  // The table only keeps metadata (filename, row count, status), so without
+  // Storage there is nothing to hand back when the owner clicks Download on
+  // the Historical Data Storage tab. Objects live in the same "files" bucket
+  // the settings backups use, under uploads/<uploadId>/<filename>: a path
+  // derived from the row alone, so no new column and no migration needed.
+  // -------------------------------------------------------------------------
+
+  // Storage objects must not carry path traversal, a directory prefix or
+  // control characters: only the sanitized basename of the recorded upload
+  // filename is used. Both the write and the read go through this, so the
+  // path always matches.
+  safeObjectName(name) {
+    const clean = String(name || '')
+      .replace(/^.*[\\/]/, '')
+      .replace(/\.\./g, '')
+      .replace(/[\x00-\x1F\x7F]/g, '')
+      .trim();
+    return clean || 'upload.csv';
+  }
+
+  originalFilePath(uploadId, filename) {
+    return `uploads/${uploadId}/${this.safeObjectName(filename)}`;
+  }
+
+  // Best-effort write, called right after saveUploadRecord. Throws on
+  // storage failure — the caller (routes/upload.js) catches and logs so a
+  // Storage hiccup never fails the upload itself (daily_sales is already
+  // the source of truth).
+  async storeOriginalFile(uploadId, filename, buffer, contentType = 'application/octet-stream') {
+    if (!uploadId || !buffer || buffer.length === 0) return false;
+    if (!this.isSupabaseReady()) return false;
+
+    const { error } = await supabaseAdmin.storage
+      .from('files')
+      .upload(this.originalFilePath(uploadId, filename), buffer, {
+        contentType,
+        upsert: true
+      });
+
+    if (error) throw error;
+    return true;
+  }
+
+  // Returns a Buffer, or null when there is no stored object (uploads
+  // predating storeOriginalFile, a deleted object, or storage unavailable).
+  // Never throws: "no file on record" is a normal outcome the caller turns
+  // into a CSV rebuilt from daily_sales.
+  async readOriginalFile(uploadId, filename) {
+    if (!this.isSupabaseReady()) return null;
+
+    try {
+      const { data, error } = await supabaseAdmin.storage
+        .from('files')
+        .download(this.originalFilePath(uploadId, filename));
+
+      if (error || !data) {
+        if (error) {
+          console.warn(`Upload ${uploadId}: original file unavailable (${error.message})`);
+        }
+        return null;
+      }
+
+      if (Buffer.isBuffer(data)) return data;
+      if (typeof data.arrayBuffer === 'function') return Buffer.from(await data.arrayBuffer());
+      return Buffer.from(data);
+    } catch (error) {
+      console.warn(`Upload ${uploadId}: could not read the original file (${error.message})`);
+      return null;
+    }
+  }
+
+  // Fallback download for uploads with no stored object: rebuilds their
+  // daily_sales rows as a CSV. Returns null when the upload contributed no
+  // rows, so the route can answer 404 instead of an empty file.
+  async exportUploadCsv(uploadId) {
+    if (!this.isSupabaseReady()) return null;
+
+    const { data: rows, error } = await fetchAllRows(() => supabaseAdmin
+      .from('daily_sales')
+      .select('sale_date, quantity_sold, product_id')
+      .eq('upload_id', uploadId)
+      .order('sale_date')
+      .order('product_id'));
+
+    if (error) throw error;
+    if (!rows || rows.length === 0) return null;
+
+    const productIds = [...new Set(
+      rows
+        .map((row) => row.product_id)
+        .filter((id) => id !== null && id !== undefined)
+    )];
+
+    const { data: products, error: productError } = productIds.length
+      ? await fetchAllRows(() => supabaseAdmin
+          .from('products')
+          .select('id, name, category')
+          .in('id', productIds))
+      : { data: [], error: null };
+
+    if (productError) throw productError;
+
+    const productById = new Map((products || []).map((product) => [product.id, product]));
+
+    const cell = (value) => {
+      const text = value === null || value === undefined ? '' : String(value);
+      return /[",\r\n]/.test(text) ? `"${text.replace(/"/g, '""')}"` : text;
+    };
+
+    const lines = [['sale_date', 'product', 'category', 'quantity_sold'].join(',')];
+    for (const row of rows) {
+      const product = productById.get(row.product_id) || {};
+      lines.push([
+        cell(row.sale_date),
+        cell(product.name || `Product #${row.product_id}`),
+        cell(product.category || ''),
+        cell(row.quantity_sold)
+      ].join(','));
+    }
+
+    return lines.join('\r\n');
+  }
+
   // `fingerprintPromise` (optional): a dataCoverageService fingerprint
   // already being fetched by the caller (getDashboardState), so one check
   // reads it once. Without it, this function fetches its own.

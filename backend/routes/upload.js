@@ -215,6 +215,21 @@ router.post(
             numericId
           );
 
+          // Keep the raw file so the Historical Data Storage tab can hand it
+          // back later (GET /upload/:id/download). Best-effort: daily_sales is
+          // already the source of truth, so a Storage hiccup must not fail the
+          // upload itself.
+          try {
+            await uploadService.storeOriginalFile(
+              uploadId,
+              file.originalname,
+              file.buffer,
+              file.mimetype
+            );
+          } catch (storageError) {
+            console.error('Could not store the original upload file for download:', storageError);
+          }
+
           // Base names only — "Marinated Porksilog NO EGG" is Marinated Porksilog.
           const modifierKeywords = await uploadService.getModifierKeywords();
           const uniqueProductNames = uploadService.extractUniqueProductNames(
@@ -487,6 +502,77 @@ router.get('/dashboard-state', authenticate, async (req, res) => {
       error: 'Failed to fetch dashboard state',
       details: error.message
     });
+  }
+});
+
+// HTTP header helpers for file downloads. The stored filename can contain
+// non-ASCII characters, so both the ASCII fallback and the RFC 5987 UTF-8
+// form are sent; the browser prefers filename* when it understands it.
+const attachmentHeader = (name) =>
+  `attachment; filename="${name.replace(/[^\x20-\x7E]/g, '_').replace(/["\\]/g, '_')}"`
+  + `; filename*=UTF-8''${encodeURIComponent(name)}`;
+
+const contentTypeFor = (name) => {
+  const dot = name.lastIndexOf('.');
+  const ext = dot >= 0 ? name.slice(dot).toLowerCase() : '';
+  if (ext === '.csv') return 'text/csv; charset=utf-8';
+  if (ext === '.xlsx') return 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
+  if (ext === '.xls') return 'application/vnd.ms-excel';
+  return 'application/octet-stream';
+};
+
+// GET /api/upload/:id/download - Download a file listed on the Historical
+// Data Storage tab.
+//
+// Two sources, in order:
+//   1. the raw file saved at upload time (uploadService.storeOriginalFile)
+//      - the exact bytes the owner uploaded;
+//   2. a CSV rebuilt from that upload's daily_sales rows, so uploads made
+//      before files were stored are still downloadable.
+//
+// The bytes stream straight back as an attachment; the tab reads them as a
+// blob and clicks a temporary link, so no signed URL (and no popup) is
+// needed.
+router.get('/:id/download', authenticate, async (req, res) => {
+  try {
+    const userId = req.user?.user_id || req.user?.id || null;
+    const uploadId = parseInt(req.params.id, 10);
+
+    if (isNaN(uploadId)) {
+      return res.status(400).json({ success: false, error: 'Invalid upload ID' });
+    }
+
+    const upload = await uploadService.getUploadById(uploadId, userId);
+
+    if (!upload) {
+      return res.status(404).json({ success: false, error: 'Upload not found' });
+    }
+
+    const fileName = uploadService.safeObjectName(upload.filename);
+
+    const original = await uploadService.readOriginalFile(upload.id, fileName);
+    if (original) {
+      res.setHeader('Content-Type', contentTypeFor(fileName));
+      res.setHeader('Content-Disposition', attachmentHeader(fileName));
+      return res.send(original);
+    }
+
+    const csv = await uploadService.exportUploadCsv(upload.id);
+    if (!csv) {
+      return res.status(404).json({
+        success: false,
+        error: 'This upload has no stored file or rows to download.'
+      });
+    }
+
+    const baseName = fileName.replace(/\.[^.]*$/, '') || 'upload';
+    const csvName = `${baseName}.csv`;
+    res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+    res.setHeader('Content-Disposition', attachmentHeader(csvName));
+    return res.send(csv);
+  } catch (error) {
+    console.error('Error downloading upload:', error);
+    res.status(500).json({ success: false, error: 'Failed to download file' });
   }
 });
 

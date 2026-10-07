@@ -1,22 +1,28 @@
 // states/ReadyToTrain.jsx
 //
-// State 3 of the 7-state Dashboard spec: >=12 months uploaded, products
-// detected, but the owner hasn't clicked Start Training yet (no model
-// exists). Distinct from State 4 (TrainingInProgress.jsx) — that one
-// only renders once mlService.isTrainingInFlight() is actually true.
+// State 3 of 7 — >=12 months uploaded, products detected, but the owner
+// hasn't clicked Start Training yet (no model exists). Distinct from
+// State 4 (TrainingInProgress.jsx) — that one only renders once
+// mlService.isTrainingInFlight() is actually true.
 import { useState, useEffect } from "react";
-import Navbar from "../../components/Navbar/Navbar";
-import "../states/statescss/TrainingInProgress.css";
-import { useNavigate } from "react-router-dom";
 import axios from "axios";
+import { useNavigate } from "react-router-dom";
 import toast from "react-hot-toast";
-import Swal from '../../../utils/swal';
+import { FaArrowRight, FaCheckCircle, FaExclamationTriangle } from "react-icons/fa";
 import trainingImage from "../../../assets/images/Rene.png";
-import { FaCheckCircle } from "react-icons/fa";
+import Swal from "../../../utils/swal";
+import {
+  StateShell,
+  StateBanner,
+  SetupStep,
+  Illustration,
+  Meter,
+  ProductsDetected,
+} from "../components/DashboardStateKit.jsx";
 
 const API_URL = import.meta.env.VITE_API_URL || "http://localhost:5000/api";
 
-const ReadyToTrain = () => {
+const ReadyToTrain = ({ initialState }) => {
   const navigate = useNavigate();
   // actual_months_uploaded/actual_days_uploaded count real distinct
   // calendar days that have a sales row (see uploadService.js's
@@ -32,6 +38,15 @@ const ReadyToTrain = () => {
   // reads as "0 days / 0 products".
   const [uploadedMonths, setUploadedMonths] = useState(null);
   const [uploadedDays, setUploadedDays] = useState(null);
+  // Seeded from the Dashboard's dashboard-state response, whose `stats` block
+  // is the same getUploadStats() payload /upload/stats/summary returns — so the
+  // month/day counters are correct on the first frame rather than counting up
+  // from zero a moment later.
+  const seedStats = initialState?.stats;
+  const [uploadedMonths, setUploadedMonths] = useState(
+    Math.min(seedStats?.actual_months_uploaded || 0, 12)
+  );
+  const [uploadedDays, setUploadedDays] = useState(seedStats?.actual_days_uploaded || 0);
   const [totalMonthsNeeded] = useState(12);
   const [products, setProducts] = useState([]);
   const [totalProducts, setTotalProducts] = useState(null);
@@ -50,34 +65,25 @@ const ReadyToTrain = () => {
     return config;
   });
 
-  const formatDate = (date) => {
-    const months = ["JANUARY", "FEBRUARY", "MARCH", "APRIL", "MAY", "JUNE", "JULY", "AUGUST", "SEPTEMBER", "OCTOBER", "NOVEMBER", "DECEMBER"];
-    return `${months[date.getMonth()]}-${String(date.getDate()).padStart(2, "0")}-${date.getFullYear()}`;
-  };
-  const formatDay = (date) => ["SUNDAY", "MONDAY", "TUESDAY", "WEDNESDAY", "THURSDAY", "FRIDAY", "SATURDAY"][date.getDay()];
-  const formatTime = (date) => {
-    let hours = date.getHours();
-    const minutes = String(date.getMinutes()).padStart(2, "0");
-    const ampm = hours >= 12 ? "PM" : "AM";
-    hours = hours % 12 || 12;
-    return `${hours}:${minutes} ${ampm}`;
-  };
-  const now = new Date();
-
   useEffect(() => {
     let cancelled = false;
 
     async function loadData() {
-      try {
-        const statsRes = await apiClient.get("/upload/stats/summary");
-        if (!cancelled && statsRes.data.success) {
-          const months = statsRes.data.data.actual_months_uploaded || 0;
-          const days = statsRes.data.data.actual_days_uploaded || 0;
-          setUploadedMonths(Math.min(months, totalMonthsNeeded));
-          setUploadedDays(days);
+      // The stats are already seeded from the Dashboard's own request, so only
+      // the product list — which dashboard-state doesn't carry — is fetched
+      // here, and it's the only thing the first frame was ever missing.
+      if (!seedStats) {
+        try {
+          const statsRes = await apiClient.get("/upload/stats/summary");
+          if (!cancelled && statsRes.data.success) {
+            const months = statsRes.data.data.actual_months_uploaded || 0;
+            const days = statsRes.data.data.actual_days_uploaded || 0;
+            setUploadedMonths(Math.min(months, totalMonthsNeeded));
+            setUploadedDays(days);
+          }
+        } catch (err) {
+          console.error("Error fetching upload stats:", err);
         }
-      } catch (err) {
-        console.error("Error fetching upload stats:", err);
       }
 
       try {
@@ -98,7 +104,9 @@ const ReadyToTrain = () => {
     }
 
     loadData();
-    return () => { cancelled = true; };
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   const handleStartTraining = async () => {
@@ -160,51 +168,69 @@ const ReadyToTrain = () => {
     }
   };
 
-  const productsNeedingRecipes = products
-    .filter((p) => !p.product_ingredients?.length)
-    .slice(0, 3);
+  const handleAddRecipe = (productName) => {
+    navigate("/inventory-management", { state: { product: productName } });
+  };
 
   return (
-    <div className="training-container">
-      <Navbar />
-      <main className="training-main">
-        <div className="training-header">
-          <div className="training-date-info">
-            <span>{formatDate(now)}</span>
-            <span className="training-date-separator">|</span>
-            <span>{formatDay(now)}</span>
-            <span className="training-date-separator">|</span>
-            <span>{formatTime(now)}</span>
-          </div>
-          <div className="training-progress-container">
-            <div className="training-progress-bar-wrapper">
-              <div
-                className="training-progress-fill"
-                style={{ width: "50%", backgroundColor: "rgba(122, 1, 1, 0.5)" }}
-              />
-              <div className="training-progress-text">
-                <span>System Status Progress</span>
-                <span>50%</span>
-              </div>
+    <StateShell
+      eyebrow="Step 1 complete"
+      eyebrowTone="ok"
+      title={<>Your data is <em>ready to train</em></>}
+      lede="Start training whenever you're ready. Training runs in the background, so you can keep adding ingredient recipes while it finishes."
+      progress={{ value: 50, tone: "ok", caption: "Setup progress across the whole system" }}
+      status={
+        <StateBanner
+          tone="ok"
+          icon={<FaCheckCircle size={20} />}
+          title="Sales history requirement met"
+          text={`Your sales history covers at least ${totalMonthsNeeded} months and every day in it is accounted for — open with sales, or marked closed. Training is available${
+            uploadedDays ? ` across ${uploadedDays} uploaded sales day${uploadedDays === 1 ? "" : "s"}` : ""
+          }.`}
+          actions={
+            <button
+              type="button"
+              className="sk-btn sk-btn--success"
+              onClick={handleStartTraining}
+              disabled={isStarting}
+            >
+              {isStarting ? "Starting…" : "Start Training"}
+              <FaArrowRight size={15} />
+            </button>
+          }
+        />
+      }
+    >
+      <Illustration
+        src={trainingImage}
+        alt="Model ready to train illustration"
+        copy={
+          <div>
+            <h2 className="sk-section-title">One click from live forecasts</h2>
+            <p className="sk-section-sub">
+              ChefDuo Forecast reads your historical sales patterns, learns weekday,
+              weekend, seasonal and payday behaviour, then turns that into daily and
+              weekly product demand projections.
+            </p>
+            <div className="sk-tags" style={{ marginTop: 20 }}>
+              <span className="sk-tag sk-tag--brand">Takes a few minutes</span>
+              <span className="sk-tag">Runs in the background</span>
+              <span className="sk-tag">Daily + weekly forecasts</span>
             </div>
+          </div>
+        }
+      />
+
+      <section className="sk-section">
+        <div className="sk-section-head">
+          <div>
+            <h2 className="sk-section-title">Where you are in the setup</h2>
+            <p className="sk-section-sub">
+              Training is unlocked. Adding recipes is optional but is what produces the
+              ingredient shopping list later on.
+            </p>
           </div>
         </div>
-
-        <div className="training-content">
-          <div className="training-welcome-wrapper">
-            <div className="training-welcome-section">
-              <h3 className="training-welcome-title">Your data is ready</h3>
-              <p className="training-welcome-description">
-                Start training your forecasting model whenever you're ready.
-                <br />
-                While you're reviewing, you can also start adding ingredient recipes
-                to your products so the shopping list is ready once forecasting completes.
-              </p>
-            </div>
-            <div className="training-welcome-image">
-              <img src={trainingImage} alt="Ready to Train Illustration" className="training-welcome-img" />
-            </div>
-          </div>
 
           <div className="training-step-cards">
             <div className="training-step-card training-step-card-complete">
@@ -244,60 +270,56 @@ const ReadyToTrain = () => {
                     </div>
                   </div>
                 </div>
-
-                <div className="ready-to-train-panel">
-                  <p className="ready-to-train-title">✅ Ready to Train</p>
-                  <p className="ready-to-train-body">
-                    You've uploaded enough sales history to train your demand forecasting
-                    model. Training takes a few minutes and can run in the background —
-                    you can keep working while it completes.
-                  </p>
-                  <p
-                    className="ready-to-train-body"
-                    style={{ color: "#92400e", fontWeight: 500 }}
-                  >
-                    ⚠️ Before you train: Make sure the products in{" "}
-                    <button
-                      type="button"
-                      onClick={() => navigate("/inventory-management")}
-                      style={{
-                        background: "none",
-                        border: "none",
-                        padding: 0,
-                        font: "inherit",
-                        fontWeight: 700,
-                        color: "#7A0101",
-                        textDecoration: "underline",
-                        cursor: "pointer",
-                      }}
-                    >
-                      Inventory Management
-                    </button>{" "}
-                    are the menu items you actually sell. Sales data uploads can include
-                    rows that aren't real menu items — archive anything that doesn't
-                    belong before starting, since archived products are excluded from
-                    training and forecasting.
-                  </p>
-                  <button
-                    type="button"
-                    className="training-step-btn"
-                    onClick={handleStartTraining}
-                    disabled={isStarting}
-                  >
-                    {isStarting ? "Starting…" : "Start Training"}
-                  </button>
-                </div>
-              </div>
+        <div className="sk-grid-2">
+          <SetupStep
+            index={1}
+            tone="ok"
+            title="Upload Historical Sales Data"
+            tag={<span className="sk-tag sk-tag--ok">Complete</span>}
+            foot={
+              <button
+                type="button"
+                className="sk-btn sk-btn--primary"
+                onClick={handleStartTraining}
+                disabled={isStarting}
+              >
+                {isStarting ? "Starting…" : "Start Training"}
+                <FaArrowRight size={15} />
+              </button>
+            }
+          >
+            <div className="sk-note sk-note--ok">
+              <FaCheckCircle size={16} style={{ color: "var(--sk-success)", marginRight: 8, verticalAlign: -3 }} />
+              Requirement met — your sales history covers at least {totalMonthsNeeded}{" "}
+              months, and every day in it is accounted for (open with sales, or marked
+              closed). Training is available.
             </div>
 
-            <div className="training-step-card">
-              <div className="training-step-number">2</div>
-              <div className="training-step-content">
-                <h4 className="training-step-title">Add Ingredient Recipes to Your Products</h4>
-                <p className="training-step-description">
-                  Your menu products have been automatically detected from your sales data.
-                  You can start adding ingredient recipes now, or while training runs.
-                </p>
+            <div style={{ marginTop: 16 }}>
+              <Meter
+                tone="ok"
+                label={`Sales data actually uploaded (${uploadedDays} day${uploadedDays === 1 ? "" : "s"})`}
+                value={`${uploadedMonths} / ${totalMonthsNeeded} months`}
+                percent={(uploadedMonths / totalMonthsNeeded) * 100}
+              />
+            </div>
+
+            <div className="sk-note sk-note--warn" style={{ marginTop: 16 }}>
+              <FaExclamationTriangle size={16} style={{ color: "var(--sk-amber-ink)", marginRight: 8, verticalAlign: -3 }} />
+              <strong>Before you train.</strong> Make sure the products in{" "}
+              <button
+                type="button"
+                className="sk-linkbtn"
+                onClick={() => navigate("/inventory-management")}
+              >
+                Inventory Management
+              </button>{" "}
+              are the menu items you actually sell. Sales data uploads can include rows
+              that aren't real menu items — archive anything that doesn't belong before
+              starting, since archived products are excluded from training and
+              forecasting.
+            </div>
+          </SetupStep>
 
                 <div className="training-products-detected">
                   <div className="training-products-header">
@@ -352,19 +374,63 @@ const ReadyToTrain = () => {
                     )}
                   </div>
                 </div>
+          <SetupStep
+            index={2}
+            title="Add Ingredient Recipes to Your Products"
+            tag={
+              products.length === 0 ? (
+                <span className="sk-tag">Checking…</span>
+              ) : productsWithoutRecipes > 0 ? (
+                <span className="sk-tag sk-tag--warn">
+                  {productsWithoutRecipes} need recipes
+                </span>
+              ) : (
+                <span className="sk-tag sk-tag--ok">Complete</span>
+              )
+            }
+            foot={
+              <button
+                type="button"
+                className="sk-btn sk-btn--secondary"
+                onClick={() => navigate("/inventory-management")}
+              >
+                Go to Inventory Management
+                <FaArrowRight size={15} />
+              </button>
+            }
+          >
+            <p className="sk-card-text">
+              Your menu products have been automatically detected from your sales data.
+              You can start adding ingredient recipes now, or while training runs.
+            </p>
 
-                <button
-                  className="training-step-btn training-step-btn-secondary"
-                  onClick={() => navigate("/inventory-management")}
-                >
-                  Go to Inventory Management
-                </button>
+            <div className="sk-subcard" style={{ marginTop: 18 }}>
+              <div className="sk-subcard-title">Products detected from your sales data</div>
+              <p className="sk-subcard-text">
+                {products.length === 0 ? (
+                  "Looking for the products detected in your sales data…"
+                ) : (
+                  <>
+                    <strong>{totalProducts}</strong> products were found in your uploaded
+                    sales data. <strong>{productsWithoutRecipes}</strong> need ingredient
+                    recipes added.
+                  </>
+                )}
+              </p>
+
+              <div style={{ marginTop: 14 }}>
+                <ProductsDetected products={products} onAddRecipe={handleAddRecipe} />
               </div>
+
+              <p className="sk-subcard-foot">
+                Products without recipes will still be forecasted, but will not appear
+                in the ingredient demand shopping list.
+              </p>
             </div>
-          </div>
+          </SetupStep>
         </div>
-      </main>
-    </div>
+      </section>
+    </StateShell>
   );
 };
 

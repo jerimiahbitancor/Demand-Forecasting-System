@@ -1,6 +1,6 @@
 // frontend/src/features/landing/landing-kit/LandingNav.jsx
-import { useEffect, useState } from 'react';
-import { Link, NavLink } from 'react-router-dom';
+import { useCallback, useEffect, useState } from 'react';
+import { Link, NavLink, useLocation } from 'react-router-dom';
 import { FaBars, FaTimes } from 'react-icons/fa';
 import { useBusinessLogo } from '../../../context/BusinessProfileContext';
 import './landing-kit.css';
@@ -16,8 +16,21 @@ export default function LandingNav() {
   const [open, setOpen] = useState(false);
   const [stuck, setStuck] = useState(false);
   const businessLogo = useBusinessLogo();
+  const { pathname } = useLocation();
 
   const closeDrawer = () => setOpen(false);
+
+  // Clicking the logo while already on the home route has to scroll back up.
+  // ScrollManager (App.jsx) only reacts to a *pathname change*, so a / -> /
+  // click is invisible to it and leaves you stranded wherever you scrolled to.
+  // When arriving from another route we deliberately stay out of the way and
+  // let ScrollManager's reset own the jump - scrolling here too would animate
+  // the page you are in the middle of leaving.
+  const goHome = useCallback(() => {
+    if (pathname === '/') {
+      window.scrollTo({ top: 0, behavior: 'smooth' });
+    }
+  }, [pathname]);
 
   // Shadow/border once the page scrolls
   useEffect(() => {
@@ -41,7 +54,12 @@ export default function LandingNav() {
     <header className={`lk-nav ${stuck ? 'is-stuck' : ''}`}>
       <div className="lk-container">
         <div className="lk-nav-inner">
-          <Link to="/" className="lk-brand" aria-label="ChefDuo Forecast home">
+          <Link
+            to="/"
+            className="lk-brand"
+            aria-label="ChefDuo Forecast home"
+            onClick={goHome}
+          >
             <span className="lk-brand-mark" aria-hidden="true">
               <img src={businessLogo} alt="" />
             </span>
