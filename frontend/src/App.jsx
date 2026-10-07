@@ -12,14 +12,6 @@ import { TEMPORARY_ACCESS_BYPASS } from './config/accessControl';
 import ForgotPassword from './features/auth/pages/forgotpass/ForgotPassword';
 import ResetPassword from './features/auth/pages/forgotpass/ResetPassword';
 import ChefDuoLanding from './features/landing/ChefDuoLanding';
-<<<<<<< HEAD
-<<<<<<< HEAD
-import Dashboard from './features/dashboard/pages/Dashboard';
-import HealthPage from './features/admin/pages/HealthPage';
-=======
->>>>>>> 4c5708cc8ec29f389bce56fbd7a4bb2bca5093f6
-=======
-import Dashboard from './features/dashboard/pages/Dashboard';
 import HealthPage from './features/admin/pages/HealthPage';
 import DataManagement from './features/datamanagement/pages/DataManagement';
 import Forecasting from './features/analytics/components/Forecasting';
