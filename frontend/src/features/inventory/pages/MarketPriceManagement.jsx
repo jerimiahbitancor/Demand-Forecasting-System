@@ -56,7 +56,7 @@ const DEFAULT_SOURCES = [
   { key: "sm", label: "SM", tooltip: "Manually recorded from in-store visit. Last verified by staff." },
   { key: "puregold", label: "Puregold", tooltip: "Manually recorded from in-store visit. Last verified by staff." },
   { key: "wet_market", label: "Wet Market", tooltip: "Manually recorded from in-store visit. Last verified by staff." },
-  { key: "da_reference", label: "DA Reference", tooltip: "Manually copied from DA Bantay Presyo (da.gov.ph/price-monitoring). Official government reference price." },
+  { key: "da_reference", label: "DA Reference", tooltip: "Imported automatically each day from the DA Daily Price Index / Bantay Presyo (da.gov.ph/price-monitoring). Official government reference price — editable by staff." },
 ];
 
 const PROTECTED_SOURCE_KEYS = ["wet_market", "da_reference"];
@@ -159,6 +159,8 @@ const computeSummaryStats = (data, sources = DEFAULT_SOURCES) => {
   let countLowest = 0;
   let biggestGap = null;
   let biggestGapIngredient = null;
+  let potentialSavings = 0;
+  let savingsCount = 0;
   let maxLastUpdated = null;
 
   (data || []).forEach((row) => {
@@ -168,6 +170,11 @@ const computeSummaryStats = (data, sources = DEFAULT_SOURCES) => {
     if (row.lowest !== null && row.lowest !== undefined) {
       sumLowest += Number(row.lowest);
       countLowest += 1;
+    }
+    const saving = Number(row.savings);
+    if (row.savings !== null && row.savings !== undefined && Number.isFinite(saving) && saving > 0) {
+      potentialSavings += saving;
+      savingsCount += 1;
     }
     if (row.highest !== null && row.lowest !== null) {
       const gap = Number(row.highest) - Number(row.lowest);
@@ -197,6 +204,8 @@ const computeSummaryStats = (data, sources = DEFAULT_SOURCES) => {
     cheapestSource: cheapestSource ? `${cheapestSource} (avg ${formatCurrency(cheapestAvg)})` : "-",
     avgPrice: countLowest ? sumLowest / countLowest : 0,
     biggestGap: biggestGap !== null ? { value: Number(biggestGap.toFixed(2)), ingredient: biggestGapIngredient } : 0,
+    potentialSavings: Number(potentialSavings.toFixed(2)),
+    savingsCount,
     lastUpdated: maxLastUpdated || null,
   };
 };
@@ -207,6 +216,8 @@ const mapServerSummary = (summary) => {
       cheapestSource: "-",
       avgPrice: 0,
       biggestGap: 0,
+      potentialSavings: 0,
+      savingsCount: 0,
       lastUpdated: null,
     };
   }
@@ -218,6 +229,8 @@ const mapServerSummary = (summary) => {
     biggestGap: summary.biggestGap
       ? { value: summary.biggestGap.value, ingredient: summary.biggestGap.ingredient }
       : 0,
+    potentialSavings: Number(summary.potentialSavings) || 0,
+    savingsCount: Number(summary.savingsCount) || 0,
     lastUpdated: summary.lastUpdated || null,
   };
 };
@@ -274,6 +287,8 @@ const MarketPriceManagement = () => {
     cheapestSource: "-",
     avgPrice: 0,
     biggestGap: 0,
+    potentialSavings: 0,
+    savingsCount: 0,
     lastUpdated: null,
   });
   const [isModalOpen, setIsModalOpen] = useState(false);
@@ -555,6 +570,25 @@ const MarketPriceManagement = () => {
       }
     };
   }, [fetchComparison, fetchCategories, fetchIngredients, fetchSources, debouncedFetch, searchTerm, sortField, sortDirection, currentPage, selectedCategory, selectedSource]);
+
+  // The DA Reference prices are refreshed by a server job once a day, so an
+  // already-open page would otherwise stay stale until a manual reload. Re-run
+  // the comparison when the tab becomes visible again (and on window focus) so
+  // the newest daily run and its trend point appear without the user doing
+  // anything.
+  useEffect(() => {
+    const refreshIfVisible = () => {
+      if (document.visibilityState === 'visible') {
+        fetchComparison();
+      }
+    };
+    document.addEventListener('visibilitychange', refreshIfVisible);
+    window.addEventListener('focus', refreshIfVisible);
+    return () => {
+      document.removeEventListener('visibilitychange', refreshIfVisible);
+      window.removeEventListener('focus', refreshIfVisible);
+    };
+  }, [fetchComparison]);
 
   // ============ SORT ============
   const handleSort = (field) => {
@@ -1148,7 +1182,7 @@ const MarketPriceManagement = () => {
     if (savings < 0) {
       return <span className="market-savings-negative">Pay {formatCurrency(Math.abs(savings))} more</span>;
     }
-    return <span className="market-price-empty">Same</span>;
+    return <span className="market-price-empty">No savings</span>;
   };
 
   const totalPages = Math.ceil(totalItems / itemsPerPage);
@@ -1156,9 +1190,12 @@ const MarketPriceManagement = () => {
   const trendIngName = (ingredients || []).find((i) => String(i.id) === String(trendIngredientId))?.name || "";
 
   // Recompute summary live while a price is being typed.
+  const displaySummaryForRow = (row, srcs) => computeSummaryStats([row], srcs);
+
+const rowForSummary = selectedRow ? getEffectiveRow(selectedRow) : null;
   const displaySummary = editingCell
     ? computeSummaryStats(rows.map(getEffectiveRow), sources)
-    : summaryStats;
+    : (rowForSummary ? displaySummaryForRow(rowForSummary, sources) : summaryStats);
 
 
   const insights = useMemo(() => {
@@ -1199,15 +1236,7 @@ const MarketPriceManagement = () => {
       });
     }
 
-    // 3. Biggest price gap — where shopping around pays most.
-    if (displaySummary.biggestGap && displaySummary.biggestGap.value) {
-      tips.push({
-        tone: 'info',
-        text: `The widest price difference is ${formatCurrency(displaySummary.biggestGap.value)} on ${displaySummary.biggestGap.ingredient || 'an ingredient'}. Comparing suppliers here can save you the most.`,
-      });
-    }
-
-    // 4. Trend insight for the selected ingredient's history.
+    // 3. Trend insight for the selected ingredient's history.
     if (trendIngredientId && trendRows && trendRows.length) {
       const perSource = {};
       (trendRows || []).forEach((t) => {
@@ -1228,7 +1257,7 @@ const MarketPriceManagement = () => {
       }
     }
 
-    // 5. Low-stock cross-reference from the inventory list.
+    // 4. Low-stock cross-reference from the inventory list.
     const lowItems = (ingredients || []).filter((ing) => {
       const q = Number(ing.quantity) || 0;
       const ms = Number(ing.min_stock) || 0;
@@ -1241,7 +1270,7 @@ const MarketPriceManagement = () => {
       });
     }
 
-    // 6. Data freshness reminder.
+    // 5. Data freshness reminder.
     if (!displaySummary.lastUpdated) {
       tips.push({
         tone: 'info',
@@ -1313,12 +1342,12 @@ const MarketPriceManagement = () => {
           </div>
         </div>
 
-        <div className="inventory-stat-card market-card-gap">
+        <div className="inventory-stat-card market-card-savings">
           <div className="inventory-stat-card-content">
             <div className="inventory-stat-card-header">
-              <p className="inventory-stat-card-label">Biggest Price Gap</p>
+              <p className="inventory-stat-card-label">Potential Savings</p>
               <Tippy
-                content="The largest difference between the highest and the lowest recorded price for a single ingredient."
+                content="If you bought every compared ingredient at its lowest recorded source instead of your current ingredient cost, this is the total you would save. Ingredients with no market price or no current cost are not counted."
                 placement="bottom"
                 animation="scale"
                 duration={200}
@@ -1330,17 +1359,17 @@ const MarketPriceManagement = () => {
                 appendTo={() => document.body}
                 zIndex={100000}
               >
-                <span className="inventory-card-info" tabIndex={0} aria-label="Biggest price gap information">
+                <span className="inventory-card-info" tabIndex={0} aria-label="Potential savings information">
                   <FaInfoCircle />
                 </span>
               </Tippy>
             </div>
-            <p className="inventory-stat-card-value is-small">
-              {displaySummary.biggestGap && displaySummary.biggestGap.value
-                ? `${formatCurrency(displaySummary.biggestGap.value)} (${displaySummary.biggestGap.ingredient || ''})`
-                : "-"}
+            <p className="inventory-stat-card-value is-medium">{formatCurrency(displaySummary.potentialSavings || 0)}</p>
+            <p className="inventory-stat-card-change">
+              {displaySummary.savingsCount
+                ? `Across ${displaySummary.savingsCount} ingredient(s) vs lowest source`
+                : 'Buying at the lowest source'}
             </p>
-            <p className="inventory-stat-card-change">High vs lowest price</p>
           </div>
         </div>
 
@@ -1367,7 +1396,7 @@ const MarketPriceManagement = () => {
               </Tippy>
             </div>
             <p className="inventory-stat-card-value is-small">{timeAgo(displaySummary.lastUpdated, now)}</p>
-            <p className="inventory-stat-card-change">Most recent manual recording</p>
+            <p className="inventory-stat-card-change">Most recent price recording</p>
           </div>
         </div>
       </div>
@@ -1428,26 +1457,7 @@ const MarketPriceManagement = () => {
             <option value="savings">Sort By: Savings</option>
           </select>
 
-          <Tippy
-            content="Opens the official DA price monitoring page in a new tab. Nothing is downloaded automatically — enter prices manually after reviewing."
-            placement="bottom"
-            animation="scale"
-            duration={200}
-            theme="dark"
-            arrow
-            delay={[100, 0]}
-            interactive
-            trigger="mouseenter focus click"
-            appendTo={() => document.body}
-            zIndex={100000}
-          >
-            <button
-              className="btn-secondary"
-              onClick={() => window.open('https://www.da.gov.ph/price-monitoring/', '_blank', 'noopener,noreferrer')}
-            >
-              <FaExternalLinkAlt /> DA Bantay Presyo
-            </button>
-          </Tippy>
+         
 
           <button className="btn-secondary" onClick={handleExportCsv}>
             <FaFileCsv /> Export CSV
@@ -1520,7 +1530,7 @@ const MarketPriceManagement = () => {
                   <th className="sortable"><SortableHeader label="Category" field="category" activeSortField={sortField} sortDirection={sortDirection} onSort={handleSort} /></th>
                   {(sources || []).map((s) => (
                     <th key={s.key}>
-                      <SourceHeader label={s.label} tooltip={s.tooltip || `Manually recorded prices from ${s.label}.`} />
+                      <SourceHeader label={s.label} tooltip={s.tooltip || `Recorded prices from ${s.label}.`} />
                     </th>
                   ))}
                   <th className="sortable"><SortableHeader label="Lowest" field="lowest" activeSortField={sortField} sortDirection={sortDirection} onSort={handleSort} /></th>
@@ -1553,7 +1563,12 @@ const MarketPriceManagement = () => {
                   const displayIndex = (currentPage - 1) * itemsPerPage + index + 1;
                   const effectiveRow = getEffectiveRow(row);
                   return (
-                    <tr key={row.ingredientId || index}>
+                    <tr
+                      key={row.ingredientId || index}
+                      className={`market-table-row ${String(selectedRow?.ingredientId) === String(row.ingredientId) ? 'active' : ''}`}
+                      onClick={() => setSelectedRow((prev) => (String(prev?.ingredientId) === String(row.ingredientId) ? null : row))}
+                      style={{ cursor: 'pointer' }}
+                    >
                       <td data-label="#">{displayIndex}</td>
                       <td data-label="Ingredient" className="inventory-item-name-cell">
                         <span className="inventory-item-name">{row.ingredient || 'Unnamed'}</span>
@@ -1576,7 +1591,7 @@ const MarketPriceManagement = () => {
                         <div className="inventory-action-buttons">
                           <button
                             className="inventory-action-btn edit"
-                            onClick={() => openEditModal(row)}
+                            onClick={(e) => { e.stopPropagation(); openEditModal(row); }}
                             title="Edit prices"
                           >
                             <FaEdit size={14} />
@@ -1584,7 +1599,7 @@ const MarketPriceManagement = () => {
                          
                           <button
                             className="inventory-action-btn history"
-                            onClick={() => toggleTrend(row.ingredientId)}
+                            onClick={(e) => { e.stopPropagation(); toggleTrend(row.ingredientId); }}
                             title="View price trend"
                           >
                             <FaChartLine size={14} />
@@ -1755,7 +1770,7 @@ const MarketPriceManagement = () => {
 
             {!trendLoading && trendPointCount < 2 && presentTrendSources.length > 0 && (
               <div className="market-price-chart-hint">
-                Only 1 recording point so far — save this ingredient's prices again (even later today) and the trend line will start drawing.
+                Only 1 recording point so far. The DA Reference sheet adds a new point automatically each day, and every manual save adds one too — the trend line draws as soon as there are 2 points.
               </div>
             )}
 

@@ -1,22 +1,25 @@
 // controllers/marketPriceController.js
 /**
- * Market Price controller — LEGAL / MANUAL-ONLY EDITION
+ * Market Price controller — MANUAL-ENTRY EDITION
  *
- * This module does NOT scrape any website and does NOT call any external API.
- * No axios.get, no fetch, no node-fetch, no puppeteer, no cheerio, no playwright.
- * The only "network" this code talks to is the Supabase database.
+ * Every price row written through THIS module originates from authenticated
+ * human input via the UI: staff read the price in a store or on the official
+ * DA Bantay Presyo page and type it in (or confirm a receipt-OCR scan). All
+ * of those rows are flagged is_manual_entry = true, and every network it
+ * touches is Supabase.
  *
- * Every price row originates from authenticated human input via the UI:
- * staff physically read the price in a store or on the official DA Bantay
- * Presyo page, then type it into the app.
+ * The one deliberate exception to "no automated writes" lives elsewhere: the
+ * scheduled DA importer in services/daPriceImportService.js (cron job
+ * jobs/dailyPriceImportJob.js). It reads the DA's own public "Daily Price
+ * Index" sheets — published by the DA for the public as a transparency
+ * service — at most once a day, matches commodities to the current inventory,
+ * and writes is_manual_entry = false rows under the da_reference source.
+ * It is tightly scoped: no other site, no crawl, one request per day, and
+ * DA_PRICE_IMPORT_ENABLED=false switches it off.
  *
- * The `scraped_at` column is repurposed as "recorded_at" — the timestamp when
- * a human entered the price. The column name is kept as-is to avoid a
- * database migration; never use it for automated scraping.
- *
- * Rationale: scraping Philippine supermarket or government websites may violate
- * their Terms of Service, the Cybercrime Prevention Act, and NPC Advisory
- * No. 2026-01 on data privacy. See: https://privacy.gov.ph/
+ * The `scraped_at` column carries the recorded timestamp: when a human typed
+ * a price, or the as-of date of the automated DA sheet. The column name is
+ * kept as-is to avoid a database migration.
  */
 const { supabaseAdmin } = require('../config/supabase');
 const { logAction } = require('../services/auditService');
@@ -31,7 +34,7 @@ const DEFAULT_SOURCES = [
   { key: 'sm', label: 'SM', tooltip: 'Manually recorded from an in-store visit.' },
   { key: 'puregold', label: 'Puregold', tooltip: 'Manually recorded from an in-store visit.' },
   { key: 'wet_market', label: 'Wet Market', tooltip: 'Manually recorded from an in-store visit.' },
-  { key: 'da_reference', label: 'DA Reference', tooltip: 'Manually copied from the DA Bantay Presyo page (da.gov.ph/price-monitoring).' }
+  { key: 'da_reference', label: 'DA Reference', tooltip: 'Sourced from the DA Daily Price Index (da.gov.ph/price-monitoring) — imported automatically each day, editable by staff.' }
 ];
 
 // These two are required reference sources and can never be removed.
@@ -160,6 +163,8 @@ const computeSummary = (rows, sources) => {
   let countLowest = 0;
   let biggestGap = null;
   let biggestGapIngredient = null;
+  let potentialSavings = 0;
+  let savingsCount = 0;
   let maxLastUpdated = null;
 
   for (const row of rows) {
@@ -176,6 +181,13 @@ const computeSummary = (rows, sources) => {
       if (biggestGap === null || gap > biggestGap) {
         biggestGap = gap;
         biggestGapIngredient = row.ingredient;
+      }
+    }
+    if (row.savings !== null && row.savings !== undefined) {
+      const saving = Number(row.savings);
+      if (Number.isFinite(saving) && saving > 0) {
+        potentialSavings += saving;
+        savingsCount += 1;
       }
     }
     if (row.lastUpdated && (!maxLastUpdated || new Date(row.lastUpdated) > new Date(maxLastUpdated))) {
@@ -204,6 +216,10 @@ const computeSummary = (rows, sources) => {
       biggestGap !== null
         ? { value: Number(biggestGap.toFixed(2)), ingredient: biggestGapIngredient }
         : null,
+    // Sum of every ingredient's positive "savings vs your price" across the
+    // full filtered set — the Potential Savings KPI on the comparison screen.
+    potentialSavings: Number(potentialSavings.toFixed(2)),
+    savingsCount,
     lastUpdated: maxLastUpdated || null
   };
 };

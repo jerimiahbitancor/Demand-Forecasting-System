@@ -1,14 +1,17 @@
 // routes/marketPrice.js
 /**
- * Market Price routes — LEGAL / MANUAL-ONLY EDITION
+ * Market Price routes — MANUAL-ENTRY + DA DAILY IMPORT
  *
- * This module does NOT scrape any website and does NOT call any external API.
- * All prices are entered manually by authorized users via the UI.
- * The `scraped_at` column is repurposed as "recorded_at" (timestamp of manual entry).
+ * Prices reach this screen two ways:
+ *   - manually, entered by authorized users via the UI (is_manual_entry = true);
+ *   - automatically, once a day, from the DA's own public "Daily Price Index"
+ *     sheets (Bantay Presyo) via services/daPriceImportService.js and
+ *     jobs/dailyPriceImportJob.js (is_manual_entry = false, source
+ *     'da_reference'). That job is the ONLY outbound request in the backend.
  *
- * Rationale: scraping Philippine supermarket or government websites may violate
- * their Terms of Service, the Cybercrime Prevention Act, and NPC Advisory
- * No. 2026-01 on data privacy. See: https://privacy.gov.ph/
+ * The `scraped_at` column is the recording timestamp: a manual entry's time, or
+ * the as-of date of the automated DA sheet. It is kept under this name to avoid
+ * a database migration.
  */
 const express = require('express');
 const router = express.Router();
@@ -27,7 +30,8 @@ const {
 } = require('../controllers/marketPriceController');
 
 // All routes require authentication.
-// No route ever makes an outbound HTTP request — this is manual-entry only.
+// No ROUTE here makes an outbound HTTP request; the daily DA importer runs on
+// its own cron, not through any of these handlers.
 router.use(authenticateToken);
 
 router.get('/sources', getSourcesList);
