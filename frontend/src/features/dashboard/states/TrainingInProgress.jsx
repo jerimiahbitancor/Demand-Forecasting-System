@@ -13,7 +13,7 @@ import "../states/statescss/TrainingInProgress.css";
 import { useState, useRef } from "react";
 import { useNavigate } from "react-router-dom";
 import { FaArrowRight, FaCheckCircle, FaSpinner } from "react-icons/fa";
-import trainingInProgressImage from "../../../assets/images/Rene.png";
+import trainingInProgressImage from "../../../assets/images/NoData.png";
 import { useHelp } from "../../../hooks/useHelp";
 import {
   StateShell,

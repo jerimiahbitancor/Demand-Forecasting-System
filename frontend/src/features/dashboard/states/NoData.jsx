@@ -14,7 +14,6 @@ import { StateShell, SetupStep, Illustration } from "../components/DashboardStat
 const API_URL = import.meta.env.VITE_API_URL || "http://localhost:5000/api";
 import Navbar from "../../components/Navbar/Navbar";
 import "../states/statescss/NoData.css";
-import { useState } from "react";
 import { useNavigate } from "react-router-dom"; // Import useNavigate
 import noDataImage from "../../../assets/images/NoData.png";
 import { useHelp } from "../../../hooks/useHelp";

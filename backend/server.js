@@ -52,6 +52,10 @@ const mlRoutes = require('./routes/ml');
 const analyticsRoutes = require('./routes/analytics');
 const forecastSummaryRoutes = require('./routes/forecastSummary');
 const marketPriceRoutes = require('./routes/marketPrice');
+// Receipt-OCR routes live separately from marketPrice.js (the manual-only
+// module) but share the same URL prefix — Express falls through the first
+// router when no route matches.
+const marketPricesReceiptRoutes = require('./routes/marketPrices');
 const auditRoutes = require('./routes/audit');
 
 const app = express();
@@ -109,6 +113,7 @@ app.use('/api/ml', mlRoutes);
 app.use('/api/analytics', analyticsRoutes);
 app.use('/api/forecast', forecastSummaryRoutes);
 app.use('/api/market-prices', marketPriceRoutes);
+app.use('/api/market-prices', marketPricesReceiptRoutes);
 app.use('/api/audit', auditRoutes);
 
 // ============= HEALTH CHECK =============

@@ -1,0 +1,409 @@
+/* components/market modal/ReceiptScanner.css
+   Everything is scoped under .receipt-scanner so none of these rules can
+   leak into the market price table or the other inventory modals. */
+
+.receipt-scanner .receipt-body {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+/* ---------- Stage 1: capture ---------- */
+
+.receipt-capture {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+  padding: 8px 0 4px;
+}
+
+.receipt-file-input {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  opacity: 0;
+  pointer-events: none;
+}
+
+/* Full width + >=56px tall: the thumb has to reach it one-handed while the
+   other hand is holding a receipt. */
+.receipt-capture-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  width: 100%;
+  min-height: 56px;
+  padding: 14px 18px;
+  font-size: 16px;
+  font-weight: 600;
+  color: #fff;
+  background: var(--color-red-primary, #b91c1c);
+  border: none;
+  border-radius: 10px;
+  cursor: pointer;
+  transition: filter 0.2s;
+}
+
+.receipt-capture-btn:hover {
+  filter: brightness(1.08);
+}
+
+.receipt-capture-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  width: 100%;
+}
+
+/* The upload path is secondary to the camera, so it reads as an outline
+   button instead of competing with the red capture button. */
+.receipt-capture-upload {
+  color: var(--color-red-primary, #b91c1c);
+  background: #fff;
+  border: 1.5px solid var(--color-red-primary, #b91c1c);
+}
+
+.receipt-capture-upload:hover {
+  background: #fef2f2;
+  filter: none;
+}
+
+.receipt-capture-tip {
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--color-text-light, #6b7280);
+  text-align: center;
+}
+
+.receipt-capture-source {
+  margin: 0;
+  font-size: 13px;
+  color: var(--color-text-light, #6b7280);
+}
+
+/* Shown after a scan that read text but produced zero price lines: the raw
+   OCR text so staff can see whether the photo was readable at all. */
+.receipt-read-text {
+  width: 100%;
+  padding: 12px;
+  border: 1px solid var(--color-border-light, #d1d5db);
+  border-radius: 8px;
+  background: #f9fafb;
+  text-align: left;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.receipt-read-text p {
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--color-text-light, #6b7280);
+}
+
+.receipt-read-text pre {
+  margin: 0;
+  max-height: 160px;
+  overflow: auto;
+  padding: 8px;
+  border-radius: 6px;
+  background: #fff;
+  border: 1px solid var(--color-border-light, #e5e7eb);
+  font-size: 12px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-word;
+  user-select: text;
+}
+
+/* ---------- Stage 2: scanning ---------- */
+
+.receipt-scanning {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 14px;
+}
+
+.receipt-preview {
+  max-width: 100%;
+  max-height: 45vh;
+  border-radius: 8px;
+  object-fit: contain;
+  background: #f3f4f6;
+}
+
+/* PDFs have no thumbnail here — show which file is being read instead. */
+.receipt-preview-pdf {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  max-width: 100%;
+  padding: 16px 20px;
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--color-red-primary, #b91c1c);
+  background: #f3f4f6;
+  border-radius: 8px;
+}
+
+.receipt-preview-pdf svg {
+  flex-shrink: 0;
+  font-size: 24px;
+}
+
+.receipt-preview-pdf span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.receipt-progress {
+  width: 100%;
+  height: 10px;
+  overflow: hidden;
+  background: #e5e7eb;
+  border-radius: 999px;
+}
+
+.receipt-progress-bar {
+  height: 100%;
+  background: var(--color-red-primary, #b91c1c);
+  border-radius: 999px;
+  transition: width 0.2s ease;
+}
+
+.receipt-status {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0;
+  font-size: 14px;
+  color: var(--color-text-light, #6b7280);
+}
+
+/* ---------- Stage 3: review ---------- */
+
+.receipt-hint {
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--color-text-light, #6b7280);
+}
+
+/* Phone-sized receipts get wide; the table scrolls sideways instead of
+   squashing the ingredient dropdown. */
+.receipt-review-scroll {
+  width: 100%;
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+  border: 1px solid var(--color-border-light, #e5e7eb);
+  border-radius: 8px;
+}
+
+.receipt-review-table {
+  width: 100%;
+  min-width: 720px;
+  border-collapse: collapse;
+  font-size: 14px;
+}
+
+.receipt-review-table th,
+.receipt-review-table td {
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--color-border-light, #e5e7eb);
+  text-align: left;
+  vertical-align: middle;
+}
+
+.receipt-review-table th {
+  font-size: 12px;
+  font-weight: 600;
+  text-transform: uppercase;
+  color: var(--color-text-light, #6b7280);
+  background: #f9fafb;
+}
+
+/* The raw receipt text is the reviewer's ground truth, so it gets room to
+   breathe: two-column-wide bounds keep long lines from crushing the rest of
+   the table, and top alignment stops a wrapped line from shifting the input
+   cells beside it. */
+.receipt-row-raw {
+  min-width: 200px;
+  max-width: 380px;
+  font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+  font-size: 13px;
+  line-height: 1.45;
+  word-break: break-word;
+  vertical-align: top;
+}
+
+.receipt-confidence-flag,
+.receipt-saved-flag {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin-left: 6px;
+  padding: 2px 6px;
+  font-size: 11px;
+  font-weight: 600;
+  border-radius: 4px;
+  white-space: nowrap;
+}
+
+.receipt-confidence-flag {
+  color: #92400e;
+  background: #fef3c7;
+}
+
+.receipt-saved-flag {
+  color: #065f46;
+  background: #d1fae5;
+}
+
+.receipt-match-select {
+  min-width: 150px;
+  max-width: 220px;
+  padding: 7px 8px;
+  font-size: 14px;
+  border: 1px solid var(--color-border-light, #d1d5db);
+  border-radius: 6px;
+  background: #fff;
+}
+
+.receipt-unit-cell {
+  white-space: nowrap;
+}
+
+.receipt-unit-empty {
+  color: #9ca3af;
+}
+
+.receipt-num-input {
+  width: 78px;
+  padding: 7px 8px;
+  font-size: 14px;
+  border: 1px solid var(--color-border-light, #d1d5db);
+  border-radius: 6px;
+}
+
+.receipt-price-input {
+  width: 96px;
+}
+
+.receipt-remove-cell {
+  text-align: center;
+}
+
+.receipt-remove-btn {
+  padding: 6px 8px;
+  color: #b91c1c;
+  background: none;
+  border: none;
+  border-radius: 4px;
+  cursor: pointer;
+}
+
+.receipt-remove-btn:hover {
+  background: #fee2e2;
+}
+
+.receipt-low-confidence td {
+  background: #fffbeb;
+}
+
+/* Lets staff re-add an item the parser dropped (it is counted as an ignored
+   line in the footer). Sits directly under the review table. */
+.receipt-add-row {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.receipt-row-failed td {
+  background: #fef2f2;
+}
+
+.receipt-row-saved td {
+  opacity: 0.65;
+}
+
+.receipt-save-error {
+  margin: 10px 0 0;
+  padding: 8px 10px;
+  font-size: 13px;
+  color: #991b1b;
+  background: #fee2e2;
+  border-radius: 6px;
+}
+
+.receipt-save-done {
+  color: #065f46;
+  background: #d1fae5;
+}
+
+/* ---------- Footer ---------- */
+
+.receipt-footer {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.receipt-footer-info {
+  font-size: 13px;
+  color: var(--color-text-light, #6b7280);
+}
+
+.receipt-footer-actions {
+  display: flex;
+  gap: 10px;
+  margin-left: auto;
+}
+
+.receipt-footer-actions .btn-primary,
+.receipt-footer-actions .btn-secondary {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 44px;
+}
+
+/* Small spinner used by the scanning status line and the save button. */
+.receipt-scanner .spin {
+  width: 14px;
+  height: 14px;
+  display: inline-block;
+  border: 2px solid currentColor;
+  border-right-color: transparent;
+  border-radius: 50%;
+  animation: receipt-spin 0.8s linear infinite;
+}
+
+@keyframes receipt-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@media (max-width: 640px) {
+  .receipt-footer {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .receipt-footer-actions {
+    margin-left: 0;
+  }
+
+  .receipt-footer-actions button {
+    flex: 1;
+  }
+}
