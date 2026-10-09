@@ -4,21 +4,25 @@
 // receipt photo into reviewable, ingredient-matched price lines.
 //
 // Kept in a separate file from routes/marketPrice.js on purpose: that router
-// is the "MANUAL-ONLY" module (see its controller header) and this one is the
-// only place that touches receipt text. Both are mounted on the same
-// /api/market-prices prefix in server.js — Express falls through the first
-// router when no route matches.
+// is the comparison/manual-entry module (see its controller header) and this
+// one is the only place that touches receipt text. Both are mounted on the
+// same /api/market-prices prefix in server.js — Express falls through the
+// first router when no route matches.
 //
 // This module never writes anything. The returned lines are shown in the
 // review screen and only reach the database when staff press "Save confirmed
 // prices", which posts to the existing /market-prices/bulk-upsert endpoint.
 //
-// No website is scraped and no retailer is contacted: the only input is the
-// text the user's own photo produced (tesseract.js in the browser).
+// No website is scraped here and no retailer is contacted: the only input is
+// the text the user's own photo produced (tesseract.js in the browser). The
+// system's single outbound price fetcher is the scheduled DA importer
+// (services/daPriceImportService.js), which reuses this module's DA parser
+// and the shared ingredient matcher in utils/ingredientMatch.js.
 const express = require('express');
-const Fuse = require('fuse.js');
 const authenticateToken = require('../middleware/auth');
 const { supabaseAdmin } = require('../config/supabase');
+const { isDailyPriceIndex, parseDailyPriceIndex } = require('../utils/dailyPriceIndex');
+const { toCoreName, matchIngredient, createIngredientFuse } = require('../utils/ingredientMatch');
 
 const router = express.Router();
 router.use(authenticateToken);
@@ -32,14 +36,6 @@ const MAX_TEXT_LENGTH = 100000;
 // A grocery receipt line above this is a misread (8 -> 888888) — saving it
 // would poison the price history, so the line is dropped before review.
 const MAX_PRICE = 100000;
-
-// Fuse's threshold is "reject anything scoring worse than this". 0.5 keeps
-// plural/singular and word-order differences ("Pork, Ground" vs "Ground Pork")
-// while dropping unrelated words; the flip side is that a passing score can
-// still be a weak match, which is exactly what `confidence` (1 - score) and
-// the <0.6 low-confidence highlight in the UI are for.
-const FUZZY_THRESHOLD = 0.5;
-const CANDIDATE_COUNT = 5;
 
 // The ingredient list changes rarely and every scan re-reads it; 60s keeps a
 // burst of scans off the database without ever serving stale data for long.
@@ -302,6 +298,10 @@ const loadIngredients = async () => {
   return ingredientCache.rows;
 };
 
+// DA commodity names embed their specification; see
+// utils/ingredientMatch.js for toCoreName / matchIngredient / the Fuse
+// options, shared with the scheduled DA importer so both stay in sync.
+
 // ---- handler ----------------------------------------------------------------
 
 // POST /api/market-prices/parse-receipt
@@ -333,47 +333,62 @@ const parseReceipt = async (req, res) => {
     }
 
     const ingredients = await loadIngredients();
-    const fuse = new Fuse(ingredients, {
-      keys: ['name'],
-      threshold: FUZZY_THRESHOLD,
-      ignoreLocation: true,
-      includeScore: true,
-    });
+    const fuse = createIngredientFuse(ingredients);
 
     const lines = [];
     let skipped = 0;
 
-    // mergeSplitLines first: re-joins name/amount pairs that OCR split across
-    // lines, so a 4-item paper stays 4 review rows instead of dropping the
-    // items whose amount landed on its own line.
-    for (const trimmed of mergeSplitLines(text.split(/\r?\n/))) {
-      const parsed = parseReceiptLine(trimmed);
-      if (!parsed) {
-        skipped += 1;
-        continue;
+    if (isDailyPriceIndex(text)) {
+      // DA "Daily Price Index" sheet: a table of commodity -> average price,
+      // not a receipt. parseDailyPriceIndex reconstructs the rows (wrapped
+      // names, "n/a" cells, section headers) and the generic receipt regexes
+      // are skipped entirely — they would drop every name carrying a percent
+      // sign, parenthesis or numeric specification.
+      const { records, skipped: unavailable } = parseDailyPriceIndex(text);
+      skipped = unavailable; // "n/a" commodities have no price to save
+
+      for (const record of records) {
+        if (record.price === null) continue;
+
+        const { top, candidates } = matchIngredient(fuse, record.name, { useCore: true });
+        lines.push({
+          raw: record.name,
+          qty: null,
+          // null -> the UI shows the matched ingredient's own unit, which is
+          // right for the sheet's peso-per-kilo (and per-piece/per-litre) cells.
+          unit: null,
+          price: record.price,
+          ingredientId: top ? top.item.id : null,
+          ingredientName: top ? top.item.name : null,
+          confidence: top ? Math.max(0, Math.min(1, 1 - top.score)) : 0,
+          candidates,
+        });
       }
+    } else {
+      // mergeSplitLines first: re-joins name/amount pairs that OCR split across
+      // lines, so a 4-item paper stays 4 review rows instead of dropping the
+      // items whose amount landed on its own line.
+      for (const trimmed of mergeSplitLines(text.split(/\r?\n/))) {
+        const parsed = parseReceiptLine(trimmed);
+        if (!parsed) {
+          skipped += 1;
+          continue;
+        }
 
-      // Nameless per-unit rows ("100/k") have no name to search — Fuse
-      // treats a non-string pattern as an extended-search expression
-      // (crash), so the guard is explicit; they reach review unassigned.
-      const hits = parsed.name ? fuse.search(parsed.name) : [];
-      const top = hits[0];
-
-      lines.push({
-        raw: trimmed,
-        qty: parsed.qty,
-        // undefined key (e.g. "jar") -> null, which the UI turns into the
-        // matched ingredient's own unit.
-        unit: parsed.unit ? (TO_STORABLE_UNIT[parsed.unit] ?? null) : null,
-        price: parsed.price,
-        ingredientId: top ? top.item.id : null,
-        ingredientName: top ? top.item.name : null,
-        confidence: top ? Math.max(0, Math.min(1, 1 - top.score)) : 0,
-        candidates: hits.slice(0, CANDIDATE_COUNT).map((hit) => ({
-          id: hit.item.id,
-          name: hit.item.name,
-        })),
-      });
+        const { top, candidates } = matchIngredient(fuse, parsed.name);
+        lines.push({
+          raw: trimmed,
+          qty: parsed.qty,
+          // undefined key (e.g. "jar") -> null, which the UI turns into the
+          // matched ingredient's own unit.
+          unit: parsed.unit ? (TO_STORABLE_UNIT[parsed.unit] ?? null) : null,
+          price: parsed.price,
+          ingredientId: top ? top.item.id : null,
+          ingredientName: top ? top.item.name : null,
+          confidence: top ? Math.max(0, Math.min(1, 1 - top.score)) : 0,
+          candidates,
+        });
+      }
     }
 
     res.json({

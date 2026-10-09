@@ -27,6 +27,7 @@
     "multer": "^2.2.0",
     "node-cron": "^4.6.0",
     "nodemailer": "^9.0.3",
+    "pdfjs-dist": "^6.4.299",
     "resend": "^6.28.1",
     "xlsx": "^0.18.5"
   },

@@ -2064,7 +2064,7 @@
 /* ============ MARKET PRICE UI FIXES ============ */
 .inventory-stat-card.market-card-source { border-top-color: #3b82f6; }
 .inventory-stat-card.market-card-avg { border-top-color: #16a34a; }
-.inventory-stat-card.market-card-gap { border-top-color: #d97706; }
+.inventory-stat-card.market-card-savings { border-top-color: #059669; }
 .inventory-stat-card.market-card-updated { border-top-color: #a31d1d; }
 
 .inventory-stat-card-value.is-small {
@@ -2170,3 +2170,12 @@
   }
 }
 
+
+.market-table-row:hover {
+  background: #f9fafb;
+}
+
+.market-table-row.active {
+  background: #eff6ff;
+  outline: 1px solid #93c5fd;
+}

@@ -52,9 +52,9 @@ const mlRoutes = require('./routes/ml');
 const analyticsRoutes = require('./routes/analytics');
 const forecastSummaryRoutes = require('./routes/forecastSummary');
 const marketPriceRoutes = require('./routes/marketPrice');
-// Receipt-OCR routes live separately from marketPrice.js (the manual-only
-// module) but share the same URL prefix — Express falls through the first
-// router when no route matches.
+// Receipt-OCR routes live separately from marketPrice.js (the comparison/
+// manual-entry module) but share the same URL prefix — Express falls through
+// the first router when no route matches.
 const marketPricesReceiptRoutes = require('./routes/marketPrices');
 const auditRoutes = require('./routes/audit');
 const statusRoutes = require('./routes/status');
@@ -199,6 +199,13 @@ setTimeout(() => loadUnitMetadataFromDb(supabaseAdmin).catch(() => {}), 1000);
 // mlService.forecast() directly instead of training auto-triggering it.
 const { registerForecastJobs } = require('./jobs/forecastScheduler');
 registerForecastJobs();
+
+// Daily automated DA "Daily Price Index" import (default 4:00 PM Asia/Manila;
+// see jobs/dailyPriceImportJob.js). Writes matched prices for current
+// inventory ingredients under the da_reference source. Disable entirely with
+// DA_PRICE_IMPORT_ENABLED=false.
+const { registerDailyPriceImportJob } = require('./jobs/dailyPriceImportJob');
+registerDailyPriceImportJob();
 
 app.listen(PORT, () => {
   console.log(`🚀 Server running on port ${PORT}`);
