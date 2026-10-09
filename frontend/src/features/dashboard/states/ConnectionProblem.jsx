@@ -30,6 +30,8 @@ function connectionMessage(error) {
       return `Too many requests. Retrying in ${error.retryInSec ?? error.retryAfterSec ?? 60} s.`;
     case 'auth':
       return 'Your session has expired. Please log in again.';
+    case 'config':
+      return 'This site is missing its server address (VITE_API_URL). The site owner must set it and redeploy.';
     default:
       return 'The dashboard could not be loaded.';
   }

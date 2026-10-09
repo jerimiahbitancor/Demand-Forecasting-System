@@ -179,3 +179,94 @@ test('two simultaneous callers with the same fingerprint share one computation',
   assert.deepEqual(await Promise.all([p1, p2]), ['v', 'v']);
   assert.equal(runs, 1);
 });
+
+// ---- Task 2.0: daily_sales_date_summary view + fallback ----
+
+const {
+  getSaleDateSummary,
+  getUserSaleCoverageFromSummary,
+  _resetFallbackWarning,
+} = require('../services/dataCoverageService');
+
+// Answers per table: a function (query state) -> { data, count, error }.
+function scriptedClient(answers) {
+  const calls = [];
+  return {
+    calls,
+    from(table) {
+      const q = { table, head: false, filters: [], range: null };
+      const b = {
+        select(_c, o = {}) { q.head = Boolean(o.head); return b; },
+        order() { return b; },
+        eq(c, v) { q.filters.push(['eq', c, v]); return b; },
+        in(c, v) { q.filters.push(['in', c, v]); return b; },
+        range(f, t) { q.range = [f, t]; return b; },
+        then(res, rej) {
+          calls.push({ ...q });
+          return Promise.resolve(answers[table](q)).then(res, rej);
+        },
+      };
+      return b;
+    },
+  };
+}
+const page = (rows) => (q) => ({ data: q.range && q.range[0] > 0 ? [] : rows, error: null });
+
+test('getSaleDateSummary reads the view, sorted', async () => {
+  const client = scriptedClient({
+    daily_sales_date_summary: page([{ sale_date: '2025-07-11', sale_rows: 3 }, { sale_date: '2025-07-10', sale_rows: 5 }]),
+  });
+  const { rows, source } = await getSaleDateSummary(client);
+  assert.equal(source, 'view');
+  assert.deepEqual(rows.map((r) => r.sale_date), ['2025-07-10', '2025-07-11']);
+});
+
+test('missing view -> falls back to the paged scan and warns once', async () => {
+  _resetFallbackWarning();
+  const warnings = [];
+  const realWarn = console.warn;
+  console.warn = (msg) => warnings.push(msg);
+  try {
+    const client = scriptedClient({
+      daily_sales_date_summary: () => ({ data: null, error: { code: 'PGRST205', message: "Could not find the table 'public.daily_sales_date_summary'" } }),
+      daily_sales: page([{ sale_date: '2025-07-10' }, { sale_date: '2025-07-10' }, { sale_date: '2025-07-12' }]),
+    });
+    const first = await getSaleDateSummary(client);
+    const second = await getSaleDateSummary(client);
+    assert.equal(first.source, 'scan');
+    assert.deepEqual(first.rows, [{ sale_date: '2025-07-10', sale_rows: 2 }, { sale_date: '2025-07-12', sale_rows: 1 }]);
+    assert.deepEqual(second.rows, first.rows);
+    assert.equal(warnings.length, 1, 'warns only once');
+  } finally {
+    console.warn = realWarn;
+  }
+});
+
+test('a real error (e.g. permission denied on the view) is thrown, not swallowed', async () => {
+  const client = scriptedClient({
+    daily_sales_date_summary: () => ({ data: null, error: { code: '42501', message: 'permission denied for view daily_sales_date_summary' } }),
+    daily_sales: () => { throw new Error('must not fall back on a permission error'); },
+  });
+  await assert.rejects(getSaleDateSummary(client), (err) => err.code === '42501');
+});
+
+test('user coverage uses the view only when every sales row is this user\'s', async () => {
+  const summary = page([{ sale_date: '2025-07-10', sale_rows: 2 }, { sale_date: '2025-07-12', sale_rows: 1 }]);
+  const headCounts = (allCount, mineCount) => (q) => ({
+    data: null,
+    count: q.filters.some((f) => f[0] === 'in') ? mineCount : allCount,
+    error: null,
+  });
+
+  clearCache();
+  const same = await getUserSaleCoverageFromSummary(
+    scriptedClient({ daily_sales: headCounts(3, 3), daily_sales_date_summary: summary }), [1, 2], 'fp-a'
+  );
+  assert.deepEqual(same, { distinctSaleDays: 2, earliestSaleDate: '2025-07-10' });
+
+  clearCache();
+  const differs = await getUserSaleCoverageFromSummary(
+    scriptedClient({ daily_sales: headCounts(4, 3), daily_sales_date_summary: summary }), [1, 2], 'fp-b'
+  );
+  assert.equal(differs, null, 'caller must run its own filtered scan');
+});

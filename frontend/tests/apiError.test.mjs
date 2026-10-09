@@ -50,6 +50,11 @@ check('503 -> server', toApiError(httpError(503)).kind === 'server');
 check('404 -> client', toApiError(httpError(404)).kind === 'client');
 check('400 -> client', toApiError(httpError(400)).kind === 'client');
 check('ERR_CANCELED -> canceled', toApiError({ code: 'ERR_CANCELED', name: 'CanceledError' }).kind === 'canceled');
+{
+  const e = toApiError({ code: 'API_URL_MISSING', message: 'VITE_API_URL is not set' }, 'sent-0009');
+  check('API_URL_MISSING -> config (no URL in this build, nothing sent)', e.kind === 'config', JSON.stringify(e));
+  check('config message names VITE_API_URL', /VITE_API_URL/.test(e.message));
+}
 check('retryAfterSec is null when not rate limited', toApiError(httpError(500, { headers: { 'retry-after': '5' } })).retryAfterSec === null);
 
 console.log('request ID');

@@ -325,3 +325,29 @@
     font-size: 24px;
   }
 }
+
+/* "System Health" link in the header (opens /admin/health) */
+.settings-health-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 14px;
+  border-radius: 8px;
+  border: 1px solid var(--color-border, #ced4da);
+  background: rgba(255, 255, 255, 0.9);
+  color: var(--color-text-primary, #1c2632);
+  font-size: 13px;
+  font-weight: 600;
+  text-decoration: none;
+  white-space: nowrap;
+}
+
+.settings-health-link:hover {
+  border-color: var(--color-red-primary, #7a0101);
+  color: var(--color-red-primary, #7a0101);
+}
+
+.settings-health-link:focus-visible {
+  outline: 2px solid var(--color-secondary, #feb161);
+  outline-offset: 2px;
+}

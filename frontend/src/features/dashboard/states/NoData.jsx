@@ -3,40 +3,33 @@
 // State 1 of 7 — nothing has been uploaded yet. All it does is explain the
 // two setup steps, poll the backend so the owner is moved on automatically
 // once data lands, and send them to Data Management / Inventory Management.
-import { useState, useEffect, useRef } from "react";
-import axios from "axios";
+//
+// Layout: the shared state kit (components/DashboardStateKit.jsx).
+// Data: services/apiClient + hooks/usePolling — one check at a time, paused
+// while the tab is hidden, stopped on a login problem.
+import { useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { FaArrowRight, FaLightbulb } from "react-icons/fa";
 import noDataImage from "../../../assets/images/NoData.png";
 import { useHelp } from "../../../hooks/useHelp";
-import { StateShell, SetupStep, Illustration } from "../components/DashboardStateKit.jsx";
-
-const API_URL = import.meta.env.VITE_API_URL || "http://localhost:5000/api";
-import Navbar from "../../components/Navbar/Navbar";
-import "../states/statescss/NoData.css";
-import { useNavigate } from "react-router-dom"; // Import useNavigate
-import noDataImage from "../../../assets/images/NoData.png";
-import { useHelp } from "../../../hooks/useHelp";
 import apiClient from "../../../services/apiClient";
 import usePolling from "../../../hooks/usePolling";
+import { StateShell, SetupStep, Illustration } from "../components/DashboardStateKit.jsx";
 
-// One check at a time, paused while the tab is hidden (hooks/usePolling.js).
 const NO_DATA_POLL_MS = 60000;
 
 const NoData = ({ initialState }) => {
   const navigate = useNavigate();
   const { openHelp } = useHelp();
   // Seeded from the Dashboard's dashboard-state response — its `progress`
-  // block is the same getUploadProgress() payload /upload/progress returns, so
-  // the bar starts at the real value instead of animating up from zero after
-  // the screen appears.
+  // block is the same getUploadProgress() payload, so the bar starts at the
+  // real value instead of animating up from zero.
   const [progressPercentage, setProgressPercentage] = useState(
     initialState?.progress?.progress || 0
   );
-  const isMountedRef = useRef(true);
-  const [progressPercentage, setProgressPercentage] = useState(0);
+  // The Dashboard asked the same endpoint moments ago; skip the first poll.
+  const skipFirstPollRef = useRef(Boolean(initialState));
 
-  // Navigation handlers
   const handleUploadData = () => {
     navigate("/data-management");
   };
@@ -45,93 +38,22 @@ const NoData = ({ initialState }) => {
     navigate("/inventory-management");
   };
 
-  const getAuthToken = () => sessionStorage.getItem("access_token") || localStorage.getItem("token");
-
-  const apiClient = axios.create({
-    baseURL: API_URL,
-    headers: { "Content-Type": "application/json" },
-  });
-
-  apiClient.interceptors.request.use(
-    (config) => {
-      const token = getAuthToken();
-      if (token) config.headers.Authorization = `Bearer ${token}`;
-      return config;
-    },
-    (error) => Promise.reject(error),
-  );
-
-  const fetchDataStatus = async () => {
-    try {
-      const stateResult = await apiClient.get("/upload/dashboard-state");
-
-      if (!stateResult.data.success) return;
-
-      const { state, progress } = stateResult.data.data;
-      if (!isMountedRef.current) return;
-      setProgressPercentage(progress?.progress || 0);
-
-      if (isMountedRef.current && state !== "no-data") {
-        navigate("/dashboard", { replace: true });
-      }
-    } catch (error) {
-      console.error("Error fetching upload progress:", error);
-      try {
-        const uploadsResponse = await apiClient.get("/upload?limit=1");
-        const uploadCount =
-          uploadsResponse.data.count || uploadsResponse.data.data?.length || 0;
-
-        if (uploadCount > 0) {
-          if (!isMountedRef.current) return;
-          setProgressPercentage(Math.min((uploadCount / 12) * 100, 100));
-          navigate("/dashboard", { replace: true });
-        } else {
-          if (!isMountedRef.current) return;
-          setProgressPercentage(0);
-        }
-      } catch (fallbackError) {
-        console.error("Error fetching upload fallback:", fallbackError);
-        if (isMountedRef.current) setProgressPercentage(0);
-      }
-    }
-  };
-
-  useEffect(() => {
-    isMountedRef.current = true;
-
-    // Only re-check immediately when there was nothing to seed from (a direct
-    // visit to /dashboard/no-data). Otherwise the Dashboard asked the same
-    // endpoint moments ago and 3s from now the poll picks up any change.
-    const initialFetch = initialState
-      ? null
-      : setTimeout(fetchDataStatus, 0);
-    const interval = setInterval(() => {
-      fetchDataStatus();
-    }, 3000);
-
-    return () => {
-      isMountedRef.current = false;
-      if (initialFetch) clearTimeout(initialFetch);
-      clearInterval(interval);
-    };
-  }, [navigate]);
-  const now = new Date();
-  const formattedDate = formatDate(now);
-  const formattedDay = formatDay(now);
-  const formattedTime = formatTime(now);
-
   // A failed check throws (usePolling keeps the last values and records the
-  // error). It no longer guesses a progress value from the upload count.
+  // error). It never guesses a progress value from the upload count.
   const fetchDataStatus = async (signal) => {
-    const stateResult = await apiClient.get('/upload/dashboard-state', { signal });
+    if (skipFirstPollRef.current) {
+      skipFirstPollRef.current = false;
+      return;
+    }
+    const stateResult = await apiClient.get("/upload/dashboard-state", { signal });
 
     if (!stateResult.data.success) return;
 
     const { state, progress } = stateResult.data.data;
     setProgressPercentage(progress?.progress || 0);
 
-    if (state !== 'no-data') {
-      navigate('/dashboard', { replace: true });
+    if (state !== "no-data") {
+      navigate("/dashboard", { replace: true });
     }
   };
 

@@ -23,6 +23,17 @@ process.env.LOG_LEVEL = 'error';
 // ---------- fake supabase (installed before the service loads) ----------
 let db = {};
 let calls = 0;
+let tableLog = []; // table name of every request, for per-table counts
+// 'present': the daily_sales_date_summary view exists (computed from
+// db.daily_sales like Postgres would). 'missing': PostgREST's real
+// "not in schema cache" error, which forces the fallback scan.
+let viewMode = 'present';
+function sourceRows(table) {
+  if (table !== 'daily_sales_date_summary') return db[table] || [];
+  const counts = new Map();
+  for (const r of db.daily_sales || []) counts.set(r.sale_date, (counts.get(r.sale_date) || 0) + 1);
+  return [...counts.entries()].map(([sale_date, sale_rows]) => ({ sale_date, sale_rows }));
+}
 const cmp = (a, b) => (a < b ? -1 : a > b ? 1 : 0);
 function makeBuilder(table) {
   const st = { filters: [], orders: [], limit: null, range: null, head: false, count: false, single: false };
@@ -31,13 +42,22 @@ function makeBuilder(table) {
     eq(c, v) { st.filters.push((r) => r[c] === v); return b; },
     in(c, vs) { const s = new Set(vs); st.filters.push((r) => s.has(r[c])); return b; },
     gte(c, v) { st.filters.push((r) => r[c] != null && r[c] >= v); return b; },
+    gt(c, v) { st.window = true; st.filters.push((r) => r[c] != null && r[c] > v); return b; },
+    lt(c, v) { st.filters.push((r) => r[c] != null && r[c] < v); return b; },
     order(c, o = {}) { st.orders.push({ c, asc: o.ascending !== false, nullsFirst: o.nullsFirst }); return b; },
     limit(n) { st.limit = n; return b; },
     range(f, t) { st.range = [f, t]; return b; },
     maybeSingle() { st.single = true; return b; },
     then(res, rej) {
       calls++;
-      let rows = (db[table] || []).filter((r) => st.filters.every((f) => f(r)));
+      tableLog.push(st.window ? `${table}:window` : table);
+      if (table === 'daily_sales_date_summary' && viewMode === 'missing') {
+        return Promise.resolve({
+          data: null, count: null,
+          error: { code: 'PGRST205', message: "Could not find the table 'public.daily_sales_date_summary' in the schema cache" },
+        }).then(res, rej);
+      }
+      let rows = sourceRows(table).filter((r) => st.filters.every((f) => f(r)));
       if (st.orders.length) {
         rows = [...rows].sort((x, y) => {
           for (const o of st.orders) {
@@ -434,7 +454,20 @@ const SCENARIOS = [
   ['fully operational', 'fully-operational', () => mapAll(withForecast(build({ days: 50 })), 3)],
   ['production size, fully operational', 'fully-operational', () => mapAll(withForecast(build({ days: 446, products: 52, gapEvery: 4 })), 52)],
   ['no baseline (unknown, not bad)', 'fully-operational', () => mapAll(withForecast(build({ days: 50 }), { baseline_wmape: null }), 3)],
+  // Sales rows that are NOT this user's: one on another user's upload, one
+  // with no upload_id. The stats count only this user's rows; the history
+  // rule counts all rows. The view path must notice and fall back for the
+  // stats (Task 2.0 guard), and still match the baseline exactly.
+  ["sales rows outside this user's uploads", 'uploaded-insufficient', () => {
+    const t = build({ days: 446, products: 3, gapEvery: 7 });
+    t.uploads.push({ id: 7777, user_id: 8, filename: 'other.csv', status: 'processed', row_count: 1, upload_date: '2026-09-01T07:00:00', error_message: null });
+    t.daily_sales.push({ id: 900001, upload_id: 7777, product_id: 1, sale_date: '2025-07-13', quantity_sold: 2 });
+    t.daily_sales.push({ id: 900002, upload_id: null, product_id: 2, sale_date: '2025-07-20', quantity_sold: 1 });
+    return t;
+  }],
 ];
+
+const VIEW_MODES = ['present', 'missing'];
 
 // Owner's comparison rule ignores stats.last_sync (new Date() with no uploads).
 const comparable = (r) => {
@@ -442,6 +475,26 @@ const comparable = (r) => {
   if (copy.stats && copy.stats.total_uploads === 0) delete copy.stats.last_sync;
   return copy;
 };
+
+// DELIBERATE CHANGE (Task 2.10, owner-approved Oct 6 2026): "stale" is now
+// counted as missing expected operating days, not forecast_runs.stale_days.
+// So the attention payload's staleDays changes meaning and three fields are
+// added. Everything else, including isStale and the state, must still
+// match; checkStale() asserts the parts that are comparable.
+const STALE_FIELDS = ['staleDays', 'rawStaleDays', 'missingOperatingDays', 'operatingDaysSource'];
+const comparableNew = (r) => {
+  const copy = comparable(r);
+  if (copy.attention) for (const f of STALE_FIELDS) delete copy.attention[f];
+  return copy;
+};
+const comparableOld = comparableNew;
+function checkStale(now, old, label) {
+  if (!old.attention) return;
+  assert.equal(now.attention.rawStaleDays, old.attention.staleDays, `${label}: rawStaleDays keeps the old number`);
+  assert.equal(typeof now.attention.missingOperatingDays, 'number', `${label}: missingOperatingDays is counted`);
+  assert.equal(now.attention.staleDays, now.attention.missingOperatingDays, `${label}: staleDays is the new count`);
+  assert.ok(['configured', 'default'].includes(now.attention.operatingDaysSource), label);
+}
 
 async function run(fn) {
   const saved = console.log;
@@ -457,8 +510,10 @@ async function run(fn) {
   }
 }
 
+for (const mode of VIEW_MODES)
 for (const [name, expected, make, inFlight = false] of SCENARIOS) {
-  test(`same answer as baseline: ${name}`, async () => {
+  test(`same answer as baseline (view ${mode}): ${name}`, async () => {
+    viewMode = mode;
     for (const userId of [7, 'x'.repeat(36), null]) {
       trainingInFlight = inFlight;
       db = make();
@@ -468,8 +523,10 @@ for (const [name, expected, make, inFlight = false] of SCENARIOS) {
       const warm = await run(() => newSvc.getDashboardState(userId));
 
       assert.equal(old.result.state, expected, `baseline state for user ${userId}`);
-      assert.deepEqual(comparable(cold.result), comparable(old.result), `first check, user ${userId}`);
-      assert.deepEqual(comparable(warm.result), comparable(old.result), `cached check, user ${userId}`);
+      assert.deepEqual(comparableNew(cold.result), comparableOld(old.result), `first check, user ${userId}`);
+      assert.deepEqual(comparableNew(warm.result), comparableOld(old.result), `cached check, user ${userId}`);
+      checkStale(cold.result, old.result, `first check, user ${userId}`);
+      checkStale(warm.result, old.result, `cached check, user ${userId}`);
       assert.ok(warm.calls <= cold.calls, 'a cached check never costs more than a cold one');
     }
     trainingInFlight = false;
@@ -485,6 +542,25 @@ test('production size: a cached check makes far fewer Supabase calls', async () 
   const warm = await run(() => newSvc.getDashboardState(7));
   assert.equal(old.calls, 43, 'the baseline matches the 43 calls seen in production logs');
   assert.ok(warm.calls <= 9, `cached check used ${warm.calls} calls`);
+});
+
+// A cache refill (first check after a redeploy, or after the data changed):
+// the expensive case the view is for. Production HAR: ~10 s before.
+test('production size: a cache refill makes far fewer calls with the view', async (t) => {
+  trainingInFlight = false;
+  const counts = {};
+  for (const mode of VIEW_MODES) {
+    viewMode = mode;
+    db = build({ days: 446, products: 52, gapEvery: 4 });
+    coverage.clearCache();
+    counts[mode] = (await run(() => newSvc.getDashboardState(7))).calls;
+  }
+  viewMode = 'present';
+  t.diagnostic(`refill calls, Uploaded Insufficient: Phase 1A refill 48, view missing ${counts.missing}, view present ${counts.present}`);
+  // Without the view the fallback still pages every daily_sales row, but
+  // only ONCE per refill (shared by the stats and the history rule), not twice.
+  assert.ok(counts.missing < 48 && counts.missing > 20, `fallback refill used ${counts.missing} calls`);
+  assert.ok(counts.present <= 16, `refill with the view used ${counts.present} calls`);
 });
 
 const CHANGES = [
@@ -511,8 +587,10 @@ const CHANGES = [
   }],
 ];
 
+for (const mode of VIEW_MODES)
 for (const [name, mutate, visible = true] of CHANGES) {
-  test(`still the same answer after the data changes: ${name}`, async () => {
+  test(`still the same answer after the data changes (view ${mode}): ${name}`, async () => {
+    viewMode = mode;
     trainingInFlight = false;
     db = build({ days: 446, products: 3, gapEvery: 7 });
     coverage.clearCache();
@@ -520,7 +598,8 @@ for (const [name, mutate, visible = true] of CHANGES) {
     mutate(db);
     const old = await run(() => reference.getDashboardState(7));
     const now = await run(() => newSvc.getDashboardState(7));
-    assert.deepEqual(comparable(now.result), comparable(old.result));
+    assert.deepEqual(comparableNew(now.result), comparableOld(old.result));
+    checkStale(now.result, old.result, name);
     if (visible) assert.notDeepEqual(comparable(now.result), comparable(before.result), 'the change is visible');
   });
 }
@@ -535,4 +614,69 @@ test('reference uses the same helpers as production code', () => {
   assert.equal(supabaseAdmin, fake);
   assert.equal(typeof RETRAINING_CADENCE_DAYS, 'number');
   assert.equal(PH_TZ, 'Asia/Manila');
+});
+
+// ---- Task 2.10: stale = missing expected operating days (deliberate change) ----
+//
+// "Today" is the real clock, so the scenario is built around it: the last
+// confirmed open day is 2 days ago, and yesterday is made a non-operating
+// day (like a normal Sunday). Old rule: stale_days 1 -> "data needs
+// attention". New rule: 0 missing operating days -> fully operational.
+test('a non-operating day in between is not "stale" any more (Task 2.10)', async () => {
+  viewMode = 'present';
+  trainingInFlight = false;
+  const today = dayjs().tz(PH_TZ);
+  const yesterdayWeekday = (today.subtract(1, 'day').day() + 6) % 7; // 0 = Monday
+  const operatingDays = [0, 1, 2, 3, 4, 5, 6].filter((d) => d !== yesterdayWeekday);
+
+  const make = () => {
+    const t = mapAll(withForecast(build({ days: 50 })), 3);
+    t.forecast_runs.push({ run_at: today.toISOString(), stale_days: 1, last_confirmed_date: today.subtract(2, 'day').format('YYYY-MM-DD') });
+    t.business_profile = [{ id: 1, operating_days: operatingDays }];
+    return t;
+  };
+
+  db = make();
+  coverage.clearCache();
+  const old = await run(() => reference.getDashboardState(7));
+  assert.equal(old.result.state, 'data-needs-attention', 'the old rule called it stale');
+
+  const cold = await run(() => newSvc.getDashboardState(7));
+  const warm = await run(() => newSvc.getDashboardState(7));
+  assert.equal(cold.result.state, 'fully-operational', 'the new rule does not');
+  assert.equal(warm.result.state, 'fully-operational');
+
+  // Same data, but yesterday IS an operating day with no upload -> stale, 1 day.
+  db = make();
+  db.business_profile = [{ id: 1, operating_days: [0, 1, 2, 3, 4, 5, 6] }];
+  coverage.clearCache();
+  const stale = await run(() => newSvc.getDashboardState(7));
+  assert.equal(stale.result.state, 'data-needs-attention');
+  assert.equal(stale.result.attention.isStale, true);
+  assert.equal(stale.result.attention.missingOperatingDays, 1);
+  assert.equal(stale.result.attention.rawStaleDays, 1);
+  assert.equal(stale.result.attention.operatingDaysSource, 'configured');
+
+  // ...and marking yesterday closed clears it.
+  db.business_days.push({ id: 99001, business_date: today.subtract(1, 'day').format('YYYY-MM-DD'), status: 'confirmed_closed', confirmed_at: new Date().toISOString() });
+  const closed = await run(() => newSvc.getDashboardState(7));
+  assert.equal(closed.result.state, 'fully-operational');
+});
+
+test('missing operating days add at most 1 request to a cached check (Task 2.10)', async () => {
+  viewMode = 'present';
+  trainingInFlight = false;
+  const today = dayjs().tz(PH_TZ);
+  db = mapAll(withForecast(build({ days: 50 })), 3);
+  db.forecast_runs.push({ run_at: today.toISOString(), stale_days: 0, last_confirmed_date: today.subtract(1, 'day').format('YYYY-MM-DD') });
+  coverage.clearCache();
+  const old = await run(() => reference.getDashboardState(7));
+  await run(() => newSvc.getDashboardState(7));
+  tableLog = [];
+  const warm = await run(() => newSvc.getDashboardState(7));
+  assert.equal(warm.result.state, old.result.state);
+  const reads = (table) => tableLog.filter((t) => t === table).length;
+  assert.equal(reads('business_profile'), 1, 'one business_profile read per check');
+  assert.equal(reads('business_days:window'), 0, 'the business_days window comes from the fingerprint cache');
+  assert.equal(warm.calls, 14 + 1, 'Phase 1A cached check (14) + the business_profile read');
 });

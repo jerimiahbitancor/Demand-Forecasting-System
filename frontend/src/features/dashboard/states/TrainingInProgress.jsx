@@ -2,66 +2,66 @@
 //
 // State 4 of 7 — ml-service is actively training. Because ml-service's
 // /train is a single blocking HTTP call (no job queue), there is no real
-// incremental percentage or ETA to report: the bar below is an
-// indeterminate shimmer, not a fabricated number. Dashboard.jsx's 5s poll
-// of /upload/dashboard-state moves the owner on as soon as the in-flight
-// flag clears, so this component never navigates by itself.
-import { useState, useEffect } from "react";
-import axios from "axios";
-import Navbar from "../../components/Navbar/Navbar";
-import "../states/statescss/TrainingInProgress.css";
-import { useState, useRef } from "react";
+// incremental percentage or ETA to report: the training bar below is an
+// indeterminate shimmer, not a fabricated number.
+//
+// Layout: the shared state kit (components/DashboardStateKit.jsx).
+// Data: services/apiClient + hooks/usePolling — one request at a time per
+// poll, paused while the tab is hidden, stopped on a login problem.
+import { useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { FaArrowRight, FaCheckCircle, FaSpinner } from "react-icons/fa";
 import trainingInProgressImage from "../../../assets/images/NoData.png";
 import { useHelp } from "../../../hooks/useHelp";
+import apiClient from "../../../services/apiClient";
+import usePolling from "../../../hooks/usePolling";
 import {
   StateShell,
   StateBanner,
-  SetupStep,
   Illustration,
   ProgressMeter,
   Meter,
+  SetupStep,
   ProductsDetected,
 } from "../components/DashboardStateKit.jsx";
-import apiClient from "../../../services/apiClient";
-import usePolling from "../../../hooks/usePolling";
 
-// One request at a time, paused while the tab is hidden (hooks/usePolling.js).
 // Was 3 s (training status), 5 s (upload progress) and 10 s (products).
 const TRAINING_STATUS_POLL_MS = 15000;
 const UPLOAD_PROGRESS_POLL_MS = 60000;
 const PRODUCTS_POLL_MS = 60000;
 
-const TrainingInProgress = ({ initialState }) => {
-const TrainingInProgress = ({ onRefreshState }) => {
+const TrainingInProgress = ({ onRefreshState, initialState }) => {
   const navigate = useNavigate();
   const { openHelp } = useHelp();
+
   // Seeded from the Dashboard's dashboard-state response: `stats` is the same
-  // getUploadStats() payload /upload/stats/summary returns, and `progress` the
-  // same getUploadProgress() payload /upload/progress returns. Both used to be
-  // re-requested on mount, so the bars sat at their defaults for a beat after
-  // the screen appeared.
-  const seedStats = initialState?.stats;
-  const seedMonths = Math.min(seedStats?.months_uploaded || 0, 12);
+  // getUploadStats() payload /upload/stats/summary returns, and `progress`
+  // the same getUploadProgress() payload /upload/progress returns — real
+  // values, so the screen is right on the first frame. Without a seed
+  // everything starts as null and shows "—", never an invented number
+  // (these used to start at 50%, 100% and 12/12 months).
+  const seedStats = initialState?.stats || null;
+  const seedProgress = initialState?.progress?.progress;
+  const seedMonths = seedStats ? Number(seedStats.months_uploaded) || 0 : null;
+
   const [progressPercentage, setProgressPercentage] = useState(
-    initialState?.progress?.progress ?? 50
+    seedProgress != null ? Number(seedProgress) || 0 : null
   );
+  const [uploadedMonths, setUploadedMonths] = useState(seedMonths);
   const [dataProgress, setDataProgress] = useState(
-    seedStats ? Math.min((seedMonths / 12) * 100, 100) : 100
+    seedMonths != null ? Math.min((seedMonths / 12) * 100, 100) : null
   );
-  const [uploadedMonths, setUploadedMonths] = useState(seedMonths || 12);
   const [totalMonthsNeeded] = useState(12);
   const [isTrainingComplete, setIsTrainingComplete] = useState(false);
   const [products, setProducts] = useState([]);
-  const [totalProducts, setTotalProducts] = useState(0);
-  const [productsWithRecipes, setProductsWithRecipes] = useState(3);
-  const [totalProducts, setTotalProducts] = useState(12);
+  const [totalProducts, setTotalProducts] = useState(null);
+
   // Last known "training running?" answer, to spot the true -> false change.
   const wasTrainingRef = useRef(null);
-  const dataStatusLoadedRef = useRef(false);
+  const dataStatusLoadedRef = useRef(Boolean(seedStats));
+  // Upload progress and stats came with the Dashboard's request moments ago.
+  const skipFirstProgressPollRef = useRef(Boolean(seedStats) && seedProgress != null);
 
-  // Navigation handlers
   const handleUploadData = () => {
     navigate("/data-management");
   };
@@ -74,117 +74,35 @@ const TrainingInProgress = ({ onRefreshState }) => {
     navigate("/inventory-management", { state: { product: productName } });
   };
 
-  const getAuthToken = () => sessionStorage.getItem("access_token") || localStorage.getItem("token");
-
-  const apiClient = axios.create({
-    baseURL: API_URL,
-    headers: { "Content-Type": "application/json" },
-  });
-
-  apiClient.interceptors.request.use(
-    (config) => {
-      const token = getAuthToken();
-      if (token) config.headers.Authorization = `Bearer ${token}`;
-      return config;
-    },
-    (error) => Promise.reject(error),
-  );
-  const formatDate = (date) => {
-    const months = [
-      "JANUARY", "FEBRUARY", "MARCH", "APRIL", "MAY", "JUNE",
-      "JULY", "AUGUST", "SEPTEMBER", "OCTOBER", "NOVEMBER", "DECEMBER",
-    ];
-    const month = months[date.getMonth()];
-    const day = String(date.getDate()).padStart(2, "0");
-    const year = date.getFullYear();
-    return `${month}-${day}-${year}`;
-  };
-
-  const formatDay = (date) => {
-    const days = [
-      "SUNDAY", "MONDAY", "TUESDAY", "WEDNESDAY", "THURSDAY", "FRIDAY", "SATURDAY",
-    ];
-    return days[date.getDay()];
-  };
-
-  const formatTime = (date) => {
-    let hours = date.getHours();
-    const minutes = String(date.getMinutes()).padStart(2, "0");
-    const ampm = hours >= 12 ? "PM" : "AM";
-    hours = hours % 12;
-    hours = hours ? hours : 12;
-    return `${hours}:${minutes} ${ampm}`;
-  };
-
-  const now = new Date();
-  const formattedDate = formatDate(now);
-  const formattedDay = formatDay(now);
-  const formattedTime = formatTime(now);
-
   // A failed request throws: the screen keeps its last values (usePolling
   // records the error). The old catch blocks filled in invented values
   // (12/12 months, 50% progress, and a hardcoded list of 12 product names),
   // which looked like real data.
 
-  // Fetch data status
   const fetchDataStatus = async (signal) => {
-    try {
-      const statusResponse = await apiClient.get("/upload/stats/summary");
-      setIsLoading(true);
-
-      const statusResponse = await apiClient.get("/upload/stats/summary", { signal });
-
-      if (statusResponse.data.success) {
-        const data = statusResponse.data.data;
-
-        const totalRows = data.sales_records || data.total_rows || 0;
-        const totalUploads = data.total_uploads || 0;
-        let months = data.months_uploaded || 12;
-
-        const monthsUploaded = data.months_uploaded || 12;
-
-        let months = monthsUploaded;
-        if (months === 0 && totalUploads > 0) {
-          months = Math.min(totalUploads, totalMonthsNeeded);
-        }
-
-        if (totalRows > 0 && months === 0) {
-          months = 1;
-        }
-
-        setUploadedMonths(months);
-        setDataProgress(Math.min((months / totalMonthsNeeded) * 100, 100));
-      }
-    } catch (error) {
-      console.error("Error fetching data status:", error);
-      setUploadedMonths(12);
-      setDataProgress(100);
+    const statusResponse = await apiClient.get("/upload/stats/summary", { signal });
+    if (statusResponse.data.success) {
+      const data = statusResponse.data.data;
+      // The server's own number, as is. This used to turn 0 into 12
+      // (`|| 12`), then count uploads as months, then round 0 up to 1.
+      const months = Number(data.months_uploaded) || 0;
+      setUploadedMonths(months);
+      setDataProgress(Math.min((months / totalMonthsNeeded) * 100, 100));
+      dataStatusLoadedRef.current = true;
     }
   };
 
-  // Fetch upload progress
-  const fetchUploadProgress = async () => {
-    try {
-      const response = await apiClient.get("/upload/progress");
-      if (response.data.success) {
-        setProgressPercentage(response.data.data.progress || 50);
-        setHasData(totalRows > 0 || totalUploads > 0);
-
-        const progressPercent = (months / totalMonthsNeeded) * 100;
-        setDataProgress(Math.min(progressPercent, 100));
-        dataStatusLoadedRef.current = true;
-      }
-    } finally {
-      setIsLoading(false);
-    }
-  };
-
-  // Fetch upload progress. The data status is loaded on the first run (as
-  // the old mount sequence did) and whenever processing is complete.
+  // Upload progress. The data status is loaded on the first run (unless it
+  // was seeded) and whenever processing is complete.
   const fetchUploadProgress = async (signal) => {
+    if (skipFirstProgressPollRef.current) {
+      skipFirstProgressPollRef.current = false;
+      return;
+    }
     const response = await apiClient.get("/upload/progress", { signal });
     if (response.data.success) {
-      const progress = response.data.data.progress || 50;
+      // The real upload progress (was `|| 50`, an invented fallback).
+      const progress = Number(response.data.data.progress) || 0;
       setProgressPercentage(progress);
 
       if (progress >= 100 || !dataStatusLoadedRef.current) {
@@ -193,25 +111,11 @@ const TrainingInProgress = ({ onRefreshState }) => {
     }
   };
 
-  // Fetch training status. mlService.isTrainingInFlight() only knows "still
-  // running" vs "finished" — see the note at the top of this file.
-  const fetchTrainingStatus = async () => {
-    try {
-      const response = await apiClient.get("/ml/training-status");
-      if (response.data.success) {
-        setIsTrainingComplete(!response.data.data.isTraining);
-      }
-    } catch (error) {
-      console.error("Error fetching training status:", error);
-  // Fetch training status. ml-service's /train is a single blocking HTTP
-  // call (no job queue), so there's no real incremental percentage or ETA
-  // to report — mlService.isTrainingInFlight() only knows "still running"
-  // vs "finished". The percentage bar below is intentionally left as a
-  // generic in-progress indicator, not a fabricated number. When
-  // isTraining flips from true to false, this asks the Dashboard to
-  // re-check its state right away (onRefreshState) instead of waiting for
-  // its next poll, so the owner moves on to whichever state follows
-  // (forecasts-ready-recipes-pending, fully-operational, or
+  // Training status. mlService.isTrainingInFlight() only knows "still
+  // running" vs "finished". When isTraining flips from true to false, this
+  // asks the Dashboard to re-check its state right away (onRefreshState)
+  // instead of waiting for its next poll, so the owner moves on to whichever
+  // state follows (forecasts-ready-recipes-pending, fully-operational, or
   // data-needs-attention).
   const fetchTrainingStatus = async (signal) => {
     const response = await apiClient.get("/ml/training-status", { signal });
@@ -225,48 +129,6 @@ const TrainingInProgress = ({ onRefreshState }) => {
     }
   };
 
-  // Fetch products data
-  const fetchProducts = async () => {
-    try {
-      const [activeResponse, inactiveResponse] = await Promise.all([
-        apiClient.get("/mapping/products", { params: { status: "active", forceRefresh: "true" } }),
-        apiClient.get("/mapping/products", { params: { status: "inactive", forceRefresh: "true" } }),
-      ]);
-      const activeProducts = activeResponse.data.success ? activeResponse.data.data || [] : [];
-      const inactiveProducts = inactiveResponse.data.success ? inactiveResponse.data.data || [] : [];
-      const productsData = [...activeProducts, ...inactiveProducts];
-      setProducts(productsData);
-      setTotalProducts(productsData.length);
-    } catch (error) {
-      console.error("Error fetching products:", error);
-    }
-  };
-
-  useEffect(() => {
-    // Parallel, and only for what dashboard-state doesn't already carry. This
-    // used to await four requests one after another before showing anything.
-    async function load() {
-      if (!seedStats) {
-        // Unseeded (direct visit): no stats or progress to start from.
-        fetchDataStatus();
-        fetchUploadProgress();
-      }
-      fetchTrainingStatus();
-      fetchProducts();
-    }
-
-    load();
-
-    const uploadInterval = setInterval(fetchUploadProgress, 5000);
-    const trainingInterval = setInterval(fetchTrainingStatus, 3000);
-    const productsInterval = setInterval(fetchProducts, 10000);
-
-    return () => {
-      clearInterval(uploadInterval);
-      clearInterval(trainingInterval);
-      clearInterval(productsInterval);
-    };
-  }, []);
   const fetchProducts = async (signal) => {
     const [activeResponse, inactiveResponse] = await Promise.all([
       apiClient.get("/mapping/products", { params: { status: "active", forceRefresh: "true" }, signal }),
@@ -277,18 +139,15 @@ const TrainingInProgress = ({ onRefreshState }) => {
     const productsData = [...activeProducts, ...inactiveProducts];
     setProducts(productsData);
     setTotalProducts(productsData.length);
-
-    const withRecipes = productsData.filter(p => p.product_ingredients?.length).length;
-    setProductsWithRecipes(withRecipes);
   };
 
   usePolling(fetchUploadProgress, UPLOAD_PROGRESS_POLL_MS);
   usePolling(fetchTrainingStatus, TRAINING_STATUS_POLL_MS);
   usePolling(fetchProducts, PRODUCTS_POLL_MS);
 
-  const getMonths = () => Math.min(uploadedMonths, totalMonthsNeeded);
-  const productsNeedingRecipes = products.filter((p) => !p.product_ingredients?.length);
-  const productsWithoutRecipes = productsNeedingRecipes.length;
+  const getMonths = () =>
+    uploadedMonths == null ? null : Math.min(uploadedMonths, totalMonthsNeeded);
+  const productsWithoutRecipes = products.filter((p) => !p.product_ingredients?.length).length;
 
   return (
     <StateShell
@@ -369,9 +228,7 @@ const TrainingInProgress = ({ onRefreshState }) => {
                   {isTrainingComplete ? "Training Complete" : "Still training..."}
                 </span>
                 <span className="sk-live-sub">
-                  {isTrainingComplete
-                    ? "Ready to view forecasts"
-                    : "Analyzing the pattern..."}
+                  {isTrainingComplete ? "Ready to view forecasts" : "Analyzing the pattern..."}
                 </span>
               </div>
 
@@ -379,6 +236,7 @@ const TrainingInProgress = ({ onRefreshState }) => {
                 <ProgressMeter
                   label="Model Training"
                   tone="info"
+                  value={isTrainingComplete ? 100 : null}
                   indeterminate={!isTrainingComplete}
                   caption={
                     isTrainingComplete
@@ -418,16 +276,17 @@ const TrainingInProgress = ({ onRefreshState }) => {
           >
             <div className="sk-note sk-note--ok">
               <FaCheckCircle size={16} style={{ color: "var(--sk-success)", marginRight: 8, verticalAlign: -3 }} />
-              Historical data upload complete. All {getMonths()} months of data have been
-              successfully uploaded and validated.
+              {getMonths() == null
+                ? "Checking your uploaded sales data…"
+                : `Historical data upload complete. All ${getMonths()} months of data have been successfully uploaded and validated.`}
             </div>
 
             <div style={{ marginTop: 16 }}>
               <Meter
                 tone="ok"
                 label="Historical Data"
-                value={`${getMonths()} / ${totalMonthsNeeded} months Complete`}
-                percent={dataProgress}
+                value={getMonths() == null ? "—" : `${getMonths()} / ${totalMonthsNeeded} months Complete`}
+                percent={dataProgress ?? 0}
               />
             </div>
           </SetupStep>
@@ -436,7 +295,7 @@ const TrainingInProgress = ({ onRefreshState }) => {
             index={2}
             title="Add Ingredient Recipes to Your Products"
             tag={
-              products.length === 0 ? (
+              totalProducts == null ? (
                 <span className="sk-tag">Checking…</span>
               ) : productsWithoutRecipes > 0 ? (
                 <span className="sk-tag sk-tag--warn">
@@ -466,8 +325,8 @@ const TrainingInProgress = ({ onRefreshState }) => {
             <div className="sk-subcard" style={{ marginTop: 18 }}>
               <div className="sk-subcard-title">Products detected from your sales data</div>
               <p className="sk-subcard-text">
-                {products.length === 0 ? (
-                  "Looking for the products detected in your sales data…"
+                {totalProducts == null ? (
+                  "Checking your products…"
                 ) : (
                   <>
                     <strong>{totalProducts}</strong> products were found in your sales data.{" "}

@@ -1391,6 +1391,29 @@ def stage_production_reality_check(model, model_version: str,
         print("  No previous model to compare against (only one model has ever been trained).")
         previous_html = "<p>Only one model has ever been trained — there is no previous version to compare against.</p>"
         warning_html = ""
+    elif not (set(model.trained_product_ids) & set(previous_model.trained_product_ids)):
+        # No product in common. This happens when the products table was
+        # rebuilt between the two training runs (e.g. the database was reset
+        # and the history re-uploaded): every product gets a NEW id, so the
+        # older model's ids point at nothing today. There is nothing fair to
+        # score both models on, and scoring an empty set crashes sklearn —
+        # so say so plainly instead.
+        prev_ids = sorted(previous_model.trained_product_ids)
+        cur_ids = sorted(model.trained_product_ids)
+        print(f"  13c skipped: the previous model ({previous_version}) and the current model "
+              "share no products. Its product ids "
+              f"({prev_ids[0]}..{prev_ids[-1]}) do not overlap today's ({cur_ids[0]}..{cur_ids[-1]}), "
+              "which usually means the products table was rebuilt between the two training runs.")
+        previous_html = (
+            f"<p>The previous model <code>{previous_version}</code> was trained on "
+            f"{len(prev_ids)} products (ids {prev_ids[0]}&ndash;{prev_ids[-1]}); the current one on "
+            f"{len(cur_ids)} (ids {cur_ids[0]}&ndash;{cur_ids[-1]}). They have <strong>no products in "
+            "common</strong>, which usually means the products table was rebuilt between the two "
+            "training runs, so every product got a new id. There is no fair set of rows to score both "
+            "models on, so no comparison is shown. This will work again from the next retrain, when "
+            "both models are trained on the same products.</p>"
+        )
+        warning_html = ""
     else:
         # Both models are scored on the same rows: products BOTH of them
         # were trained on.

@@ -38,15 +38,20 @@ const ReadyToTrain = ({ initialState }) => {
   // is the same getUploadStats() payload /upload/stats/summary returns — so the
   // month/day counters are correct on the first frame rather than counting up
   // from zero a moment later.
+  //
+  // null = not loaded yet (shown as "—"), so a slow or failed load never
+  // reads as "0 days / 0 products".
   const seedStats = initialState?.stats;
   const [uploadedMonths, setUploadedMonths] = useState(
-    Math.min(seedStats?.actual_months_uploaded || 0, 12)
+    seedStats ? Math.min(seedStats.actual_months_uploaded || 0, 12) : null
   );
-  const [uploadedDays, setUploadedDays] = useState(seedStats?.actual_days_uploaded || 0);
+  const [uploadedDays, setUploadedDays] = useState(
+    seedStats ? seedStats.actual_days_uploaded || 0 : null
+  );
   const [totalMonthsNeeded] = useState(12);
   const [products, setProducts] = useState([]);
-  const [totalProducts, setTotalProducts] = useState(0);
-  const [productsWithoutRecipes, setProductsWithoutRecipes] = useState(0);
+  const [totalProducts, setTotalProducts] = useState(null);
+  const [productsWithoutRecipes, setProductsWithoutRecipes] = useState(null);
   const [isStarting, setIsStarting] = useState(false);
 
   const getAuthToken = () => sessionStorage.getItem("access_token") || localStorage.getItem("token");
@@ -140,7 +145,7 @@ const ReadyToTrain = ({ initialState }) => {
     setIsStarting(true);
     // This POST doesn't resolve until training finishes server-side —
     // don't wait on it to navigate. Dashboard.jsx polls
-    // /upload/dashboard-state every 5s and will pick up
+    // /upload/dashboard-state (hooks/usePolling.js) and will pick up
     // 'training-in-progress' as soon as the in-flight flag flips, well
     // before this promise itself settles.
     //
@@ -256,9 +261,13 @@ const ReadyToTrain = ({ initialState }) => {
             <div style={{ marginTop: 16 }}>
               <Meter
                 tone="ok"
-                label={`Sales data actually uploaded (${uploadedDays} day${uploadedDays === 1 ? "" : "s"})`}
-                value={`${uploadedMonths} / ${totalMonthsNeeded} months`}
-                percent={(uploadedMonths / totalMonthsNeeded) * 100}
+                label={
+                  uploadedDays == null
+                    ? "Sales data actually uploaded (—)"
+                    : `Sales data actually uploaded (${uploadedDays} day${uploadedDays === 1 ? "" : "s"})`
+                }
+                value={uploadedMonths == null ? "—" : `${uploadedMonths} / ${totalMonthsNeeded} months`}
+                percent={((uploadedMonths ?? 0) / totalMonthsNeeded) * 100}
               />
             </div>
 
@@ -283,7 +292,7 @@ const ReadyToTrain = ({ initialState }) => {
             index={2}
             title="Add Ingredient Recipes to Your Products"
             tag={
-              products.length === 0 ? (
+              totalProducts == null ? (
                 <span className="sk-tag">Checking…</span>
               ) : productsWithoutRecipes > 0 ? (
                 <span className="sk-tag sk-tag--warn">
@@ -312,8 +321,8 @@ const ReadyToTrain = ({ initialState }) => {
             <div className="sk-subcard" style={{ marginTop: 18 }}>
               <div className="sk-subcard-title">Products detected from your sales data</div>
               <p className="sk-subcard-text">
-                {products.length === 0 ? (
-                  "Looking for the products detected in your sales data…"
+                {totalProducts == null ? (
+                  "Checking your products…"
                 ) : (
                   <>
                     <strong>{totalProducts}</strong> products were found in your uploaded

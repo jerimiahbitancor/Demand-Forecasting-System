@@ -13,6 +13,8 @@
 //         'client'       — any other 4xx
 //         'canceled'     — we aborted it ourselves (page closed, poll stopped);
 //                          never shown to the user
+//         'config'       — this build has no backend URL (VITE_API_URL);
+//                          nothing was sent
 //
 // Pure: no axios or Vite imports, so it runs in plain Node tests.
 
@@ -24,6 +26,7 @@ const DEFAULT_MESSAGES = {
   server: 'The server had a problem.',
   client: 'The request was not accepted.',
   canceled: 'The request was canceled.',
+  config: 'This site is not configured with a backend address (VITE_API_URL).',
 };
 
 // Reads a header from axios's AxiosHeaders, a fetch Headers, or a plain object.
@@ -54,6 +57,7 @@ export function parseRetryAfter(value, now = Date.now()) {
 
 function classify(error, status) {
   const code = error && error.code;
+  if (code === 'API_URL_MISSING') return 'config';
   if (code === 'ERR_CANCELED' || (error && error.name === 'CanceledError')) return 'canceled';
   if (code === 'ECONNABORTED' || code === 'ETIMEDOUT') return 'timeout';
   if (!status) return 'network';
