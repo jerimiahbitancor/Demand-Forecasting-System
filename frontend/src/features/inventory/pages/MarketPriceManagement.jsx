@@ -21,6 +21,7 @@ import {
   FaLightbulb,
   FaPiggyBank,
   FaExclamationTriangle,
+  FaCamera,
 } from 'react-icons/fa';
 import axios from 'axios';
 import toast from 'react-hot-toast';
@@ -44,6 +45,8 @@ import {
 } from 'recharts';
 import InventoryModal from '../components/InventoryModal';
 import MarketPriceModal from '../components/market modal/MarketPriceModal';
+import ReceiptScanner from '../components/market modal/ReceiptScanner';
+import { uploadReceiptFile, receiptTimestamp } from '../components/market modal/receiptStorage';
 import Swal from '../../../utils/swal';
 
 const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:5000/api';
@@ -286,6 +289,17 @@ const MarketPriceManagement = () => {
   const [newSourceLabel, setNewSourceLabel] = useState("");
   const [newSourceTooltip, setNewSourceTooltip] = useState("");
   const [sourceActionLoading, setSourceActionLoading] = useState(false);
+
+  // Receipt OCR scan. The source is picked BEFORE the scan because every
+  // price row written from the receipt has to name the store it came from.
+  const [isScannerOpen, setIsScannerOpen] = useState(false);
+  const [receiptSource, setReceiptSource] = useState("");
+  const [scannerKey, setScannerKey] = useState(0);
+  // One receipt can produce several bulk-upsert calls (one per ingredient).
+  // After a partial failure these let a retry write ONLY the ingredients that
+  // have not been saved yet, instead of duplicating the ones that did.
+  const savedReceiptIdsRef = useRef(new Set());
+  const receiptTimestampRef = useRef(null);
 
   // Inline cell editing state
   const [editingCell, setEditingCell] = useState(null); // { ingredientId, source }
@@ -572,6 +586,98 @@ const MarketPriceManagement = () => {
     setSelectedRow(row);
     setIsDeleteOpen(true);
   };
+
+  // ============ RECEIPT SCANNER ============
+  const openScanner = () => {
+    if (!receiptSource) {
+      toast.error('Pick the market source of the receipt first');
+      return;
+    }
+    // Fresh refs/key per scan so a new receipt never inherits the previous
+    // one's "already saved" markers or timestamp.
+    savedReceiptIdsRef.current = new Set();
+    receiptTimestampRef.current = null;
+    setScannerKey((prev) => prev + 1);
+    setIsScannerOpen(true);
+  };
+
+  // Called by ReceiptScanner when staff press "Save confirmed prices".
+  // Uploads the photo first (the price rows point at it), then writes one
+  // bulk-upsert per ingredient. Returns a report the scanner uses to lock the
+  // rows that succeeded and highlight the ones to retry.
+  const handleReceiptCommit = useCallback(
+    async (entries, receiptFile) => {
+      const groups = new Map();
+      entries.forEach((entry) => {
+        if (!groups.has(entry.ingredientId)) groups.set(entry.ingredientId, []);
+        groups.get(entry.ingredientId).push(entry);
+      });
+
+      // Everything in this batch may already be on the server (a retry after
+      // a partial failure) — re-sending it would append duplicate history rows.
+      const pending = [...groups.entries()].filter(
+        ([ingredientId]) => !savedReceiptIdsRef.current.has(ingredientId)
+      );
+      if (!pending.length) {
+        return { ok: true, savedIngredientIds: [...groups.keys()], failedIngredientIds: [] };
+      }
+
+      // One timestamp per receipt: every copy of the receipt file gets the
+      // same name, only the ingredient folder differs.
+      if (!receiptTimestampRef.current) receiptTimestampRef.current = receiptTimestamp();
+
+      const saved = [];
+      const failed = [];
+
+      for (const [ingredientId, ingredientEntries] of pending) {
+        try {
+          const receiptUrl = receiptFile
+            ? await uploadReceiptFile(receiptFile, ingredientId, receiptTimestampRef.current)
+            : null;
+
+          const response = await apiClient.post('/market-prices/bulk-upsert', {
+            ingredientId,
+            entries: ingredientEntries.map((entry) => ({
+              ...entry,
+              ...(receiptUrl ? { receipt_url: receiptUrl } : {}),
+            })),
+          });
+
+          if (!response.data || !response.data.success) {
+            throw new Error((response.data && response.data.error) || 'Save was rejected');
+          }
+
+          saved.push(ingredientId);
+          savedReceiptIdsRef.current.add(ingredientId);
+        } catch (error) {
+          console.error(`Receipt save failed for ingredient ${ingredientId}:`, error);
+          failed.push(ingredientId);
+        }
+      }
+
+      if (!failed.length) {
+        toast.success(
+          `Saved ${saved.length} price ${saved.length === 1 ? 'entry' : 'entries'} from the receipt`
+        );
+        setIsScannerOpen(false);
+        setTimeout(() => fetchComparison(), 300);
+        return { ok: true, savedIngredientIds: saved, failedIngredientIds: [] };
+      }
+
+      const failedNames = failed
+        .map((id) => {
+          const ingredient = ingredients.find((item) => Number(item.id) === Number(id));
+          return ingredient ? ingredient.name : `ingredient #${id}`;
+        })
+        .join(', ');
+      toast.error(
+        `Not saved: ${failedNames}` +
+          (saved.length ? ` — ${saved.length} other ingredient(s) were saved` : '')
+      );
+      return { ok: false, savedIngredientIds: saved, failedIngredientIds: failed };
+    },
+    [apiClient, fetchComparison, ingredients]
+  );
 
   // ============ SOURCE MANAGEMENT ============
   const refreshAfterSourcesChanged = () => {
@@ -1351,6 +1457,36 @@ const MarketPriceManagement = () => {
             <FaStore /> Manage Sources
           </button>
 
+          {/* Receipt source is chosen before scanning: every price row
+              written from the receipt has to name the store it came from. */}
+          <select
+            className="inventory-sort-select"
+            value={receiptSource}
+            onChange={(event) => setReceiptSource(event.target.value)}
+            title="Which store is this receipt from?"
+            aria-label="Receipt market source"
+          >
+            <option value="">Receipt source…</option>
+            {sources.map((item) => (
+              <option key={item.key} value={item.key}>
+                {item.label}
+              </option>
+            ))}
+          </select>
+
+          <button
+            className="btn-secondary"
+            onClick={openScanner}
+            disabled={!receiptSource}
+            title={
+              receiptSource
+                ? 'Photograph a receipt and match its lines to ingredients'
+                : 'Pick the receipt source first'
+            }
+          >
+            <FaCamera /> Scan Receipt
+          </button>
+
           <button className="btn-primary" onClick={openCreateModal}>
             <FaPlus /> Add Price Entry
           </button>
@@ -1661,6 +1797,17 @@ const MarketPriceManagement = () => {
               setSelectedRow(null);
             }
           }}
+        />
+      )}
+
+      {/* ============ RECEIPT SCANNER MODAL ============ */}
+      {isScannerOpen && (
+        <ReceiptScanner
+          key={scannerKey}
+          source={receiptSource}
+          apiClient={apiClient}
+          onCommit={handleReceiptCommit}
+          onClose={() => setIsScannerOpen(false)}
         />
       )}
 

@@ -621,7 +621,7 @@ const bulkUpsertPrices = async (req, res) => {
     const sources = await getMarketSources();
     const validEntries = [];
     for (const entry of entries || []) {
-      const { source, price, unit } = entry || {};
+      const { source, price, unit, receipt_url, ocr_confidence } = entry || {};
 
       // Only non-empty prices are saved (the modal never sends blank rows).
       if (price === undefined || price === null || price === '') continue;
@@ -637,14 +637,35 @@ const bulkUpsertPrices = async (req, res) => {
         throw validationError(`unit must be one of: ${ALLOWED_UNITS.join(', ')}`);
       }
 
-      validEntries.push({
+      const savedEntry = {
         ingredient_id: ingredientId,
         source,
         price: Number(price),
         unit: normalizedUnit,
         is_manual_entry: true,
         scraped_at: normalizeScrapedAt(entry.scraped_at)
-      });
+      };
+
+      // Optional receipt-provenance fields, sent only by the receipt-OCR
+      // review screen. The manual modal and the inline table editor never
+      // send them, so their payloads keep writing exactly what they wrote
+      // before. receipt_url is an upload URL from our own storage bucket —
+      // it is stored as text, never fetched by the server.
+      if (receipt_url !== undefined && receipt_url !== null && receipt_url !== '') {
+        if (typeof receipt_url !== 'string' || receipt_url.length > 1024) {
+          throw validationError('receipt_url must be a string of at most 1024 characters');
+        }
+        savedEntry.receipt_url = receipt_url;
+      }
+      if (ocr_confidence !== undefined && ocr_confidence !== null && ocr_confidence !== '') {
+        const confidence = Number(ocr_confidence);
+        if (!Number.isFinite(confidence) || confidence < 0 || confidence > 1) {
+          throw validationError('ocr_confidence must be a number between 0 and 1');
+        }
+        savedEntry.ocr_confidence = confidence;
+      }
+
+      validEntries.push(savedEntry);
     }
 
     if (!validEntries.length) {
