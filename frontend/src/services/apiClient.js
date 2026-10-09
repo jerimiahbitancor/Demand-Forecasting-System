@@ -11,8 +11,9 @@
 
 import axios from 'axios';
 import { makeRequestId, toApiError } from '../utils/apiError';
+import { API_URL, API_BASE_ERROR } from '../config/apiBase';
 
-export const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:5000/api';
+export { API_URL };
 
 const REQUEST_ID_HEADER = 'X-Request-ID';
 
@@ -25,11 +26,16 @@ function getAuthToken() {
 }
 
 const apiClient = axios.create({
-  baseURL: API_URL,
+  baseURL: API_URL || undefined,
   timeout: 15000,
 });
 
 apiClient.interceptors.request.use((config) => {
+  // Deployed build with no VITE_API_URL: refuse instead of calling
+  // localhost (see config/resolveApiBase.js).
+  if (!API_URL) {
+    throw Object.assign(new Error(API_BASE_ERROR), { code: 'API_URL_MISSING', config });
+  }
   const token = getAuthToken();
   if (token) config.headers.set('Authorization', `Bearer ${token}`);
   if (!config.headers.get(REQUEST_ID_HEADER)) {

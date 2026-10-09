@@ -57,6 +57,7 @@ const marketPriceRoutes = require('./routes/marketPrice');
 // router when no route matches.
 const marketPricesReceiptRoutes = require('./routes/marketPrices');
 const auditRoutes = require('./routes/audit');
+const statusRoutes = require('./routes/status');
 
 const app = express();
 const PORT = process.env.PORT || 5000;
@@ -115,6 +116,7 @@ app.use('/api/forecast', forecastSummaryRoutes);
 app.use('/api/market-prices', marketPriceRoutes);
 app.use('/api/market-prices', marketPricesReceiptRoutes);
 app.use('/api/audit', auditRoutes);
+app.use('/api/status', statusRoutes);
 
 // ============= HEALTH CHECK =============
 app.get('/health', (req, res) => {
