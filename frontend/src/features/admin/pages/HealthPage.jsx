@@ -27,9 +27,17 @@ const CHECK_TITLES = {
   mlPipeline: 'Model and forecasts',
   uploads: 'Sales uploads',
   scheduler: 'Forecast schedule',
+  dailyPriceImport: 'DA price import',
   server: 'API server',
 };
-const CHECK_ORDER = ['database', 'mlService', 'mlPipeline', 'uploads', 'scheduler', 'server'];
+// Known checks first, in this order. Any check the API adds later is still
+// shown (after these, by its key), so a warning can never be hidden behind
+// an "all green" page while the overall banner says otherwise.
+const CHECK_ORDER = ['database', 'mlService', 'mlPipeline', 'uploads', 'scheduler', 'dailyPriceImport', 'server'];
+const orderedCheckNames = (checks) => [
+  ...CHECK_ORDER.filter((name) => checks[name]),
+  ...Object.keys(checks).filter((name) => !CHECK_ORDER.includes(name)).sort(),
+];
 
 const OVERALL_TEXT = {
   ok: { title: 'All systems OK', tone: 'ok' },
@@ -92,6 +100,21 @@ function rowsFor(name, d = {}) {
       return [
         ['Daily 9:00 AM', run(d.lastRuns && d.lastRuns.daily)],
         ['Weekly Monday 9:00 AM', run(d.lastRuns && d.lastRuns.weekly)],
+      ];
+    }
+    case 'dailyPriceImport': {
+      const runs = Array.isArray(d.lastRuns) ? d.lastRuns : [];
+      const last = runs.length ? runs[runs.length - 1] : null;
+      const lastText = last
+        ? `${last.status}${last.finishedAt ? `, ${fmtTime(last.finishedAt)}` : ''}`
+          + `${last.saved != null ? ` (${last.saved} price(s) saved)` : ''}`
+          + `${last.reason ? ` — ${last.reason}` : ''}`
+        : 'Not run since restart';
+      return [
+        ['Enabled', d.enabled === false ? 'No (DA_PRICE_IMPORT_ENABLED=false)' : d.enabled ? 'Yes' : '—'],
+        ['Schedule', d.cron ? `${d.cron} (${d.timezone || '—'})` : '—'],
+        ['Last run', lastText],
+        ['DA sheet date', last && last.sheetDate ? last.sheetDate : '—'],
       ];
     }
     case 'server': {
@@ -174,7 +197,7 @@ const HealthPage = () => {
             </section>
 
             <div className="health-grid">
-              {CHECK_ORDER.filter((name) => data.checks[name]).map((name) => {
+              {orderedCheckNames(data.checks).map((name) => {
                 const check = data.checks[name];
                 return (
                   <article key={name} className={`health-card status-${check.status}`}>
