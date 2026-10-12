@@ -83,6 +83,23 @@ router.post('/close', authenticate, async (req, res) => {
   }
 });
 
+// GET /api/business-days/pending — operating days in the last 60 days, up
+// to yesterday (Asia/Manila), with no upload and no closed mark. Feeds the
+// "Days that need your answer" card on Data Management, which the 4:00 AM /
+// 7:00 AM upload reminders link to. Same rule as the reminders
+// (utils/uploadReminders.js).
+router.get('/pending', authenticate, async (req, res) => {
+  try {
+    const { supabaseAdmin } = require('../config/supabase');
+    const { getPendingDays } = require('../services/uploadReminderService');
+    const data = await getPendingDays(supabaseAdmin);
+    res.json({ success: true, data });
+  } catch (error) {
+    console.error('Error listing days that need an answer:', error);
+    res.status(500).json({ success: false, error: 'Failed to list days that need an answer', details: error.message });
+  }
+});
+
 // GET /api/business-days?from=YYYY-MM-DD&to=YYYY-MM-DD
 router.get('/', authenticate, async (req, res) => {
   try {

@@ -171,6 +171,8 @@ function buildDefaultChecks(deps = {}) {
   const client = deps.client || require('../config/supabase').supabaseAdmin;
   const requestStats = deps.requestStats || require('../utils/requestStats');
   const getSchedulerStatus = deps.getSchedulerStatus || (() => require('../jobs/forecastScheduler').getSchedulerStatus());
+  const getUploadReminderStatus = deps.getUploadReminderStatus
+    || (() => require('../jobs/uploadReminderJob').getUploadReminderStatus());
   const getDailyPriceImportStatus = deps.getDailyPriceImportStatus
     || (() => require('../jobs/dailyPriceImportJob').getDailyPriceImportStatus());
   const isTrainingInFlight = deps.isTrainingInFlight || (() => require('./mlService').isTrainingInFlight());
@@ -346,13 +348,20 @@ function buildDefaultChecks(deps = {}) {
 
     async scheduler() {
       const status = getSchedulerStatus();
-      const failed = Object.entries(status.lastRuns || {})
+      // The upload reminder job (04:00 / 07:00) sits in the same card as
+      // the forecast jobs: name 'uploadReminder', its crons, lastRuns.
+      const uploadReminder = getUploadReminderStatus();
+      const failedRuns = (runs, prefix) => Object.entries(runs || {})
         .filter(([, r]) => r && r.status === 'failed')
-        .map(([name, r]) => `${name} run failed at ${r.finishedAt}${r.error ? `: ${r.error}` : ''}`);
+        .map(([name, r]) => `${prefix}${name} run failed at ${r.finishedAt}${r.error ? `: ${r.error}` : ''}`);
+      const failed = [
+        ...failedRuns(status.lastRuns, ''),
+        ...failedRuns(uploadReminder && uploadReminder.lastRuns, 'uploadReminder '),
+      ];
       return {
         status: failed.length ? 'warn' : 'ok',
         reason: failed.join('; ') || null,
-        details: status,
+        details: { ...status, uploadReminder },
       };
     },
 

@@ -15,6 +15,13 @@
 const path = require('path');
 
 const cmp = (a, b) => (a < b ? -1 : a > b ? 1 : 0);
+// 'metadata->>key' reads a JSON field as text, like PostgREST does.
+const field = (row, column) => {
+  const [base, key] = column.split('->>');
+  if (key === undefined) return row[column];
+  const value = row[base] && row[base][key];
+  return value == null ? null : String(value);
+};
 const day = (v) => (v == null ? v : String(v).slice(0, 10));
 
 function createFakeSupabase(seed = {}, options = {}) {
@@ -67,7 +74,7 @@ function createFakeSupabase(seed = {}, options = {}) {
       upsert(rows, o = {}) { st.op = 'upsert'; st.values = Array.isArray(rows) ? rows : [rows]; st.upsertOpts = o; return b; },
       update(values) { st.op = 'update'; st.values = values; return b; },
       delete() { st.op = 'delete'; return b; },
-      eq(c, v) { st.filters.push((r) => r[c] === v || (r[c] != null && v != null && String(r[c]) === String(v))); return b; },
+      eq(c, v) { st.filters.push((r) => { const x = field(r, c); return x === v || (x != null && v != null && String(x) === String(v)); }); return b; },
       neq(c, v) { st.filters.push((r) => r[c] !== v); return b; },
       in(c, vs) { const s = new Set((vs || []).map(String)); st.filters.push((r) => s.has(String(r[c]))); return b; },
       gte(c, v) { st.filters.push((r) => r[c] != null && r[c] >= v); return b; },

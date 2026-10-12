@@ -207,6 +207,11 @@ registerForecastJobs();
 const { registerDailyPriceImportJob } = require('./jobs/dailyPriceImportJob');
 registerDailyPriceImportJob();
 
+// Upload reminders, 4:00 AM and 7:00 AM Asia/Manila: yesterday's sales not
+// uploaded and not marked closed -> notification (see jobs/uploadReminderJob.js).
+const { registerUploadReminderJobs } = require('./jobs/uploadReminderJob');
+registerUploadReminderJobs();
+
 app.listen(PORT, () => {
   console.log(`🚀 Server running on port ${PORT}`);
 });
