@@ -5,7 +5,8 @@
 //   cd frontend && node tests/appEvents.test.mjs
 
 const {
-  createChangeDetector, emitDataChanged, onDataChanged, describeChange, DATA_CHANGED_EVENT,
+  createChangeDetector, createNewestDetector, emitDataChanged, onDataChanged, describeChange, DATA_CHANGED_EVENT,
+  requestNotificationCheck, onNotificationCheck, NOTIFICATION_CHECK_EVENT,
 } = await import('../src/utils/appEvents.js');
 
 const failures = [];
@@ -38,6 +39,24 @@ console.log('change detector');
   check('first notification after an empty baseline -> change', detect(n(1, 'upload'))?.id === 1);
 }
 
+console.log('newest detector (toast pop-out)');
+{
+  const detect = createNewestDetector();
+  check('first result is only a baseline', detect(n(10, 'upload')) === null);
+  check('same newest -> nothing', detect(n(10, 'upload')) === null);
+  const found = detect(n(11, 'low_stock'));
+  check('any new kind is reported (not just watched)', found && found.id === 11, JSON.stringify(found));
+  check('reported once', detect(n(11, 'low_stock')) === null);
+  check('older id -> nothing', detect(n(5, 'upload')) === null);
+  check('no id -> nothing', detect({ metadata: { kind: 'upload' } }) === null);
+  check('returns the whole notification', detect(n(12, 'market_price'))?.id === 12);
+}
+{
+  const detect = createNewestDetector();
+  check('empty list as baseline', detect(null) === null);
+  check('first notification after empty baseline is reported', detect(n(1, 'info'))?.id === 1);
+}
+
 console.log('event');
 {
   const target = new EventTarget();
@@ -50,6 +69,22 @@ console.log('event');
   check('unsubscribe works', seen.length === 1);
   check('event name', DATA_CHANGED_EVENT === 'dfs:data-changed');
   check('no target -> no crash', (() => { emitDataChanged({}, null); onDataChanged(() => {}, null)(); return true; })());
+}
+
+console.log('notification check nudge');
+{
+  const target = new EventTarget();
+  let hits = 0;
+  const off = onNotificationCheck(() => { hits += 1; }, target);
+  requestNotificationCheck(target);
+  check('handler runs on request', hits === 1);
+  requestNotificationCheck(target);
+  check('runs again on each request', hits === 2);
+  off();
+  requestNotificationCheck(target);
+  check('unsubscribe works', hits === 2);
+  check('event name', NOTIFICATION_CHECK_EVENT === 'dfs:check-notifications');
+  check('no target -> no crash', (() => { requestNotificationCheck(null); onNotificationCheck(() => {}, null)(); return true; })());
 }
 
 console.log('toast text');

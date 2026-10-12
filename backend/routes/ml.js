@@ -67,7 +67,7 @@ router.post('/train', authenticate, async (req, res) => {
     // guard actually means: block only while an upload is genuinely
     // still being written, not forever afterward.
     if (latestUpload && latestUpload.status === 'pending') {
-      createNotification({
+      await createNotification({
         userId: userIdOf(req),
         type: 'pending',
         title: 'Training on hold',
@@ -82,7 +82,7 @@ router.post('/train', authenticate, async (req, res) => {
       });
     }
 
-    createNotification({
+    await createNotification({
       userId: userIdOf(req),
       type: 'pending',
       title: 'Forecast model training started',
@@ -93,7 +93,7 @@ router.post('/train', authenticate, async (req, res) => {
 
     const result = await mlService.train();
 
-    createNotification({
+    await createNotification({
       userId: userIdOf(req),
       type: 'success',
       title: 'Forecast model training completed',
@@ -104,7 +104,7 @@ router.post('/train', authenticate, async (req, res) => {
 
     res.json({ success: true, data: result });
   } catch (error) {
-    createNotification({
+    await createNotification({
       userId: userIdOf(req),
       type: 'error',
       title: 'Model training failed',
@@ -131,7 +131,7 @@ router.post('/forecast', authenticate, async (req, res) => {
     const { horizonDays, runType } = req.body || {};
     const result = await mlService.forecast({ horizonDays, runType });
 
-    createNotification({
+    await createNotification({
       userId: userIdOf(req),
       type: 'success',
       title: 'Forecast report is ready',
@@ -142,7 +142,7 @@ router.post('/forecast', authenticate, async (req, res) => {
 
     res.json({ success: true, data: result });
   } catch (error) {
-    createNotification({
+    await createNotification({
       userId: userIdOf(req),
       type: 'error',
       title: 'Forecast generation failed',

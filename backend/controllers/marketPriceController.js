@@ -475,7 +475,7 @@ const createManualPrice = async (req, res) => {
       actorOf(req)
     );
 
-    createNotification({
+    await createNotification({
       userId: req.user?.user_id,
       type: 'success',
       title: `Price recorded for ${ingredient.name || `ingredient #${ingredientId}`}`,
@@ -555,7 +555,7 @@ const updateManualPrice = async (req, res) => {
       actorOf(req)
     );
 
-    createNotification({
+    await createNotification({
       userId: req.user?.user_id,
       type: 'success',
       title: `Price updated for ${ingredientName}`,
@@ -714,7 +714,7 @@ const bulkUpsertPrices = async (req, res) => {
       actorOf(req)
     );
 
-    createNotification({
+    await createNotification({
       userId: req.user?.user_id,
       type: 'success',
       title: `Market prices updated for ${cleanIngredientName}`,

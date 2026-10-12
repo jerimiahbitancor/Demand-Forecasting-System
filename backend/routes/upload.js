@@ -162,7 +162,7 @@ router.post(
             actorOf(req)
           );
 
-          createNotification({
+          await createNotification({
             userId: numericId,
             type: 'success',
             title: 'Menu data uploaded',
@@ -290,7 +290,7 @@ router.post(
             actorOf(req)
           );
 
-          createNotification({
+          await createNotification({
             userId: numericId,
             type: 'success',
             title: 'Sales data uploaded',

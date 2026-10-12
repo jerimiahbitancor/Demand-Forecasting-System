@@ -307,3 +307,87 @@
     padding: 12px 16px;
   }
 }
+
+/* New-notification pop-out: same look as a list item, slides in from the
+   right. Mounted through a portal on <body>, stacked top-right. */
+.notification-popup-host {
+  position: fixed;
+  top: 16px;
+  right: 16px;
+  z-index: 9999;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  pointer-events: none;
+}
+
+.notification-toast {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  width: 360px;
+  max-width: calc(100vw - 32px);
+  padding: 14px 16px;
+  background: var(--color-bg-white, #FFFFFF);
+  border: 1px solid var(--color-border-light, #e8e0dd);
+  border-left: 4px solid var(--color-red-primary, #7A0101);
+  border-radius: 12px;
+  box-shadow: 0 10px 40px rgba(0, 0, 0, 0.18);
+  cursor: pointer;
+  pointer-events: auto;
+  animation: notificationToastIn 0.35s cubic-bezier(0.21, 1.02, 0.73, 1) both;
+}
+
+.notification-toast:hover {
+  background: var(--color-bg-light, #f8f9fa);
+}
+
+.notification-toast.notification-toast-exit {
+  animation: notificationToastOut 0.25s ease-in both;
+}
+
+.notification-toast-close {
+  background: none;
+  border: none;
+  color: var(--color-text-light, #6c757d);
+  cursor: pointer;
+  padding: 2px;
+  font-size: 13px;
+  border-radius: 6px;
+  flex-shrink: 0;
+  transition: color 0.2s, background 0.2s;
+}
+
+.notification-toast-close:hover {
+  color: var(--color-red-primary, #7A0101);
+  background: var(--color-bg-light, #f8f9fa);
+}
+
+@keyframes notificationToastIn {
+  from {
+    opacity: 0;
+    transform: translateX(120%);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+
+@keyframes notificationToastOut {
+  from {
+    opacity: 1;
+    transform: translateX(0);
+  }
+  to {
+    opacity: 0;
+    transform: translateX(120%);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .notification-toast,
+  .notification-toast.notification-toast-exit {
+    animation: none;
+  }
+}
