@@ -16,6 +16,7 @@ import axios from 'axios';
 import * as XLSX from 'xlsx';
 import toast from 'react-hot-toast';
 import { useAuth } from "../../../context/AuthContext";
+import { requestNotificationCheck } from "../../../utils/appEvents";
 
 import {
   isRunAlive,
@@ -920,6 +921,7 @@ const UploadData = ({
         }
       });
       window.dispatchEvent(new CustomEvent('products:updated'));
+      requestNotificationCheck();
       
       if (onUploadSuccess) {
         onUploadSuccess({ filesUploaded: uploaded, totalFiles });
@@ -1307,6 +1309,7 @@ const UploadData = ({
         }
       });
       window.dispatchEvent(new CustomEvent('products:updated'));
+      requestNotificationCheck();
       
       setTimeout(() => {
         setMenuUploadStatus(null);

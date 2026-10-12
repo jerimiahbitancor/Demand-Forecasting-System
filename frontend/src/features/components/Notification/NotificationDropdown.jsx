@@ -1,5 +1,6 @@
 // components/NotificationDropdown.jsx
-import { useState, useEffect, useCallback, useMemo } from 'react';
+import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
+import { createPortal } from 'react-dom';
 import { 
   FaRegBell, 
   FaCheckCircle, 
@@ -15,7 +16,7 @@ import axios from 'axios';
 import toast from 'react-hot-toast';
 import sharedApiClient from '../../../services/apiClient';
 import usePolling from '../../../hooks/usePolling';
-import { createChangeDetector, emitDataChanged } from '../../../utils/appEvents';
+import { createChangeDetector, createNewestDetector, emitDataChanged, onNotificationCheck } from '../../../utils/appEvents';
 import './NotificationDropdown.css';
 
 const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:5000/api';
@@ -37,6 +38,121 @@ const NOTIFICATION_POLL_MS = 30000;
 // the switch.
 const detectDataChange = createChangeDetector();
 
+// Reports ANY new notification so it can pop out as a toast. Module-scope for
+// the same reason as detectDataChange: the bell remounts on navigation, and a
+// per-mount baseline would re-toast the newest notification every time.
+const detectNewest = createNewestDetector();
+
+// Pure render helpers shared by the list and the pop-out toast.
+const getNotificationIcon = (type) => {
+  switch (type) {
+    case 'success': return <FaCheckCircle />;
+    case 'warning': return <FaExclamationCircle />;
+    case 'error': return <FaTimes />;
+    case 'upload': return <FaUpload />;
+    case 'file': return <FaFileAlt />;
+    case 'pending': return <FaClock />;
+    default: return <FaInfoCircle />;
+  }
+};
+
+const getNotificationTypeClass = (type) => {
+  switch (type) {
+    case 'success': return 'notification-success';
+    case 'warning': return 'notification-warning';
+    case 'error': return 'notification-error';
+    case 'upload': return 'notification-upload';
+    case 'file': return 'notification-file';
+    case 'pending': return 'notification-pending';
+    default: return 'notification-info';
+  }
+};
+
+const formatTime = (dateString) => {
+  if (!dateString) return 'Just now';
+  try {
+    const date = new Date(dateString);
+    const now = new Date();
+    const diffMs = now - date;
+    const diffMins = Math.floor(diffMs / 60000);
+    const diffHours = Math.floor(diffMs / 3600000);
+    const diffDays = Math.floor(diffMs / 86400000);
+
+    if (diffMins < 1) return 'Just now';
+    if (diffMins < 60) return `${diffMins} minute${diffMins > 1 ? 's' : ''} ago`;
+    if (diffHours < 24) return `${diffHours} hour${diffHours > 1 ? 's' : ''} ago`;
+    if (diffDays < 7) return `${diffDays} day${diffDays > 1 ? 's' : ''} ago`;
+    return date.toLocaleDateString();
+  } catch {
+    return 'Just now';
+  }
+};
+
+// How long a popped-out notification stays on screen before sliding away.
+const POPUP_DURATION_MS = 6000;
+const POPUP_EXIT_MS = 250;
+
+// A single pop-out notification card. Rendered through a portal (see
+// NotificationDropdown) instead of react-hot-toast so it is guaranteed to
+// appear and can reuse the exact notification-list markup/styles.
+const NotificationPopup = ({ notificationKey, notification, onOpen, onDismiss }) => {
+  const [leaving, setLeaving] = useState(false);
+  const exitTimer = useRef(null);
+
+  const dismiss = useCallback(() => {
+    setLeaving(true);
+    exitTimer.current = setTimeout(() => onDismiss(notificationKey), POPUP_EXIT_MS);
+  }, [onDismiss, notificationKey]);
+
+  useEffect(() => {
+    const timer = setTimeout(dismiss, POPUP_DURATION_MS);
+    return () => {
+      clearTimeout(timer);
+      clearTimeout(exitTimer.current);
+    };
+  }, [dismiss]);
+
+  const open = () => {
+    onOpen(notification);
+    dismiss();
+  };
+
+  return (
+    <div
+      className={`notification-toast ${leaving ? 'notification-toast-exit' : ''}`}
+      role="button"
+      tabIndex={0}
+      onClick={open}
+      onKeyDown={(event) => {
+        if (event.key === 'Enter' || event.key === ' ') {
+          event.preventDefault();
+          open();
+        }
+      }}
+    >
+      <div className={`notification-icon ${getNotificationTypeClass(notification.type)}`}>
+        {getNotificationIcon(notification.type)}
+      </div>
+      <div className="notification-content">
+        <div className="notification-title">{notification.title}</div>
+        <div className="notification-message">{notification.message}</div>
+        <div className="notification-time">{formatTime(notification.created_at)}</div>
+      </div>
+      <button
+        type="button"
+        className="notification-toast-close"
+        aria-label="Dismiss notification"
+        onClick={(event) => {
+          event.stopPropagation();
+          dismiss();
+        }}
+      >
+        <FaTimes />
+      </button>
+    </div>
+  );
+};
+
 const NotificationDropdown = () => {
   const [isOpen, setIsOpen] = useState(false);
   const [notifications, setNotifications] = useState(() => {
@@ -49,6 +165,21 @@ const NotificationDropdown = () => {
   const [loading, setLoading] = useState(false);
 
   const navigate = useNavigate();
+
+  // Newly-arrived notifications that pop out on the right. Each gets a
+  // monotonic key so React keeps them independent while they animate.
+  const [popups, setPopups] = useState([]);
+  const popupKeyRef = useRef(0);
+
+  const removePopup = useCallback((key) => {
+    setPopups((prev) => prev.filter((popup) => popup.key !== key));
+  }, []);
+
+  const pushPopup = useCallback((notification) => {
+    popupKeyRef.current += 1;
+    const key = popupKeyRef.current;
+    setPopups((prev) => [...prev, { key, notification }]);
+  }, []);
 
   // Get auth token from sessionStorage
   const getAuthToken = useCallback(() => {
@@ -147,11 +278,54 @@ const NotificationDropdown = () => {
     setUnreadCount(count);
     sessionStorage.setItem(STORAGE_KEYS.UNREAD_COUNT, count.toString());
 
-    const change = detectDataChange((response.data.data || [])[0] || null);
-    if (change) emitDataChanged(change);
-  }, []);
+    const newest = (response.data.data || [])[0] || null;
 
-  usePolling(checkNewest, NOTIFICATION_POLL_MS);
+    const change = detectDataChange(newest);
+    if (change) emitDataChanged(change);
+
+    // Pop the new one out on the right (styled like the notification list).
+    const popped = detectNewest(newest);
+    console.info('[notification-popup] poll', {
+      count,
+      newestId: newest ? newest.id : null,
+      popped: popped ? popped.id : null,
+    });
+    if (popped) pushPopup(popped);
+  }, [pushPopup]);
+
+  const { refresh: refreshNotifications } = usePolling(checkNewest, NOTIFICATION_POLL_MS);
+
+  // Actions that create a notification (upload/training/forecast/saving
+  // prices/...) dispatch this so the new card pops out right away. The server
+  // usually writes the row a moment AFTER it answers the request (and some
+  // notifications are fire-and-forget), so check now and again over the next
+  // couple of seconds. detectNewest de-dupes by id, so the extra checks never
+  // re-pop the same notification.
+  useEffect(() => {
+    let timers = [];
+    const check = () => refreshNotifications();
+    const handler = () => {
+      check();
+      timers.forEach(clearTimeout);
+      timers = [500, 1200, 2500].map((ms) => setTimeout(check, ms));
+    };
+    const off = onNotificationCheck(handler);
+    return () => {
+      off();
+      timers.forEach(clearTimeout);
+    };
+  }, [refreshNotifications]);
+
+  // TEMP diagnostic: from the browser console run
+  //   __popNotification({ id: 1, type: 'info', title: 'Test', message: 'Hello', created_at: new Date().toISOString() })
+  // If the card slides in from the right, rendering works and the problem is
+  // the new-notification detection; if nothing appears, rendering is the issue.
+  useEffect(() => {
+    window.__popNotification = pushPopup;
+    return () => {
+      if (window.__popNotification === pushPopup) delete window.__popNotification;
+    };
+  }, [pushPopup]);
 
   // Initial load
   useEffect(() => {
@@ -241,52 +415,9 @@ const NotificationDropdown = () => {
     }
   };
 
-  const getNotificationIcon = (type) => {
-    switch(type) {
-      case 'success': return <FaCheckCircle />;
-      case 'warning': return <FaExclamationCircle />;
-      case 'error': return <FaTimes />;
-      case 'upload': return <FaUpload />;
-      case 'file': return <FaFileAlt />;
-      case 'pending': return <FaClock />;
-      default: return <FaInfoCircle />;
-    }
-  };
-
-  const getNotificationTypeClass = (type) => {
-    switch(type) {
-      case 'success': return 'notification-success';
-      case 'warning': return 'notification-warning';
-      case 'error': return 'notification-error';
-      case 'upload': return 'notification-upload';
-      case 'file': return 'notification-file';
-      case 'pending': return 'notification-pending';
-      default: return 'notification-info';
-    }
-  };
-
-  const formatTime = (dateString) => {
-    if (!dateString) return 'Just now';
-    try {
-      const date = new Date(dateString);
-      const now = new Date();
-      const diffMs = now - date;
-      const diffMins = Math.floor(diffMs / 60000);
-      const diffHours = Math.floor(diffMs / 3600000);
-      const diffDays = Math.floor(diffMs / 86400000);
-
-      if (diffMins < 1) return 'Just now';
-      if (diffMins < 60) return `${diffMins} minute${diffMins > 1 ? 's' : ''} ago`;
-      if (diffHours < 24) return `${diffHours} hour${diffHours > 1 ? 's' : ''} ago`;
-      if (diffDays < 7) return `${diffDays} day${diffDays > 1 ? 's' : ''} ago`;
-      return date.toLocaleDateString();
-    } catch {
-      return 'Just now';
-    }
-  };
-
   return (
-    <div className="notification-wrapper">
+    <>
+      <div className="notification-wrapper">
       <button 
         className="action-btn notification-btn" 
         aria-label="Notifications"
@@ -369,7 +500,23 @@ const NotificationDropdown = () => {
           )}
         </div>
       )}
-    </div>
+      </div>
+
+      {createPortal(
+        <div className="notification-popup-host">
+          {popups.map(({ key, notification }) => (
+            <NotificationPopup
+              key={key}
+              notificationKey={key}
+              notification={notification}
+              onOpen={handleNotificationClick}
+              onDismiss={removePopup}
+            />
+          ))}
+        </div>,
+        document.body
+      )}
+    </>
   );
 };
 

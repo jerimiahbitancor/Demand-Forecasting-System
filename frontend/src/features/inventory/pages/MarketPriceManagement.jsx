@@ -25,6 +25,7 @@ import {
 import axios from 'axios';
 import toast from 'react-hot-toast';
 import { useAuth } from "../../../context/AuthContext";
+import { requestNotificationCheck } from "../../../utils/appEvents";
 import Tippy from '@tippyjs/react';
 import 'tippy.js/dist/tippy.css';
 import 'tippy.js/animations/scale.css';
@@ -716,6 +717,7 @@ const MarketPriceManagement = () => {
         toast.success(response.data.message || 'Prices saved successfully!');
         setIsModalOpen(false);
         setSelectedRow(null);
+        requestNotificationCheck();
         setTimeout(() => fetchComparison(), 300);
       }
     } catch (error) {
@@ -940,6 +942,7 @@ const MarketPriceManagement = () => {
       .then((res) => {
         if (res.data.success) {
           toast.success(res.data.message || 'Price updated successfully!');
+          requestNotificationCheck();
           fetchComparison();
         }
       })

@@ -12,6 +12,7 @@
 import axios from 'axios';
 import { makeRequestId, toApiError } from '../utils/apiError';
 import { API_URL, API_BASE_ERROR } from '../config/apiBase';
+import { requestNotificationCheck } from '../utils/appEvents';
 
 export { API_URL };
 
@@ -45,7 +46,13 @@ apiClient.interceptors.request.use((config) => {
 });
 
 apiClient.interceptors.response.use(
-  (response) => response,
+  (response) => {
+    // Any successful change may have created a notification; nudge the bell to
+    // check right away so the card pops out instantly rather than on its poll.
+    const method = (response.config?.method || '').toLowerCase();
+    if (method && method !== 'get') requestNotificationCheck();
+    return response;
+  },
   (error) => {
     const sentRequestId = error?.config?.headers?.get?.(REQUEST_ID_HEADER) || null;
     error.apiError = toApiError(error, sentRequestId);
