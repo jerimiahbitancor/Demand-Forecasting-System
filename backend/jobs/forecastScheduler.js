@@ -8,8 +8,11 @@
 // never auto-triggers a forecast run here.
 //
 // Both jobs run in Asia/Manila time, per CLAUDE.md's confirmed schedule:
-// daily refresh every day 9:00 AM (horizon 1 day, today only), weekly refresh
-// every Monday 9:00 AM (horizon 7 days, Mon-Sun). An earlier 8:00 AM figure
+// daily refresh every day except Monday, 9:00 AM (horizon 1 day, today only);
+// Monday runs the weekly forecast only, 9:00 AM (horizon 7 days, Mon-Sun,
+// which already covers Monday itself). Daily skips Monday so the two jobs
+// never fire at the same minute and send two /forecast calls to the ML
+// service at once (there is no lock between them). An earlier 8:00 AM figure
 // in some comments/docs was a documented mistake — 9:00 AM is correct and is
 // the only schedule wired up here.
 //
@@ -27,7 +30,7 @@ const PH_TZ = 'Asia/Manila';
 // The two cron jobs, in one list so getSchedulerStatus() reports exactly
 // what registerForecastJobs() schedules.
 const JOBS = [
-  { name: 'daily', cron: '0 9 * * *', timezone: PH_TZ, horizonDays: 1 },
+  { name: 'daily', cron: '0 9 * * 0,2-6', timezone: PH_TZ, horizonDays: 1 }, // not Monday
   { name: 'weekly', cron: '0 9 * * 1', timezone: PH_TZ, horizonDays: 7 },
 ];
 
@@ -104,15 +107,16 @@ async function runScheduledForecast({ horizonDays, runType }) {
 }
 
 function registerForecastJobs() {
-  // Daily refresh — every day at 9:00 AM Asia/Manila (JOBS[0]).
-  // Weekly 7-day refresh — Monday at 9:00 AM Asia/Manila (JOBS[1]).
+  // Daily refresh — every day except Monday at 9:00 AM Asia/Manila (JOBS[0]).
+  // Weekly 7-day refresh — Monday at 9:00 AM Asia/Manila (JOBS[1]); Monday
+  // runs the weekly forecast only.
   for (const job of JOBS) {
     cron.schedule(job.cron, () => {
       runScheduledForecast({ horizonDays: job.horizonDays, runType: job.name });
     }, { timezone: job.timezone });
   }
 
-  console.log('[forecastScheduler] Registered forecast jobs — daily 9:00 AM and weekly Monday 9:00 AM (Asia/Manila).');
+  console.log('[forecastScheduler] Registered forecast jobs — daily 9:00 AM except Monday, weekly Monday 9:00 AM (Asia/Manila).');
 }
 
 // For /api/status. `lastRuns` holds copies, so callers can't change them.

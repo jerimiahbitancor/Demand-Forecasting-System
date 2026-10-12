@@ -105,9 +105,12 @@ function defaultDateRange(daysBack = 30, daysForward = 7) {
   return { from: from.format('YYYY-MM-DD'), to: to.format('YYYY-MM-DD'), today: today.format('YYYY-MM-DD') };
 }
 
-// Next daily 9:00 AM Asia/Manila forecast-refresh run — matches the real
-// cron job registered in jobs/forecastScheduler.js ('0 9 * * *', timezone
-// Asia/Manila). 9:00 AM is the confirmed, locked schedule (see CLAUDE.md);
+// Next 9:00 AM Asia/Manila forecast run of either kind — matches the two
+// cron jobs in jobs/forecastScheduler.js: daily '0 9 * * 0,2-6' (every day
+// except Monday) and weekly '0 9 * * 1' (Monday runs the weekly forecast
+// only). Together they still fire every day at 9:00, so "next 9:00 AM" is
+// right without a weekday rule here. If either cron ever stops covering a
+// day, this needs that rule. 9:00 AM is the confirmed, locked schedule (see CLAUDE.md);
 // an earlier 8:00 AM figure in some older comments/docs was a mistake.
 //
 // This used to compute "9:00 AM" against the server's own local clock via

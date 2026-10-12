@@ -859,8 +859,8 @@ function Forecasting() {
           </InfoBanner>
 
           <InfoBanner variant="info">
-            Daily forecasts run every morning at 9:00 AM. A full 7-day weekly forecast is
-            generated every Monday at 9:00 AM.
+            Daily forecasts run every morning at 9:00 AM except Monday. On Monday, a full 7-day weekly forecast is
+            generated at 9:00 AM instead.
           </InfoBanner>
 
           <div className="feature-importance">
@@ -1106,8 +1106,8 @@ function Forecasting() {
         </InfoBanner>
 
         <InfoBanner variant="info">
-          Daily forecasts run every morning at 9:00 AM. A full 7-day weekly forecast is
-          generated every Monday at 9:00 AM.
+          Daily forecasts run every morning at 9:00 AM except Monday. On Monday, a full 7-day weekly forecast is
+          generated at 9:00 AM instead.
         </InfoBanner>
 
         <div className="feature-importance">

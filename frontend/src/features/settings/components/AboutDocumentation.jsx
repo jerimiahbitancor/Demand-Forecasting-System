@@ -146,7 +146,7 @@ const USER_MANUAL = {
     <p>Open <strong>Analytics</strong> for a deeper analysis of your data. Three tabs sit across the top: <strong>Forecasting</strong>, <strong>Product Performance</strong>, and <strong>Ingredient Demand</strong>. Each tab has a <strong>Generate Report</strong> button to export the current view.</p>
     <h4>Sales Forecast</h4>
     <ul>
-      <li>Select <strong>Generate Forecast</strong> to create fresh predictions. Forecasts also run automatically: daily at <strong>9:00 AM</strong>, and a 7-day forecast every <strong>Monday at 9:00 AM</strong>.</li>
+      <li>Select <strong>Generate Forecast</strong> to create fresh predictions. Forecasts also run automatically: daily at <strong>9:00 AM</strong> every day except Monday, and a 7-day forecast every <strong>Monday at 9:00 AM</strong> (Monday runs the 7-day forecast only).</li>
       <li>The <strong>Forecast Accuracy</strong> card compares your forecast against a simple 7-day average. A higher percentage means the model is beating that baseline.</li>
       <li><strong>Sales and Demand Prediction</strong> shows a line chart and a table with <strong>Actual</strong> and <strong>Forecast</strong> quantities and revenue, plus estimated cost and gross profit. Switch between the <strong>Sales</strong> and <strong>Demand</strong> views and choose a date range.</li>
       <li><strong>Model Insights</strong> lists <strong>Feature Importance</strong> (what influences sales the most) and <strong>Training Information</strong> such as model status, last trained, active products, latest forecast, and the next training and forecast dates.</li>

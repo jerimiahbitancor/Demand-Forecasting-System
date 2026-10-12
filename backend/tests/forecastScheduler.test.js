@@ -32,17 +32,19 @@ const quiet = () => {
 
 const scheduler = require('../jobs/forecastScheduler');
 
-test('schedules the same two jobs as before, in Asia/Manila', () => {
+// Daily runs every day except Monday; Monday runs the weekly forecast only,
+// so the two jobs never fire at the same minute.
+test('schedules daily (not Monday) and weekly (Monday) jobs, in Asia/Manila', () => {
   const restore = quiet();
   scheduler.registerForecastJobs();
   restore();
   assert.deepEqual(
     scheduled.map((s) => [s.expression, s.options.timezone]),
-    [['0 9 * * *', 'Asia/Manila'], ['0 9 * * 1', 'Asia/Manila']]
+    [['0 9 * * 0,2-6', 'Asia/Manila'], ['0 9 * * 1', 'Asia/Manila']]
   );
   const status = scheduler.getSchedulerStatus();
   assert.deepEqual(status.jobs, [
-    { name: 'daily', cron: '0 9 * * *', timezone: 'Asia/Manila' },
+    { name: 'daily', cron: '0 9 * * 0,2-6', timezone: 'Asia/Manila' },
     { name: 'weekly', cron: '0 9 * * 1', timezone: 'Asia/Manila' },
   ]);
   assert.ok(!Number.isNaN(Date.parse(status.since)));
