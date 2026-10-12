@@ -128,6 +128,12 @@ router.post('/train', authenticate, async (req, res) => {
 // not this HTTP route), and this route itself for the owner-triggered
 // manual "Generate Forecast" refresh on the Analytics page.
 router.post('/forecast', authenticate, async (req, res) => {
+  // Checked here too (not only inside mlService.forecast) so a second
+  // click gets a plain 409 without a "Forecast generation failed"
+  // notification for a run that is actually still going.
+  if (mlService.isForecastInFlight()) {
+    return res.status(409).json({ success: false, error: mlService.FORECAST_IN_FLIGHT_MESSAGE });
+  }
   try {
     const { horizonDays, runType } = req.body || {};
     const result = await mlService.forecast({ horizonDays, runType });
@@ -143,6 +149,11 @@ router.post('/forecast', authenticate, async (req, res) => {
 
     res.json({ success: true, data: result });
   } catch (error) {
+    // Lost the race to a run that started after the check above
+    // (e.g. the 9:00 AM job): same 409, no failure notification.
+    if (error && error.code === 'FORECAST_IN_FLIGHT') {
+      return res.status(409).json({ success: false, error: mlService.FORECAST_IN_FLIGHT_MESSAGE });
+    }
     await createNotification({
       userId: userIdOf(req),
       type: 'error',

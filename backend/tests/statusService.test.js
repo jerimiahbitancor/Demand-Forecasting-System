@@ -298,3 +298,10 @@ test('the full result with the real checks has 7 checks and no secrets', async (
     assert.ok(!text.includes(secret), `output must not contain ${secret}`);
   }
 });
+
+test('mlPipeline: details show whether a forecast is running', async () => {
+  const running = await buildDefaultChecks(baseDeps({ isForecastInFlight: () => true })).mlPipeline();
+  assert.equal(running.details.forecastInFlight, true);
+  const idle = await buildDefaultChecks(baseDeps({ isForecastInFlight: () => false })).mlPipeline();
+  assert.equal(idle.details.forecastInFlight, false);
+});

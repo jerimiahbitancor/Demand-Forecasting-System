@@ -23,6 +23,18 @@ function getEffectiveNow() {
   return new Date();
 }
 
+// Archived is the owner's decision, never derived from sales. status =
+// 'archived' is the source of truth; the "Archived: ..." reason prefix is
+// only a fallback for rows written before status existed. Uploads must
+// leave such a product alone (its sales rows are still saved): writing
+// deriveProductStatus()'s `note` back as inactive_reason strips that
+// prefix, and the next status pass then un-archived the product.
+function isArchivedProduct(product) {
+  if (!product) return false;
+  if (product.status === 'archived') return true;
+  return /^archived\b/i.test(product.inactive_reason || '');
+}
+
 function deriveProductStatus({ firstSoldDate, lastSoldDate, createdAt, isActive = false, inactiveReason = null }) {
   const isArchived = /^archived\b/i.test(inactiveReason || '');
   if (isArchived) {
@@ -102,5 +114,6 @@ function getStatusText(status) {
 
 module.exports = {
   deriveProductStatus,
+  isArchivedProduct,
   getStatusText,
 };

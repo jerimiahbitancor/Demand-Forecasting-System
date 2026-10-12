@@ -174,6 +174,7 @@ function buildDefaultChecks(deps = {}) {
   const getDailyPriceImportStatus = deps.getDailyPriceImportStatus
     || (() => require('../jobs/dailyPriceImportJob').getDailyPriceImportStatus());
   const isTrainingInFlight = deps.isTrainingInFlight || (() => require('./mlService').isTrainingInFlight());
+  const isForecastInFlight = deps.isForecastInFlight || (() => require('./mlService').isForecastInFlight());
   const getMissingOperatingDays = deps.getMissingOperatingDays
     || ((args) => require('./dataCoverageService').getMissingOperatingDays(client, args));
   const { beatsBaseline } = require('../utils/accuracy');
@@ -327,6 +328,7 @@ function buildDefaultChecks(deps = {}) {
         operatingDaysSource: missing.operatingDaysSource,
         forecastsToday: forecastsToday.count || 0,
         trainingInFlight: Boolean(isTrainingInFlight()),
+        forecastInFlight: Boolean(isForecastInFlight()),
       };
 
       const reasons = [];

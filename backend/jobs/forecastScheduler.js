@@ -56,6 +56,25 @@ async function notifyAllUsers({ type, title, message, metadata }) {
 
 async function runScheduledForecast({ horizonDays, runType }) {
   const label = runType === 'weekly' ? 'Weekly (7-day)' : 'Daily (1-day)';
+  const skipRun = () => {
+    const at = new Date().toISOString();
+    lastRuns[runType] = {
+      startedAt: at,
+      finishedAt: at,
+      status: 'skipped',
+      forecastedCount: null,
+      skippedCount: null,
+      error: mlService.FORECAST_IN_FLIGHT_MESSAGE,
+    };
+    console.warn(`[forecastScheduler] ${label} forecast run skipped — ${mlService.FORECAST_IN_FLIGHT_MESSAGE}.`);
+  };
+  // Another forecast (usually a manual "Generate Forecast") is still
+  // running. Skip this run rather than send a second /forecast; no
+  // notification, because nothing failed.
+  if (typeof mlService.isForecastInFlight === 'function' && mlService.isForecastInFlight()) {
+    skipRun();
+    return;
+  }
   console.log(`[forecastScheduler] ${label} forecast run starting…`);
   const run = {
     startedAt: new Date().toISOString(),
@@ -89,6 +108,12 @@ async function runScheduledForecast({ horizonDays, runType }) {
       metadata: { kind: 'forecast', status: 'completed', run_type: runType, horizon_days: horizonDays, scheduled: true, forecasted_count: forecastedCount },
     });
   } catch (error) {
+    // Lost the race to a run that started between the check above and
+    // the call: same outcome as the check.
+    if (error && error.code === 'FORECAST_IN_FLIGHT') {
+      skipRun();
+      return;
+    }
     if (run.status === 'running') {
       Object.assign(run, {
         status: 'failed',

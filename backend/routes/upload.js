@@ -215,6 +215,27 @@ router.post(
             numericId
           );
 
+          // Invalid file: stop here. saveUploadRecord() has already stored
+          // the row as 'failed' with the first errors. No product sync, no
+          // sales rows, no stock deduction, no open-day confirmation. Before,
+          // the pipeline ran anyway and the row ended up 'processed'.
+          if (!validation.isValid) {
+            uploadService.markUploadComplete(file.originalname, numericId);
+            const fieldErrors = validation.fieldErrors || [];
+            const errorCount = validation.fieldErrorCount ?? fieldErrors.length;
+            return res.status(400).json({
+              success: false,
+              error: 'Invalid sales file',
+              message: `This file has ${errorCount} problem(s) and was not uploaded. `
+                + 'Fix them and upload it again. No sales were saved.',
+              uploadId,
+              errors: fieldErrors.map(({ row, column, message }) => ({ row, column, message })),
+              errorCount,
+              totalRows: validation.totalRows,
+              invalidRows: validation.invalidRows,
+            });
+          }
+
           // Keep the raw file so the Historical Data Storage tab can hand it
           // back later (GET /upload/:id/download). Best-effort: daily_sales is
           // already the source of truth, so a Storage hiccup must not fail the
@@ -669,7 +690,19 @@ router.put('/:id', authenticate, async (req, res) => {
 });
 
 // DELETE /api/upload/:id - Delete upload
+//
+// Turned off: deleting an upload cascades away its daily_sales rows but
+// never gives back the ingredient stock that upload deducted
+// (inventory_transactions has no upload_id to find it by). No screen calls
+// this today. uploadService.deleteUpload() is kept; set this to true only
+// once deletion restores stock.
+const UPLOAD_DELETE_ENABLED = false;
+const UPLOAD_DELETE_DISABLED_MESSAGE = 'Deleting uploads is turned off. It would not restore ingredient stock.';
+
 router.delete('/:id', authenticate, async (req, res) => {
+  if (!UPLOAD_DELETE_ENABLED) {
+    return res.status(403).json({ success: false, error: UPLOAD_DELETE_DISABLED_MESSAGE });
+  }
   try {
     const userId = req.user?.user_id || req.user?.id || null;
     const uploadId = parseInt(req.params.id);

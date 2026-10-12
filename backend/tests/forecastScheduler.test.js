@@ -97,3 +97,30 @@ test('shows "running" while a run is in flight', async () => {
   restore();
   assert.equal(scheduler.getSchedulerStatus().lastRuns.daily.status, 'succeeded');
 });
+
+test('a scheduled run that finds a forecast already running is skipped, not failed', async () => {
+  const calls = [];
+  const realInFlight = mlService.isForecastInFlight;
+  mlService.isForecastInFlight = () => true;
+  mlService.forecast = async (args) => { calls.push(args); return { results: [] }; };
+  const restore = quiet();
+  await scheduler.runScheduledForecast({ horizonDays: 1, runType: 'daily' });
+  restore();
+  mlService.isForecastInFlight = realInFlight;
+  assert.equal(calls.length, 0, 'no second /forecast call');
+  const run = scheduler.getSchedulerStatus().lastRuns.daily;
+  assert.equal(run.status, 'skipped');
+  assert.equal(run.error, 'A forecast is already running');
+});
+
+test('losing the race inside mlService.forecast is also recorded as skipped', async () => {
+  mlService.forecast = async () => {
+    const error = new Error('A forecast is already running');
+    error.code = 'FORECAST_IN_FLIGHT';
+    throw error;
+  };
+  const restore = quiet();
+  await scheduler.runScheduledForecast({ horizonDays: 7, runType: 'weekly' });
+  restore();
+  assert.equal(scheduler.getSchedulerStatus().lastRuns.weekly.status, 'skipped');
+});

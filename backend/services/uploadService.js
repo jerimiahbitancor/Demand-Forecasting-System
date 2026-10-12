@@ -8,7 +8,7 @@ const mlService = require('./mlService');
 const businessDayService = require('./businessDayService');
 const dataCoverageService = require('./dataCoverageService');
 const logger = require('../utils/logger');
-const { deriveProductStatus } = require('./productStatusService');
+const { deriveProductStatus, isArchivedProduct } = require('./productStatusService');
 const { PRODUCT_STATUS_NOTES, PRODUCT_DB_STATUS_BY_DERIVED } = require('./productStatusConstants');
 const dayjs = require('dayjs');
 const utc = require('dayjs/plugin/utc');
@@ -595,6 +595,19 @@ class UploadService {
           + `not a dish: ${aggregated.modifierOnlyNames.join(', ')}. Their plates were not counted.`
         );
       }
+      // A name with no product (e.g. the product insert failed during sync,
+      // or the name normalises differently) used to lose its plates silently.
+      if (aggregated.unmatchedNames.length > 0) {
+        warnings.push(
+          `Skipped ${aggregated.unmatchedNames.length} item name(s) that matched no product: `
+          + `${aggregated.unmatchedNames.join(', ')}. Their plates were not counted.`
+        );
+        logger.warn('upload_unmatched_item_names', {
+          upload_id: uploadId,
+          count: aggregated.unmatchedNames.length,
+          names: aggregated.unmatchedNames.slice(0, 20),
+        });
+      }
 
       if (dailySalesRows.length > 0) {
         const { error: saleInsertError } = await supabaseAdmin
@@ -775,6 +788,8 @@ class UploadService {
       }
 
       for (const product of productRows || []) {
+        // Archived stays archived: never rewrite its status or reason here.
+        if (isArchivedProduct(product)) continue;
         const summary = salesSummary.get(product.id);
 
         const firstSoldDate = summary?.firstSaleDate || product.first_sold_date || null;
@@ -883,6 +898,9 @@ class UploadService {
 
   validateFileData(data, requiredColumns, columnMap) {
     const errors = [];
+    // One entry per bad cell, { row, column, message } — what the upload
+    // route returns on a 400. `errors` keeps its old one-per-row shape.
+    const fieldErrors = [];
     let validRows = 0;
     let invalidRows = 0;
     
@@ -892,18 +910,22 @@ class UploadService {
 
       requiredColumns.forEach(col => {
         const actualCol = columnMap[col];
+        const addError = (message) => {
+          rowErrors.push(message);
+          fieldErrors.push({ row: rowNumber, column: col, message });
+        };
         if (!actualCol) {
-          rowErrors.push(`${col} column not found`);
+          addError(`${col} column not found`);
           return;
         }
 
         const value = row[actualCol];
         if (value === undefined || value === null || value === '' || value === ' ') {
-          rowErrors.push(`${col} is empty`);
+          addError(`${col} is empty`);
         } else if (['Items sold', 'Gross sales', 'Items refunded', 'Refunds', 'Net sales'].includes(col)) {
           const numValue = parseFloat(value);
           if (isNaN(numValue) && value.toString().trim() !== '') {
-            rowErrors.push(`${col} must be a valid number`);
+            addError(`${col} must be a valid number`);
           }
         }
       });
@@ -921,6 +943,8 @@ class UploadService {
 
     return {
       errors: errors.slice(0, 10),
+      fieldErrors: fieldErrors.slice(0, 50),
+      fieldErrorCount: fieldErrors.length,
       validRows,
       invalidRows,
       totalRows: data.length
@@ -947,6 +971,7 @@ class UploadService {
       return {
         isValid: false,
         errors: [{ row: 0, message: 'File is empty' }],
+        fieldErrors: [{ row: 0, column: null, message: 'File is empty' }],
         validRows: 0,
         invalidRows: 0,
         totalRows: 0,
@@ -968,6 +993,9 @@ class UploadService {
       return {
         isValid: false,
         errors: [{ row: 1, message: columnValidation.message }],
+        fieldErrors: (columnValidation.missingColumns || []).map((column) => ({
+          row: 1, column, message: `${column} column is missing`,
+        })),
         validRows: 0,
         invalidRows: data.length,
         totalRows: data.length,
@@ -983,6 +1011,8 @@ class UploadService {
     return {
       isValid: rowValidation.errors.length === 0,
       errors: rowValidation.errors,
+      fieldErrors: rowValidation.fieldErrors,
+      fieldErrorCount: rowValidation.fieldErrorCount,
       validRows: rowValidation.validRows,
       invalidRows: rowValidation.invalidRows,
       totalRows: data.length,
