@@ -11,6 +11,7 @@ import { useAuth } from '../../../context/AuthContext';
 import { setUnitMetadata } from '../../../utils/recipeUnits';
 import './ForecastConfig.css';
 import '../../inventory/pages/Inventory.css';
+import { buildPageItems, ELLIPSIS } from '../../../utils/pagination';
 
 const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:5000/api';
 
@@ -265,40 +266,39 @@ function ForecastConfig() {
             <button
               className="inventory-pagination-btn"
               onClick={() => goToPage(Math.max(currentPage - 1, 1))}
-              disabled={currentPage === 1}
+              disabled={currentPage <= 1}
+              aria-label="Previous page"
             >
               <FaArrowLeft /> Previous
             </button>
             <div className="inventory-pagination-numbers">
-              {Array.from({ length: Math.min(5, totalPages) }, (_, i) => {
-                let pageNumber;
-                if (totalPages <= 5) {
-                  pageNumber = i + 1;
-                } else if (currentPage <= 3) {
-                  pageNumber = i + 1;
-                } else if (currentPage >= totalPages - 2) {
-                  pageNumber = totalPages - 4 + i;
-                } else {
-                  pageNumber = currentPage - 2 + i;
-                }
-                if (pageNumber > 0 && pageNumber <= totalPages) {
-                  return (
-                    <button
-                      key={pageNumber}
-                      className={`inventory-pagination-number ${currentPage === pageNumber ? 'active' : ''}`}
-                      onClick={() => goToPage(pageNumber)}
-                    >
-                      {pageNumber}
-                    </button>
-                  );
-                }
-                return null;
-              })}
+              {buildPageItems(currentPage, totalPages).map((item, index) =>
+                item === ELLIPSIS ? (
+                  <span
+                    key={`ellipsis-${index}`}
+                    className="inventory-pagination-ellipsis"
+                    aria-hidden="true"
+                  >
+                    …
+                  </span>
+                ) : (
+                  <button
+                    key={item}
+                    className={`inventory-pagination-number ${currentPage === item ? 'active' : ''}`}
+                    onClick={() => goToPage(item)}
+                    aria-label={`Page ${item}`}
+                    aria-current={currentPage === item ? 'page' : undefined}
+                  >
+                    {item}
+                  </button>
+                )
+              )}
             </div>
             <button
               className="inventory-pagination-btn"
               onClick={() => goToPage(Math.min(currentPage + 1, totalPages))}
-              disabled={currentPage === totalPages}
+              disabled={currentPage >= totalPages}
+              aria-label="Next page"
             >
               Next <FaArrowRight />
             </button>

@@ -5,6 +5,7 @@ import "tippy.js/dist/tippy.css";
 import "tippy.js/animations/scale.css";
 import InventoryModal from "../InventoryModal";
 import "./HistoryModal.css";
+import { buildPageItems, ELLIPSIS } from "../../../../utils/pagination";
 
 const HistoryModal = ({ item, apiClient, onClose }) => {
   const [transactions, setTransactions] = useState([]);
@@ -241,26 +242,36 @@ const HistoryModal = ({ item, apiClient, onClose }) => {
               <button
                 className="page-btn"
                 onClick={() => setCurrentPage((page) => Math.max(page - 1, 1))}
-                disabled={currentPage === 1 || loading}
+                disabled={currentPage <= 1 || loading}
+                aria-label="Previous page"
               >
                 <FaArrowLeft /> Previous
               </button>
               <div className="page-numbers">
-                {Array.from({ length: totalPages }, (_, index) => index + 1).map((page) => (
-                  <button
-                    key={page}
-                    className={`page-number ${currentPage === page ? 'active' : ''}`}
-                    onClick={() => setCurrentPage(page)}
-                    disabled={loading}
-                  >
-                    {page}
-                  </button>
-                ))}
+                {buildPageItems(currentPage, totalPages).map((item, index) =>
+                  item === ELLIPSIS ? (
+                    <span key={`ellipsis-${index}`} className="page-dots" aria-hidden="true">
+                      …
+                    </span>
+                  ) : (
+                    <button
+                      key={item}
+                      className={`page-number ${currentPage === item ? 'active' : ''}`}
+                      onClick={() => setCurrentPage(item)}
+                      disabled={loading}
+                      aria-label={`Page ${item}`}
+                      aria-current={currentPage === item ? 'page' : undefined}
+                    >
+                      {item}
+                    </button>
+                  )
+                )}
               </div>
               <button
                 className="page-btn"
                 onClick={() => setCurrentPage((page) => Math.min(page + 1, totalPages))}
-                disabled={currentPage === totalPages || totalPages === 0 || loading}
+                disabled={currentPage >= totalPages || loading}
+                aria-label="Next page"
               >
                 Next <FaArrowRight />
               </button>

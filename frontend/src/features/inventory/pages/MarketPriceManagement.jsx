@@ -21,6 +21,7 @@ import {
   FaLightbulb,
   FaPiggyBank,
   FaExclamationTriangle,
+  FaSyncAlt,
 } from 'react-icons/fa';
 import axios from 'axios';
 import toast from 'react-hot-toast';
@@ -46,6 +47,7 @@ import {
 import InventoryModal from '../components/InventoryModal';
 import MarketPriceModal from '../components/market modal/MarketPriceModal';
 import Swal from '../../../utils/swal';
+import { buildPageItems, ELLIPSIS } from '../../../utils/pagination';
 
 const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:5000/api';
 
@@ -295,6 +297,7 @@ const MarketPriceManagement = () => {
   const [modalKey, setModalKey] = useState(0);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [isDeleteOpen, setIsDeleteOpen] = useState(false);
+  const [isImporting, setIsImporting] = useState(false);
 
   // Market sources are loaded from the server so staff can add their own stores.
   const [sources, setSources] = useState(DEFAULT_SOURCES);
@@ -804,6 +807,69 @@ const MarketPriceManagement = () => {
     } catch (error) {
       console.error('Error exporting CSV:', error);
       toast.error('Failed to export CSV');
+    }
+  };
+
+  // ============ DA DAILY PRICE IMPORT (on demand) ============
+  // The backend runs this automatically each day; this lets staff force a run
+  // (e.g. a newly released sheet, or a day the scheduled run was missed).
+  const handleFetchDa = async () => {
+    if (isImporting) return;
+    setIsImporting(true);
+    Swal.fire({
+      title: 'Fetching DA prices…',
+      text: 'Downloading the latest DA Daily Price Index and matching it to your ingredients. This can take up to a minute.',
+      allowOutsideClick: false,
+      allowEscapeKey: false,
+      didOpen: () => Swal.showLoading(),
+    });
+
+    try {
+      // The scheduled importer fetches remote HTML + a PDF, so it needs far
+      // more time than the default 10s client timeout. Send `{}` (not null):
+      // axios would serialize a null body as the top-level JSON `null`, which
+      // Express's strict body parser rejects.
+      const response = await apiClient.post('/market-prices/import-da', {}, { timeout: 120000 });
+      const report = response.data?.data || {};
+      Swal.close();
+
+      if (report.status === 'succeeded') {
+        await Swal.fire({
+          icon: 'success',
+          title: 'DA prices imported',
+          html:
+            `Recorded <b>${report.saved ?? 0}</b> price(s) across <b>${report.matched ?? 0}</b> ingredient(s)` +
+            (report.sheetDate ? ` from the ${report.sheetDate} sheet.` : '.'),
+        });
+        fetchComparison();
+      } else if (report.status === 'skipped') {
+        Swal.fire({
+          icon: 'info',
+          title: 'Already up to date',
+          text: report.reason ? `${report.reason[0].toUpperCase()}${report.reason.slice(1)}.` : 'This sheet has already been imported.',
+        });
+      } else if (report.status === 'no_match') {
+        Swal.fire({
+          icon: 'info',
+          title: 'Nothing matched',
+          text: 'The DA sheet was downloaded, but no commodity matched your current ingredients confidently enough.',
+        });
+      } else {
+        Swal.fire({
+          icon: 'error',
+          title: 'Import failed',
+          text: report.error || response.data?.error || 'Please try again later.',
+        });
+      }
+    } catch (error) {
+      Swal.close();
+      Swal.fire({
+        icon: 'error',
+        title: 'Import failed',
+        text: error.response?.data?.error || error.message || 'Could not reach the server.',
+      });
+    } finally {
+      setIsImporting(false);
     }
   };
 
@@ -1356,6 +1422,10 @@ const rowForSummary = selectedRow ? getEffectiveRow(selectedRow) : null;
 
          
 
+          <button className="btn-secondary" onClick={handleFetchDa} disabled={isImporting}>
+            <FaSyncAlt className={isImporting ? 'market-import-spin' : undefined} /> {isImporting ? 'Fetching…' : 'Fetch DA Prices'}
+          </button>
+
           <button className="btn-secondary" onClick={handleExportCsv}>
             <FaFileCsv /> Export CSV
           </button>
@@ -1492,42 +1562,41 @@ const rowForSummary = selectedRow ? getEffectiveRow(selectedRow) : null;
                 <button
                   className="inventory-pagination-btn"
                   onClick={() => setCurrentPage(prev => Math.max(prev - 1, 1))}
-                  disabled={currentPage === 1}
+                  disabled={currentPage <= 1}
+                  aria-label="Previous page"
                 >
                   <FaArrowLeft /> Previous
                 </button>
 
                 <div className="inventory-pagination-numbers">
-                  {Array.from({ length: Math.min(5, totalPages) }, (_, i) => {
-                    let pageNumber;
-                    if (totalPages <= 5) {
-                      pageNumber = i + 1;
-                    } else if (currentPage <= 3) {
-                      pageNumber = i + 1;
-                    } else if (currentPage >= totalPages - 2) {
-                      pageNumber = totalPages - 4 + i;
-                    } else {
-                      pageNumber = currentPage - 2 + i;
-                    }
-                    if (pageNumber > 0 && pageNumber <= totalPages) {
-                      return (
-                        <button
-                          key={pageNumber}
-                          className={`inventory-pagination-number ${currentPage === pageNumber ? 'active' : ''}`}
-                          onClick={() => setCurrentPage(pageNumber)}
-                        >
-                          {pageNumber}
-                        </button>
-                      );
-                    }
-                    return null;
-                  })}
+                  {buildPageItems(currentPage, totalPages).map((item, index) =>
+                    item === ELLIPSIS ? (
+                      <span
+                        key={`ellipsis-${index}`}
+                        className="inventory-pagination-ellipsis"
+                        aria-hidden="true"
+                      >
+                        …
+                      </span>
+                    ) : (
+                      <button
+                        key={item}
+                        className={`inventory-pagination-number ${currentPage === item ? 'active' : ''}`}
+                        onClick={() => setCurrentPage(item)}
+                        aria-label={`Page ${item}`}
+                        aria-current={currentPage === item ? 'page' : undefined}
+                      >
+                        {item}
+                      </button>
+                    )
+                  )}
                 </div>
 
                 <button
                   className="inventory-pagination-btn"
                   onClick={() => setCurrentPage(prev => Math.min(prev + 1, totalPages))}
-                  disabled={currentPage === totalPages}
+                  disabled={currentPage >= totalPages}
+                  aria-label="Next page"
                 >
                   Next <FaArrowRight />
                 </button>

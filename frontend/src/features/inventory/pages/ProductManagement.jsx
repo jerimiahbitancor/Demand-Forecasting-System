@@ -26,6 +26,7 @@ import 'tippy.js/dist/tippy.css';
 import 'tippy.js/animations/scale.css';
 import ProductDetailsModal from '../product modals/ProductDetailsModal';
 import ProductRestoreModal from '../product modals/ProductRestoreModal';
+import { buildPageItems, ELLIPSIS } from "../../../utils/pagination";
 
 const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:5000/api';
 
@@ -1291,23 +1292,14 @@ const ProductManagement = () => {
       })
       .every((i) => selectedIds.includes(i.id));
 
-  // Up to five plain numbers: first page, last page, and the active page with a
-// neighbour either side. The "..." gap markers this used to push were disabled
-// buttons, which on a phone read as a broken fifth control next to four real
-// ones. A Set handles the short list for free - with five or fewer pages the
-// window covers every one of them, so no separate case is needed - and drops the
-// duplicates that appear when the active page is already the first or last.
-const getPageNumbers = useMemo(() => {
-    const pages = new Set([1, totalPages]);
-    for (
-      let i = Math.max(2, activePage - 1);
-      i <= Math.min(totalPages - 1, activePage + 1);
-      i++
-    ) {
-      pages.add(i);
-    }
-    return [...pages].sort((a, b) => a - b);
-  }, [totalPages, activePage]);
+  // First and last page stay visible, a window follows the active page, and
+  // gaps collapse into an "…" marker so long lists never render dozens of
+  // buttons. The shared helper keeps every pagination control in the app in
+  // sync.
+  const pageItems = useMemo(
+    () => buildPageItems(activePage, totalPages),
+    [activePage, totalPages],
+  );
 
   const [selectedItem, setSelectedItem] = useState(null);
   const [selectedLowMarginItem, setSelectedLowMarginItem] = useState(null);
@@ -1956,17 +1948,27 @@ const getPageNumbers = useMemo(() => {
                 </button>
               </div>
               <div className="pagination-center">
-                {getPageNumbers.map((page) => (
-                  <button
-                    key={page}
-                    className={`page-number ${page === activePage ? 'active' : ''}`}
-                    onClick={() => setCurrentPage(page)}
-                    aria-label={`Page ${page}`}
-                    aria-current={page === activePage ? 'page' : undefined}
-                  >
-                    {page}
-                  </button>
-                ))}
+                {pageItems.map((item, index) =>
+                  item === ELLIPSIS ? (
+                    <span
+                      key={`ellipsis-${index}`}
+                      className="page-ellipsis"
+                      aria-hidden="true"
+                    >
+                      …
+                    </span>
+                  ) : (
+                    <button
+                      key={item}
+                      className={`page-number ${item === activePage ? 'active' : ''}`}
+                      onClick={() => setCurrentPage(item)}
+                      aria-label={`Page ${item}`}
+                      aria-current={item === activePage ? 'page' : undefined}
+                    >
+                      {item}
+                    </button>
+                  )
+                )}
               </div>
               <div className="pagination-right">
                 <button 

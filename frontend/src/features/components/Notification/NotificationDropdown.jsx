@@ -119,7 +119,7 @@ const NotificationPopup = ({ notificationKey, notification, onOpen, onDismiss })
 
   return (
     <div
-      className={`notification-toast ${leaving ? 'notification-toast-exit' : ''}`}
+      className={`notification-toast ${getNotificationTypeClass(notification.type)} ${leaving ? 'notification-toast-exit' : ''}`}
       role="button"
       tabIndex={0}
       onClick={open}
@@ -130,13 +130,15 @@ const NotificationPopup = ({ notificationKey, notification, onOpen, onDismiss })
         }
       }}
     >
-      <div className={`notification-icon ${getNotificationTypeClass(notification.type)}`}>
+      <div className={`notification-toast-icon ${getNotificationTypeClass(notification.type)}`}>
         {getNotificationIcon(notification.type)}
       </div>
-      <div className="notification-content">
-        <div className="notification-title">{notification.title}</div>
-        <div className="notification-message">{notification.message}</div>
-        <div className="notification-time">{formatTime(notification.created_at)}</div>
+      <div className="notification-toast-body">
+        <div className="notification-toast-title">{notification.title}</div>
+        {notification.message && (
+          <div className="notification-toast-message">{notification.message}</div>
+        )}
+        <div className="notification-toast-time">{formatTime(notification.created_at)}</div>
       </div>
       <button
         type="button"
@@ -149,6 +151,7 @@ const NotificationPopup = ({ notificationKey, notification, onOpen, onDismiss })
       >
         <FaTimes />
       </button>
+      <span className="notification-toast-progress" aria-hidden="true" />
     </div>
   );
 };
@@ -380,7 +383,11 @@ const NotificationDropdown = () => {
     }
     
     if (notification.link) {
-      navigate(notification.link);
+      const target =
+        notification.link === '/ingredient-management'
+          ? '/inventory-management'
+          : notification.link;
+      navigate(target);
       setIsOpen(false);
     }
   };
