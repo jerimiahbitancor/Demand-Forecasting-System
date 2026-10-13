@@ -28,6 +28,8 @@ const {
   normalizeKeyword,
 } = require('../utils/salesModifiers');
 const { createNotificationOnce } = require('./notificationService');
+const { loadAliasMap } = require('./productAliasService');
+const { productNameKey } = require('../utils/productNameKey');
 
 // modifier_rules is read once per minute at most: a 288-file backfill would
 // otherwise query it 288 times for a table of a handful of rows.
@@ -468,17 +470,25 @@ class UploadService {
       }
 
       const existingByName = new Map(
-        (existingProducts || []).map((product) => [String(product.name).trim().toLowerCase(), product])
+        (existingProducts || []).map((product) => [productNameKey(product.name), product])
       );
+      // A name that is an alias (an old or merged-away name) already belongs
+      // to a product: never create a new product for it.
+      const aliasProductIds = await loadAliasMap(supabaseAdmin);
 
       const created = [];
       const existing = [];
 
       for (const productName of uniqueProducts) {
-        const key = productName.trim().toLowerCase();
+        const key = productNameKey(productName);
         console.log('[PRODUCT DISCOVERY] Checking product:', JSON.stringify(productName));
         if (existingByName.has(key)) {
           console.log('[PRODUCT DISCOVERY] Existing:', true, JSON.stringify(existingByName.get(key)));
+          existing.push(productName);
+          continue;
+        }
+        if (aliasProductIds.has(key)) {
+          console.log('[PRODUCT DISCOVERY] Alias of product', aliasProductIds.get(key), JSON.stringify(productName));
           existing.push(productName);
           continue;
         }
@@ -593,8 +603,14 @@ class UploadService {
 
       const currentCategoryByProductId = new Map();
       for (const product of products || []) {
-        productIdByName.set(String(product.name).trim().toLowerCase(), product.id);
+        productIdByName.set(productNameKey(product.name), product.id);
         currentCategoryByProductId.set(product.id, product.category);
+      }
+      // Then aliases (old / merged-away names), same key rule. A real
+      // product name always wins over an alias with the same key.
+      const aliasProductIds = await loadAliasMap(supabaseAdmin);
+      for (const [aliasKey, productId] of aliasProductIds) {
+        if (!productIdByName.has(aliasKey)) productIdByName.set(aliasKey, productId);
       }
 
       // Keyed by `${productId}|${saleDate}`, not one entry per CSV row.

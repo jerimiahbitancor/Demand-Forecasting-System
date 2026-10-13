@@ -564,6 +564,11 @@ display: flex;
   background: #fef3c7;
 }
 
+.product-action-btn.merge:hover {
+  color: #8b1538;
+  background: #fdf2f4;
+}
+
 .product-action-btn.restore {
   color: #6b7280;
 }

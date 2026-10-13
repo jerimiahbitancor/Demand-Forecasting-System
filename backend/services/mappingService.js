@@ -2,6 +2,8 @@
 const { supabase, isConfigured, supabaseAdmin } = require('../config/supabase');
 const { deriveProductStatus, isArchivedProduct, loadStatusInputs, statusInputsFor } = require('./productStatusService');
 const { fetchAllRows } = require('../utils/fetchAllRows');
+const { addAlias } = require('./productAliasService');
+const { productNameKey } = require('../utils/productNameKey');
 const { PRODUCT_DB_STATUS_BY_DERIVED } = require('./productStatusConstants');
 const { isMissingColumnError } = require('../utils/recipeUnits');
 const logger = require('../utils/logger');
@@ -585,6 +587,21 @@ class MappingService {
       if (productError) {
         console.error('Error updating product:', productError);
         throw productError;
+      }
+
+      // Renamed: keep the OLD name as an alias, so Loyverse files that still
+      // use it match this product instead of creating a new one. Best
+      // effort: the rename itself already succeeded.
+      if (
+        updateData.name !== undefined
+        && existingProduct.name
+        && productNameKey(existingProduct.name) !== productNameKey(updateData.name)
+      ) {
+        try {
+          await addAlias(supabaseAdmin, existingProduct.name, Number(id));
+        } catch (aliasError) {
+          console.error('Product renamed, but its old name could not be kept as an alias:', aliasError);
+        }
       }
 
       // Update ingredients if provided

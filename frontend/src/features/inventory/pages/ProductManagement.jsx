@@ -14,6 +14,7 @@ import {
   FaEye,
   FaUndo,
   FaCheck,
+  FaCodeBranch,
 } from "react-icons/fa";
 import axios from 'axios';
 import toast from 'react-hot-toast';
@@ -26,6 +27,8 @@ import 'tippy.js/dist/tippy.css';
 import 'tippy.js/animations/scale.css';
 import ProductDetailsModal from '../product modals/ProductDetailsModal';
 import ProductRestoreModal from '../product modals/ProductRestoreModal';
+import ProductMergeModal from '../product modals/ProductMergeModal';
+import PossibleDuplicates from '../components/PossibleDuplicates';
 
 const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:5000/api';
 
@@ -132,6 +135,9 @@ const ProductManagement = () => {
   const [isViewMode, setIsViewMode] = useState(false);
   const [isArchiveModalOpen, setIsArchiveModalOpen] = useState(false);
   const [isRestoreModalOpen, setIsRestoreModalOpen] = useState(false);
+  // Merge (owner's v3 flowchart, page 4): { source: {id,name}, targetId }
+  const [mergeRequest, setMergeRequest] = useState(null);
+  const [duplicatesKey, setDuplicatesKey] = useState(0);
   const [isProductDetailsModalOpen, setIsProductDetailsModalOpen] = useState(false);
   const [isLowMarginModalOpen, setIsLowMarginModalOpen] = useState(false);
   const [editingId, setEditingId] = useState(null);
@@ -793,6 +799,16 @@ const ProductManagement = () => {
   const openRestoreModal = (product) => {
     setSelectedItem(product);
     setIsRestoreModalOpen(true);
+  };
+
+  // After a merge: drop the cached lists, reload, re-check duplicates.
+  const handleMerged = () => {
+    setMergeRequest(null);
+    Object.keys(sessionStorage).forEach((key) => {
+      if (key.startsWith('mapping_')) sessionStorage.removeItem(key);
+    });
+    setDuplicatesKey((k) => k + 1);
+    fetchData(true);
   };
 
   const confirmRestore = async () => {
@@ -1771,6 +1787,11 @@ const getPageNumbers = useMemo(() => {
         </div>
       </div>
 
+      <PossibleDuplicates
+        refreshKey={duplicatesKey}
+        onReview={({ source, target }) => setMergeRequest({ source, targetId: target.id })}
+      />
+
       <div className="product-section">
         <div className="product-table-wrapper">
           {loading && mappingData.length === 0 ? (
@@ -1926,13 +1947,23 @@ const getPageNumbers = useMemo(() => {
                               <FaUndo size={14} />
                             </button>
                           ) : (
-                            <button 
-                              className="product-action-btn archive"
-                              onClick={() => handleArchive(item)}
-                              title="Archive"
-                            >
-                              <FaArchive size={14} />
-                            </button>
+                            <>
+                              <button
+                                className="product-action-btn merge"
+                                onClick={() => setMergeRequest({ source: { id: item.id, name: item.name }, targetId: null })}
+                                title="Merge into..."
+                                aria-label={`Merge ${item.name} into another product`}
+                              >
+                                <FaCodeBranch size={14} />
+                              </button>
+                              <button
+                                className="product-action-btn archive"
+                                onClick={() => handleArchive(item)}
+                                title="Archive"
+                              >
+                                <FaArchive size={14} />
+                              </button>
+                            </>
                           )}
                         </div>
                       </td>
@@ -2444,6 +2475,15 @@ const getPageNumbers = useMemo(() => {
           }}
           onRestore={() => openRestoreModal(selectedItem)}
           onClose={() => setIsProductDetailsModalOpen(false)}
+        />
+      )}
+
+      {mergeRequest && (
+        <ProductMergeModal
+          source={mergeRequest.source}
+          initialTargetId={mergeRequest.targetId}
+          onClose={() => setMergeRequest(null)}
+          onMerged={handleMerged}
         />
       )}
 

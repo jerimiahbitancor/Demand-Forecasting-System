@@ -101,6 +101,14 @@ function createFakeSupabase(seed = {}, options = {}) {
     };
 
     function run() {
+      // options.missingTables: tables that "do not exist yet" (a migration
+      // not run): every request answers PostgREST's real PGRST205 error.
+      if (options.missingTables && options.missingTables.includes(table)) {
+        return {
+          data: null,
+          error: { code: 'PGRST205', message: `Could not find the table 'public.${table}' in the schema cache` },
+        };
+      }
       const all = rowsOf(table);
       const match = (r) => st.filters.every((f) => f(r));
 
@@ -177,6 +185,7 @@ function createFakeSupabase(seed = {}, options = {}) {
       writes.length = 0;
       rpcCalls.length = 0;
       options.rejectInsert = newOptions.rejectInsert || (() => false);
+      options.missingTables = newOptions.missingTables || [];
     },
     from: (table) => builder(table),
     rpc: async (name, args) => {
