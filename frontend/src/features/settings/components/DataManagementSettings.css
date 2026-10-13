@@ -550,7 +550,8 @@
 }
 
 .btn-backup-download,
-.btn-backup-delete {
+.btn-backup-delete,
+.btn-backup-restore {
   display: flex;
   align-items: center;
   gap: 0.35rem;
@@ -575,6 +576,16 @@
 .btn-backup-download:disabled {
   opacity: 0.5;
   cursor: not-allowed;
+}
+
+.btn-backup-restore {
+  border: 1px solid #bbf7d0;
+  background: #f0fdf4;
+  color: #15803d;
+}
+
+.btn-backup-restore:hover {
+  background: #dcfce7;
 }
 
 .btn-backup-delete {
