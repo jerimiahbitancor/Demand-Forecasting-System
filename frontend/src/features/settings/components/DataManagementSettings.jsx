@@ -1,6 +1,6 @@
 // DataManagementSettings.jsx
 import { useState, useEffect } from "react";
-import { FiInfo, FiAlertTriangle, FiDownload, FiCheck, FiX, FiTrash2, FiRefreshCw, FiDatabase } from "react-icons/fi";
+import { FiInfo, FiAlertTriangle, FiDownload, FiCheck, FiX, FiTrash2, FiRefreshCw, FiDatabase, FiRotateCcw } from "react-icons/fi";
 import axios from 'axios';
 import toast from 'react-hot-toast';
 import "./DataManagementSettings.css";
@@ -80,6 +80,31 @@ function DataManagementSettings() {
       }
     } catch (error) {
       toast.error(error.response?.data?.error || 'Failed to delete backup');
+    }
+  };
+
+  const handleRestoreBackup = async (name) => {
+    const confirmed = window.confirm(
+      `Restore backup "${name}"?\n\nThis merges the backup's data back into the system. ` +
+      `It will NOT delete any current data, and your login account is left untouched.`
+    );
+    if (!confirmed) return;
+
+    const loadingToast = toast.loading('Restoring backup...');
+    try {
+      const response = await apiClient.post(`/settings/backups/${encodeURIComponent(name)}/restore`);
+      toast.dismiss(loadingToast);
+
+      if (!response.data.success) {
+        throw new Error(response.data.error || 'Restore failed');
+      }
+
+      const total = response.data.data?.totalRows ?? 0;
+      toast.success(`Backup restored — ${total} row${total === 1 ? '' : 's'} merged.`);
+      fetchBackups(true);
+    } catch (error) {
+      toast.dismiss(loadingToast);
+      toast.error(error.response?.data?.error || error.message || 'Failed to restore backup');
     }
   };
 
@@ -405,6 +430,13 @@ function DataManagementSettings() {
                   >
                     <FiDownload size={14} />
                     Download
+                  </button>
+                  <button
+                    className="btn-backup-restore"
+                    onClick={() => handleRestoreBackup(item.name)}
+                  >
+                    <FiRotateCcw size={14} />
+                    Restore
                   </button>
                   <button
                     className="btn-backup-delete"

@@ -32,6 +32,7 @@ router.post('/backup', authenticate, HistoryController.createBackup);
 router.get('/backups', authenticate, HistoryController.listBackups);
 router.get('/backups/:name', authenticate, HistoryController.downloadBackup);
 router.delete('/backups/:name', authenticate, HistoryController.deleteBackup);
+router.post('/backups/:name/restore', authenticate, HistoryController.restoreBackup);
 router.get('/export-data', authenticate, HistoryController.exportData);
 router.delete('/reset-data', authenticate, HistoryController.resetData);
 

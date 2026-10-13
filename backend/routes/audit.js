@@ -42,6 +42,7 @@ const ACTION_TYPES = [
   'business_logo_updated',
   'backup_created',
   'backup_deleted',
+  'backup_restored',
   'data_reset',
   'report_generated'
 ];
