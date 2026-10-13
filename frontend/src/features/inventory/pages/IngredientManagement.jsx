@@ -34,6 +34,7 @@ import InventoryModal from '../components/InventoryModal';
 import RestockModal from '../components/ingredients modal/RestockModal';
 import HistoryModal from '../components/ingredients modal/HistoryModal';
 import ArchiveModal from '../components/ingredients modal/ArchiveModal';
+import { buildPageItems, ELLIPSIS } from "../../../utils/pagination";
 
 const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:5000/api';
 
@@ -1149,42 +1150,41 @@ const IngredientManagement = () => {
                 <button 
                   className="inventory-pagination-btn"
                   onClick={() => setCurrentPage(prev => Math.max(prev - 1, 1))}
-                  disabled={currentPage === 1}
+                  disabled={currentPage <= 1}
+                  aria-label="Previous page"
                 >
                   <FaArrowLeft /> Previous
                 </button>
                 
                 <div className="inventory-pagination-numbers">
-                  {Array.from({ length: Math.min(5, totalPages) }, (_, i) => {
-                    let pageNumber;
-                    if (totalPages <= 5) {
-                      pageNumber = i + 1;
-                    } else if (currentPage <= 3) {
-                      pageNumber = i + 1;
-                    } else if (currentPage >= totalPages - 2) {
-                      pageNumber = totalPages - 4 + i;
-                    } else {
-                      pageNumber = currentPage - 2 + i;
-                    }
-                    if (pageNumber > 0 && pageNumber <= totalPages) {
-                      return (
-                        <button
-                          key={pageNumber}
-                          className={`inventory-pagination-number ${currentPage === pageNumber ? 'active' : ''}`}
-                          onClick={() => setCurrentPage(pageNumber)}
-                        >
-                          {pageNumber}
-                        </button>
-                      );
-                    }
-                    return null;
-                  })}
+                  {buildPageItems(currentPage, totalPages).map((item, index) =>
+                    item === ELLIPSIS ? (
+                      <span
+                        key={`ellipsis-${index}`}
+                        className="inventory-pagination-ellipsis"
+                        aria-hidden="true"
+                      >
+                        …
+                      </span>
+                    ) : (
+                      <button
+                        key={item}
+                        className={`inventory-pagination-number ${currentPage === item ? 'active' : ''}`}
+                        onClick={() => setCurrentPage(item)}
+                        aria-label={`Page ${item}`}
+                        aria-current={currentPage === item ? 'page' : undefined}
+                      >
+                        {item}
+                      </button>
+                    )
+                  )}
                 </div>
 
                 <button 
                   className="inventory-pagination-btn"
                   onClick={() => setCurrentPage(prev => Math.min(prev + 1, totalPages))}
-                  disabled={currentPage === totalPages}
+                  disabled={currentPage >= totalPages}
+                  aria-label="Next page"
                 >
                   Next <FaArrowRight />
                 </button>

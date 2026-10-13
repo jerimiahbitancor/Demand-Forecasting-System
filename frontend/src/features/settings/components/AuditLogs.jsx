@@ -6,6 +6,7 @@ import toast from 'react-hot-toast';
 import { buildAuditLogsPDF } from "../../../services/reportService";
 import "./AuditLogs.css";
 import "../../../features/inventory/InventoryControls.css";
+import { buildPageItems, ELLIPSIS } from "../../../utils/pagination";
 
 const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:5000/api';
 
@@ -463,42 +464,41 @@ function AuditLogs() {
                 className="audit-page-btn"
                 onClick={() => setPage((p) => Math.max(1, p - 1))}
                 disabled={page <= 1}
+                aria-label="Previous page"
               >
                 <FiChevronLeft size={14} />
                 Previous
               </button>
 
               <div className="audit-page-numbers">
-                {Array.from({ length: Math.min(5, totalPages) }, (_, i) => {
-                  let pageNumber;
-                  if (totalPages <= 5) {
-                    pageNumber = i + 1;
-                  } else if (page <= 3) {
-                    pageNumber = i + 1;
-                  } else if (page >= totalPages - 2) {
-                    pageNumber = totalPages - 4 + i;
-                  } else {
-                    pageNumber = page - 2 + i;
-                  }
-                  if (pageNumber > 0 && pageNumber <= totalPages) {
-                    return (
-                      <button
-                        key={pageNumber}
-                        className={`audit-page-number ${page === pageNumber ? 'active' : ''}`}
-                        onClick={() => setPage(pageNumber)}
-                      >
-                        {pageNumber}
-                      </button>
-                    );
-                  }
-                  return null;
-                })}
+                {buildPageItems(page, totalPages).map((item, index) =>
+                  item === ELLIPSIS ? (
+                    <span
+                      key={`ellipsis-${index}`}
+                      className="audit-page-ellipsis"
+                      aria-hidden="true"
+                    >
+                      …
+                    </span>
+                  ) : (
+                    <button
+                      key={item}
+                      className={`audit-page-number ${page === item ? 'active' : ''}`}
+                      onClick={() => setPage(item)}
+                      aria-label={`Page ${item}`}
+                      aria-current={page === item ? 'page' : undefined}
+                    >
+                      {item}
+                    </button>
+                  )
+                )}
               </div>
 
               <button
                 className="audit-page-btn"
                 onClick={() => setPage((p) => p + 1)}
                 disabled={page >= totalPages}
+                aria-label="Next page"
               >
                 Next
                 <FiChevronRight size={14} />

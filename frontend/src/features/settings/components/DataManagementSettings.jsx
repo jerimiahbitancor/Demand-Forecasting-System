@@ -3,6 +3,7 @@ import { useState, useEffect } from "react";
 import { FiInfo, FiAlertTriangle, FiDownload, FiCheck, FiX, FiTrash2, FiRefreshCw, FiDatabase, FiRotateCcw } from "react-icons/fi";
 import axios from 'axios';
 import toast from 'react-hot-toast';
+import Swal from '../../../utils/swal';
 import "./DataManagementSettings.css";
 
 const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:5000/api';
@@ -62,49 +63,116 @@ function DataManagementSettings() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  const handleDownloadBackup = (url) => {
-    if (url) window.open(url, '_blank', 'noopener,noreferrer');
+  const handleDownloadBackup = async (item) => {
+    if (!item?.url) return;
+
+    const confirmed = await Swal.fire({
+      title: 'Download this backup?',
+      text: `"${item.name}" will be downloaded to your device.`,
+      icon: 'question',
+      showCancelButton: true,
+      confirmButtonText: 'Yes, download',
+      cancelButtonText: 'Cancel',
+    });
+    if (!confirmed.isConfirmed) return;
+
+    window.open(item.url, '_blank', 'noopener,noreferrer');
   };
 
   const handleDeleteBackup = async (name) => {
-    const confirmed = window.confirm(
-      `Delete backup "${name}"? This will permanently remove the file from the files bucket.`
-    );
-    if (!confirmed) return;
+    const confirmed = await Swal.fire({
+      title: 'Delete this backup?',
+      text: `"${name}" will be permanently removed from the files bucket. This cannot be undone.`,
+      icon: 'warning',
+      showCancelButton: true,
+      confirmButtonText: 'Yes, delete',
+      cancelButtonText: 'Cancel',
+      confirmButtonColor: '#d33',
+      cancelButtonColor: '#6b7280',
+    });
+    if (!confirmed.isConfirmed) return;
+
+    Swal.fire({
+      title: 'Deleting backup...',
+      allowOutsideClick: false,
+      didOpen: () => {
+        Swal.showLoading();
+      },
+    });
 
     try {
       const response = await apiClient.delete(`/settings/backups/${encodeURIComponent(name)}`);
-      if (response.data.success) {
-        toast.success('Backup deleted');
-        fetchBackups(true);
+      Swal.close();
+
+      if (!response.data.success) {
+        throw new Error(response.data.error || 'Failed to delete backup');
       }
+
+      await Swal.fire({
+        icon: 'success',
+        title: 'Backup deleted',
+        text: `"${name}" was removed from the files bucket.`,
+        timer: 1800,
+        showConfirmButton: false,
+      });
+      fetchBackups(true);
     } catch (error) {
-      toast.error(error.response?.data?.error || 'Failed to delete backup');
+      Swal.close();
+      Swal.fire({
+        icon: 'error',
+        title: 'Delete failed',
+        text: error.response?.data?.error || error.message || 'Failed to delete backup',
+      });
     }
   };
 
   const handleRestoreBackup = async (name) => {
-    const confirmed = window.confirm(
-      `Restore backup "${name}"?\n\nThis merges the backup's data back into the system. ` +
-      `It will NOT delete any current data, and your login account is left untouched.`
-    );
-    if (!confirmed) return;
+    const confirmed = await Swal.fire({
+      title: 'Restore this backup?',
+      text:
+        `This merges "${name}" back into the system. It will NOT delete any current data, ` +
+        `and your login account is left untouched.`,
+      icon: 'warning',
+      showCancelButton: true,
+      confirmButtonText: 'Yes, restore',
+      cancelButtonText: 'Cancel',
+      confirmButtonColor: '#7A0101',
+      cancelButtonColor: '#6b7280',
+    });
+    if (!confirmed.isConfirmed) return;
 
-    const loadingToast = toast.loading('Restoring backup...');
+    Swal.fire({
+      title: 'Restoring backup...',
+      allowOutsideClick: false,
+      didOpen: () => {
+        Swal.showLoading();
+      },
+    });
+
     try {
       const response = await apiClient.post(`/settings/backups/${encodeURIComponent(name)}/restore`);
-      toast.dismiss(loadingToast);
+      Swal.close();
 
       if (!response.data.success) {
         throw new Error(response.data.error || 'Restore failed');
       }
 
       const total = response.data.data?.totalRows ?? 0;
-      toast.success(`Backup restored — ${total} row${total === 1 ? '' : 's'} merged.`);
+      await Swal.fire({
+        icon: 'success',
+        title: 'Backup restored',
+        text: `${total} row${total === 1 ? '' : 's'} merged.`,
+        timer: 1800,
+        showConfirmButton: false,
+      });
       fetchBackups(true);
     } catch (error) {
-      toast.dismiss(loadingToast);
-      toast.error(error.response?.data?.error || error.message || 'Failed to restore backup');
+      Swal.close();
+      Swal.fire({
+        icon: 'error',
+        title: 'Restore failed',
+        text: error.response?.data?.error || error.message || 'Failed to restore backup',
+      });
     }
   };
 
@@ -425,7 +493,7 @@ function DataManagementSettings() {
                 <div className="backup-actions">
                   <button
                     className="btn-backup-download"
-                    onClick={() => handleDownloadBackup(item.url)}
+                    onClick={() => handleDownloadBackup(item)}
                     disabled={!item.url}
                   >
                     <FiDownload size={14} />

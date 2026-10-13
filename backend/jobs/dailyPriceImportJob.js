@@ -20,9 +20,22 @@ const { supabaseAdmin } = require('../config/supabase');
 
 const PH_TZ = 'Asia/Manila';
 
+// Asia/Manila is UTC+8 with no DST, so the local date is a fixed offset away.
+const PH_OFFSET_MS = 8 * 60 * 60 * 1000;
+
 // One every-day cron, since the importer only ever fetches the newest sheet.
 // Env can rescope it (e.g. "0 20 * * 1-5" for weekdays only).
 const DEFAULT_CRON = '0 16 * * *';
+
+// On boot, wait this long before the catch-up attempt so the daily schedule
+// and startup work (DB warm-up, etc.) settle first. The catch-up itself is the
+// reliability backstop: a redeploy/restart that lands on or after the cron
+// time would otherwise silently skip the whole day, since the scheduler only
+// fires while the process is alive.
+const STARTUP_CATCHUP_DELAY_MS = 20 * 1000;
+
+// Philippine calendar date (YYYY-MM-DD) for a given instant.
+const phDateStr = (date = new Date()) => new Date(date.getTime() + PH_OFFSET_MS).toISOString().slice(0, 10);
 
 // Behave exactly like forecastScheduler's jobs list: this is what
 // getDailyPriceImportStatus() reports as "scheduled", so callers can see the
@@ -47,6 +60,45 @@ async function notifyAllUsers({ type, title, message, metadata }) {
   for (const user of users || []) {
     await createNotification({ userId: user.id, type, title, message, link: '/inventory-management', metadata });
   }
+}
+
+// Any automated da_reference row already recorded for the given PH date means
+// that day's import has happened (the importer stores the sheet's date in
+// scraped_at). Used only by the startup catch-up to decide whether there is
+// anything to do, so a healthy restart never re-fetches the DA page.
+async function importedForPhDate(dateStr) {
+  const { data, error } = await supabaseAdmin
+    .from('market_price')
+    .select('id')
+    .eq('source', 'da_reference')
+    .eq('is_manual_entry', false)
+    .gte('scraped_at', `${dateStr}T00:00:00`)
+    .lte('scraped_at', `${dateStr}T23:59:59`)
+    .limit(1);
+  if (error) {
+    // Fail open: if we cannot tell, still attempt the import — the service is
+    // idempotent per sheet date, so the worst case is a redundant fetch.
+    console.error('[dailyPriceImport] Catch-up guard query failed:', error);
+    return false;
+  }
+  return Boolean(data && data.length);
+}
+
+// Runs once at startup, after a short delay, to recover the day's import when
+// the process was down at the scheduled cron time (typical with redeploys).
+// Skips when the current PH day is already imported; the service's own
+// per-sheet-date guard makes a redundant run harmless.
+async function runDailyPriceJobIfMissed() {
+  if (!isEnabled()) return { status: 'disabled' };
+
+  const today = phDateStr();
+  if (await importedForPhDate(today)) {
+    console.log(`[dailyPriceImport] Catch-up skipped — already imported for ${today}.`);
+    return { status: 'skipped', reason: `already imported for ${today}` };
+  }
+
+  console.log(`[dailyPriceImport] Catch-up run for ${today} (scheduled run may have been missed).`);
+  return runDailyPriceJob();
 }
 
 async function runDailyPriceJob() {
@@ -116,6 +168,13 @@ function registerDailyPriceImportJob() {
     },
     { timezone: JOBS[0].timezone }
   );
+  // Startup catch-up: recover a day whose scheduled run was missed because the
+  // process was not running at the cron time.
+  setTimeout(() => {
+    runDailyPriceJobIfMissed().catch((error) => {
+      console.error('[dailyPriceImport] Startup catch-up failed:', error);
+    });
+  }, STARTUP_CATCHUP_DELAY_MS).unref?.();
   registered = true;
   console.log(
     `[dailyPriceImport] Registered DA price import job — ${JOBS[0].cron} (${JOBS[0].timezone})` +
@@ -133,4 +192,4 @@ function getDailyPriceImportStatus() {
   };
 }
 
-module.exports = { registerDailyPriceImportJob, runDailyPriceJob, getDailyPriceImportStatus, JOBS };
+module.exports = { registerDailyPriceImportJob, runDailyPriceJob, runDailyPriceJobIfMissed, getDailyPriceImportStatus, JOBS };

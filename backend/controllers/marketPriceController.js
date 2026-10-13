@@ -893,6 +893,35 @@ const deleteSource = async (req, res) => {
   }
 };
 
+// Manual "fetch now" trigger for the automated DA importer. Unlike every other
+// handler here it does not write a human entry itself — it delegates to the
+// same job/cron (jobs/dailyPriceImportJob.js) so staff can force a run (e.g.
+// after a missed schedule or a new price release). Idempotent per sheet date.
+const triggerDaImport = async (req, res) => {
+  try {
+    // Required lazily so this controller never pulls the scheduler into a
+    // request path it doesn't need.
+    const { runDailyPriceJob } = require('../jobs/dailyPriceImportJob');
+    const report = await runDailyPriceJob();
+    const ok = report.status !== 'failed' && report.status !== 'disabled';
+
+    await logAction(
+      'market_price_import',
+      `Ran DA price import manually — ${report.status}${report.sheetDate ? ` (${report.sheetDate})` : ''}`,
+      actorOf(req)
+    );
+
+    res.status(ok ? 200 : 502).json({
+      success: ok,
+      data: report,
+      error: ok ? undefined : (report.error || `Import ${report.status}`)
+    });
+  } catch (error) {
+    console.error('Error running DA price import:', error);
+    res.status(500).json({ success: false, error: error.message });
+  }
+};
+
 module.exports = {
   getComparison,
   getIngredientPrices,
@@ -903,5 +932,6 @@ module.exports = {
   bulkUpsertPrices,
   getSourcesList,
   createSource,
-  deleteSource
+  deleteSource,
+  triggerDaImport
 };

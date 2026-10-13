@@ -1,0 +1,150 @@
+/* frontend/src/features/components/NotFound.css */
+/* 404 page — same design scheme as the rest of the app (see App.css tokens). */
+
+.not-found-page {
+  position: relative;
+  min-height: 100vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 40px 24px;
+  background-color: var(--color-primary, #ede9de);
+  background-image:
+    radial-gradient(circle at 18% 20%, rgba(254, 177, 97, 0.22), transparent 42%),
+    radial-gradient(circle at 82% 85%, rgba(122, 1, 1, 0.08), transparent 45%);
+  overflow: hidden;
+}
+
+.not-found-card {
+  position: relative;
+  width: 100%;
+  max-width: 560px;
+  background: var(--color-bg-white, #ffffff);
+  border: 1px solid var(--color-border-light, #e8e0dd);
+  border-radius: 20px;
+  padding: 48px 40px 44px;
+  text-align: center;
+  box-shadow: 0 20px 60px rgba(28, 38, 50, 0.12);
+  animation: notFoundRise 0.4s ease both;
+}
+
+@keyframes notFoundRise {
+  from {
+    opacity: 0;
+    transform: translateY(14px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+/* Orange accent tile holding the brand icon. */
+.not-found-badge {
+  width: 64px;
+  height: 64px;
+  margin: 0 auto 8px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 18px;
+  font-size: 26px;
+  color: var(--color-red-primary, #7a0101);
+  background: rgba(254, 177, 97, 0.25);
+  border: 1px solid rgba(254, 177, 97, 0.55);
+}
+
+.not-found-code {
+  margin: 0;
+  font-size: clamp(72px, 16vw, 120px);
+  line-height: 1;
+  font-weight: 800;
+  letter-spacing: -0.04em;
+  color: var(--color-red-primary, #7a0101);
+  text-shadow: 0 6px 24px rgba(122, 1, 1, 0.18);
+}
+
+.not-found-title {
+  margin: 8px 0 12px;
+  font-size: 24px;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+  color: var(--color-text-primary, #1c2632);
+}
+
+.not-found-text {
+  margin: 0 auto 24px;
+  max-width: 420px;
+  font-size: 15px;
+  line-height: 1.65;
+  color: var(--color-text-secondary, #5c403c);
+}
+
+.not-found-path {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0 auto 28px;
+  padding: 8px 14px;
+  max-width: 100%;
+  border-radius: 999px;
+  background: var(--color-bg-light, #f8f9fa);
+  border: 1px solid var(--color-border-light, #e8e0dd);
+}
+
+.not-found-path-label {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.8px;
+  text-transform: uppercase;
+  color: var(--color-text-light, #6c757d);
+}
+
+.not-found-path code {
+  font-family: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 13px;
+  color: var(--color-text-primary, #1c2632);
+  overflow-wrap: anywhere;
+}
+
+.not-found-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  justify-content: center;
+}
+
+.not-found-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  min-width: 160px;
+  text-decoration: none;
+  padding: 12px 20px;
+  line-height: 1.2;
+  font-size: 15px;
+}
+
+@media (max-width: 480px) {
+  .not-found-page {
+    padding: 28px 18px;
+  }
+
+  .not-found-card {
+    padding: 36px 22px 32px;
+    border-radius: 16px;
+  }
+
+  .not-found-title {
+    font-size: 20px;
+  }
+
+  .not-found-actions {
+    flex-direction: column;
+  }
+
+  .not-found-btn {
+    width: 100%;
+  }
+}
