@@ -136,6 +136,7 @@ const baseDeps = (over = {}) => ({
   client: fakeClient({}),
   requestStats: { snapshot: () => ({ since: '2026-10-06T00:00:00.000Z', count: 10, errors5xx: 0, rateLimited429: 0, p50Ms: 50, p95Ms: 300, maxMs: 400 }) },
   getSchedulerStatus: () => ({ since: '2026-10-06T00:00:00.000Z', jobs: [], lastRuns: { daily: null, weekly: null } }),
+  getDailyPriceImportStatus: () => ({ enabled: true, cron: '0 10 * * *', timezone: 'Asia/Manila', lastRuns: [] }),
   isTrainingInFlight: () => false,
   getMissingOperatingDays: async () => ({ missingOperatingDays: 0, missingDates: [], operatingDaysSource: 'configured' }),
   fetchImpl: async () => ({ status: 200 }),
@@ -283,11 +284,15 @@ test('scheduler: a failed last run warns', async () => {
   assert.equal(fine.status, 'ok');
 });
 
-test('the full result with the real checks has 6 checks and no secrets', async () => {
+// Seven since 014e434 (DA price import job, added on another branch).
+test('the full result with the real checks has 7 checks and no secrets', async () => {
   const deps = baseDeps({ env: { ...baseDeps().env, SUPABASE_SERVICE_ROLE_KEY: 'super-secret-key', ML_SERVICE_SHARED_SECRET: 'shh' } });
   const service = createStatusService({ checks: buildDefaultChecks(deps) });
   const result = await service.getStatus();
-  assert.deepEqual(Object.keys(result.checks).sort(), ['database', 'mlPipeline', 'mlService', 'scheduler', 'server', 'uploads']);
+  assert.deepEqual(
+    Object.keys(result.checks).sort(),
+    ['dailyPriceImport', 'database', 'mlPipeline', 'mlService', 'scheduler', 'server', 'uploads']
+  );
   const text = JSON.stringify(result);
   for (const secret of ['super-secret-key', 'shh', 'ml.railway.internal', 'http://']) {
     assert.ok(!text.includes(secret), `output must not contain ${secret}`);

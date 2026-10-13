@@ -53,9 +53,47 @@ export function createChangeDetector(kinds = DATA_CHANGE_KINDS) {
   };
 }
 
+// Like createChangeDetector, but reports EVERY new notification instead of
+// only the watched kinds. Returns the notification object once per id, so the
+// bell can pop it out as a toast. The watched-kind filter above is unchanged.
+export function createNewestDetector() {
+  let highestId = null;
+
+  return function detectNewest(newest) {
+    const id = newest && Number(newest.id);
+    const hasId = Number.isFinite(id);
+
+    if (highestId === null) {
+      highestId = hasId ? id : 0;
+      return null;
+    }
+    if (!hasId || id <= highestId) return null;
+
+    highestId = id;
+    return newest;
+  };
+}
+
 export function emitDataChanged(detail, target = globalThis.window) {
   if (!target || typeof target.dispatchEvent !== 'function') return;
   target.dispatchEvent(new CustomEvent(DATA_CHANGED_EVENT, { detail }));
+}
+
+// A "check the notification list right now" nudge. Actions that create a
+// notification (upload, training, forecast, saving prices, ...) call
+// requestNotificationCheck() right after they succeed, so the bell pops the
+// new notification out immediately instead of waiting for its 30 s poll.
+export const NOTIFICATION_CHECK_EVENT = 'dfs:check-notifications';
+
+export function requestNotificationCheck(target = globalThis.window) {
+  if (!target || typeof target.dispatchEvent !== 'function') return;
+  target.dispatchEvent(new CustomEvent(NOTIFICATION_CHECK_EVENT));
+}
+
+export function onNotificationCheck(handler, target = globalThis.window) {
+  if (!target || typeof target.addEventListener !== 'function') return () => {};
+  target.addEventListener(NOTIFICATION_CHECK_EVENT, handler);
+  return () => target.removeEventListener(NOTIFICATION_CHECK_EVENT, handler);
 }
 
 // Subscribes; returns the unsubscribe function (handy as an effect cleanup).

@@ -50,6 +50,47 @@ export async function loadLogoBase64(url = getStoredBusinessLogo()) {
   }
 }
 
+// ---------------------------------------------------------------------
+// Peso sign - jsPDF's built-in fonts have no glyph for the Philippine
+// peso sign (U+20B1), so it renders as a wrong character. We embed a tiny
+// subset font (ASCII + U+20B1 only, generated with pyftsubset) on demand
+// and use it for currency text only, leaving everything else as-is.
+// ---------------------------------------------------------------------
+const PESO = '\u20B1';
+const PESO_FONT = 'PesoFont';
+const PESO_FONT_FILE = 'Roboto-Regular.ttf';
+const PESO_FONT_URL = `${(import.meta.env && import.meta.env.BASE_URL) || '/'}fonts/${PESO_FONT_FILE}`;
+let pesoFontBase64Promise = null;
+
+function loadPesoFontBase64() {
+  if (!pesoFontBase64Promise) {
+    pesoFontBase64Promise = fetch(PESO_FONT_URL)
+      .then((res) => (res.ok ? res.arrayBuffer() : Promise.reject(new Error('peso font unavailable'))))
+      .then((buffer) => {
+        const bytes = new Uint8Array(buffer);
+        let binary = '';
+        const chunkSize = 0x8000;
+        for (let i = 0; i < bytes.length; i += chunkSize) {
+          binary += String.fromCharCode(...bytes.subarray(i, i + chunkSize));
+        }
+        return btoa(binary);
+      })
+      .catch(() => null);
+  }
+  return pesoFontBase64Promise;
+}
+
+function registerPesoFont(doc, base64) {
+  if (!base64) return false;
+  try {
+    doc.addFileToVFS(PESO_FONT_FILE, base64);
+    doc.addFont(PESO_FONT_FILE, PESO_FONT, 'normal');
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 function drawHeader(doc, { reportTitle, dateRangeLabel, generatedLabel, business, logoDataUrl }) {
   const y = PAGE_MARGIN;
 
@@ -397,7 +438,12 @@ export async function buildGroceryListPDF({
   GROCERY_CATEGORIES,
 }) {
   const doc = new jsPDF({ unit: 'mm', format: 'a5', orientation: 'portrait' });
-  const logoDataUrl = await loadLogoBase64();
+  const [logoDataUrl, pesoFontBase64] = await Promise.all([
+    loadLogoBase64(),
+    loadPesoFontBase64(),
+  ]);
+  const pesoFontReady = registerPesoFont(doc, pesoFontBase64);
+  const peso = pesoFontReady ? PESO : 'PHP ';
 
   const PAGE_W = 148;
   const PAGE_H = 210;
@@ -458,9 +504,9 @@ export async function buildGroceryListPDF({
   doc.setFontSize(7);
   doc.text('Est. Total Cost', MARGIN + cardW / 2, y + 5, { align: 'center' });
   doc.setTextColor(28, 38, 50);
-  doc.setFont('courier', 'bold');
+  doc.setFont(pesoFontReady ? PESO_FONT : 'courier', pesoFontReady ? 'normal' : 'bold');
   doc.setFontSize(13);
-  doc.text(`₱ ${totalCost.toLocaleString()}`, MARGIN + cardW / 2, y + 13, { align: 'center' });
+  doc.text(`${peso} ${totalCost.toLocaleString()}`, MARGIN + cardW / 2, y + 13, { align: 'center' });
 
   const card2X = MARGIN + cardW + 6;
   doc.setFillColor(237, 233, 222);
@@ -490,114 +536,117 @@ export async function buildGroceryListPDF({
   const filledCats = GROCERY_CATEGORIES
     .map((cat) => ({ cat, items: itemsToDownload.filter((i) => i.category === cat) }))
     .filter(({ items }) => items.length > 0);
-  const colW = (CONTENT_W - 5) / 2;
+  const TABLE_HEAD = [['', 'Item', 'Qty', 'Unit', 'Market Price', 'Notes']];
+  const COLUMN_STYLES = {
+    0: { cellWidth: 8, halign: 'center' },
+    1: { cellWidth: 'auto' },
+    2: { cellWidth: 14, halign: 'right' },
+    3: { cellWidth: 14 },
+    4: { cellWidth: 34, halign: 'right' },
+    5: { cellWidth: 24 },
+  };
+  const drawCheckbox = (data) => {
+    if (data.section === 'body' && data.column.index === 0) {
+      const cx = data.cell.x + (data.cell.width - 3) / 2;
+      const cy = data.cell.y + (data.cell.height - 3) / 2;
+      doc.setDrawColor(153, 153, 153);
+      doc.setLineWidth(0.3);
+      doc.rect(cx, cy, 3, 3);
+    }
+  };
+  const usePesoFontForCurrency = (data) => {
+    if (pesoFontReady && typeof data.cell.raw === 'string' && data.cell.raw.includes(PESO)) {
+      data.cell.styles.font = PESO_FONT;
+    }
+  };
 
-  for (let ci = 0; ci < filledCats.length; ci += 2) {
-    const left = filledCats[ci];
-    const right = filledCats[ci + 1] || null;
-    const renderCatTable = (startX, catObj) => {
-      const { cat, items } = catObj;
-      const colors = CAT_COLORS[cat] || { bg: [240, 240, 240], text: [28, 38, 50] };
-      const itemCount = `${items.length} item${items.length !== 1 ? 's' : ''}`;
-      const headerH = 7;
-      doc.setFillColor(...colors.bg);
-      doc.setDrawColor(232, 224, 221);
-      doc.setLineWidth(0.2);
-      doc.roundedRect(startX, y, colW, headerH, 1, 1, 'FD');
-      doc.setTextColor(...colors.text);
-      doc.setFont('helvetica', 'bold');
-      doc.setFontSize(8);
-      doc.text(cat, startX + 3, y + 5);
-      doc.setFont('helvetica', 'normal');
-      doc.setFontSize(7);
-      doc.setTextColor(108, 117, 125);
-      doc.text(itemCount, startX + colW - 3, y + 5, { align: 'right' });
-
-      autoTable(doc, {
-        startY: y + headerH,
-        head: [['', 'Item', 'Qty.', 'Unit', 'Market Price', 'Notes']],
-        body: items.map((item) => ['', item.name, item.toBuy?.toFixed(2) ?? '—', item.unit, `₱${item.marketPrice}/${item.unit}`, '']),
-        margin: { left: startX, right: PAGE_W - startX - colW },
-        tableWidth: colW,
-        styles: { fontSize: 7, textColor: [28, 38, 50], lineColor: [232, 224, 221], lineWidth: 0.15, cellPadding: 1.5 },
-        headStyles: { fillColor: [244, 244, 242], textColor: [28, 38, 50], fontStyle: 'bold', fontSize: 6.5 },
-        columnStyles: { 0: { cellWidth: 5, halign: 'center' }, 1: { cellWidth: 'auto' }, 2: { cellWidth: 12, halign: 'right' }, 3: { cellWidth: 10 }, 4: { cellWidth: 22, halign: 'right' }, 5: { cellWidth: 14 } },
-        didDrawCell: (data) => {
-          if (data.section === 'body' && data.column.index === 0) {
-            const cx = data.cell.x + (data.cell.width - 3) / 2;
-            const cy = data.cell.y + (data.cell.height - 3) / 2;
-            doc.setDrawColor(153, 153, 153);
-            doc.setLineWidth(0.3);
-            doc.rect(cx, cy, 3, 3);
-          }
-        },
-      });
-      return doc.lastAutoTable.finalY;
-    };
-    const leftFinalY = renderCatTable(MARGIN, left);
-    const rightFinalY = right ? renderCatTable(MARGIN + colW + 5, right) : leftFinalY;
-    y = Math.max(leftFinalY, rightFinalY) + 6;
-    if (y > PAGE_H - 30 && ci + 2 < filledCats.length) {
+  for (const { cat, items } of filledCats) {
+    const colors = CAT_COLORS[cat] || { bg: [240, 240, 240], text: [28, 38, 50] };
+    const itemCount = `${items.length} item${items.length !== 1 ? 's' : ''}`;
+    const headerH = 8;
+    const estimatedHeight = headerH + 7 + items.length * 6;
+    if (y + estimatedHeight > PAGE_H - 16 && y > MARGIN + 1) {
       doc.addPage('a5', 'portrait');
       y = MARGIN;
     }
+
+    doc.setFillColor(...colors.bg);
+    doc.setDrawColor(232, 224, 221);
+    doc.setLineWidth(0.2);
+    doc.roundedRect(MARGIN, y, CONTENT_W, headerH, 1, 1, 'FD');
+    doc.setTextColor(...colors.text);
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(9);
+    doc.text(cat, MARGIN + 4, y + 5.5);
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(7);
+    doc.setTextColor(108, 117, 125);
+    doc.text(itemCount, MARGIN + CONTENT_W - 4, y + 5.5, { align: 'right' });
+
+    autoTable(doc, {
+      startY: y + headerH,
+      head: TABLE_HEAD,
+      body: items.map((item) => [
+        '',
+        item.name,
+        item.toBuy?.toFixed(2) ?? '—',
+        item.unit,
+        `${peso}${item.marketPrice}/${item.unit}`,
+        '',
+      ]),
+      margin: { left: MARGIN, right: MARGIN },
+      tableWidth: CONTENT_W,
+      theme: 'grid',
+      styles: { fontSize: 7.5, textColor: [28, 38, 50], lineColor: [232, 224, 221], lineWidth: 0.15, cellPadding: 1.4 },
+      headStyles: { fillColor: [244, 244, 242], textColor: [28, 38, 50], fontStyle: 'bold', fontSize: 7 },
+      columnStyles: COLUMN_STYLES,
+      didParseCell: usePesoFontForCurrency,
+      didDrawCell: drawCheckbox,
+    });
+    y = doc.lastAutoTable.finalY + 7;
   }
 
-  const frontFooterY = PAGE_H - 10;
-  doc.setDrawColor(232, 224, 221);
-  doc.setLineWidth(0.2);
-  doc.line(MARGIN, frontFooterY - 2, MARGIN + CONTENT_W, frontFooterY - 2);
-  doc.setTextColor(108, 117, 125);
-  doc.setFont('helvetica', 'normal');
-  doc.setFontSize(7);
-  doc.text(`${business?.name || 'ChefDuo'} Forecast System`, MARGIN, frontFooterY + 2);
-  doc.text('Page 1 of 2', MARGIN + CONTENT_W, frontFooterY + 2, { align: 'right' });
-
-  doc.addPage('a5', 'portrait');
-  let by = MARGIN;
+  const blankRowCount = 15;
+  const additionalNeeded = 14 + 7 + blankRowCount * 7.5;
+  if (y + additionalNeeded > PAGE_H - 16) {
+    doc.addPage('a5', 'portrait');
+    y = MARGIN;
+  }
   doc.setTextColor(122, 1, 1);
   doc.setFont('helvetica', 'bold');
   doc.setFontSize(11);
-  doc.text('Additional Items', MARGIN, by + 6);
+  doc.text('Additional Items', MARGIN, y + 6);
   doc.setDrawColor(122, 1, 1);
   doc.setLineWidth(0.4);
-  doc.line(MARGIN, by + 8, MARGIN + CONTENT_W, by + 8);
-  by += 14;
-  const blankRows = Array(15).fill(['', '', '', '', '', '']);
-  const blankHead = [['', 'Item', 'Qty.', 'Unit', 'Market Price', 'Notes']];
-  const renderBlankTable = (startX) => {
-    autoTable(doc, {
-      startY: by,
-      head: blankHead,
-      body: blankRows,
-      margin: { left: startX, right: PAGE_W - startX - colW },
-      tableWidth: colW,
-      styles: { fontSize: 7, textColor: [28, 38, 50], lineColor: [200, 200, 200], lineWidth: 0.15, cellPadding: 1.5, minCellHeight: 7 },
-      headStyles: { fillColor: [244, 244, 242], textColor: [28, 38, 50], fontStyle: 'bold', fontSize: 6.5 },
-      columnStyles: { 0: { cellWidth: 5, halign: 'center' }, 1: { cellWidth: 'auto' }, 2: { cellWidth: 12 }, 3: { cellWidth: 10 }, 4: { cellWidth: 22 }, 5: { cellWidth: 14 } },
-      didDrawCell: (data) => {
-        if (data.section === 'body' && data.column.index === 0) {
-          const cx = data.cell.x + (data.cell.width - 3) / 2;
-          const cy = data.cell.y + (data.cell.height - 3) / 2;
-          doc.setDrawColor(153, 153, 153);
-          doc.setLineWidth(0.3);
-          doc.rect(cx, cy, 3, 3);
-        }
-      },
-    });
-  };
-  renderBlankTable(MARGIN);
-  renderBlankTable(MARGIN + colW + 5);
+  doc.line(MARGIN, y + 8, MARGIN + CONTENT_W, y + 8);
 
-  const backFooterY = PAGE_H - 10;
-  doc.setDrawColor(232, 224, 221);
-  doc.setLineWidth(0.2);
-  doc.line(MARGIN, backFooterY - 2, MARGIN + CONTENT_W, backFooterY - 2);
-  doc.setTextColor(108, 117, 125);
-  doc.setFont('helvetica', 'normal');
-  doc.setFontSize(7);
-  doc.text(`${business?.name || 'ChefDuo'} Forecast System`, MARGIN, backFooterY + 2);
-  doc.text('Page 2 of 2', MARGIN + CONTENT_W, backFooterY + 2, { align: 'right' });
+  autoTable(doc, {
+    startY: y + 14,
+    head: TABLE_HEAD,
+    body: Array(blankRowCount).fill(['', '', '', '', '', '']),
+    margin: { left: MARGIN, right: MARGIN },
+    tableWidth: CONTENT_W,
+    theme: 'grid',
+    styles: { fontSize: 7.5, textColor: [28, 38, 50], lineColor: [200, 200, 200], lineWidth: 0.15, cellPadding: 1.4, minCellHeight: 7.5 },
+    headStyles: { fillColor: [244, 244, 242], textColor: [28, 38, 50], fontStyle: 'bold', fontSize: 7 },
+    columnStyles: COLUMN_STYLES,
+    didDrawCell: drawCheckbox,
+  });
+
+  const pageCount = doc.internal.getNumberOfPages();
+  for (let i = 1; i <= pageCount; i++) {
+    doc.setPage(i);
+    const footerY = PAGE_H - 10;
+    doc.setDrawColor(232, 224, 221);
+    doc.setLineWidth(0.2);
+    doc.line(MARGIN, footerY - 2, MARGIN + CONTENT_W, footerY - 2);
+    doc.setTextColor(108, 117, 125);
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(7);
+    doc.text(`${business?.name || 'ChefDuo'} Forecast System`, MARGIN, footerY + 2);
+    doc.text(`Page ${i} of ${pageCount}`, MARGIN + CONTENT_W, footerY + 2, { align: 'right' });
+  }
+  doc.setPage(1);
 
   return doc;
 }

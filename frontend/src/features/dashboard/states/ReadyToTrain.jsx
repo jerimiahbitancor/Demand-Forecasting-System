@@ -9,7 +9,7 @@ import axios from "axios";
 import { useNavigate } from "react-router-dom";
 import toast from "react-hot-toast";
 import { FaArrowRight, FaCheckCircle, FaExclamationTriangle } from "react-icons/fa";
-import trainingImage from "../../../assets/images/Rene.png";
+import trainingImage from "../../../assets/images/NoData.png";
 import Swal from "../../../utils/swal";
 import {
   StateShell,

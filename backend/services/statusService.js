@@ -142,7 +142,7 @@ function createStatusService({ checks, cacheMs = THRESHOLDS.cacheMs, timeoutMs =
 }
 
 // ---------------------------------------------------------------------------
-// The six real checks. Dependencies are injectable for tests.
+// The seven real checks. Dependencies are injectable for tests.
 // ---------------------------------------------------------------------------
 
 const timed = async (fn, nowFn = Date.now) => {
@@ -171,6 +171,8 @@ function buildDefaultChecks(deps = {}) {
   const client = deps.client || require('../config/supabase').supabaseAdmin;
   const requestStats = deps.requestStats || require('../utils/requestStats');
   const getSchedulerStatus = deps.getSchedulerStatus || (() => require('../jobs/forecastScheduler').getSchedulerStatus());
+  const getDailyPriceImportStatus = deps.getDailyPriceImportStatus
+    || (() => require('../jobs/dailyPriceImportJob').getDailyPriceImportStatus());
   const isTrainingInFlight = deps.isTrainingInFlight || (() => require('./mlService').isTrainingInFlight());
   const getMissingOperatingDays = deps.getMissingOperatingDays
     || ((args) => require('./dataCoverageService').getMissingOperatingDays(client, args));
@@ -349,6 +351,27 @@ function buildDefaultChecks(deps = {}) {
         status: failed.length ? 'warn' : 'ok',
         reason: failed.join('; ') || null,
         details: status,
+      };
+    },
+
+    async dailyPriceImport() {
+      const status = getDailyPriceImportStatus();
+      const reasons = [];
+      if (!status.enabled) reasons.push('disabled (DA_PRICE_IMPORT_ENABLED=false)');
+      const failed = (status.lastRuns || []).filter((r) => r && r.status === 'failed');
+      if (failed.length) {
+        const last = failed[failed.length - 1];
+        reasons.push(`last run failed: ${last.error || last.status}`);
+      }
+      return {
+        status: reasons.length ? 'warn' : 'ok',
+        reason: reasons.join('; ') || null,
+        details: {
+          enabled: status.enabled,
+          cron: status.cron,
+          timezone: status.timezone,
+          lastRuns: (status.lastRuns || []).slice(-5),
+        },
       };
     },
   };

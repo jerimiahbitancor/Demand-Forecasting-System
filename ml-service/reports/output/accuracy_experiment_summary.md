@@ -1,3 +1,5 @@
+STALE: run on data ending 2026-09-17 (40 products), before the Sep 30 synthetic-data cleanup. Not evidence for the current model.
+
 # Accuracy tuning experiment summary
 
 Dataset: 12754 usable rows, 40 eligible products.

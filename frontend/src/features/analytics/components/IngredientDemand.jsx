@@ -570,7 +570,7 @@ function IngredientDemand() {
                   {paginatedWeekly.map((row, i) => (
                     <tr key={row.ingredient}>
                       <td>{(weeklyPage - 1) * ROWS_PER_PAGE + i + 1}</td>
-                      <td>{i < 2 ? row.ingredient : ""}</td>
+                      <td>{row.ingredient}</td>
                       {row.values.map((v, di) => (
                         <td key={di} className={`heatmap-cell heatmap-cell--${cellLevel(row, di)}`}>
                           {v}
