@@ -195,6 +195,10 @@ test('C3: no-recipe product skipped while others deduct; archived skipped; New a
 
 test('C3: a product still Discontinued after this upload\'s refresh deducts (old-history upload)', async () => {
   seed({ ingredientCreatedAt: '2025-07-01T00:00:00Z' });
+  // 30 confirmed-open days after 2025-08-01: more than 28 -> Discontinued.
+  fake.tables.business_days = Array.from({ length: 30 }, (_, i) => ({
+    business_date: new Date(Date.UTC(2025, 7, 2 + i)).toISOString().slice(0, 10), status: 'confirmed_open',
+  }));
   await upload([['Old Dish', 1]], 51, 'item-sales-summary-2025-08-01-2025-08-01.csv');
   const product4 = fake.tables.products.find((p) => p.id === 4);
   assert.equal(product4.status, 'inactive_discontinued', 'its last sale is still months ago');
@@ -241,7 +245,7 @@ test('C4: shortfall floors stock at 0, writes notes, one warning per ingredient 
 
   const notes = fake.tables.notifications;
   assert.equal(notes.length, 1, 'one notification: egg only');
-  assert.equal(notes[0].title, 'Low stock: Egg');
+  assert.equal(notes[0].title, 'Stock shortfall: Egg', 'not "Low stock", which looks like the out-of-stock alert');
   assert.equal(notes[0].message, 'Egg: 5 pcs used but 2 pcs in stock. Please monitor it.');
   assert.equal(notes[0].type, 'warning');
   assert.equal(notes[0].link, '/ingredient-management');

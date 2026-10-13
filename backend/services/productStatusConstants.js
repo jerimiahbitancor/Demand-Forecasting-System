@@ -1,8 +1,8 @@
 module.exports = {
   PRODUCT_STATUS_NOTES: {
     ACTIVE: '',
-    NEW_PRODUCT: 'New product detected. Forecast available after 28 days of sales data.',
-    STALE: 'No sales for 28 days. Excluded from forecast until sales resume.',
+    NEW_PRODUCT: 'Fewer than 42 sales days so far. Forecast available after 42 days with sales.',
+    STALE: 'No sales in the last 28 open days. Excluded from forecast until sales resume.',
     NEVER_SOLD: 'No sales recorded since being added. Excluded from forecast until first sale.',
   },
   ARCHIVE_REASONS: {

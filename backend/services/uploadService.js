@@ -1,14 +1,15 @@
 // services/uploadService.js
 const { fetchAllRows } = require('../utils/fetchAllRows');
 const { accuracyFromWmape, beatsBaseline, modelNeedsAttention } = require('../utils/accuracy');
-const { getProductSalesSummary } = require('../utils/productSalesSummary');
 const { supabase, isConfigured, supabaseAdmin } = require('../config/supabase');
 const mappingService = require('./mappingService');
 const mlService = require('./mlService');
 const businessDayService = require('./businessDayService');
 const dataCoverageService = require('./dataCoverageService');
 const logger = require('../utils/logger');
-const { deriveProductStatus, isArchivedProduct } = require('./productStatusService');
+const {
+  deriveProductStatus, isArchivedProduct, loadStatusInputs, statusInputsFor,
+} = require('./productStatusService');
 const { PRODUCT_STATUS_NOTES, PRODUCT_DB_STATUS_BY_DERIVED } = require('./productStatusConstants');
 const dayjs = require('dayjs');
 const utc = require('dayjs/plugin/utc');
@@ -320,7 +321,8 @@ class UploadService {
           await createNotificationOnce({
             userId: user.id,
             type: 'warning',
-            title: item.title,
+            // Not "Low stock": that reads like the separate low/out-of-stock alert.
+            title: `Stock shortfall: ${item.name || `ingredient #${item.ingredientId}`}`,
             message: item.message,
             link: '/ingredient-management',
             metadata: {
@@ -733,30 +735,21 @@ class UploadService {
         const { data: productRows, error: productFetchError } = await supabaseAdmin.from('products')
           .select('id, created_at, first_sold_date, is_active, inactive_reason, inactive_since, status')
           .in('id', selectedProductIds);
-        // First/last sale per product via the view -- this is the per-upload
-        // call that used to read every sales row for the selected products.
-        const { data: salesSummary, error: salesFetchError } = await getProductSalesSummary(selectedProductIds);
+        if (productFetchError) throw productFetchError;
 
-        if (productFetchError || salesFetchError) {
-          throw productFetchError || salesFetchError;
-        }
+        // Status inputs for the products in this file (sales days, last real
+        // sale, confirmed-open days) — a few paged reads, the same ones
+        // mappingService.reconcileProductActivation() uses for all products.
+        const statusInputs = await loadStatusInputs(supabaseAdmin, { productIds: selectedProductIds });
 
         // 1. Status refresh for the products in this file. Runs BEFORE stock
         // deduction so the deduction sees this upload's status (v3).
         for (const product of productRows || []) {
           // Archived stays archived: never rewrite its status or reason here.
           if (isArchivedProduct(product)) continue;
-          const summary = salesSummary.get(product.id);
-
-          const firstSoldDate = summary?.firstSaleDate || product.first_sold_date || null;
-          const lastSoldDate = summary?.lastSaleDate || firstSoldDate || null;
-          const status = deriveProductStatus({
-            firstSoldDate: firstSoldDate || null,
-            lastSoldDate: lastSoldDate || null,
-            createdAt: product.created_at || null,
-            isActive: Boolean(product.is_active),
-            inactiveReason: product.inactive_reason
-          });
+          const inputs = statusInputsFor(product, statusInputs);
+          const firstSoldDate = inputs.firstSaleDate || product.first_sold_date || null;
+          const status = deriveProductStatus(inputs);
 
           const nextValues = {
             first_sold_date: firstSoldDate ? firstSoldDate.slice(0, 10) : null,
@@ -948,7 +941,7 @@ class UploadService {
               });
 
             if (transactionError) throw transactionError;
-            if (shortfall) shortfalls.push({ ingredientId, ...shortfall });
+            if (shortfall) shortfalls.push({ ingredientId, name: info.name, ...shortfall });
           }
 
           for (const item of shortfalls) {

@@ -145,6 +145,10 @@ test('A1: reconcile never un-archives, and still updates non-archived products',
   // Product 1 last sold long ago -> should become discontinued.
   seed.daily_sales = seed.daily_sales.filter((r) => r.product_id !== 1);
   seed.daily_sales.push({ id: 200, product_id: 1, sale_date: '2025-08-01', quantity_sold: 4, upload_id: 1 });
+  // Discontinued now means more than 28 confirmed-OPEN days since the last sale.
+  seed.business_days = Array.from({ length: 30 }, (_, i) => ({
+    business_date: new Date(Date.UTC(2025, 7, 2 + i)).toISOString().slice(0, 10), status: 'confirmed_open',
+  }));
   fake.reset(seed);
   const restore = quiet();
   const out = await mappingService.reconcileProductActivation();

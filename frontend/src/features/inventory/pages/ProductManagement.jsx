@@ -1111,12 +1111,16 @@ const ProductManagement = () => {
     const isArchived = lifecycleStatus === 'archived' || product?.is_archived === true
       || /^archived\b/i.test(product?.inactive_reason || '');
 
-    const price = product?.price || 0;
+    const price = Number(product?.price) || 0;
+    // Flags (computed here, nothing stored): Unmapped = no recipe;
+    // No Price = price is 0; High Food Cost = recipe cost / price above the
+    // threshold, skipped when there is no price.
+    const isNoPrice = price <= 0;
     const cogs = calculateProductCogs(product);
-    const foodCostPercentage = cogs !== null && price > 0 ? (cogs / price) * 100 : null;
+    const foodCostPercentage = cogs !== null && !isNoPrice ? (cogs / price) * 100 : null;
     const isMapped = hasIngredients;
     const isUnmapped = !isMapped;
-    const isHighFoodCost = isMapped && foodCostPercentage !== null
+    const isHighFoodCost = isMapped && !isNoPrice && foodCostPercentage !== null
       && foodCostPercentage > foodCostThreshold;
 
     const createdDate = new Date(product?.created_at);
@@ -1138,14 +1142,14 @@ const ProductManagement = () => {
       label = 'INACTIVE (DISCONTINUED)';
       className = 'status-discontinued';
       dotColor = '#dc2626';
-      tooltip = 'No sales recorded in the last 28 days. Excluded from active forecasting until sales activity resumes. Historical sales data is retained.';
+      tooltip = 'No sales in the last 28 days the store was open. Excluded from active forecasting until sales activity resumes. Historical sales data is retained.';
     } else if (isNew) {
       label = 'INACTIVE (NEW)';
       className = 'status-inactive-new';
       dotColor = '#f59e0b';
       tooltip = hasIngredients
-        ? 'New product with a recipe. COGS and Food Cost Percentage are calculated. Forecasting becomes available after the required 28-day minimum sales history is reached.'
-        : 'New product. Requires a recipe configuration and the 28-day minimum sales history before forecasting is available.';
+        ? 'Fewer than 42 days with sales so far. COGS and Food Cost Percentage are calculated. Forecasting becomes available after 42 days with sales.'
+        : 'Fewer than 42 days with sales so far. Requires a recipe configuration and 42 days with sales before forecasting is available.';
     }
 
     const indicators = [];
@@ -1157,9 +1161,9 @@ const ProductManagement = () => {
           className: 'status-unmapped',
           dotColor: '#9ca3af',
           tooltip: isNew
-            ? 'Requires a recipe configuration and at least 28 days of sales data before forecasting is available.'
+            ? 'Requires a recipe configuration and at least 42 days with sales before forecasting is available.'
             : isDiscontinued
-              ? 'No sales for 28+ days. Requires a recipe configuration. Excluded from forecasting until sales resume.'
+              ? 'No sales in the last 28 open days. Requires a recipe configuration. Excluded from forecasting until sales resume.'
               : 'No ingredient recipe configured. Included in forecasting but excluded from ingredient demand estimation, automatic stock deduction, and COGS/food cost calculation. Add a recipe using the Edit button.',
         });
       } else if (isHighFoodCost) {
@@ -1169,6 +1173,15 @@ const ProductManagement = () => {
           className: 'status-low-margin',
           dotColor: '#ec4899',
           tooltip: `This product's Food Cost Percentage (${foodCostPercentage.toFixed(1)}%) is above the ${foodCostThreshold}% warning threshold. COGS and Food Cost Percentage are calculated from the recipe. Consider reviewing the selling price, recipe, portion size, or ingredient costs.`,
+        });
+      }
+      if (isNoPrice) {
+        indicators.push({
+          key: 'no-price',
+          label: 'NO PRICE',
+          className: 'status-no-price',
+          dotColor: '#b45309',
+          tooltip: 'This product has no selling price (0). Revenue and Food Cost Percentage cannot be calculated until a price is set. Add the price using the Edit button.',
         });
       }
     }

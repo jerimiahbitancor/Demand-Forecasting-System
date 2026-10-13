@@ -1,7 +1,7 @@
 // services/mappingService.js
-const { getProductSalesSummary } = require('../utils/productSalesSummary');
 const { supabase, isConfigured, supabaseAdmin } = require('../config/supabase');
-const { deriveProductStatus, isArchivedProduct } = require('./productStatusService');
+const { deriveProductStatus, isArchivedProduct, loadStatusInputs, statusInputsFor } = require('./productStatusService');
+const { fetchAllRows } = require('../utils/fetchAllRows');
 const { PRODUCT_DB_STATUS_BY_DERIVED } = require('./productStatusConstants');
 const { isMissingColumnError } = require('../utils/recipeUnits');
 const logger = require('../utils/logger');
@@ -147,7 +147,8 @@ class MappingService {
       } else if (status === 'inactive') {
         query = query.eq('is_active', false);
       } else if (status === 'archived') {
-        query = query.or('inactive_reason.ilike.archived%');
+        // isArchivedProduct(): status first, reason prefix as a fallback.
+        query = query.or('status.eq.archived,inactive_reason.ilike.archived%');
       } else if (status === 'all') {
         // "All products" shows everything EXCEPT archived ones.
         query = query.not('status', 'eq', 'archived');
@@ -176,34 +177,28 @@ class MappingService {
         category: item.category || 'Uncategorized',
         serving_size_label: item.serving_size_label || 'serving',
         is_active: item.is_active,
-        is_archived: /^archived\b/i.test(item.inactive_reason || ''),
+        // status = 'archived' first; the reason prefix only as a fallback.
+        is_archived: isArchivedProduct(item),
         created_at: item.created_at,
         updated_at: item.updated_at,
         first_sold_date: item.first_sold_date,
         inactive_reason: item.inactive_reason,
         inactive_since: item.inactive_since,
-        status: /^archived\b/i.test(item.inactive_reason || '') ? 'archived' : (item.is_active ? 'active' : 'inactive'),
-        status_label: /^archived\b/i.test(item.inactive_reason || '') ? 'ARCHIVED' : (item.is_active ? 'ACTIVE' : 'INACTIVE (NEW)'),
+        status: isArchivedProduct(item) ? 'archived' : (item.is_active ? 'active' : 'inactive'),
+        status_label: isArchivedProduct(item) ? 'ARCHIVED' : (item.is_active ? 'ACTIVE' : 'INACTIVE (NEW)'),
         // For ingredients, we need to fetch from product_ingredients
         product_ingredients: []
       }));
 
       if (transformedData.length > 0) {
-        const { data: salesSummary, error: salesError } = await getProductSalesSummary(
-          transformedData.map(product => product.id)
-        );
-
-        if (salesError) throw salesError;
+        // Same rule and inputs as the post-upload reconcile, so the list
+        // shows what the next upload would store.
+        const statusInputs = await loadStatusInputs(supabaseAdmin, {
+          productIds: transformedData.map(product => product.id),
+        });
 
         for (const product of transformedData) {
-          const summary = salesSummary.get(product.id);
-          const statusDetails = deriveProductStatus({
-            firstSoldDate: summary?.firstSaleDate || product.first_sold_date,
-            lastSoldDate: summary?.lastSaleDate || product.first_sold_date || null,
-            createdAt: product.created_at,
-            isActive: product.is_active,
-            inactiveReason: product.inactive_reason
-          });
+          const statusDetails = deriveProductStatus(statusInputsFor(product, statusInputs));
           product.status = statusDetails.status;
           product.status_label = statusDetails.label;
           product.status_note = statusDetails.note;
@@ -346,7 +341,7 @@ class MappingService {
         category: data.category || 'Uncategorized',
         serving_size_label: data.serving_size_label || 'serving',
         is_active: data.is_active,
-        is_archived: /^archived\b/i.test(data.inactive_reason || ''),
+        is_archived: isArchivedProduct(data),
         created_at: data.created_at,
         updated_at: data.updated_at,
         first_sold_date: data.first_sold_date,
@@ -930,39 +925,29 @@ class MappingService {
     }
 
     try {
-      const { data: products, error: productsError } = await supabaseAdmin
+      const { data: products, error: productsError } = await fetchAllRows(() => supabaseAdmin
         .from('products')
-        .select('id, first_sold_date, created_at, is_active, inactive_reason, status');
+        .select('id, first_sold_date, created_at, is_active, inactive_reason, status')
+        .order('id'));
 
       if (productsError) throw productsError;
       if (!products || products.length === 0) {
         return { updated: 0 };
       }
 
-      // This runs after EVERY sales upload. It used to read the entire
-      // daily_sales table to find each product's newest sale, which across
-      // a bulk backfill exhausted the connection pool. The view returns
-      // one row per product instead.
-      const { data: salesSummary, error: salesError } = await getProductSalesSummary();
-
-      if (salesError) throw salesError;
-
-      const lastSoldDateByProduct = new Map(
-        [...salesSummary].map(([productId, s]) => [productId, s.lastSaleDate])
-      );
+      // This runs after EVERY sales upload, for ALL products. Its inputs
+      // (sales days, last real sale, confirmed-open days) come from a few
+      // paged reads for every product at once — never one query per
+      // product, and never the whole daily_sales table (that exhausted the
+      // connection pool during a bulk backfill, Oct 1 2026).
+      const statusInputs = await loadStatusInputs(supabaseAdmin);
 
       const updates = [];
       for (const product of products) {
         // Archived is the owner's call, not a sales rule: leave it alone,
         // even when the reason lost its "Archived" prefix.
         if (isArchivedProduct(product)) continue;
-        const derived = deriveProductStatus({
-          firstSoldDate: product.first_sold_date,
-          lastSoldDate: lastSoldDateByProduct.get(product.id) || null,
-          createdAt: product.created_at,
-          isActive: product.is_active,
-          inactiveReason: product.inactive_reason,
-        });
+        const derived = deriveProductStatus(statusInputsFor(product, statusInputs));
         const dbStatus = PRODUCT_DB_STATUS_BY_DERIVED[derived.status];
 
         if (dbStatus && dbStatus !== product.status) {
