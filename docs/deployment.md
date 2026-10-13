@@ -64,6 +64,12 @@ Start command: `npm start` (that is, `node server.js`).
 | `NETWORK_ATTEMPT_TIMEOUT_MS` | no | Per-address connect timeout. Default 5000. |
 | `DEV_NOW_OVERRIDE` | **never in production** | Development only: fakes "today". |
 | `RAILWAY_GIT_COMMIT_SHA` | set by Railway | Shown on `/admin/health`. |
+| `SCHEDULERS_ENABLED` | **set to `true` on Railway** | Turns the timed jobs on: forecasts (9:00 AM), upload reminders (4:00 / 7:00 AM), the DA price import and the low-stock refresh. Default: `true` only when `NODE_ENV=production`, otherwise `false`. Set it explicitly to `true` here so the jobs never depend on `NODE_ENV` alone. When off, the server logs one line saying so and System Health shows a warning. |
+| `PRODUCT_MERGE_ENABLED` | no | `true` allows `POST /api/products/:id/merge` (runs `merge_products()`). Default `false`: the request answers 403 `MERGE_DISABLED` and the database is never touched; preview and "Possible duplicates" still work, and the Merge into... button is shown disabled. Keep `false` until the merges are scheduled (after the defense). |
+
+### Running the backend locally
+
+`backend/.env` points at the **live** database. A local `npm run dev` has `NODE_ENV` unset, so `SCHEDULERS_ENABLED` defaults to `false`: it never sends reminders, runs forecasts or imports prices by itself. Do not set `SCHEDULERS_ENABLED=true` locally, and do not set `PRODUCT_MERGE_ENABLED=true` locally unless you mean to merge real products.
 
 ## Railway: `ml` (ML service)
 

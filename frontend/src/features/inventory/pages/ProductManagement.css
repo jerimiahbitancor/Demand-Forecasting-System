@@ -564,6 +564,15 @@ display: flex;
   background: #fef3c7;
 }
 
+.product-action-btn:disabled,
+.product-action-btn:disabled:hover {
+  opacity: 0.45;
+  cursor: not-allowed;
+  background: transparent;
+  color: #6b7280;
+  transform: none;
+}
+
 .product-action-btn.merge:hover {
   color: #8b1538;
   background: #fdf2f4;

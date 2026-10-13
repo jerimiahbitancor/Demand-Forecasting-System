@@ -131,7 +131,7 @@ const USER_MANUAL = {
       <li>Summary cards show <strong>Total Menu Items</strong>, <strong>Average COGS</strong>, <strong>High Food Cost Items</strong>, and <strong>Unmapped Products</strong> (products still missing a recipe).</li>
       <li>Each product lists its <strong>Category</strong>, <strong>Modifier</strong>, <strong>Ingredients</strong>, <strong>Selling Price</strong>, <strong>Total Ingredient Cost</strong>, and <strong>Status</strong>.</li>
       <li>Add a product with <strong>Add Product</strong>. In the product form, add each ingredient as a line with its <strong>Quantity</strong> and <strong>Unit</strong>; the ingredient cost is calculated automatically.</li>
-      <li>Products are classified as <strong>Active</strong>, <strong>New</strong> (needs 4 weeks of data before forecasts activate), <strong>Inactive</strong> (auto-flagged after 28 days with no sales), or <strong>Archived</strong>. Archived products can be restored.</li>
+      <li>Products are classified as <strong>Active</strong>, <strong>Inactive (Not enough data)</strong> (fewer than 42 days with sales; forecasting starts at 42), <strong>Inactive (Discontinued)</strong> (no sales in the last 28 days the store was open), or <strong>Archived</strong>. Archived products can be restored.</li>
       <li>The <strong>High Food Cost</strong> modal shows each item's food-cost percentage and profit margin. Note that a high food cost does not always mean the item is unprofitable.</li>
     </ul>
     <h4>Market Price</h4>

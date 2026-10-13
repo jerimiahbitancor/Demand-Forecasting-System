@@ -138,6 +138,8 @@ const ProductManagement = () => {
   // Merge (owner's v3 flowchart, page 4): { source: {id,name}, targetId }
   const [mergeRequest, setMergeRequest] = useState(null);
   const [duplicatesKey, setDuplicatesKey] = useState(0);
+  const [mergeEnabled, setMergeEnabled] = useState(false);
+  const [mergeDisabledMessage, setMergeDisabledMessage] = useState('Merging is turned off for now.');
   const [isProductDetailsModalOpen, setIsProductDetailsModalOpen] = useState(false);
   const [isLowMarginModalOpen, setIsLowMarginModalOpen] = useState(false);
   const [editingId, setEditingId] = useState(null);
@@ -287,6 +289,21 @@ const ProductManagement = () => {
         }
       })
       .catch((error) => console.error('Error fetching food cost threshold:', error));
+    return () => { cancelled = true; };
+  }, [apiClient]);
+
+  // PRODUCT_MERGE_ENABLED (backend, default off): until it is on, the
+  // Merge into... button shows but is disabled. Unknown counts as off.
+  useEffect(() => {
+    let cancelled = false;
+    apiClient.get('/products/settings')
+      .then((response) => {
+        if (cancelled) return;
+        const data = response.data?.data || {};
+        setMergeEnabled(data.mergeEnabled === true);
+        if (data.mergeDisabledMessage) setMergeDisabledMessage(data.mergeDisabledMessage);
+      })
+      .catch(() => { if (!cancelled) setMergeEnabled(false); });
     return () => { cancelled = true; };
   }, [apiClient]);
 
@@ -1114,7 +1131,7 @@ const ProductManagement = () => {
   };
 
   // ============ GET STATUS DETAILS ============
-  // Primary status comes from the product lifecycle (Active / Inactive (New) /
+  // Primary status comes from the product lifecycle (Active / Inactive (Not enough data) /
   // Inactive (Discontinued) / Archived). Unmapped and High Food Cost are
   // SECONDARY indicators shown alongside the primary status. They are mutually
   // exclusive: High Food Cost requires a COGS calculation, and COGS requires a
@@ -1160,7 +1177,7 @@ const ProductManagement = () => {
       dotColor = '#dc2626';
       tooltip = 'No sales in the last 28 days the store was open. Excluded from active forecasting until sales activity resumes. Historical sales data is retained.';
     } else if (isNew) {
-      label = 'INACTIVE (NEW)';
+      label = 'INACTIVE (NOT ENOUGH DATA)';
       className = 'status-inactive-new';
       dotColor = '#f59e0b';
       tooltip = hasIngredients
@@ -1368,7 +1385,7 @@ const getPageNumbers = useMemo(() => {
     { label: 'Unmapped', color: '#9ca3af' },
     { label: 'High Food Cost', color: '#ec4899' },
     { label: 'Active', color: '#16a34a' },
-    { label: 'Inactive (New)', color: '#f59e0b' },
+    { label: 'Inactive (Not enough data)', color: '#f59e0b' },
     { label: 'Inactive (Discontinued)', color: '#dc2626' }
   ];
 
@@ -1726,7 +1743,7 @@ const getPageNumbers = useMemo(() => {
           >
             <option value="all">All products</option>
             <option value="active">Active</option>
-            <option value="new">Inactive (New)</option>
+            <option value="new">Inactive (Not enough data)</option>
             <option value="discontinued">Inactive (Discontinued)</option>
             <option value="unmapped">Unmapped</option>
             <option value="high-food-cost">High Food Cost</option>
@@ -1948,14 +1965,18 @@ const getPageNumbers = useMemo(() => {
                             </button>
                           ) : (
                             <>
-                              <button
-                                className="product-action-btn merge"
-                                onClick={() => setMergeRequest({ source: { id: item.id, name: item.name }, targetId: null })}
-                                title="Merge into..."
-                                aria-label={`Merge ${item.name} into another product`}
-                              >
-                                <FaCodeBranch size={14} />
-                              </button>
+                              {/* The span carries the tooltip: browsers show no
+                                  title on a disabled button. */}
+                              <span title={mergeEnabled ? 'Merge into...' : mergeDisabledMessage}>
+                                <button
+                                  className="product-action-btn merge"
+                                  onClick={() => setMergeRequest({ source: { id: item.id, name: item.name }, targetId: null })}
+                                  disabled={!mergeEnabled}
+                                  aria-label={mergeEnabled ? `Merge ${item.name} into another product` : mergeDisabledMessage}
+                                >
+                                  <FaCodeBranch size={14} />
+                                </button>
+                              </span>
                               <button
                                 className="product-action-btn archive"
                                 onClick={() => handleArchive(item)}
@@ -2482,6 +2503,8 @@ const getPageNumbers = useMemo(() => {
         <ProductMergeModal
           source={mergeRequest.source}
           initialTargetId={mergeRequest.targetId}
+          mergeEnabled={mergeEnabled}
+          mergeDisabledMessage={mergeDisabledMessage}
           onClose={() => setMergeRequest(null)}
           onMerged={handleMerged}
         />

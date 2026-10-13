@@ -171,6 +171,7 @@ function buildDefaultChecks(deps = {}) {
   const client = deps.client || require('../config/supabase').supabaseAdmin;
   const requestStats = deps.requestStats || require('../utils/requestStats');
   const getSchedulerStatus = deps.getSchedulerStatus || (() => require('../jobs/forecastScheduler').getSchedulerStatus());
+  const isSchedulersEnabled = deps.schedulersEnabled || (() => require('../utils/featureFlags').schedulersEnabled());
   const getUploadReminderStatus = deps.getUploadReminderStatus
     || (() => require('../jobs/uploadReminderJob').getUploadReminderStatus());
   const getDailyPriceImportStatus = deps.getDailyPriceImportStatus
@@ -358,10 +359,14 @@ function buildDefaultChecks(deps = {}) {
         ...failedRuns(status.lastRuns, ''),
         ...failedRuns(uploadReminder && uploadReminder.lastRuns, 'uploadReminder '),
       ];
+      // SCHEDULERS_ENABLED off: the jobs were never registered, so no run
+      // will ever happen. Say so instead of looking like "not run yet".
+      const enabled = isSchedulersEnabled();
+      if (!enabled) failed.unshift('timed jobs are off (SCHEDULERS_ENABLED=false)');
       return {
         status: failed.length ? 'warn' : 'ok',
         reason: failed.join('; ') || null,
-        details: { ...status, uploadReminder },
+        details: { ...status, uploadReminder, schedulersEnabled: enabled },
       };
     },
 

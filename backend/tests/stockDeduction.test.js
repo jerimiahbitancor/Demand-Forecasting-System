@@ -78,7 +78,7 @@ test('lastStockCountAt: the newer of the latest adjustment and created_at', () =
 
 test('shortfall message, notes and title (unit from the ingredient, up to 3 decimals)', () => {
   const rice = describeShortfall({ ingredientName: 'Rice', unit: 'Kilograms (kg)', requested: 9.07, inStock: 0 });
-  assert.equal(rice.title, 'Low stock: Rice');
+  assert.equal(rice.title, 'Stock shortfall: Rice', 'same title as the notification, not "Low stock"');
   assert.equal(rice.message, 'Rice: 9.07 kg used but 0 kg in stock. Please monitor it.');
   assert.equal(rice.notes, 'Requested 9.07 kg, only 0 kg in stock. Shortfall 9.07 kg.');
   assert.equal(rice.shortfall, 9.07);

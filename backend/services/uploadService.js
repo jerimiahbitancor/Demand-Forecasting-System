@@ -30,6 +30,7 @@ const {
 const { createNotificationOnce } = require('./notificationService');
 const { loadAliasMap } = require('./productAliasService');
 const { productNameKey } = require('../utils/productNameKey');
+const { buildUploadSummary } = require('../utils/uploadSummary');
 
 // modifier_rules is read once per minute at most: a 288-file backfill would
 // otherwise query it 288 times for a table of a handful of rows.
@@ -323,8 +324,8 @@ class UploadService {
           await createNotificationOnce({
             userId: user.id,
             type: 'warning',
-            // Not "Low stock": that reads like the separate low/out-of-stock alert.
-            title: `Stock shortfall: ${item.name || `ingredient #${item.ingredientId}`}`,
+            // Built by describeShortfall(): "Stock shortfall: <ingredient>".
+            title: item.title || `Stock shortfall: ingredient #${item.ingredientId}`,
             message: item.message,
             link: '/ingredient-management',
             metadata: {
@@ -562,7 +563,10 @@ class UploadService {
     }
   }
 
-  async processSalesData(rows = [], userId = null, uploadId = null, filename = null) {
+  // options.createdProductNames: products the caller's own sync already
+  // created for this file (routes/upload.js syncs before calling this), so
+  // the upload summary still lists them as new.
+  async processSalesData(rows = [], userId = null, uploadId = null, filename = null, options = {}) {
     try {
       if (!Array.isArray(rows) || rows.length === 0) {
         return { productsDetected: 0, productsUpdated: 0, warnings: [] };
@@ -579,6 +583,10 @@ class UploadService {
       const categoryByProductId = new Map();
       const warnings = [];
       let productsDetected = 0;
+      // For the upload summary (utils/uploadSummary.js).
+      const createdProductNames = [...(options.createdProductNames || [])];
+      productsDetected += createdProductNames.length;
+      let shortfallSummary = [];
 
       // POS modifiers ("... NO EGG") — see utils/salesModifiers.js.
       const modifierRules = await this.getModifierRules();
@@ -590,12 +598,13 @@ class UploadService {
         const syncSummary = await this.syncProductsFromSales(uniqueSalesProductNames, numericId);
         if (Array.isArray(syncSummary.created) && syncSummary.created.length > 0) {
           productsDetected += syncSummary.created.length;
+          createdProductNames.push(...syncSummary.created);
         }
       }
 
       const { data: products, error: productsError } = await supabaseAdmin
         .from('products')
-        .select('id, name, created_at, first_sold_date, is_active, inactive_reason, inactive_since, category');
+        .select('id, name, created_at, first_sold_date, is_active, inactive_reason, inactive_since, category, status');
 
       if (productsError) {
         throw productsError;
@@ -640,6 +649,20 @@ class UploadService {
         uploadId,
       });
       const { dailySalesRows, modifierRows } = aggregated;
+      // The upload summary for this file, from what is already in memory
+      // (no extra queries). Built at return time so it includes shortfalls.
+      const summaryNow = () => buildUploadSummary({
+        products: products || [],
+        dailySalesRows,
+        modifierRows,
+        baseNames: uniqueSalesProductNames,
+        aliasProductIds,
+        newProductNames: createdProductNames,
+        unmatchedNames: aggregated.unmatchedNames,
+        shortfalls: shortfallSummary,
+        modifierKeywords,
+        isArchived: isArchivedProduct,
+      });
       for (const [productId, category] of aggregated.categoryByProductId) {
         categoryByProductId.set(productId, category);
       }
@@ -745,7 +768,7 @@ class UploadService {
 
         const selectedProductIds = [...productIds];
         if (selectedProductIds.length === 0) {
-          return { productsDetected, productsUpdated: 0, warnings };
+          return { productsDetected, productsUpdated: 0, warnings, uploadSummary: summaryNow() };
         }
 
         const { data: productRows, error: productFetchError } = await supabaseAdmin.from('products')
@@ -969,6 +992,7 @@ class UploadService {
               + `(the count already includes those plates): ${skippedForCount.map((s) => s.name).join(', ')}.`
             );
           }
+          shortfallSummary = shortfalls;
           if (shortfalls.length > 0) {
             await this.notifyStockShortfalls(shortfalls, uploadId);
           }
@@ -981,7 +1005,8 @@ class UploadService {
       return {
         productsDetected,
         productsUpdated,
-        warnings
+        warnings,
+        uploadSummary: summaryNow(),
       };
     } catch (error) {
       console.error('Error processing sales data:', error);

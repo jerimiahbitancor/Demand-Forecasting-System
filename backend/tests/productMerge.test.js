@@ -298,6 +298,7 @@ function call(server, method, path, body) {
 
 test('routes: preview, merge (then status recompute), duplicates, modifier keywords', async () => {
   seedMerge();
+  process.env.PRODUCT_MERGE_ENABLED = 'true'; // flag ON for this test
   rpcCalls.length = 0;
   rpcAnswer = () => ({ data: { days_moved: 2 }, error: null });
   const realReconcile = mappingService.reconcileProductActivation;
@@ -328,8 +329,68 @@ test('routes: preview, merge (then status recompute), duplicates, modifier keywo
     const kw = await call(server, 'GET', '/api/products/modifier-keywords');
     assert.deepEqual(kw.body.data.keywords, ['NO RICE']);
   } finally {
+    delete process.env.PRODUCT_MERGE_ENABLED;
     restore();
     mappingService.reconcileProductActivation = realReconcile;
     server.close();
   }
+});
+
+test('G1f: PRODUCT_MERGE_ENABLED off (the default) -> POST merge is 403 MERGE_DISABLED and the rpc is never called', async () => {
+  seedMerge();
+  delete process.env.PRODUCT_MERGE_ENABLED;
+  rpcCalls.length = 0;
+  const realReconcile = mappingService.reconcileProductActivation;
+  let reconciled = 0;
+  mappingService.reconcileProductActivation = async () => { reconciled += 1; return { updated: 0 }; };
+  const app = express();
+  app.use(express.json());
+  app.use('/api/products', productsRouter);
+  const server = await new Promise((resolve) => { const s = app.listen(0, '127.0.0.1', () => resolve(s)); });
+  const restore = quiet();
+  try {
+    const settings = await call(server, 'GET', '/api/products/settings');
+    assert.deepEqual(settings.body.data, { mergeEnabled: false, mergeDisabledMessage: 'Merging is turned off for now.' });
+
+    const writesBefore = fake.writes.length;
+    const blocked = await call(server, 'POST', '/api/products/434/merge', { targetId: 316 });
+    assert.equal(blocked.status, 403);
+    assert.equal(blocked.body.code, 'MERGE_DISABLED');
+    assert.equal(blocked.body.message, 'Merging is turned off for now.');
+    assert.equal(rpcCalls.length, 0, 'merge_products never called');
+    assert.equal(reconciled, 0);
+    assert.equal(fake.writes.length, writesBefore, 'nothing written');
+
+    process.env.PRODUCT_MERGE_ENABLED = 'false';
+    assert.equal((await call(server, 'POST', '/api/products/434/merge', { targetId: 316 })).status, 403, 'explicit false too');
+
+    // Read-only endpoints keep working.
+    assert.equal((await call(server, 'GET', '/api/products/434/merge-preview?targetId=316')).status, 200);
+    assert.equal((await call(server, 'GET', '/api/products/duplicates')).status, 200);
+
+    // Flag on -> the rpc is called exactly once.
+    process.env.PRODUCT_MERGE_ENABLED = 'true';
+    rpcAnswer = () => ({ data: { days_moved: 2 }, error: null });
+    const ok = await call(server, 'POST', '/api/products/434/merge', { targetId: 316 });
+    assert.equal(ok.status, 200);
+    assert.equal(rpcCalls.length, 1);
+  } finally {
+    delete process.env.PRODUCT_MERGE_ENABLED;
+    restore();
+    mappingService.reconcileProductActivation = realReconcile;
+    server.close();
+  }
+});
+
+test('featureFlags: defaults and parsing', () => {
+  const { schedulersEnabled, productMergeEnabled } = require('../utils/featureFlags');
+  assert.equal(schedulersEnabled({ NODE_ENV: 'production' }), true);
+  assert.equal(schedulersEnabled({ NODE_ENV: 'development' }), false);
+  assert.equal(schedulersEnabled({}), false);
+  assert.equal(schedulersEnabled({ NODE_ENV: 'production', SCHEDULERS_ENABLED: 'false' }), false);
+  assert.equal(schedulersEnabled({ SCHEDULERS_ENABLED: 'true' }), true);
+  assert.equal(schedulersEnabled({ SCHEDULERS_ENABLED: 'maybe', NODE_ENV: 'production' }), true, 'unreadable value -> default');
+  assert.equal(productMergeEnabled({}), false);
+  assert.equal(productMergeEnabled({ PRODUCT_MERGE_ENABLED: 'TRUE' }), true);
+  assert.equal(productMergeEnabled({ PRODUCT_MERGE_ENABLED: '0' }), false);
 });

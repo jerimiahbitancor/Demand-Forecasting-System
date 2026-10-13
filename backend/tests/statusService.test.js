@@ -138,6 +138,7 @@ const baseDeps = (over = {}) => ({
   getSchedulerStatus: () => ({ since: '2026-10-06T00:00:00.000Z', jobs: [], lastRuns: { daily: null, weekly: null } }),
   getDailyPriceImportStatus: () => ({ enabled: true, cron: '0 10 * * *', timezone: 'Asia/Manila', lastRuns: [] }),
   isTrainingInFlight: () => false,
+  schedulersEnabled: () => true,
   getUploadReminderStatus: () => ({ name: 'uploadReminder', since: '2026-10-06T00:00:00.000Z', jobs: [], lastRuns: { '0400': null, '0700': null } }),
   getMissingOperatingDays: async () => ({ missingOperatingDays: 0, missingDates: [], operatingDaysSource: 'configured' }),
   fetchImpl: async () => ({ status: 200 }),
@@ -318,4 +319,13 @@ test('scheduler: the upload reminder job is shown, and its failed run warns', as
   assert.match(result.reason, /uploadReminder 0400 run failed at .*: db down/);
   assert.deepEqual(result.details.uploadReminder.jobs.map((j) => j.cron), ['0 4 * * *', '0 7 * * *']);
   assert.equal(result.details.uploadReminder.name, 'uploadReminder');
+});
+
+test('scheduler: timed jobs switched off (SCHEDULERS_ENABLED=false) -> warns, says so', async () => {
+  const off = await buildDefaultChecks(baseDeps({ schedulersEnabled: () => false })).scheduler();
+  assert.equal(off.status, 'warn');
+  assert.match(off.reason, /timed jobs are off \(SCHEDULERS_ENABLED=false\)/);
+  assert.equal(off.details.schedulersEnabled, false);
+  const on = await buildDefaultChecks(baseDeps()).scheduler();
+  assert.equal(on.details.schedulersEnabled, true);
 });

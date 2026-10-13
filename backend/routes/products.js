@@ -6,10 +6,14 @@
 //   GET  /api/products/duplicates                 "Possible duplicates" suggestions
 //   GET  /api/products/modifier-keywords          keywords from modifier_rules
 //   GET  /api/products/:id/merge-preview?targetId=&modifierKeyword=   counts only
+//   GET  /api/products/settings                   { mergeEnabled } for the UI
 //   POST /api/products/:id/merge  { targetId, modifierKeyword? }      runs the merge
 //
 // All require a login. The merge is one database transaction
 // (public.merge_products); afterwards every product's status is recomputed.
+// POST .../merge answers 403 MERGE_DISABLED unless PRODUCT_MERGE_ENABLED is
+// true (utils/featureFlags.js); preview, duplicates and settings stay
+// read-only and always work.
 
 const express = require('express');
 const router = express.Router();
@@ -20,6 +24,9 @@ const {
   getMergePreview, mergeProducts, listModifierKeywords, getPossibleDuplicates, MergeError,
 } = require('../services/productMergeService');
 
+const { productMergeEnabled } = require('../utils/featureFlags');
+
+const MERGE_DISABLED_MESSAGE = 'Merging is turned off for now.';
 const actorOf = (req) => req.user?.name || req.user?.email || null;
 const toId = (value) => {
   const n = Number(value);
@@ -64,7 +71,22 @@ router.get('/:id/merge-preview', authenticate, async (req, res) => {
   }
 });
 
+// GET /api/products/settings — what the Product Management page needs to
+// know about merging (the Merge into... button is shown but disabled while
+// merging is off).
+router.get('/settings', authenticate, (req, res) => {
+  res.json({ success: true, data: { mergeEnabled: productMergeEnabled(), mergeDisabledMessage: MERGE_DISABLED_MESSAGE } });
+});
+
 router.post('/:id/merge', authenticate, async (req, res) => {
+  // PRODUCT_MERGE_ENABLED (default off): merge_products() is live in the
+  // database, but merges wait until after the defense. Checked before
+  // anything else, so the database function is never reached.
+  if (!productMergeEnabled()) {
+    return res.status(403).json({
+      success: false, code: 'MERGE_DISABLED', message: MERGE_DISABLED_MESSAGE, error: MERGE_DISABLED_MESSAGE,
+    });
+  }
   try {
     const { targetId, modifierKeyword } = req.body || {};
     const userId = req.user?.user_id || req.user?.id || null;

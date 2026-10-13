@@ -13,7 +13,12 @@ import './ProductMergeModal.css';
 
 const MAX_SHOWN = 8;
 
-const ProductMergeModal = ({ source: initialSource, initialTargetId = null, onClose, onMerged }) => {
+const ProductMergeModal = ({
+  source: initialSource, initialTargetId = null, onClose, onMerged,
+  // PRODUCT_MERGE_ENABLED: off -> the preview still works (read-only), but
+  // Confirm is disabled.
+  mergeEnabled = false, mergeDisabledMessage = 'Merging is turned off for now.',
+}) => {
   const [source, setSource] = useState(initialSource);
   const [products, setProducts] = useState([]);
   const [keywords, setKeywords] = useState([]);
@@ -89,7 +94,7 @@ const ProductMergeModal = ({ source: initialSource, initialTargetId = null, onCl
   };
 
   const confirm = async () => {
-    if (!preview || merging) return;
+    if (!preview || merging || !mergeEnabled) return;
     setMerging(true);
     try {
       const res = await apiClient.post(`/products/${source.id}/merge`, {
@@ -174,6 +179,7 @@ const ProductMergeModal = ({ source: initialSource, initialTargetId = null, onCl
 
         {loadingPreview && <p className="merge-hint">Checking what will change...</p>}
         {previewError && <p className="merge-error">{previewError}</p>}
+        {!mergeEnabled && <p className="merge-error">{mergeDisabledMessage} You can still preview what a merge would do.</p>}
         {preview && !loadingPreview && (
           <div className="merge-preview">
             <h4>What will happen</h4>
@@ -186,7 +192,12 @@ const ProductMergeModal = ({ source: initialSource, initialTargetId = null, onCl
 
       <div className="modal-footer inventory-modal-footer">
         <button className="btn-secondary" onClick={close} disabled={merging}>Cancel</button>
-        <button className="btn-primary" onClick={confirm} disabled={!preview || loadingPreview || merging}>
+        <button
+          className="btn-primary"
+          onClick={confirm}
+          disabled={!preview || loadingPreview || merging || !mergeEnabled}
+          title={mergeEnabled ? undefined : mergeDisabledMessage}
+        >
           {merging ? 'Merging...' : <><FaCodeBranch /> Confirm merge</>}
         </button>
       </div>

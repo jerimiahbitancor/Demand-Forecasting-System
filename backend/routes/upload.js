@@ -266,8 +266,9 @@ router.post(
           ));
           console.log('[PRODUCT DISCOVERY] Unique Item names:', JSON.stringify(uniqueProductNames, null, 2));
 
+          let discoveredProducts = null;
           if (uniqueProductNames.length > 0) {
-            const discoveredProducts = await uploadService.syncProductsFromSales(uniqueProductNames, numericId);
+            discoveredProducts = await uploadService.syncProductsFromSales(uniqueProductNames, numericId);
             console.log('[PRODUCT DISCOVERY] Sync result:', JSON.stringify(discoveredProducts, null, 2));
           }
 
@@ -275,7 +276,10 @@ router.post(
             processedData.data,
             numericId,
             uploadId,
-            file.originalname
+            file.originalname,
+            // Products created by the sync above: processSalesData's own sync
+            // then sees them as existing, so the upload summary needs this.
+            { createdProductNames: (discoveredProducts && discoveredProducts.created) || [] }
           );
 
           const summary = {
@@ -286,7 +290,9 @@ router.post(
             uploadDate: validation.uploadDate || new Date().toISOString().split('T')[0],
             productsDetected: salesProcessingResult.productsDetected || 0,
             productsUpdated: salesProcessingResult.productsUpdated || 0,
-            warnings: salesProcessingResult.warnings || []
+            warnings: salesProcessingResult.warnings || [],
+            // Owner's flowchart page 2, "Output (upload summary)".
+            uploadSummary: salesProcessingResult.uploadSummary || null
           };
 
           console.log('Sales data processed:', summary);

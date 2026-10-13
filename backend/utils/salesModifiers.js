@@ -367,7 +367,8 @@ function describeShortfall({ ingredientName, unit, requested, inStock }) {
   return {
     shortfall,
     notes: `Requested ${amount(requestedN)}, only ${amount(stockN)} in stock. Shortfall ${amount(shortfall)}.`,
-    title: `Low stock: ${name}`,
+    // Not "Low stock": that reads like the separate low/out-of-stock alert.
+    title: `Stock shortfall: ${name}`,
     message: `${name}: ${amount(requestedN)} used but ${amount(stockN)} in stock. Please monitor it.`,
   };
 }
