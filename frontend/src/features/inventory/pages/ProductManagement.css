@@ -475,6 +475,16 @@
   background: #ec4899;
 }
 
+/* No Price - Amber */
+.product-status-badge.status-no-price {
+  background: #fef3c7;
+  color: #92400e;
+}
+
+.product-status-badge.status-no-price .product-status-dot {
+  background: #b45309;
+}
+
 /* Active - Green */
 .product-status-badge.status-active {
   background: #dcfce7;
@@ -552,6 +562,20 @@ display: flex;
 .product-action-btn.archive:hover {
   color: #d97706;
   background: #fef3c7;
+}
+
+.product-action-btn:disabled,
+.product-action-btn:disabled:hover {
+  opacity: 0.45;
+  cursor: not-allowed;
+  background: transparent;
+  color: #6b7280;
+  transform: none;
+}
+
+.product-action-btn.merge:hover {
+  color: #8b1538;
+  background: #fdf2f4;
 }
 
 .product-action-btn.restore {

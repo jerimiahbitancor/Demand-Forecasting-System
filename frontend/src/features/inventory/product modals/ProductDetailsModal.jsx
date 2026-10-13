@@ -30,7 +30,7 @@ const ProductDetailsModal = ({
       : isActive
         ? 'ACTIVE'
         : product.status === 'new'
-          ? 'INACTIVE (NEW)'
+          ? 'INACTIVE (NOT ENOUGH DATA)'
           : 'INACTIVE (DISCONTINUED)');
   const classForBadge = (className) => (className && {
     'status-active': 'active',

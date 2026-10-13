@@ -22,6 +22,31 @@ const createNotification = async ({ userId, type = 'info', title, message, link 
   }
 };
 
+// createNotification(), but only if this user never got a notification with
+// the same metadata.key (read or not). Returns the new row, or null when it
+// was already sent or the insert failed. Requires metadata.key.
+const createNotificationOnce = async (notification) => {
+  const key = notification && notification.metadata && notification.metadata.key;
+  if (!notification || !notification.userId || !key) return null;
+  try {
+    const { data, error } = await supabaseAdmin
+      .from('notifications')
+      .select('id')
+      .eq('user_id', notification.userId)
+      .eq('metadata->>key', key)
+      .limit(1);
+    if (error) {
+      console.error('Error checking for an existing notification:', error);
+      return null;
+    }
+    if (Array.isArray(data) && data.length > 0) return null;
+  } catch (error) {
+    console.error('Error checking for an existing notification:', error);
+    return null;
+  }
+  return createNotification(notification);
+};
+
 // Reconcile low-stock / out-of-stock alerts for every user, based on the
 // ingredients table (quantity vs min_stock). This is "dynamic" in both
 // directions:
@@ -145,4 +170,4 @@ const refreshLowStockNotifications = async () => {
   }
 };
 
-module.exports = { createNotification, refreshLowStockNotifications };
+module.exports = { createNotification, createNotificationOnce, refreshLowStockNotifications };

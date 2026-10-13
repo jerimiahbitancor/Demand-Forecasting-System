@@ -10,7 +10,9 @@
 // Express to call read-only.
 const { fetchAllRows } = require('../utils/fetchAllRows');
 const { accuracyFromWmape, beatsBaseline } = require('../utils/accuracy');
-const { getProductSalesSummary } = require('../utils/productSalesSummary');
+const {
+  loadStatusInputs, NEW_UNTIL_SALES_DAYS, DISCONTINUED_AFTER_OPEN_DAYS,
+} = require('./productStatusService');
 const { supabaseAdmin } = require('../config/supabase');
 const dayjs = require('dayjs');
 const utc = require('dayjs/plugin/utc');
@@ -105,9 +107,12 @@ function defaultDateRange(daysBack = 30, daysForward = 7) {
   return { from: from.format('YYYY-MM-DD'), to: to.format('YYYY-MM-DD'), today: today.format('YYYY-MM-DD') };
 }
 
-// Next daily 9:00 AM Asia/Manila forecast-refresh run — matches the real
-// cron job registered in jobs/forecastScheduler.js ('0 9 * * *', timezone
-// Asia/Manila). 9:00 AM is the confirmed, locked schedule (see CLAUDE.md);
+// Next 9:00 AM Asia/Manila forecast run of either kind — matches the two
+// cron jobs in jobs/forecastScheduler.js: daily '0 9 * * 0,2-6' (every day
+// except Monday) and weekly '0 9 * * 1' (Monday runs the weekly forecast
+// only). Together they still fire every day at 9:00, so "next 9:00 AM" is
+// right without a weekday rule here. If either cron ever stops covering a
+// day, this needs that rule. 9:00 AM is the confirmed, locked schedule (see CLAUDE.md);
 // an earlier 8:00 AM figure in some older comments/docs was a mistake.
 //
 // This used to compute "9:00 AM" against the server's own local clock via
@@ -559,12 +564,12 @@ async function getProductPerformanceAnalytics({ from, to } = {}) {
     .map((row, index) => ({ rank: index + 1, ...row }));
 
   // --- Product Status sections ---
-  // One query via the product_sales_summary view instead of reading the
-  // whole daily_sales table on every page load.
-  const { data: salesSummary, error: lastSaleError } = await getProductSalesSummary();
-  if (lastSaleError) throw lastSaleError;
+  // Same inputs as the status rule itself (productStatusService: sales days,
+  // last real sale, confirmed-open days), a few paged reads for all products,
+  // so the texts below match what decided each product's status.
+  const statusInputs = await loadStatusInputs(supabaseAdmin);
   const lastSaleByProduct = new Map(
-    [...salesSummary].map(([productId, s]) => [productId, s.lastSaleDate])
+    [...statusInputs.byProduct].map(([productId, s]) => [productId, s.lastSaleDate])
   );
 
   const unmappedProductIds = new Set(products.map((p) => p.id).filter((id) => !recipeMap.has(id)));
@@ -592,19 +597,25 @@ async function getProductPerformanceAnalytics({ from, to } = {}) {
     if (product.status === 'active') {
       sections.active.push({ ...base, daysOnMenu: daysOnMenuText(product), forecastStatus: 'Forecast Running' });
     } else if (product.status === 'inactive_new') {
-      const daysTracked = product.first_sold_date ? daysAgo(product.first_sold_date) : 0;
-      const daysUntilForecast = Math.max(0, 28 - (daysTracked || 0));
+      // "Inactive (Not enough data)": fewer than 42 days with sales. Was
+      // "Forecast in (28 - calendar days)", which said "Forecast Running"
+      // for long-listed dishes that are not forecast at all.
+      const salesDays = (statusInputs.byProduct.get(product.id) || {}).salesDays || 0;
+      const needed = Math.max(0, NEW_UNTIL_SALES_DAYS - salesDays);
       sections.new.push({
         ...base,
-        daysOnMenu: product.first_sold_date ? `${daysTracked} days` : 'Not yet sold',
-        forecastStatus: daysUntilForecast > 0 ? `Forecast in ${daysUntilForecast} days` : 'Forecast Running',
+        daysOnMenu: product.first_sold_date ? daysOnMenuText(product) : 'Not yet sold',
+        salesDays,
+        forecastStatus: needed > 0
+          ? `${salesDays} of ${NEW_UNTIL_SALES_DAYS} days with sales (${needed} more needed)`
+          : 'Forecast starts after the next status update',
       });
     } else if (product.status === 'inactive_discontinued') {
       const idleDays = lastSale ? daysAgo(lastSale) : null;
       sections.inactive.push({
         ...base,
         lastSale: lastSale ? `${idleDays} days ago` : 'Never sold',
-        forecastStatus: 'Excluded — no sale in 28+ days',
+        forecastStatus: `Excluded — no sale in the last ${DISCONTINUED_AFTER_OPEN_DAYS} open days`,
       });
     } else if (product.status === 'archived') {
       sections.archived.push({

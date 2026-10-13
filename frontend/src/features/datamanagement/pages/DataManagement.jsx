@@ -3,6 +3,7 @@ import { useCallback, useEffect, useMemo, useState, useRef } from "react";
 import "./DataManagement.css";
 import Navbar from "../../components/Navbar/Navbar";
 import UploadData from "../components/UploadData";
+import DaysToAnswer from "../components/DaysToAnswer";
 import { useAuth } from "../../../context/AuthContext";
 import axios from 'axios';
 
@@ -13,6 +14,8 @@ const DataManagement = () => {
   const [uploadedFile, setUploadedFile] = useState(null);
   const [isDragging, setIsDragging] = useState(false);
   const [activeTab, setActiveTab] = useState("upload");
+  // Bumped after an upload so "Days that need your answer" re-checks.
+  const [daysRefreshKey, setDaysRefreshKey] = useState(0);
   const [stats, setStats] = useState({
     total_uploads: 0,
     processed: 0,
@@ -196,6 +199,23 @@ const DataManagement = () => {
     console.log('Fixing issue at row', row);
   };
 
+  // "Upload Sales Data" on a day in the card: show the upload tab and open
+  // its file picker (the existing sales drop zone's input).
+  const handleUploadForDay = useCallback(() => {
+    setActiveTab("upload");
+    setTimeout(() => {
+      const input = document.getElementById("salesFileInput");
+      if (input) {
+        input.scrollIntoView({ behavior: "smooth", block: "center" });
+        input.click();
+      }
+    }, 0);
+  }, []);
+
+  const handleUploadSuccess = useCallback(() => {
+    setDaysRefreshKey((k) => k + 1);
+  }, []);
+
   const tabs = [
     { id: "upload", label: "Sales Data Upload" },
     { id: "historical", label: "Historical Data Storage" },
@@ -276,6 +296,8 @@ const DataManagement = () => {
             </div>
           </div>
 
+          <DaysToAnswer refreshKey={daysRefreshKey} onUploadClick={handleUploadForDay} />
+
           <UploadData  
             activeTab={activeTab} 
             setActiveTab={setActiveTab}
@@ -290,6 +312,7 @@ const DataManagement = () => {
             handleDiscard={handleDiscard}
             handleFixIssue={handleFixIssue}
             apiUrl={API_URL}
+            onUploadSuccess={handleUploadSuccess}
           />
         </div>
       </main>

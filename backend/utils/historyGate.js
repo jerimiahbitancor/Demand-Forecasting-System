@@ -123,6 +123,12 @@ function evaluateHistoryGate({ saleDates = [], closedDates = [] } = {}) {
 // ends up with half a batch saved.
 //   saleDates: every date that has daily_sales rows
 //   today:     the business's current date ('YYYY-MM-DD', Asia/Manila)
+//
+// Allowed window: the first sale date up to YESTERDAY. A day after the
+// last sale must be closable too ("we were closed yesterday" is exactly
+// the day the upload reminder asks about, and it has no sales yet). Today
+// and the future are refused: today's night is not over yet. If `today`
+// is not given, the old upper bound (the last sale date) applies.
 const MAX_CLOSE_BATCH = 500;
 
 function validateClosableDates(dates, { saleDates = [], today, maxBatch = MAX_CLOSE_BATCH } = {}) {
@@ -155,7 +161,12 @@ function validateClosableDates(dates, { saleDates = [], today, maxBatch = MAX_CL
       errors.push({ date: d, reason: 'Future dates cannot be marked closed here.' });
       continue;
     }
-    if (!first || d < first || d > last) {
+    if (todayN !== null && toDayNumber(d) === todayN) {
+      errors.push({ date: d, reason: "Today cannot be marked closed yet. Mark it after today's business day ends." });
+      continue;
+    }
+    // No sales at all yet: nothing to measure the window from.
+    if (!first || d < first || (todayN === null && d > last)) {
       errors.push({ date: d, reason: 'Outside your sales history.' });
       continue;
     }

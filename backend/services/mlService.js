@@ -96,11 +96,44 @@ function train() {
   });
 }
 
+// One forecast at a time. A manual "Generate Forecast" and a scheduled run
+// (or two clicks) used to reach ml-service together and write the same
+// forecasts rows at once. Same in-memory pattern and same restart/replica
+// tradeoff as trainingInFlight above. The flag is set before the first
+// await, so two calls in the same tick cannot both get through.
+let forecastInFlight = false;
+
+function isForecastInFlight() {
+  return forecastInFlight;
+}
+
+const FORECAST_IN_FLIGHT_MESSAGE = 'A forecast is already running';
+
 // horizonDays: 1 for the daily refresh, 7 for the weekly Monday run.
 // runType is optional — ml-service infers 'daily'/'weekly' from
 // horizonDays if omitted (see app.py's /forecast).
+// Rejects with MlServiceError status 409, code 'FORECAST_IN_FLIGHT', when
+// another forecast is still running; nothing is sent to ml-service then.
 function forecast({ horizonDays = 1, runType } = {}) {
-  return callMlService('/forecast', { horizon_days: horizonDays, run_type: runType });
+  if (forecastInFlight) {
+    const error = new MlServiceError(FORECAST_IN_FLIGHT_MESSAGE, 409);
+    error.code = 'FORECAST_IN_FLIGHT';
+    return Promise.reject(error);
+  }
+  forecastInFlight = true;
+  let pending;
+  try {
+    pending = callMlService('/forecast', { horizon_days: horizonDays, run_type: runType });
+  } catch (error) {
+    forecastInFlight = false;
+    return Promise.reject(error);
+  }
+  return pending.finally(() => {
+    forecastInFlight = false;
+  });
 }
 
-module.exports = { train, forecast, checkHealth, isTrainingInFlight, MlServiceError };
+module.exports = {
+  train, forecast, checkHealth, isTrainingInFlight, isForecastInFlight,
+  MlServiceError, FORECAST_IN_FLIGHT_MESSAGE,
+};

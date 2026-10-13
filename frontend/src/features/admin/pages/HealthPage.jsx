@@ -98,7 +98,7 @@ function rowsFor(name, d = {}) {
     case 'scheduler': {
       const run = (r) => (r ? `${r.status}${r.finishedAt ? `, ${fmtTime(r.finishedAt)}` : ''}${r.forecastedCount != null ? ` (${r.forecastedCount} forecasted)` : ''}` : 'Not run since restart');
       return [
-        ['Daily 9:00 AM', run(d.lastRuns && d.lastRuns.daily)],
+        ['Daily 9:00 AM (not Monday)', run(d.lastRuns && d.lastRuns.daily)],
         ['Weekly Monday 9:00 AM', run(d.lastRuns && d.lastRuns.weekly)],
       ];
     }

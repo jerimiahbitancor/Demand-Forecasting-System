@@ -171,9 +171,13 @@ function buildDefaultChecks(deps = {}) {
   const client = deps.client || require('../config/supabase').supabaseAdmin;
   const requestStats = deps.requestStats || require('../utils/requestStats');
   const getSchedulerStatus = deps.getSchedulerStatus || (() => require('../jobs/forecastScheduler').getSchedulerStatus());
+  const isSchedulersEnabled = deps.schedulersEnabled || (() => require('../utils/featureFlags').schedulersEnabled());
+  const getUploadReminderStatus = deps.getUploadReminderStatus
+    || (() => require('../jobs/uploadReminderJob').getUploadReminderStatus());
   const getDailyPriceImportStatus = deps.getDailyPriceImportStatus
     || (() => require('../jobs/dailyPriceImportJob').getDailyPriceImportStatus());
   const isTrainingInFlight = deps.isTrainingInFlight || (() => require('./mlService').isTrainingInFlight());
+  const isForecastInFlight = deps.isForecastInFlight || (() => require('./mlService').isForecastInFlight());
   const getMissingOperatingDays = deps.getMissingOperatingDays
     || ((args) => require('./dataCoverageService').getMissingOperatingDays(client, args));
   const { beatsBaseline } = require('../utils/accuracy');
@@ -327,6 +331,7 @@ function buildDefaultChecks(deps = {}) {
         operatingDaysSource: missing.operatingDaysSource,
         forecastsToday: forecastsToday.count || 0,
         trainingInFlight: Boolean(isTrainingInFlight()),
+        forecastInFlight: Boolean(isForecastInFlight()),
       };
 
       const reasons = [];
@@ -344,13 +349,24 @@ function buildDefaultChecks(deps = {}) {
 
     async scheduler() {
       const status = getSchedulerStatus();
-      const failed = Object.entries(status.lastRuns || {})
+      // The upload reminder job (04:00 / 07:00) sits in the same card as
+      // the forecast jobs: name 'uploadReminder', its crons, lastRuns.
+      const uploadReminder = getUploadReminderStatus();
+      const failedRuns = (runs, prefix) => Object.entries(runs || {})
         .filter(([, r]) => r && r.status === 'failed')
-        .map(([name, r]) => `${name} run failed at ${r.finishedAt}${r.error ? `: ${r.error}` : ''}`);
+        .map(([name, r]) => `${prefix}${name} run failed at ${r.finishedAt}${r.error ? `: ${r.error}` : ''}`);
+      const failed = [
+        ...failedRuns(status.lastRuns, ''),
+        ...failedRuns(uploadReminder && uploadReminder.lastRuns, 'uploadReminder '),
+      ];
+      // SCHEDULERS_ENABLED off: the jobs were never registered, so no run
+      // will ever happen. Say so instead of looking like "not run yet".
+      const enabled = isSchedulersEnabled();
+      if (!enabled) failed.unshift('timed jobs are off (SCHEDULERS_ENABLED=false)');
       return {
         status: failed.length ? 'warn' : 'ok',
         reason: failed.join('; ') || null,
-        details: status,
+        details: { ...status, uploadReminder, schedulersEnabled: enabled },
       };
     },
 

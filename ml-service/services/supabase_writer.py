@@ -6,7 +6,7 @@ forecast_cogs, forecast_runs. It never touches ingredients,
 inventory_transactions, products, daily_sales, or business_days (that
 last one is read-only from this service — see data_loader.py).
 """
-from datetime import date
+from utils.dates import manila_today
 from config import supabase
 
 
@@ -51,7 +51,7 @@ def write_model_metrics(model_version: str, metrics: dict):
 
     supabase.table("model_metrics").insert({
         "model_version": model_version,
-        "evaluation_date": date.today().isoformat(),
+        "evaluation_date": manila_today().isoformat(),
         "mape": aggregate["mape"],
         "mae": aggregate["mae"],
         "rmse": aggregate["rmse"],
@@ -70,7 +70,7 @@ def write_model_metrics(model_version: str, metrics: dict):
 def write_classification(product_id: int, classification: dict):
     supabase.table("product_classifications").insert({
         "product_id": product_id,
-        "classification_date": date.today().isoformat(),
+        "classification_date": manila_today().isoformat(),
         "demand_tier": classification["demand_tier"],
         "basis": f"p40={classification['p40_threshold']:.1f}, p80={classification['p80_threshold']:.1f}",
     }).execute()

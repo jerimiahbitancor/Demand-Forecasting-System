@@ -140,10 +140,10 @@ const tooltips = {
           </span>
         </div>
         <div style={{ marginBottom: '10px' }}>
-          <strong style={{ color: '#fbbf24' }}>New Products</strong>
+          <strong style={{ color: '#fbbf24' }}>Inactive (Not enough data)</strong>
           <br/>
           <span style={{ fontSize: '12px', color: '#94a3b8' }}>
-            Recently added. The system needs at least 4 weeks of sales data before a reliable forecast is possible.
+            Fewer than 42 days with sales so far. Forecasting starts once a product has 42 days with sales.
           </span>
         </div>
         <div style={{ marginBottom: '10px' }}>
@@ -170,7 +170,7 @@ const tooltips = {
       </div>
       <br/>
       <span style={{ color: '#94a3b8', fontSize: '12px' }}>
-        Auto-flags products with 0 sales for 28 consecutive days • New products need 4 weeks of data
+        Flags products with no sales in the last 28 open days • Products need 42 days with sales before forecasting
       </span>
     </div>
   ),
@@ -388,11 +388,11 @@ function ProductPerformance() {
           { label: "Active Products", value: activeProducts.length, caption: "menu products" },
           { label: "High Demand", value: reportDemandRows.filter(r => r.demandLevel === "High Demand").length, caption: "products" },
           { label: "Below Average", value: reportPerformanceRows.filter(r => r.ratio < 1).length, valueColor: [15, 153, 24], caption: "products" },
-          { label: "New Products", value: newProducts.length, caption: "product" },
+          { label: "Not Enough Data", value: newProducts.length, caption: "product" },
         ],
         statusBullets: [
           `${activeProducts.length} active menu`,
-          `${newProducts.length} new (${newProducts[0]?.product}, forecast in ${newProducts[0]?.forecastStatus.match(/\d+/)?.[0]} days)`,
+          `${newProducts.length} with not enough data yet (e.g. ${newProducts[0]?.product}: ${newProducts[0]?.forecastStatus})`,
           `${inactiveProducts.length} inactive (${inactiveProducts[0]?.product}, last sale ${inactiveProducts[0]?.lastSale})`,
         ],
         narrativeText: `${topPerformers[0]?.product || "—"} was the top performer this period. ${needsReview[0]?.product || "No products"} underperformed and may need a promo or menu review.`,
@@ -731,8 +731,8 @@ function ProductPerformance() {
           </div>
 
           <InfoBanner variant="info">
-            System auto-flags products with 0 sales for 28 consecutive days for Inactive
-            products. New products need 4 weeks of data before forecast activates.
+            Products with no sales in the last 28 days the store was open are marked Inactive (Discontinued).
+            Products with fewer than 42 days with sales are Inactive (Not enough data) until they reach 42.
           </InfoBanner>
 
           <div className="status-group">
@@ -764,11 +764,11 @@ function ProductPerformance() {
           </div>
 
           <div className="status-group">
-            <p className="status-group-title">New Product</p>
+            <p className="status-group-title">Inactive (Not enough data)</p>
             <p className="status-group-subtitle">
-              New product needs 4 weeks of data before forecast activates
+              Fewer than 42 days with sales. Forecasting starts at 42.
             </p>
-            <div className="table-scroll" tabIndex={0} role="region" aria-label="New products: days on menu and forecast status">
+            <div className="table-scroll" tabIndex={0} role="region" aria-label="Products with not enough data: days on menu and forecast status">
               <table className="analytics-table analytics-table--compact">
                 <thead>
                   <tr>
@@ -970,8 +970,8 @@ function ProductPerformance() {
         title="Product Status — Full View"
       >
         <InfoBanner variant="info">
-          System auto-flags products with 0 sales for 28 consecutive days for Inactive
-          products. New products need 4 weeks of data before forecast activates.
+          Products with no sales in the last 28 days the store was open are marked Inactive (Discontinued).
+          Products with fewer than 42 days with sales are Inactive (Not enough data) until they reach 42.
         </InfoBanner>
 
         <div className="status-group">
@@ -989,9 +989,9 @@ function ProductPerformance() {
         </div>
 
         <div className="status-group">
-          <p className="status-group-title">New Product</p>
-          <p className="status-group-subtitle">New product needs 4 weeks of data before forecast activates</p>
-          <div className="table-scroll" tabIndex={0} role="region" aria-label="New products: days on menu and forecast status (full view)">
+          <p className="status-group-title">Inactive (Not enough data)</p>
+          <p className="status-group-subtitle">Fewer than 42 days with sales. Forecasting starts at 42.</p>
+          <div className="table-scroll" tabIndex={0} role="region" aria-label="Products with not enough data: days on menu and forecast status (full view)">
             <table className="analytics-table analytics-table--compact">
               <thead><tr><th>No.</th><th>Product</th><th>Days on Menu</th><th>Forecast Status</th></tr></thead>
               <tbody>{modalNewProducts.map((row, i) => (

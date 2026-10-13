@@ -1,14 +1,15 @@
 // services/uploadService.js
 const { fetchAllRows } = require('../utils/fetchAllRows');
 const { accuracyFromWmape, beatsBaseline, modelNeedsAttention } = require('../utils/accuracy');
-const { getProductSalesSummary } = require('../utils/productSalesSummary');
 const { supabase, isConfigured, supabaseAdmin } = require('../config/supabase');
 const mappingService = require('./mappingService');
 const mlService = require('./mlService');
 const businessDayService = require('./businessDayService');
 const dataCoverageService = require('./dataCoverageService');
 const logger = require('../utils/logger');
-const { deriveProductStatus } = require('./productStatusService');
+const {
+  deriveProductStatus, isArchivedProduct, loadStatusInputs, statusInputsFor,
+} = require('./productStatusService');
 const { PRODUCT_STATUS_NOTES, PRODUCT_DB_STATUS_BY_DERIVED } = require('./productStatusConstants');
 const dayjs = require('dayjs');
 const utc = require('dayjs/plugin/utc');
@@ -20,9 +21,16 @@ const { convertRecipeQuantity, isMissingColumnError } = require('../utils/recipe
 const {
   splitModifiers,
   aggregateSalesRecords,
-  computeStockDeductions,
+  computeStockDeductionsByDate,
+  lastStockCountAt,
+  shouldDeduct,
+  describeShortfall,
   normalizeKeyword,
 } = require('../utils/salesModifiers');
+const { createNotificationOnce } = require('./notificationService');
+const { loadAliasMap } = require('./productAliasService');
+const { productNameKey } = require('../utils/productNameKey');
+const { buildUploadSummary } = require('../utils/uploadSummary');
 
 // modifier_rules is read once per minute at most: a 288-file backfill would
 // otherwise query it 288 times for a table of a handful of rows.
@@ -300,6 +308,42 @@ class UploadService {
   }
 
   /**
+   * One "Low stock" warning per ingredient per upload when a deduction was
+   * bigger than the stock (key stock_shortfall:<upload_id>:<ingredient_id>,
+   * never sent twice). Sent to every user, like the low-stock alerts.
+   * Best effort: a notification failure never fails the upload.
+   */
+  async notifyStockShortfalls(shortfalls = [], uploadId = null) {
+    if (!shortfalls.length) return;
+    try {
+      const { data: users, error } = await supabaseAdmin.from('user').select('id');
+      if (error) throw error;
+      for (const user of users || []) {
+        for (const item of shortfalls) {
+          const key = `stock_shortfall:${uploadId}:${item.ingredientId}`;
+          await createNotificationOnce({
+            userId: user.id,
+            type: 'warning',
+            // Built by describeShortfall(): "Stock shortfall: <ingredient>".
+            title: item.title || `Stock shortfall: ingredient #${item.ingredientId}`,
+            message: item.message,
+            link: '/ingredient-management',
+            metadata: {
+              kind: 'stock_shortfall',
+              key,
+              upload_id: uploadId,
+              ingredient_id: item.ingredientId,
+              shortfall: item.shortfall,
+            },
+          });
+        }
+      }
+    } catch (error) {
+      console.error('Could not send stock shortfall notifications:', error);
+    }
+  }
+
+  /**
    * modifier_rules as [{ keyword, ingredient_id }], keyword upper-cased.
    * Empty list (names used as-is) if the table does not exist yet.
    */
@@ -427,17 +471,25 @@ class UploadService {
       }
 
       const existingByName = new Map(
-        (existingProducts || []).map((product) => [String(product.name).trim().toLowerCase(), product])
+        (existingProducts || []).map((product) => [productNameKey(product.name), product])
       );
+      // A name that is an alias (an old or merged-away name) already belongs
+      // to a product: never create a new product for it.
+      const aliasProductIds = await loadAliasMap(supabaseAdmin);
 
       const created = [];
       const existing = [];
 
       for (const productName of uniqueProducts) {
-        const key = productName.trim().toLowerCase();
+        const key = productNameKey(productName);
         console.log('[PRODUCT DISCOVERY] Checking product:', JSON.stringify(productName));
         if (existingByName.has(key)) {
           console.log('[PRODUCT DISCOVERY] Existing:', true, JSON.stringify(existingByName.get(key)));
+          existing.push(productName);
+          continue;
+        }
+        if (aliasProductIds.has(key)) {
+          console.log('[PRODUCT DISCOVERY] Alias of product', aliasProductIds.get(key), JSON.stringify(productName));
           existing.push(productName);
           continue;
         }
@@ -511,7 +563,10 @@ class UploadService {
     }
   }
 
-  async processSalesData(rows = [], userId = null, uploadId = null, filename = null) {
+  // options.createdProductNames: products the caller's own sync already
+  // created for this file (routes/upload.js syncs before calling this), so
+  // the upload summary still lists them as new.
+  async processSalesData(rows = [], userId = null, uploadId = null, filename = null, options = {}) {
     try {
       if (!Array.isArray(rows) || rows.length === 0) {
         return { productsDetected: 0, productsUpdated: 0, warnings: [] };
@@ -528,6 +583,10 @@ class UploadService {
       const categoryByProductId = new Map();
       const warnings = [];
       let productsDetected = 0;
+      // For the upload summary (utils/uploadSummary.js).
+      const createdProductNames = [...(options.createdProductNames || [])];
+      productsDetected += createdProductNames.length;
+      let shortfallSummary = [];
 
       // POS modifiers ("... NO EGG") — see utils/salesModifiers.js.
       const modifierRules = await this.getModifierRules();
@@ -539,12 +598,13 @@ class UploadService {
         const syncSummary = await this.syncProductsFromSales(uniqueSalesProductNames, numericId);
         if (Array.isArray(syncSummary.created) && syncSummary.created.length > 0) {
           productsDetected += syncSummary.created.length;
+          createdProductNames.push(...syncSummary.created);
         }
       }
 
       const { data: products, error: productsError } = await supabaseAdmin
         .from('products')
-        .select('id, name, created_at, first_sold_date, is_active, inactive_reason, inactive_since, category');
+        .select('id, name, created_at, first_sold_date, is_active, inactive_reason, inactive_since, category, status');
 
       if (productsError) {
         throw productsError;
@@ -552,8 +612,14 @@ class UploadService {
 
       const currentCategoryByProductId = new Map();
       for (const product of products || []) {
-        productIdByName.set(String(product.name).trim().toLowerCase(), product.id);
+        productIdByName.set(productNameKey(product.name), product.id);
         currentCategoryByProductId.set(product.id, product.category);
+      }
+      // Then aliases (old / merged-away names), same key rule. A real
+      // product name always wins over an alias with the same key.
+      const aliasProductIds = await loadAliasMap(supabaseAdmin);
+      for (const [aliasKey, productId] of aliasProductIds) {
+        if (!productIdByName.has(aliasKey)) productIdByName.set(aliasKey, productId);
       }
 
       // Keyed by `${productId}|${saleDate}`, not one entry per CSV row.
@@ -583,6 +649,20 @@ class UploadService {
         uploadId,
       });
       const { dailySalesRows, modifierRows } = aggregated;
+      // The upload summary for this file, from what is already in memory
+      // (no extra queries). Built at return time so it includes shortfalls.
+      const summaryNow = () => buildUploadSummary({
+        products: products || [],
+        dailySalesRows,
+        modifierRows,
+        baseNames: uniqueSalesProductNames,
+        aliasProductIds,
+        newProductNames: createdProductNames,
+        unmatchedNames: aggregated.unmatchedNames,
+        shortfalls: shortfallSummary,
+        modifierKeywords,
+        isArchived: isArchivedProduct,
+      });
       for (const [productId, category] of aggregated.categoryByProductId) {
         categoryByProductId.set(productId, category);
       }
@@ -594,6 +674,19 @@ class UploadService {
           `Skipped ${aggregated.modifierOnlyNames.length} row name(s) that are only a modifier, `
           + `not a dish: ${aggregated.modifierOnlyNames.join(', ')}. Their plates were not counted.`
         );
+      }
+      // A name with no product (e.g. the product insert failed during sync,
+      // or the name normalises differently) used to lose its plates silently.
+      if (aggregated.unmatchedNames.length > 0) {
+        warnings.push(
+          `Skipped ${aggregated.unmatchedNames.length} item name(s) that matched no product: `
+          + `${aggregated.unmatchedNames.join(', ')}. Their plates were not counted.`
+        );
+        logger.warn('upload_unmatched_item_names', {
+          upload_id: uploadId,
+          count: aggregated.unmatchedNames.length,
+          names: aggregated.unmatchedNames.slice(0, 20),
+        });
       }
 
       if (dailySalesRows.length > 0) {
@@ -675,35 +768,93 @@ class UploadService {
 
         const selectedProductIds = [...productIds];
         if (selectedProductIds.length === 0) {
-          return { productsDetected, productsUpdated: 0, warnings };
+          return { productsDetected, productsUpdated: 0, warnings, uploadSummary: summaryNow() };
         }
 
         const { data: productRows, error: productFetchError } = await supabaseAdmin.from('products')
           .select('id, created_at, first_sold_date, is_active, inactive_reason, inactive_since, status')
           .in('id', selectedProductIds);
-        // First/last sale per product via the view -- this is the per-upload
-        // call that used to read every sales row for the selected products.
-        const { data: salesSummary, error: salesFetchError } = await getProductSalesSummary(selectedProductIds);
+        if (productFetchError) throw productFetchError;
 
-        if (productFetchError || salesFetchError) {
-          throw productFetchError || salesFetchError;
+        // Status inputs for the products in this file (sales days, last real
+        // sale, confirmed-open days) — a few paged reads, the same ones
+        // mappingService.reconcileProductActivation() uses for all products.
+        const statusInputs = await loadStatusInputs(supabaseAdmin, { productIds: selectedProductIds });
+
+        // 1. Status refresh for the products in this file. Runs BEFORE stock
+        // deduction so the deduction sees this upload's status (v3).
+        for (const product of productRows || []) {
+          // Archived stays archived: never rewrite its status or reason here.
+          if (isArchivedProduct(product)) continue;
+          const inputs = statusInputsFor(product, statusInputs);
+          const firstSoldDate = inputs.firstSaleDate || product.first_sold_date || null;
+          const status = deriveProductStatus(inputs);
+
+          const nextValues = {
+            first_sold_date: firstSoldDate ? firstSoldDate.slice(0, 10) : null,
+            // is_active is a GENERATED column (is_active = (status = 'active'))
+            // — it can never be written directly (Postgres error 428C9, see
+            // productStatusConstants.js). Every write to activity status must
+            // go through the enum column instead, translated via
+            // PRODUCT_DB_STATUS_BY_DERIVED, same as mappingService.js/menuService.js.
+            status: PRODUCT_DB_STATUS_BY_DERIVED[status.status],
+            inactive_reason: status.note || null,
+            inactive_since: status.isActive ? null : (product.inactive_since || new Date().toISOString().slice(0, 10))
+          };
+
+          // Skip products whose values would not change. This used to send
+          // one UPDATE per product in the file, every time — ~50 sequential
+          // round trips per file. On a network where each query takes
+          // ~150-400 ms that alone is 10+ seconds per file, and with 5 files
+          // uploading at once requests ran past the browser's timeout and
+          // were reported as failed even though the server finished them
+          // (Oct 1 2026). Once history is loaded, most uploads change
+          // nothing here, so this usually drops to zero queries.
+          const currentFirstSold = product.first_sold_date ? String(product.first_sold_date).slice(0, 10) : null;
+          const currentInactiveSince = product.inactive_since ? String(product.inactive_since).slice(0, 10) : null;
+          const unchanged = currentFirstSold === nextValues.first_sold_date
+            && product.status === nextValues.status
+            && (product.inactive_reason || null) === nextValues.inactive_reason
+            && currentInactiveSince === (nextValues.inactive_since ? nextValues.inactive_since.slice(0, 10) : null);
+          if (unchanged) continue;
+
+          const { error: updateError } = await supabaseAdmin.from('products')
+            .update(nextValues)
+            .eq('id', product.id);
+
+          if (updateError) throw updateError;
+          Object.assign(product, nextValues);
+          productsUpdated += 1;
         }
 
-      // Only active products with a mapped recipe deduct stock automatically.
-      const activeProductIds = new Set(
-        (productRows || []).filter((product) => product.is_active === true).map((product) => product.id)
-      );
-      if (activeProductIds.size > 0) {
-        let recipeResult = await supabaseAdmin
-          .from('product_ingredients')
-          .select('product_id, ingredient_id, quantity_per_serving, unit, ingredients!inner(name, unit, grams_per_cup)')
-          .in('product_id', [...activeProductIds]);
+        // 2. Stock deduction (owner's v3 flowchart, page 2).
+        //  - Every product in the file that is NOT archived deducts, whatever
+        //    its status: New and Discontinued dishes used real ingredients
+        //    too. A product with no recipe simply adds nothing (skipped per
+        //    product, never the whole upload).
+        //  - Per ingredient, a day's plates are deducted only if that business
+        //    day ended (D+1 03:00 Manila) AFTER the ingredient's last stock
+        //    count: a count taken later already includes them (shouldDeduct).
+        //  - Stock still floors at 0 (deduct_ingredient_stock); any shortfall
+        //    is written to the transaction's notes, sent once as a warning,
+        //    and returned in the upload warnings.
+        const deductingProductIds = new Set(
+          (productRows || []).filter((product) => !isArchivedProduct(product)).map((product) => product.id)
+        );
+        if (deductingProductIds.size > 0) {
+          const recipeColumns = (withUnit) => (withUnit
+            ? 'product_id, ingredient_id, quantity_per_serving, unit, ingredients!inner(name, unit, grams_per_cup, created_at)'
+            : 'product_id, ingredient_id, quantity_per_serving, ingredients!inner(name, unit, grams_per_cup, created_at)');
+          let recipeResult = await supabaseAdmin
+            .from('product_ingredients')
+            .select(recipeColumns(true))
+            .in('product_id', [...deductingProductIds]);
 
           if (recipeResult.error && isMissingColumnError(recipeResult.error)) {
             recipeResult = await supabaseAdmin
               .from('product_ingredients')
-              .select('product_id, ingredient_id, quantity_per_serving, ingredients!inner(name, unit, grams_per_cup)')
-              .in('product_id', [...activeProductIds]);
+              .select(recipeColumns(false))
+              .in('product_id', [...deductingProductIds]);
           }
 
           const { data: recipeRows, error: recipeError } = recipeResult;
@@ -712,13 +863,14 @@ class UploadService {
           // Full recipe for every plate, except a modifier plate leaves out
           // the one ingredient its rule maps to (and only if that ingredient
           // is in this recipe). 10 plain + 3 NO EGG + 2 NO RICE -> egg 12,
-          // rice 13. Computed as one net amount per ingredient and deducted
-          // once, so the 0-floor in deduct_ingredient_stock can't distort it.
-          const deductions = computeStockDeductions({
+          // rice 13. Kept per sale date so each day can be checked against
+          // the last stock count; still deducted once per ingredient, so the
+          // 0-floor in deduct_ingredient_stock can't distort it.
+          const deductionsByDate = computeStockDeductionsByDate({
             dailySalesRows,
             modifierRows,
             recipeRows: recipeRows || [],
-            activeProductIds,
+            deductingProductIds,
             ingredientIdByKeyword,
             perServingFor: (recipe) => {
               const ingredientUnit = recipe.ingredients?.unit || recipe.unit || null;
@@ -731,7 +883,53 @@ class UploadService {
             },
           });
 
-          for (const [ingredientId, deduction] of deductions) {
+          const ingredientInfo = new Map();
+          for (const recipe of recipeRows || []) {
+            if (!ingredientInfo.has(recipe.ingredient_id)) {
+              ingredientInfo.set(recipe.ingredient_id, {
+                name: recipe.ingredients?.name || null,
+                unit: recipe.ingredients?.unit || null,
+                createdAt: recipe.ingredients?.created_at || null,
+              });
+            }
+          }
+
+          // Latest 'adjustment' (an Edit of the stock) per ingredient. A
+          // 'restock' is a delivery, not a count, so it is not read here.
+          const ingredientIds = [...deductionsByDate.keys()];
+          const latestAdjustmentAt = new Map();
+          if (ingredientIds.length > 0) {
+            const { data: adjustments, error: adjustmentError } = await fetchAllRows(() => supabaseAdmin
+              .from('inventory_transactions')
+              .select('ingredient_id, created_at')
+              .eq('transaction_type', 'adjustment')
+              .in('ingredient_id', ingredientIds)
+              .order('created_at', { ascending: false })
+              .order('id', { ascending: true }));
+            if (adjustmentError) throw adjustmentError;
+            for (const row of adjustments || []) {
+              if (!latestAdjustmentAt.has(row.ingredient_id)) latestAdjustmentAt.set(row.ingredient_id, row.created_at);
+            }
+          }
+
+          const shortfalls = [];
+          const skippedForCount = [];
+          for (const [ingredientId, byDay] of deductionsByDate) {
+            const info = ingredientInfo.get(ingredientId) || {};
+            const lastCountAt = lastStockCountAt({
+              createdAt: info.createdAt,
+              latestAdjustmentAt: latestAdjustmentAt.get(ingredientId) || null,
+            });
+
+            let deduction = 0;
+            const skippedDays = [];
+            for (const [saleDate, amount] of [...byDay].sort((a, b) => a[0].localeCompare(b[0]))) {
+              if (shouldDeduct(saleDate, lastCountAt)) deduction += amount;
+              else skippedDays.push(saleDate);
+            }
+            if (skippedDays.length > 0) skippedForCount.push({ name: info.name || `ingredient #${ingredientId}`, days: skippedDays });
+            if (!(deduction > 0)) continue;
+
             // Was SELECT quantity, then compute new = max(0, old - deduction)
             // in JS, then UPDATE — two round trips wide open to a lost
             // update: two concurrent uploads deducting the same ingredient
@@ -757,6 +955,16 @@ class UploadService {
 
             const previousQuantity = Number(deductionRow.previous_quantity) || 0;
             const newQuantity = Number(deductionRow.new_quantity) || 0;
+            const shortfall = describeShortfall({
+              ingredientName: info.name,
+              unit: info.unit,
+              requested: deduction,
+              inStock: previousQuantity,
+            });
+            const notes = [
+              shortfall ? shortfall.notes : null,
+              skippedDays.length ? `Not deducted for ${skippedDays.join(', ')}: counted after that day ended.` : null,
+            ].filter(Boolean).join(' ') || null;
 
             const { error: transactionError } = await supabaseAdmin
               .from('inventory_transactions')
@@ -766,61 +974,28 @@ class UploadService {
                 quantity: -deduction,
                 previous_quantity: previousQuantity,
                 new_quantity: newQuantity,
-                reason: 'Automatic deduction from active mapped product sales',
+                reason: 'Automatic deduction from mapped product sales',
+                notes,
                 created_by: numericId
               });
 
-          if (transactionError) throw transactionError;
-        }
-      }
+            if (transactionError) throw transactionError;
+            if (shortfall) shortfalls.push({ ingredientId, name: info.name, ...shortfall });
+          }
 
-      for (const product of productRows || []) {
-        const summary = salesSummary.get(product.id);
-
-        const firstSoldDate = summary?.firstSaleDate || product.first_sold_date || null;
-        const lastSoldDate = summary?.lastSaleDate || firstSoldDate || null;
-        const status = deriveProductStatus({
-          firstSoldDate: firstSoldDate || null,
-          lastSoldDate: lastSoldDate || null,
-          createdAt: product.created_at || null,
-          isActive: Boolean(product.is_active),
-          inactiveReason: product.inactive_reason
-        });
-
-        const nextValues = {
-          first_sold_date: firstSoldDate ? firstSoldDate.slice(0, 10) : null,
-          // is_active is a GENERATED column (is_active = (status = 'active'))
-          // — it can never be written directly (Postgres error 428C9, see
-          // productStatusConstants.js). Every write to activity status must
-          // go through the enum column instead, translated via
-          // PRODUCT_DB_STATUS_BY_DERIVED, same as mappingService.js/menuService.js.
-          status: PRODUCT_DB_STATUS_BY_DERIVED[status.status],
-          inactive_reason: status.note || null,
-          inactive_since: status.isActive ? null : (product.inactive_since || new Date().toISOString().slice(0, 10))
-        };
-
-        // Skip products whose values would not change. This used to send
-        // one UPDATE per product in the file, every time — ~50 sequential
-        // round trips per file. On a network where each query takes
-        // ~150-400 ms that alone is 10+ seconds per file, and with 5 files
-        // uploading at once requests ran past the browser's timeout and
-        // were reported as failed even though the server finished them
-        // (Oct 1 2026). Once history is loaded, most uploads change
-        // nothing here, so this usually drops to zero queries.
-        const currentFirstSold = product.first_sold_date ? String(product.first_sold_date).slice(0, 10) : null;
-        const currentInactiveSince = product.inactive_since ? String(product.inactive_since).slice(0, 10) : null;
-        const unchanged = currentFirstSold === nextValues.first_sold_date
-          && product.status === nextValues.status
-          && (product.inactive_reason || null) === nextValues.inactive_reason
-          && currentInactiveSince === (nextValues.inactive_since ? nextValues.inactive_since.slice(0, 10) : null);
-        if (unchanged) continue;
-
-        const { error: updateError } = await supabaseAdmin.from('products')
-          .update(nextValues)
-          .eq('id', product.id);
-
-          if (updateError) throw updateError;
-          productsUpdated += 1;
+          for (const item of shortfalls) {
+            warnings.push(item.message);
+          }
+          if (skippedForCount.length > 0) {
+            warnings.push(
+              `Stock was not deducted for ${skippedForCount.length} ingredient(s) on days before their last stock count `
+              + `(the count already includes those plates): ${skippedForCount.map((s) => s.name).join(', ')}.`
+            );
+          }
+          shortfallSummary = shortfalls;
+          if (shortfalls.length > 0) {
+            await this.notifyStockShortfalls(shortfalls, uploadId);
+          }
         }
       } catch (postInsertError) {
         console.error('Sales data was saved, but follow-up processing (category backfill / stock deduction / status reconciliation) failed:', postInsertError);
@@ -830,7 +1005,8 @@ class UploadService {
       return {
         productsDetected,
         productsUpdated,
-        warnings
+        warnings,
+        uploadSummary: summaryNow(),
       };
     } catch (error) {
       console.error('Error processing sales data:', error);
@@ -883,6 +1059,9 @@ class UploadService {
 
   validateFileData(data, requiredColumns, columnMap) {
     const errors = [];
+    // One entry per bad cell, { row, column, message } — what the upload
+    // route returns on a 400. `errors` keeps its old one-per-row shape.
+    const fieldErrors = [];
     let validRows = 0;
     let invalidRows = 0;
     
@@ -892,18 +1071,22 @@ class UploadService {
 
       requiredColumns.forEach(col => {
         const actualCol = columnMap[col];
+        const addError = (message) => {
+          rowErrors.push(message);
+          fieldErrors.push({ row: rowNumber, column: col, message });
+        };
         if (!actualCol) {
-          rowErrors.push(`${col} column not found`);
+          addError(`${col} column not found`);
           return;
         }
 
         const value = row[actualCol];
         if (value === undefined || value === null || value === '' || value === ' ') {
-          rowErrors.push(`${col} is empty`);
+          addError(`${col} is empty`);
         } else if (['Items sold', 'Gross sales', 'Items refunded', 'Refunds', 'Net sales'].includes(col)) {
           const numValue = parseFloat(value);
           if (isNaN(numValue) && value.toString().trim() !== '') {
-            rowErrors.push(`${col} must be a valid number`);
+            addError(`${col} must be a valid number`);
           }
         }
       });
@@ -921,6 +1104,8 @@ class UploadService {
 
     return {
       errors: errors.slice(0, 10),
+      fieldErrors: fieldErrors.slice(0, 50),
+      fieldErrorCount: fieldErrors.length,
       validRows,
       invalidRows,
       totalRows: data.length
@@ -947,6 +1132,7 @@ class UploadService {
       return {
         isValid: false,
         errors: [{ row: 0, message: 'File is empty' }],
+        fieldErrors: [{ row: 0, column: null, message: 'File is empty' }],
         validRows: 0,
         invalidRows: 0,
         totalRows: 0,
@@ -968,6 +1154,9 @@ class UploadService {
       return {
         isValid: false,
         errors: [{ row: 1, message: columnValidation.message }],
+        fieldErrors: (columnValidation.missingColumns || []).map((column) => ({
+          row: 1, column, message: `${column} column is missing`,
+        })),
         validRows: 0,
         invalidRows: data.length,
         totalRows: data.length,
@@ -983,6 +1172,8 @@ class UploadService {
     return {
       isValid: rowValidation.errors.length === 0,
       errors: rowValidation.errors,
+      fieldErrors: rowValidation.fieldErrors,
+      fieldErrorCount: rowValidation.fieldErrorCount,
       validRows: rowValidation.validRows,
       invalidRows: rowValidation.invalidRows,
       totalRows: data.length,

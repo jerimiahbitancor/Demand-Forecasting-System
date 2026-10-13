@@ -93,6 +93,18 @@ const modQty = Object.fromEntries(agg.modifierRows.map((r) => [r.keyword, r.quan
 check('modifiers stored: NO EGG 3, NO RICE 2', modQty['NO EGG'] === 3 && modQty['NO RICE'] === 2, JSON.stringify(agg.modifierRows));
 check('modifier rows carry product, date and upload', agg.modifierRows.every((r) => r.product_id === 1040 && r.sale_date === day && r.upload_id === 7));
 check('modifier-only row reported, not counted', same(agg.modifierOnlyNames, ['NO RICE']));
+check('every name matched a product -> unmatchedNames empty', same(agg.unmatchedNames, []), JSON.stringify(agg.unmatchedNames));
+
+// A name with no product (sync insert failed, or it normalises differently)
+// is reported by its BASE name, once, and its plates are not counted.
+const withGhost = aggregateSalesRecords([
+  ...file,
+  { name: 'Ghost Dish', sold: 9, refunded: 0, saleDate: day },
+  { name: 'Ghost Dish NO EGG', sold: 2, refunded: 0, saleDate: day },
+], { productIdByName, keywords: KEYWORDS, uploadId: 7 });
+check('unmatched name reported once, by base name', same(withGhost.unmatchedNames, ['Ghost Dish']), JSON.stringify(withGhost.unmatchedNames));
+check('... and its plates are not in daily_sales', same(withGhost.dailySalesRows, agg.dailySalesRows), JSON.stringify(withGhost.dailySalesRows));
+check('... nor in the modifier rows', withGhost.modifierRows.every((r) => r.product_id === 1040));
 
 const withRefund = aggregateSalesRecords([
   ...file.slice(0, 3),

@@ -138,6 +138,8 @@ const baseDeps = (over = {}) => ({
   getSchedulerStatus: () => ({ since: '2026-10-06T00:00:00.000Z', jobs: [], lastRuns: { daily: null, weekly: null } }),
   getDailyPriceImportStatus: () => ({ enabled: true, cron: '0 10 * * *', timezone: 'Asia/Manila', lastRuns: [] }),
   isTrainingInFlight: () => false,
+  schedulersEnabled: () => true,
+  getUploadReminderStatus: () => ({ name: 'uploadReminder', since: '2026-10-06T00:00:00.000Z', jobs: [], lastRuns: { '0400': null, '0700': null } }),
   getMissingOperatingDays: async () => ({ missingOperatingDays: 0, missingDates: [], operatingDaysSource: 'configured' }),
   fetchImpl: async () => ({ status: 200 }),
   env: { NODE_ENV: 'production', ML_SERVICE_URL: 'http://ml.railway.internal:8080', RAILWAY_GIT_COMMIT_SHA: 'abcdef1234567' },
@@ -297,4 +299,33 @@ test('the full result with the real checks has 7 checks and no secrets', async (
   for (const secret of ['super-secret-key', 'shh', 'ml.railway.internal', 'http://']) {
     assert.ok(!text.includes(secret), `output must not contain ${secret}`);
   }
+});
+
+test('mlPipeline: details show whether a forecast is running', async () => {
+  const running = await buildDefaultChecks(baseDeps({ isForecastInFlight: () => true })).mlPipeline();
+  assert.equal(running.details.forecastInFlight, true);
+  const idle = await buildDefaultChecks(baseDeps({ isForecastInFlight: () => false })).mlPipeline();
+  assert.equal(idle.details.forecastInFlight, false);
+});
+
+test('scheduler: the upload reminder job is shown, and its failed run warns', async () => {
+  const reminder = {
+    name: 'uploadReminder', since: 'x',
+    jobs: [{ slot: '0400', cron: '0 4 * * *', timezone: 'Asia/Manila' }, { slot: '0700', cron: '0 7 * * *', timezone: 'Asia/Manila' }],
+    lastRuns: { '0400': { status: 'failed', finishedAt: '2026-10-13T20:00:01.000Z', error: 'db down' }, '0700': null },
+  };
+  const result = await buildDefaultChecks(baseDeps({ getUploadReminderStatus: () => reminder })).scheduler();
+  assert.equal(result.status, 'warn');
+  assert.match(result.reason, /uploadReminder 0400 run failed at .*: db down/);
+  assert.deepEqual(result.details.uploadReminder.jobs.map((j) => j.cron), ['0 4 * * *', '0 7 * * *']);
+  assert.equal(result.details.uploadReminder.name, 'uploadReminder');
+});
+
+test('scheduler: timed jobs switched off (SCHEDULERS_ENABLED=false) -> warns, says so', async () => {
+  const off = await buildDefaultChecks(baseDeps({ schedulersEnabled: () => false })).scheduler();
+  assert.equal(off.status, 'warn');
+  assert.match(off.reason, /timed jobs are off \(SCHEDULERS_ENABLED=false\)/);
+  assert.equal(off.details.schedulersEnabled, false);
+  const on = await buildDefaultChecks(baseDeps()).scheduler();
+  assert.equal(on.details.schedulersEnabled, true);
 });
