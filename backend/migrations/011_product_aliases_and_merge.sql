@@ -31,40 +31,40 @@
 -- Pairs: 434 -> 316 (Cheesy Spicy Hungarian), 436 -> 368 (OG Tapsilog),
 --        450 -> 325 (Chick & Fries NO FRIES, as the NO FRIES modifier).
 -- ===========================================================================
--- with pairs(source_id, target_id) as (
---   values (434, 316), (436, 368), (450, 325)
--- )
--- select
---   p.source_id,
---   s.name                                                        as source_name,
---   p.target_id,
---   t.name                                                        as target_name,
---   (select count(*) from public.daily_sales d where d.product_id = p.source_id)
---                                                                 as source_sales_days,
---   (select coalesce(sum(d.quantity_sold), 0) from public.daily_sales d where d.product_id = p.source_id)
---                                                                 as source_plates,
---   (select count(*) from public.daily_sales d
---      join public.daily_sales x on x.product_id = p.target_id and x.sale_date = d.sale_date
---     where d.product_id = p.source_id)                           as days_added_together,
---   (select count(*) from public.daily_sales_modifiers m where m.product_id = p.source_id)
---                                                                 as source_modifier_rows,
---   (select count(*) from public.product_ingredients r where r.product_id = p.source_id)
---                                                                 as source_recipe_rows,
---   (select count(*) from public.product_ingredients r where r.product_id = p.target_id)
---                                                                 as target_recipe_rows,
---   (select count(*) from public.forecasts f where f.product_id = p.source_id)
---                                                                 as source_forecasts_to_delete,
---   (select count(*) from public.product_classifications c where c.product_id = p.source_id)
---                                                                 as source_classifications_to_delete,
---   s.status                                                      as source_status,
---   t.status                                                      as target_status
--- from pairs p
--- join public.products s on s.id = p.source_id
--- join public.products t on t.id = p.target_id
--- order by p.source_id;
---
--- For 450 -> 325 with NO FRIES, the keyword must exist first:
--- select * from public.modifier_rules where upper(keyword) = 'NO FRIES';
+ with pairs(source_id, target_id) as (
+   values (434, 316), (436, 368), (450, 325)
+ )
+ select
+   p.source_id,
+   s.name                                                        as source_name,
+   p.target_id,
+   t.name                                                        as target_name,
+   (select count(*) from public.daily_sales d where d.product_id = p.source_id)
+                                                                 as source_sales_days,
+   (select coalesce(sum(d.quantity_sold), 0) from public.daily_sales d where d.product_id = p.source_id)
+                                                                 as source_plates,
+   (select count(*) from public.daily_sales d
+      join public.daily_sales x on x.product_id = p.target_id and x.sale_date = d.sale_date
+     where d.product_id = p.source_id)                           as days_added_together,
+   (select count(*) from public.daily_sales_modifiers m where m.product_id = p.source_id)
+                                                                 as source_modifier_rows,
+   (select count(*) from public.product_ingredients r where r.product_id = p.source_id)
+                                                                 as source_recipe_rows,
+   (select count(*) from public.product_ingredients r where r.product_id = p.target_id)
+                                                                 as target_recipe_rows,
+   (select count(*) from public.forecasts f where f.product_id = p.source_id)
+                                                                 as source_forecasts_to_delete,
+   (select count(*) from public.product_classifications c where c.product_id = p.source_id)
+                                                                 as source_classifications_to_delete,
+   s.status                                                      as source_status,
+   t.status                                                      as target_status
+ from pairs p
+ join public.products s on s.id = p.source_id
+ join public.products t on t.id = p.target_id
+ order by p.source_id;
+
+ --For 450 -> 325 with NO FRIES, the keyword must exist first:
+ select * from public.modifier_rules where upper(keyword) = 'NO FRIES';
 
 
 -- ===========================================================================
@@ -279,12 +279,12 @@ ROLLBACK;  -- dry run. Change to COMMIT after it runs without errors.
 -- ===========================================================================
 -- STEP 2 — CONFIRM (read-only, after COMMIT)
 -- ===========================================================================
--- select
---   to_regclass('public.product_aliases') is not null                          as aliases_table_exists,
---   (select relrowsecurity from pg_class where oid = 'public.product_aliases'::regclass) as aliases_rls_on,
---   not has_table_privilege('anon', 'public.product_aliases', 'SELECT')         as anon_cannot_read_aliases,
---   not has_function_privilege('anon', 'public.merge_products(integer, integer, text, text)', 'EXECUTE')
---                                                                               as anon_cannot_merge,
---   not has_function_privilege('authenticated', 'public.merge_products(integer, integer, text, text)', 'EXECUTE')
---                                                                               as authenticated_cannot_merge,
---   public.product_name_key('  Cheesy   Spicy Hungarian ') = 'cheesy spicy hungarian' as key_rule_ok;
+ select
+   to_regclass('public.product_aliases') is not null                          as aliases_table_exists,
+   (select relrowsecurity from pg_class where oid = 'public.product_aliases'::regclass) as aliases_rls_on,
+   not has_table_privilege('anon', 'public.product_aliases', 'SELECT')         as anon_cannot_read_aliases,
+   not has_function_privilege('anon', 'public.merge_products(integer, integer, text, text)', 'EXECUTE')
+                                                                               as anon_cannot_merge,
+   not has_function_privilege('authenticated', 'public.merge_products(integer, integer, text, text)', 'EXECUTE')
+                                                                               as authenticated_cannot_merge,
+   public.product_name_key('  Cheesy   Spicy Hungarian ') = 'cheesy spicy hungarian' as key_rule_ok;

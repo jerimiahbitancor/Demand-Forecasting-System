@@ -37,6 +37,7 @@ from services.supabase_writer import (
     write_forecast_run,
 )
 from utils.debug_log import log_stage, log_metrics
+from utils.dates import manila_today
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("ml-service")
@@ -404,7 +405,7 @@ def forecast():
     # instead of failing or pretending everything is current.
     last_confirmed_date = get_latest_confirmed_open_date()
     if last_confirmed_date:
-        stale_days = max(0, (date.today() - date.fromisoformat(last_confirmed_date)).days - 1)
+        stale_days = max(0, (manila_today() - date.fromisoformat(last_confirmed_date)).days - 1)
     else:
         stale_days = 0
 

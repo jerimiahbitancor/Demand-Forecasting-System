@@ -23,6 +23,7 @@ short-circuited to 0 here rather than sent through the model.
 from datetime import date, timedelta
 import pandas as pd
 
+from utils.dates import manila_today
 from services.feature_engineering import (
     build_feature_row, apply_categorical_dtype, FEATURE_COLUMNS, WARMUP_OBSERVATIONS,
 )
@@ -147,7 +148,7 @@ def generate_forecast(
     if operating_days is None:
         operating_days = {0, 1, 2, 3, 4}  # Mon-Fri fallback if caller didn't pass one
 
-    today = date.today()
+    today = manila_today()  # Asia/Manila, not the container's UTC date
     history = _get_recent_series(product_id, before_date=today, open_dates=open_dates)
 
     if len(history) < WARMUP_OBSERVATIONS:
