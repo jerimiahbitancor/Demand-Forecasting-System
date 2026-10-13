@@ -25,6 +25,9 @@ const TABLES = [
   'products',
   'product_ingredients',
   'daily_sales',
+  'daily_sales_modifiers',
+  'modifier_rules',
+  'market_sources',
   'forecast_config',
   'forecast_cogs',
   'forecasts',
@@ -39,6 +42,41 @@ const TABLES = [
   'audit_logs',
   'user'
 ];
+
+// Insertion order for a restore: reference (parent) tables before the rows
+// that point at them, so every foreign key resolves as the merge runs.
+const RESTORE_ORDER = [
+  'ingredient_categories',
+  'ingredient_units',
+  'product_categories',
+  'business_profile',
+  'forecast_config',
+  'market_sources',
+  'uploads',
+  'ingredients',
+  'products',
+  'product_ingredients',
+  'modifier_rules',
+  'daily_sales',
+  'daily_sales_modifiers',
+  'forecasts',
+  'forecast_cogs',
+  'forecast_runs',
+  'model_metrics',
+  'inventory_transactions',
+  'market_price',
+  'business_days',
+  'product_classifications',
+  'notifications',
+  'audit_logs'
+];
+
+// The login/account table is deliberately excluded: a restore must never
+// rewrite credentials or auth links and lock the owner out of the system.
+const RESTORE_SKIP_TABLES = new Set(['user']);
+
+// Upsert in bounded chunks so one big table cannot exceed a request limit.
+const RESTORE_CHUNK_SIZE = 1000;
 
 // Flow / history tables that "Reset Historical Data" clears.
 // Catalog and configuration tables are deliberately kept.
@@ -251,6 +289,89 @@ const deleteBackup = async (req, res) => {
   }
 };
 
+// POST /api/settings/backups/:name/restore
+// Safe merge: upserts the backup's rows back on top of the current data.
+// Existing rows are overwritten only when their id matches; nothing is ever
+// deleted, so data added after the backup stays put. The `user` table is
+// skipped on purpose (see RESTORE_SKIP_TABLES).
+const restoreBackup = async (req, res) => {
+  try {
+    const name = sanitizeFileName(req.params.name);
+    const objectPath = `${BACKUPS_FOLDER}/${name}`;
+
+    const { data: file, error: downloadError } = await supabaseAdmin.storage
+      .from(FILES_BUCKET)
+      .download(objectPath);
+
+    if (downloadError || !file) {
+      return res.status(404).json({
+        success: false,
+        error: `Backup not found: ${downloadError?.message || name}`
+      });
+    }
+
+    const text = await file.text();
+    let payload;
+    try {
+      payload = JSON.parse(text);
+    } catch {
+      return res.status(400).json({ success: false, error: 'Backup file is not valid JSON' });
+    }
+
+    const tables = payload?.tables;
+    if (!tables || typeof tables !== 'object' || Array.isArray(tables)) {
+      return res.status(400).json({ success: false, error: 'Backup file has no tables to restore' });
+    }
+
+    const results = {};
+    let totalRows = 0;
+
+    for (const table of RESTORE_ORDER) {
+      if (RESTORE_SKIP_TABLES.has(table)) continue;
+
+      const rows = tables[table];
+      if (!Array.isArray(rows) || rows.length === 0) {
+        results[table] = { restored: 0, skipped: true };
+        continue;
+      }
+
+      try {
+        let restored = 0;
+        for (let i = 0; i < rows.length; i += RESTORE_CHUNK_SIZE) {
+          const chunk = rows.slice(i, i + RESTORE_CHUNK_SIZE);
+          const { error } = await supabaseAdmin
+            .from(table)
+            .upsert(chunk, { onConflict: 'id' });
+          if (error) throw error;
+          restored += chunk.length;
+        }
+        results[table] = { restored };
+        totalRows += restored;
+      } catch (err) {
+        // One bad table (usually a unique-key clash) must not abort the rest.
+        results[table] = { error: err.message, restored: 0 };
+      }
+    }
+
+    const restoredTables = Object.values(results).filter((r) => r.restored).length;
+
+    logAction(
+      'backup_restored',
+      `Restored database backup "${name}" (${totalRows} rows across ${restoredTables} tables)`,
+      actorOf(req)
+    );
+
+    res.json({
+      success: true,
+      message: `Backup "${name}" restored`,
+      data: { file: objectPath, totalRows, results }
+    });
+  } catch (error) {
+    console.error('Error restoring backup:', error);
+    res.status(500).json({ success: false, error: error.message });
+  }
+};
+
 // GET /api/settings/export-data?format=json|csv|xlsx
 const exportData = async (req, res) => {
   try {
@@ -317,6 +438,7 @@ module.exports = {
   listBackups,
   downloadBackup,
   deleteBackup,
+  restoreBackup,
   exportData,
   resetData
 };
