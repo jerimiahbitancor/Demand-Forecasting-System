@@ -18,6 +18,7 @@ import { useNavigate } from 'react-router-dom';
 import axios from 'axios';
 import toast from 'react-hot-toast';
 import './NotificationsPage.css';
+import { buildPageItems, ELLIPSIS } from '../../../utils/pagination';
 
 const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:5000/api';
 
@@ -105,7 +106,11 @@ const NotificationsPage = () => {
       }
     }
     if (notification.link) {
-      navigate(notification.link);
+      const target =
+        notification.link === '/ingredient-management'
+          ? '/inventory-management'
+          : notification.link;
+      navigate(target);
     }
   };
 
@@ -183,25 +188,7 @@ const NotificationsPage = () => {
     }
   };
 
-  const getPageNumbers = useMemo(() => {
-    const pages = [];
-    if (totalPages <= 7) {
-      for (let i = 1; i <= totalPages; i++) pages.push(i);
-    } else {
-      pages.push(1);
-      if (page > 3) pages.push('...');
-      for (
-        let i = Math.max(2, page - 1);
-        i <= Math.min(totalPages - 1, page + 1);
-        i++
-      ) {
-        pages.push(i);
-      }
-      if (page < totalPages - 2) pages.push('...');
-      pages.push(totalPages);
-    }
-    return pages;
-  }, [totalPages, page]);
+  const pageItems = useMemo(() => buildPageItems(page, totalPages), [page, totalPages]);
 
   const filterTabs = [
     { key: 'all', label: 'All', count: total },
@@ -293,27 +280,39 @@ const NotificationsPage = () => {
                 <button
                   className="notification-page-btn"
                   onClick={() => handlePageChange(page - 1)}
-                  disabled={page === 1 || loading}
+                  disabled={page <= 1 || loading}
                   aria-label="Previous page"
                 >
                   <FaChevronLeft /> Prev
                 </button>
                 <div className="notification-pagination-numbers">
-                  {getPageNumbers.map((p, index) => (
-                    <button
-                      key={index}
-                      className={`notification-page-number ${p === page ? 'active' : ''} ${p === '...' ? 'dots' : ''}`}
-                      onClick={() => typeof p === 'number' && handlePageChange(p)}
-                      disabled={p === '...' || loading}
-                    >
-                      {p}
-                    </button>
-                  ))}
+                  {pageItems.map((item, index) =>
+                    item === ELLIPSIS ? (
+                      <span
+                        key={`ellipsis-${index}`}
+                        className="notification-page-ellipsis"
+                        aria-hidden="true"
+                      >
+                        …
+                      </span>
+                    ) : (
+                      <button
+                        key={item}
+                        className={`notification-page-number ${item === page ? 'active' : ''}`}
+                        onClick={() => handlePageChange(item)}
+                        disabled={loading}
+                        aria-label={`Page ${item}`}
+                        aria-current={item === page ? 'page' : undefined}
+                      >
+                        {item}
+                      </button>
+                    )
+                  )}
                 </div>
                 <button
                   className="notification-page-btn"
                   onClick={() => handlePageChange(page + 1)}
-                  disabled={page === totalPages || loading}
+                  disabled={page >= totalPages || loading}
                   aria-label="Next page"
                 >
                   Next <FaChevronRight />

@@ -26,12 +26,13 @@ const {
   bulkUpsertPrices,
   getSourcesList,
   createSource,
-  deleteSource
+  deleteSource,
+  triggerDaImport
 } = require('../controllers/marketPriceController');
 
 // All routes require authentication.
-// No ROUTE here makes an outbound HTTP request; the daily DA importer runs on
-// its own cron, not through any of these handlers.
+// Only /import-da reaches the scheduled DA importer (as an on-demand trigger);
+// every other handler is local Supabase I/O.
 router.use(authenticateToken);
 
 router.get('/sources', getSourcesList);
@@ -41,6 +42,7 @@ router.get('/comparison', getComparison);
 router.get('/ingredient/:ingredientId', getIngredientPrices);
 router.get('/history/:ingredientId', getPriceHistory);
 router.post('/bulk-upsert', bulkUpsertPrices);
+router.post('/import-da', triggerDaImport);
 router.post('/', createManualPrice);
 router.put('/:id', updateManualPrice);
 router.delete('/:id', deleteManualPrice);

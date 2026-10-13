@@ -22,6 +22,7 @@ import Analytics from './features/analytics/pages/Analytics';
 import InventoryManagement from './features/inventory/pages/InventoryManagement';
 import IngredientManagement from './features/inventory/pages/IngredientManagement';
 import NotificationsPage from './features/components/Notification/NotificationsPage';
+import NotFound from './features/components/NotFound';
 import DashboardLoading from './features/dashboard/components/DashboardLoading';
 import './App.css';
 import './RouteGuard.css';
@@ -296,8 +297,8 @@ function App() {
           <Gated><Suspense fallback={<DashboardLoading />}><DataNeedsAttention /></Suspense></Gated>
         } />
         
-        {/* Catch-all - redirect to landing */}
-        <Route path="*" element={<Navigate to="/" replace />} />
+        {/* Catch-all - custom 404 */}
+        <Route path="*" element={<NotFound />} />
       </Routes>
     </div>
   );

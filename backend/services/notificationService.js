@@ -147,7 +147,7 @@ const refreshLowStockNotifications = async () => {
           type: 'warning',
           title: item.title,
           message: item.message,
-          link: '/ingredient-management',
+          link: '/inventory-management',
           metadata: { kind: 'low_stock', key, ingredient_id: item.ingredientId },
         });
       }
@@ -160,7 +160,7 @@ const refreshLowStockNotifications = async () => {
           type: 'warning',
           title: `Restock reminder: ${alertCount} ingredient${alertCount > 1 ? 's' : ''} need attention`,
           message: `${alertCount} ingredient(s) are low or out of stock. Open Ingredient Management to restock them.`,
-          link: '/ingredient-management',
+          link: '/inventory-management',
           metadata: { kind: 'restock_summary' },
         });
       }

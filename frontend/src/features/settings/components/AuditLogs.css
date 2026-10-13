@@ -404,6 +404,17 @@
   border-color: #a31d1d;
 }
 
+.audit-page-ellipsis {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 32px;
+  height: 32px;
+  color: #94a3b8;
+  font-size: 0.8rem;
+  user-select: none;
+}
+
 .audit-page-btn {
   display: flex;
   align-items: center;
