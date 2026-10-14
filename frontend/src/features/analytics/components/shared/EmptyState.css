@@ -1,0 +1,62 @@
+/* components/shared/EmptyState.css */
+
+.empty-state {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  gap: 6px;
+  padding: 24px 16px;
+  margin: 12px 0;
+  border: 1px dashed #e3d6d6;
+  border-radius: 10px;
+  background-color: #fffafa;
+}
+
+.empty-state-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 40px;
+  height: 40px;
+  border-radius: 50%;
+  background-color: #f6e9e9;
+  color: var(--color-red-primary, #7A0101);
+}
+
+.empty-state-title {
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--color-text-primary);
+  margin: 4px 0 0;
+}
+
+.empty-state-message {
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--color-text-light, #6c757d);
+  max-width: 420px;
+  margin: 0;
+}
+
+.empty-state-action {
+  margin-top: 8px;
+  padding: 6px 14px;
+  font-size: 13px;
+  font-weight: 600;
+  border-radius: 999px;
+  border: 1.5px solid var(--color-red-primary, #7A0101);
+  background: #ffffff;
+  color: var(--color-red-primary, #7A0101);
+  cursor: pointer;
+}
+
+.empty-state-action:hover {
+  background-color: var(--color-red-primary, #7A0101);
+  color: #ffffff;
+}
+
+/* Inside a table cell: no extra outer margin. */
+td .empty-state {
+  margin: 0;
+}

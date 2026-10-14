@@ -13,6 +13,8 @@ import Tippy from '@tippyjs/react';
 import 'tippy.js/dist/tippy.css';
 import 'tippy.js/animations/scale.css';
 import InfoBanner from "./shared/InfoBanner.jsx";
+import EmptyState from "./shared/EmptyState.jsx";
+import { ratioBarGeometry, ratioBarMax } from "./shared/ratioBar.js";
 import "./shared/InfoBanner.css";
 import "./ProductPerformance.css";
 import { authService } from "../../../services/authService.js";
@@ -62,10 +64,33 @@ function buildPerformanceRows(apiRows) {
     rank: r.rank,
     product: r.product,
     qtySold: r.quantitySold,
-    revenue: formatPeso(r.revenue),
-    ratio: r.performanceRatio ?? 0,
+    // null = nothing sold in range, or price 0: shown as "—", never ₱0.
+    revenue: r.revenue == null && r.hasPrice === false && r.quantitySold > 0 ? "No price" : formatPeso(r.revenue),
+    // null = no rolling_7 for this product: shown as "—", never as 0.00.
+    ratio: r.performanceRatio ?? null,
     actionSignal: r.actionSignal,
   }));
+}
+
+function ratioText(ratio) {
+  if (ratio === null || ratio === undefined) return "—";
+  return `${ratio.toFixed(2)} ${ratio >= 1 ? "▲" : "▼"}`;
+}
+
+function ratioClass(ratio) {
+  if (ratio === null || ratio === undefined) return "value--muted";
+  return ratio >= 1 ? "value--success" : "value--error";
+}
+
+// Local calendar date (not toISOString, which shifts to UTC and gives the
+// previous day before 8 AM in Manila).
+function toYmd(date) {
+  const d = new Date(date);
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+}
+
+function fromYmd(ymd) {
+  return ymd ? new Date(`${ymd}T00:00:00`) : null;
 }
 
 // ---------------------------------------------------------------------
@@ -121,7 +146,7 @@ const tooltips = {
       </div>
       <br/>
       <span style={{ color: '#94a3b8', fontSize: '12px' }}>
-        Performance Ratio = Actual Qty Sold / Rolling Average Qty Sold (all active products)
+        Performance Ratio = this product's 7-day average ÷ the average 7-day average of all active products
       </span>
     </div>
   ),
@@ -208,14 +233,21 @@ function DemandBar({ label, qty, maxQty, zone }) {
   );
 }
 
-function RatioBar({ label, ratio }) {
-  const min = 0.2;
-  const max = 1.8;
-  const center = 50;
-  const pct = ((ratio - min) / (max - min)) * 100;
-  const isAbove = ratio >= 1.0;
-  const barStart = isAbove ? center : pct;
-  const barWidth = Math.abs(pct - center);
+// Each side of the centre line is half the track; bars never leave it (see
+// shared/ratioBar.js). Green = above average, red = below, same as the legend.
+// The value sits at the end of the bar, inside the track: inside the bar
+// when the bar is wide, just past its end when it is short.
+const RATIO_LABEL_INSIDE_MIN_PCT = 30;
+
+function RatioBar({ label, ratio, maxRatio }) {
+  const geometry = ratioBarGeometry(ratio, maxRatio);
+  if (!geometry) return null;
+  const { isAbove, leftPct, widthPct } = geometry;
+  const inside = widthPct >= RATIO_LABEL_INSIDE_MIN_PCT;
+  const endPct = isAbove ? leftPct + widthPct : leftPct; // outer end of the bar
+  const valueStyle = isAbove
+    ? (inside ? { right: `${100 - endPct}%` } : { left: `${endPct}%` })
+    : (inside ? { left: `${endPct}%` } : { right: `${100 - endPct}%` });
 
   return (
     <div className="ratio-bar-row">
@@ -224,8 +256,14 @@ function RatioBar({ label, ratio }) {
         <div className="ratio-bar-center-line" />
         <div
           className={`ratio-bar-fill ${isAbove ? "ratio-bar-fill--above" : "ratio-bar-fill--below"}`}
-          style={{ left: `${barStart}%`, width: `${barWidth}%` }}
+          style={{ left: `${leftPct}%`, width: `${widthPct}%` }}
         />
+        <span
+          className={`ratio-bar-value ${inside ? "ratio-bar-value--inside" : "ratio-bar-value--outside"}`}
+          style={valueStyle}
+        >
+          {Number(ratio).toFixed(2)} ×
+        </span>
       </div>
     </div>
   );
@@ -267,15 +305,24 @@ function ProductPerformance() {
   const [isLoading, setIsLoading] = useState(true);
   const [loadError, setLoadError] = useState(null);
   const [selectedRange, setSelectedRange] = useState([new Date(), new Date()]);
+  // null = let the backend pick: Performance Ratio = the 7 days ending on the
+  // latest sale date; Demand Classification = today.
+  const [rangeParams, setRangeParams] = useState(null);
+  const [fetchKey, setFetchKey] = useState(0);
 
-  // "Last 7 Days" was an inert <span> that looked like a dropdown. The
-  // performance ratio is fetched as params:{from,to} from selectedRange, so
-  // the useful behaviour is to drive that range: today back six days.
+  // A full range picked in the calendar refetches with that range.
+  const handleRangeChange = (value) => {
+    setSelectedRange(value);
+    if (Array.isArray(value) && value[0] && value[1]) {
+      setRangeParams({ from: toYmd(value[0]), to: toYmd(value[1]) });
+    }
+  };
+
+  // "Last 7 days" = back to the backend default (7 days ending on the latest
+  // sale date — today's sales are uploaded tomorrow, so "today" is empty).
   const applyLast7Days = () => {
-    const end = new Date();
-    const start = new Date();
-    start.setDate(start.getDate() - 6);
-    setSelectedRange([start, end]);
+    setRangeParams(null);
+    setFetchKey((k) => k + 1);
   };
   const [isReportModalOpen, setIsReportModalOpen] = useState(false);
   // Modal open states
@@ -318,8 +365,19 @@ function ProductPerformance() {
       setLoadError(null);
       try {
         const headers = await authService.getAuthHeaders();
-        const response = await axios.get(`${API_URL}/analytics/product-performance`, { headers });
-        if (!cancelled) setApiData(response.data?.data || null);
+        const response = await axios.get(`${API_URL}/analytics/product-performance`, {
+          headers,
+          params: rangeParams || undefined,
+        });
+        const data = response.data?.data || null;
+        if (!cancelled) {
+          setApiData(data);
+          // Show the range the backend chose in the date picker.
+          const ratioRange = data?.performanceRatio?.range;
+          if (!rangeParams && ratioRange?.from && ratioRange?.to) {
+            setSelectedRange([fromYmd(ratioRange.from), fromYmd(ratioRange.to)]);
+          }
+        }
       } catch (err) {
         console.error("Error fetching product performance analytics:", err);
         if (!cancelled) setLoadError(err.response?.data?.error || err.message || "Failed to load product performance data");
@@ -332,12 +390,22 @@ function ProductPerformance() {
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [rangeParams, fetchKey]);
 
   // --- Derive the same shapes the JSX below already expects. ---
   const demandRows = buildDemandRows(apiData?.demandClassification);
   const maxQty = demandRows.length ? Math.max(...demandRows.map((r) => r.forecastQty)) : 1;
   const performanceRows = buildPerformanceRows(apiData?.performanceRatio?.rows);
+  // Bars only for products that have a ratio; the table lists every row.
+  const ratioChartRows = performanceRows.filter((r) => r.ratio !== null);
+  const hasSalesInRange = performanceRows.some((r) => r.qtySold > 0);
+  const ratioAsOf = apiData?.performanceRatio?.ratioAsOf || null;
+  const demandDateLabel = (() => {
+    const range = apiData?.demandRange;
+    if (!range?.from) return null;
+    const fmt = (ymd) => fromYmd(ymd).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
+    return range.from === range.to ? fmt(range.from) : `${fmt(range.from)} – ${fmt(range.to)}`;
+  })();
 
   const statusCounts = apiData?.productStatus?.counts || { active: 0, new: 0, inactive: 0, archived: 0 };
   const activeProducts = apiData?.productStatus?.active || [];
@@ -377,7 +445,8 @@ function ProductPerformance() {
     }
 
     const topPerformers = reportPerformanceRows.filter((r) => r.ratio >= 1).slice(0, 2);
-    const needsReview = reportPerformanceRows.filter((r) => r.ratio < 1).slice(0, 2);
+    // null = no ratio yet (null < 1 is true in JS, so check it first).
+    const needsReview = reportPerformanceRows.filter((r) => r.ratio !== null && r.ratio < 1).slice(0, 2);
 
     try {
     if (format === "pdf") {
@@ -387,7 +456,7 @@ function ProductPerformance() {
         metrics: [
           { label: "Active Products", value: activeProducts.length, caption: "menu products" },
           { label: "High Demand", value: reportDemandRows.filter(r => r.demandLevel === "High Demand").length, caption: "products" },
-          { label: "Below Average", value: reportPerformanceRows.filter(r => r.ratio < 1).length, valueColor: [15, 153, 24], caption: "products" },
+          { label: "Below Average", value: reportPerformanceRows.filter(r => r.ratio !== null && r.ratio < 1).length, valueColor: [15, 153, 24], caption: "products" },
           { label: "Not Enough Data", value: newProducts.length, caption: "product" },
         ],
         statusBullets: [
@@ -466,8 +535,8 @@ function ProductPerformance() {
     (demandChartPage - 1) * ROWS_PER_PAGE, demandChartPage * ROWS_PER_PAGE
   );
 
-  const totalRatioChartPages = Math.max(1, Math.ceil(performanceRows.length / ROWS_PER_PAGE));
-  const paginatedRatioChartRows = performanceRows.slice(
+  const totalRatioChartPages = Math.max(1, Math.ceil(ratioChartRows.length / ROWS_PER_PAGE));
+  const paginatedRatioChartRows = ratioChartRows.slice(
     (ratioChartPage - 1) * ROWS_PER_PAGE, ratioChartPage * ROWS_PER_PAGE
   );
 
@@ -487,7 +556,10 @@ function ProductPerformance() {
   const modalDemandRows = filteredDemandRows.slice((modalDemandPage - 1) * 10, modalDemandPage * 10);
   const modalRatioRows = filteredPerformanceRows.slice((modalRatioPage - 1) * 10, modalRatioPage * 10);
   const modalDemandChartRows = demandRows.slice((modalDemandChartPage - 1) * 10, modalDemandChartPage * 10);
-  const modalRatioChartRows = performanceRows.slice((modalRatioChartPage - 1) * 10, modalRatioChartPage * 10);
+  const modalRatioChartRows = ratioChartRows.slice((modalRatioChartPage - 1) * 10, modalRatioChartPage * 10);
+  // Scale = the largest ratio on the page being shown (at least 2).
+  const pageRatioMax = ratioBarMax(paginatedRatioChartRows.map((r) => r.ratio));
+  const modalRatioMax = ratioBarMax(modalRatioChartRows.map((r) => r.ratio));
   const modalActiveProducts = activeProducts.slice((modalActiveStatusPage - 1) * 10, modalActiveStatusPage * 10);
   const modalNewProducts = newProducts.slice((modalNewStatusPage - 1) * 10, modalNewStatusPage * 10);
   const modalInactiveProducts = inactiveProducts.slice((modalInactiveStatusPage - 1) * 10, modalInactiveStatusPage * 10);
@@ -528,7 +600,7 @@ function ProductPerformance() {
           </div>
 
           <div className="analytics-filter-row">
-            <DatePicker value={selectedRange} onChange={setSelectedRange} mode="range" />
+            <DatePicker value={selectedRange} onChange={handleRangeChange} mode="range" />
             <input
               className="filter-search"
               type="search"
@@ -540,9 +612,18 @@ function ProductPerformance() {
           </div>
 
           <p className="section-note">
-            Demand level per product — tomorrow, Jun 25. Bar shows tomorrow's forecast.
+            Demand level per product{demandDateLabel ? ` — ${demandDateLabel}` : ""}. The bar shows the forecast.
             Colored zones show what's normal vs. above normal for each product.
           </p>
+
+          {!isLoading && demandRows.length === 0 && (
+            <EmptyState
+              title="No forecast in this date range"
+              message="No sales in this date range, so there is nothing to classify. Forecasts run every day at 9:00 AM."
+              actionLabel="Last 7 days"
+              onAction={applyLast7Days}
+            />
+          )}
 
           <div className="demand-bar-chart">
             {paginatedDemandChartRows.map((row) => (
@@ -621,7 +702,7 @@ function ProductPerformance() {
           </div>
 
           <div className="analytics-filter-row">
-            <DatePicker value={selectedRange} onChange={setSelectedRange} mode="range" />
+            <DatePicker value={selectedRange} onChange={handleRangeChange} mode="range" />
             <input
               className="filter-search"
               type="search"
@@ -634,7 +715,7 @@ function ProductPerformance() {
               type="button"
               className="filter-pill"
               onClick={applyLast7Days}
-              title="Set the analysis range to the last 7 days"
+              title="The 7 days ending on your latest uploaded sales"
             >
               Last 7 Days <FiChevronDown size={14} />
             </button>
@@ -646,9 +727,22 @@ function ProductPerformance() {
             selling below average.
           </p>
 
+          {ratioAsOf && (
+            <p className="section-note">Ratio as of {fromYmd(ratioAsOf).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })} (latest forecast).</p>
+          )}
+
+          {!isLoading && !hasSalesInRange && (
+            <EmptyState
+              title="No sales in this date range"
+              message="No sales in this date range. Pick another range, or go back to the last 7 days with sales."
+              actionLabel="Last 7 days"
+              onAction={applyLast7Days}
+            />
+          )}
+
           <div className="ratio-bar-chart">
             {paginatedRatioChartRows.map((row) => (
-              <RatioBar key={row.product} label={row.product} ratio={row.ratio} />
+              <RatioBar key={row.product} label={row.product} ratio={row.ratio} maxRatio={pageRatioMax} />
             ))}
             <div className="ratio-bar-axis">
               <span>← Below Average</span>
@@ -683,8 +777,8 @@ function ProductPerformance() {
                     <td data-label="Product">{row.product}</td>
                     <td data-label="Quantity Sold">{row.qtySold}</td>
                     <td data-label="Revenue">{row.revenue}</td>
-                    <td data-label="Performance Ratio" className={row.ratio >= 1 ? "value--success" : "value--error"}>
-                      {row.ratio.toFixed(2)} {row.ratio >= 1 ? "▲" : "▼"}
+                    <td data-label="Performance Ratio" className={ratioClass(row.ratio)}>
+                      {ratioText(row.ratio)}
                     </td>
                     <td data-label="Action Signal" className="action-signal">{row.actionSignal}</td>
                   </tr>
@@ -919,7 +1013,7 @@ function ProductPerformance() {
       >
         <div className="ratio-bar-chart">
           {modalRatioChartRows.map((row) => (
-            <RatioBar key={row.product} label={row.product} ratio={row.ratio} />
+            <RatioBar key={row.product} label={row.product} ratio={row.ratio} maxRatio={modalRatioMax} />
           ))}
           <div className="ratio-bar-axis">
             <span>← Below Average</span>
@@ -929,7 +1023,7 @@ function ProductPerformance() {
         </div>
         <Pagination
           currentPage={modalRatioChartPage}
-          totalPages={Math.max(1, Math.ceil(performanceRows.length / 10))}
+          totalPages={Math.max(1, Math.ceil(ratioChartRows.length / 10))}
           onPageChange={setModalRatioChartPage}
         />
         <div className="chart-legend">
@@ -950,7 +1044,7 @@ function ProductPerformance() {
                   <td>{row.product}</td>
                   <td>{row.qtySold}</td>
                   <td>{row.revenue}</td>
-                  <td className={row.ratio >= 1 ? "value--success" : "value--error"}>{row.ratio.toFixed(2)} {row.ratio >= 1 ? "▲" : "▼"}</td>
+                  <td className={ratioClass(row.ratio)}>{ratioText(row.ratio)}</td>
                   <td className="action-signal">{row.actionSignal}</td>
                 </tr>
               ))}

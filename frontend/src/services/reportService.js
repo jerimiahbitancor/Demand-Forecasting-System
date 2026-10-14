@@ -8,6 +8,7 @@ import jsPDF from 'jspdf';
 import autoTable from 'jspdf-autotable';
 import * as XLSX from 'xlsx';
 import { getStoredBusinessLogo } from '../context/BusinessProfileContext';
+import { formatStockQty } from '../utils/formatStockQty.js';
 
 // ---------------------------------------------------------------------
 // Palette — pulled directly from the app's CSS variables so the PDF
@@ -342,12 +343,12 @@ export async function buildProductPerformancePDF({
   topPerformers.forEach((row, i) => {
     const rowY = listTop + 8 + i * 6;
     doc.text(row.product, PAGE_MARGIN, rowY);
-    doc.text(row.ratio.toFixed(2), PAGE_MARGIN + halfWidth, rowY, { align: 'right' });
+    doc.text(row.ratio == null ? '—' : Number(row.ratio).toFixed(2), PAGE_MARGIN + halfWidth, rowY, { align: 'right' });
   });
   needsReview.forEach((row, i) => {
     const rowY = listTop + 8 + i * 6;
     doc.text(row.product, PAGE_MARGIN + halfWidth + 6, rowY);
-    doc.text(row.ratio.toFixed(2), PAGE_MARGIN + CONTENT_WIDTH, rowY, { align: 'right' });
+    doc.text(row.ratio == null ? '—' : Number(row.ratio).toFixed(2), PAGE_MARGIN + CONTENT_WIDTH, rowY, { align: 'right' });
   });
 
   y = listTop + 8 + Math.max(topPerformers.length, needsReview.length) * 6 + 6;
@@ -589,7 +590,8 @@ export async function buildGroceryListPDF({
       body: items.map((item) => [
         '',
         item.name,
-        item.toBuy?.toFixed(2) ?? '—',
+        // Stock amounts: 3 decimals (whole number for count units).
+        formatStockQty(item.toBuy, item.unit),
         item.unit,
         `${peso}${item.marketPrice}/${item.unit}`,
         '',

@@ -82,6 +82,8 @@ function createFakeSupabase(seed = {}, options = {}) {
       lte(c, v) { st.filters.push((r) => r[c] != null && r[c] <= v); return b; },
       lt(c, v) { st.filters.push((r) => r[c] != null && r[c] < v); return b; },
       is(c, v) { st.filters.push((r) => (r[c] ?? null) === v); return b; },
+      // Only the form the code uses: .not(col, 'is', null).
+      not(c, op, v) { if (op === 'is') st.filters.push((r) => (r[c] ?? null) !== v); return b; },
       order(c, o = {}) { st.orders.push({ c, asc: o.ascending !== false }); return b; },
       limit(n) { st.limit = n; return b; },
       range(f, t) { st.range = [f, t]; return b; },

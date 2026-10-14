@@ -3,7 +3,7 @@ import { useState, useEffect, useMemo, useCallback } from "react";
 import axios from "axios";
 import toast from "react-hot-toast";
 import Swal from '../../../utils/swal';
-import { FiChevronDown, FiCalendar, FiInfo, FiZap, FiExternalLink } from "react-icons/fi";
+import { FiChevronDown, FiCalendar, FiInfo, FiExternalLink } from "react-icons/fi";
 import GenerateReportModal from "../../components/Reports/GenerateReportModal.jsx";
 import { buildSalesForecastPDF, generateExcel } from "./../../../services/reportService.js";
 import { logAuditEvent, formatAuditDateRange } from "../../../services/auditClient.js";
@@ -14,6 +14,7 @@ import Tippy from '@tippyjs/react';
 import 'tippy.js/dist/tippy.css';
 import 'tippy.js/animations/scale.css';
 import InfoBanner from "./shared/InfoBanner.jsx";
+import EmptyState from "./shared/EmptyState.jsx";
 import "./shared/InfoBanner.css";
 import "./Forecasting.css";
 import { authService } from "../../../services/authService.js";
@@ -49,18 +50,25 @@ function shortDayLabel(dateStr) {
 // reusing whatever range happens to be loaded on the page) — module-scope
 // so both call sites use the exact same transformation.
 function buildPredictionSet(predictionRows, revenueMode) {
-  const rows = predictionRows.map((r) => ({
-    date: formatDisplayDate(r.date),
-    rawDate: r.date,
-    product: r.product,
-    actualQty: r.actualQty ?? "—",
-    forecastQty: r.forecastQty,
-    actualRevenue: revenueMode ? formatPeso(r.actualRevenue) : undefined,
-    forecastRevenue: revenueMode ? formatPeso(r.forecastRevenue) : undefined,
-    estCost: revenueMode ? formatPeso(r.estCost) : undefined,
-    estGrossProfit: revenueMode ? formatPeso(r.estGrossProfit) : undefined,
-    unit: revenueMode ? undefined : "servings",
-  }));
+  // Price 0 -> "No price" (revenue / gross profit left empty); no recipe ->
+  // "No recipe" for cost. Never ₱0 for a value we do not know.
+  // `hasPrice`/`hasRecipe` are missing on older API responses: treat as known.
+  const rows = predictionRows.map((r) => {
+    const noPrice = r.hasPrice === false;
+    const noRecipe = r.hasRecipe === false;
+    return {
+      date: formatDisplayDate(r.date),
+      rawDate: r.date,
+      product: r.product,
+      actualQty: r.actualQty ?? "—",
+      forecastQty: r.closed ? "Closed" : r.forecastQty,
+      actualRevenue: revenueMode ? (noPrice ? "" : formatPeso(r.actualRevenue)) : undefined,
+      forecastRevenue: revenueMode ? (noPrice ? "No price" : formatPeso(r.forecastRevenue)) : undefined,
+      estCost: revenueMode ? (noRecipe ? "No recipe" : formatPeso(r.estCost)) : undefined,
+      estGrossProfit: revenueMode ? (noPrice || noRecipe ? "" : formatPeso(r.estGrossProfit)) : undefined,
+      unit: revenueMode ? undefined : "servings",
+    };
+  });
 
   const byDate = new Map();
   for (const r of predictionRows) {
@@ -171,13 +179,9 @@ const tooltips = {
       <strong style={{ color: '#FEB161', display: 'block', marginBottom: '6px' }}>
         Model Insights
       </strong>
-      This shows what factors most influence your forecasts — like whether it's a payday, a weekend, or based on recent sales trends. It also shows when your forecast model was last updated.
+      This shows when your forecast model was last trained and when the next forecast runs.
       <br/><br/>
       Forecasts refresh automatically on a schedule (daily and weekly), or you can generate one on demand.
-      <br/><br/>
-      <span style={{ color: '#94a3b8', fontSize: '12px' }}>
-        Feature importance derived from XGBoost gain-based scoring
-      </span>
     </div>
   ),
   
@@ -186,49 +190,14 @@ const tooltips = {
       <strong style={{ color: '#FEB161', display: 'block', marginBottom: '6px' }}>
         Accuracy Over Time
       </strong>
-      Plots the accuracy of each training run, newest last.
+      Plots the accuracy of each training, oldest first, next to what a
+      simple 7-day average scored on the same days.
       <br/><br/>
-      Runs from before the accuracy measure changed are left out rather than
-      drawn as zero, so the line may start later than your first training run.
+      Trainings from before the accuracy measure changed are left out rather
+      than drawn as zero, so the line may start later than your first training.
       <br/><br/>
       <span style={{ color: '#94a3b8', fontSize: '12px' }}>
         Accuracy % = 100% − WMAPE
-      </span>
-    </div>
-  ),
-  
-  featureImportance: (
-    <div style={{ padding: '4px 0', fontSize: '13px', lineHeight: '1.6' }}>
-      <strong style={{ color: '#FEB161', display: 'block', marginBottom: '6px' }}>
-        Feature Importance
-      </strong>
-      Shows which factors most influence your forecasts.
-      <br/><br/>
-      <div style={{ margin: '8px 0' }}>
-        <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '4px' }}>
-          <span>Is payday</span>
-          <span style={{ color: '#22c55e' }}>92%</span>
-        </div>
-        <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '4px' }}>
-          <span>Holiday</span>
-          <span style={{ color: '#22c55e' }}>84%</span>
-        </div>
-        <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '4px' }}>
-          <span>Day of Week</span>
-          <span style={{ color: '#22c55e' }}>76%</span>
-        </div>
-        <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '4px' }}>
-          <span>Sales Lag (7 days)</span>
-          <span style={{ color: '#22c55e' }}>68%</span>
-        </div>
-        <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-          <span>Sales Lag (1 day)</span>
-          <span style={{ color: '#22c55e' }}>45%</span>
-        </div>
-      </div>
-      <br/>
-      <span style={{ color: '#94a3b8', fontSize: '12px' }}>
-        Day of Week has the strongest influence on sales. Paydays (15th and 30th) also significantly boost demand.
       </span>
     </div>
   ),
@@ -237,29 +206,78 @@ const tooltips = {
 // ---------------------------------------------------------------------
 // Chart Components
 // ---------------------------------------------------------------------
-function buildLinePath(values, width, height, min, max) {
-  const stepX = width / (values.length - 1);
-  const range = max - min || 1;
-  return values
-    .map((v, i) => {
-      const x = i * stepX;
-      const y = height - ((v - min) / range) * height;
-      return `${i === 0 ? "M" : "L"}${x.toFixed(1)},${y.toFixed(1)}`;
-    })
-    .join(" ");
+
+// Path through the non-null values; a null breaks the line (a gap), it is
+// never drawn as 0.
+function buildGappedPath(values, xOf, yOf) {
+  let path = "";
+  let penDown = false;
+  values.forEach((v, i) => {
+    if (v === null || v === undefined || Number.isNaN(Number(v))) {
+      penDown = false;
+      return;
+    }
+    path += `${penDown ? "L" : "M"}${xOf(i).toFixed(1)},${yOf(Number(v)).toFixed(1)} `;
+    penDown = true;
+  });
+  return path.trim();
 }
 
-function AccuracyChart({ data }) {
+function shortDate(dateStr) {
+  const d = new Date(`${dateStr}T00:00:00`);
+  return Number.isNaN(d.getTime()) ? dateStr : d.toLocaleDateString("en-US", { month: "short", day: "numeric" });
+}
+
+// K3: fewer than 3 trainings -> two bars (model vs 7-day average) for the
+// latest training; 3 or more -> a line per training, x = training time.
+const ACCURACY_TREND_MIN_TRAININGS = 3;
+
+function AccuracyChart({ history }) {
+  if (!history.length) {
+    return (
+      <EmptyState
+        title="No accuracy yet"
+        message="Accuracy appears here after the first training."
+      />
+    );
+  }
+
+  if (history.length < ACCURACY_TREND_MIN_TRAININGS) {
+    const latest = history[history.length - 1];
+    const bars = [
+      { label: "Forecast", value: latest.accuracy, className: "accuracy-bar-fill--model" },
+      { label: "7-day average", value: latest.baselineAccuracy, className: "accuracy-bar-fill--baseline" },
+    ];
+    return (
+      <div className="accuracy-bars">
+        {latest.trainedAtText && <p className="chart-block-subtitle">Training of {latest.trainedAtText}</p>}
+        {bars.map((bar) => (
+          <div className="accuracy-bar-row" key={bar.label}>
+            <span className="accuracy-bar-label">{bar.label}</span>
+            <div className="accuracy-bar-track">
+              {bar.value != null && (
+                <div className={`accuracy-bar-fill ${bar.className}`} style={{ width: `${Math.max(0, Math.min(100, bar.value))}%` }} />
+              )}
+            </div>
+            <span className="accuracy-bar-value">{bar.value != null ? `${Number(bar.value).toFixed(1)}%` : "—"}</span>
+          </div>
+        ))}
+        <p className="chart-block-subtitle">The trend line appears after 3 or more trainings.</p>
+      </div>
+    );
+  }
+
   const width = 700;
   const height = 180;
-  const min = 60;
+  const padBottom = 20;
+  const plotH = height - padBottom;
+  const all = history.flatMap((h) => [h.accuracy, h.baselineAccuracy]).filter((v) => v != null);
+  const min = Math.max(0, Math.floor((Math.min(...all) - 10) / 10) * 10);
   const max = 100;
-  const linePath = buildLinePath(data, width, height, min, max);
-  const areaPath = `${linePath} L${width},${height} L0,${height} Z`;
-  // The 80% and 90% reference lines are gone: they were the Lewis (1982)
-  // MAPE band boundaries, and accuracy is WMAPE-based now with no
-  // equivalent published bands. Drawing them would imply a standard that
-  // does not exist for this metric.
+  const xOf = (i) => (history.length === 1 ? width / 2 : (i / (history.length - 1)) * width);
+  const yOf = (v) => plotH - ((v - min) / (max - min || 1)) * plotH;
+  const modelPath = buildGappedPath(history.map((h) => h.accuracy), xOf, yOf);
+  const baselinePath = buildGappedPath(history.map((h) => h.baselineAccuracy), xOf, yOf);
 
   return (
     <Tippy
@@ -274,24 +292,42 @@ function AccuracyChart({ data }) {
     >
       <div className="chart-wrapper">
         <svg viewBox={`0 0 ${width} ${height}`} className="accuracy-chart" preserveAspectRatio="none">
-          <path d={areaPath} className="accuracy-chart-area" />
-          <path d={linePath} className="accuracy-chart-line" />
+          <path d={baselinePath} className="accuracy-chart-baseline" fill="none" strokeDasharray="6 4" />
+          <path d={modelPath} className="accuracy-chart-line" fill="none" />
+          {history.map((h, i) => (
+            <text key={h.modelVersion || i} x={xOf(i)} y={height - 4} className="sales-chart-label" textAnchor="middle">
+              {/* "Oct 14, 2026, 4:56 AM" (Manila, from the backend) -> "Oct 14" */}
+              {h.trainedAtText ? h.trainedAtText.split(",")[0] : shortDate(h.date)}
+            </text>
+          ))}
         </svg>
       </div>
     </Tippy>
   );
 }
 
-function LineChart({ points }) {
+// K4: actual = solid line; forecast = dashed line (includes today, so it
+// joins the actual side); closed dates = a gap with a small "Closed" label.
+function LineChart({ points, revenueMode, today }) {
   const width = 700;
   const height = 260;
-  const values = points.flatMap((p) => [p.actual, p.forecast]);
-  const min = 0;
-  const max = Math.max(...values) * 1.1;
+  const padBottom = 20;
+  const plotH = height - padBottom;
+  const actualOf = (p) => (revenueMode ? p.actualRevenue : p.actual);
+  const forecastOf = (p) => {
+    const past = revenueMode ? p.forecastRevenue : p.forecast;
+    const ahead = revenueMode ? p.futureRevenue : p.future;
+    return past ?? ahead ?? null;
+  };
+  const values = points.flatMap((p) => [actualOf(p), forecastOf(p)]).filter((v) => v != null);
+  const max = (values.length ? Math.max(...values) : 1) * 1.1 || 1;
+  const xOf = (i) => (points.length === 1 ? width / 2 : (i / (points.length - 1)) * width);
+  const yOf = (v) => plotH - (v / max) * plotH;
 
-  const actualPath = buildLinePath(points.map((p) => p.actual), width, height, min, max);
-  const forecastPath = buildLinePath(points.map((p) => p.forecast), width, height, min, max);
-  const stepX = width / (points.length - 1);
+  const actualPath = buildGappedPath(points.map(actualOf), xOf, yOf);
+  const forecastPath = buildGappedPath(points.map(forecastOf), xOf, yOf);
+  const labelEvery = Math.max(1, Math.ceil(points.length / 8));
+  const todayIndex = points.findIndex((p) => p.date === today);
 
   return (
     <Tippy
@@ -306,16 +342,52 @@ function LineChart({ points }) {
     >
       <div className="chart-wrapper">
         <svg viewBox={`0 0 ${width} ${height}`} className="sales-chart" preserveAspectRatio="none">
-          <path d={actualPath} className="sales-chart-line-actual" />
-          <path d={forecastPath} className="sales-chart-line-forecast" />
-          {points.map((p, i) => (
-            <text key={p.label} x={i * stepX} y={height - 4} className="sales-chart-label">
-              {p.label}
+          {todayIndex >= 0 && (
+            <line x1={xOf(todayIndex)} x2={xOf(todayIndex)} y1={0} y2={plotH} className="sales-chart-today" />
+          )}
+          <path d={actualPath} className="sales-chart-line-actual" fill="none" />
+          <path d={forecastPath} className="sales-chart-line-forecast" fill="none" strokeDasharray="8 6" />
+          {points.map((p, i) => (p.closed ? (
+            <text key={`closed-${p.date}`} x={xOf(i)} y={plotH - 4} className="sales-chart-closed" textAnchor="middle">
+              Closed
             </text>
-          ))}
+          ) : null))}
+          {points.map((p, i) => (i % labelEvery === 0 || i === todayIndex ? (
+            <text key={p.date} x={xOf(i)} y={height - 4} className="sales-chart-label" textAnchor="middle">
+              {i === todayIndex ? "Today" : shortDate(p.date)}
+            </text>
+          ) : null))}
         </svg>
       </div>
     </Tippy>
+  );
+}
+
+// K2: never an empty cell. Rows with no value show "—" plus why, and
+// "Training records" is hidden when it is not tracked.
+function TrainingInfoList({ info }) {
+  const rows = [
+    { label: "Model status", value: info.modelStatus, className: "value--success" },
+    { label: "Last trained", value: info.lastTrained },
+    info.trainingRecords != null ? { label: "Training records", value: info.trainingRecords } : null,
+    { label: "Active products", value: info.activeProducts },
+    { label: "Latest forecast", value: info.latestForecast },
+    { label: "Next training", value: info.nextTraining },
+    { label: "Next forecast", value: info.nextForecast, className: "value--success" },
+  ].filter(Boolean);
+  return (
+    <div className="training-info">
+      <p className="training-info-title">Training Information</p>
+      <p className="training-info-subtitle">Current model status</p>
+      <dl className="training-info-list">
+        {rows.map((row) => (
+          <div className="training-info-row" key={row.label}>
+            <dt>{row.label}</dt>
+            <dd className={row.className}>{row.value}</dd>
+          </div>
+        ))}
+      </dl>
+    </div>
   );
 }
 
@@ -415,15 +487,12 @@ function Forecasting() {
   // --- Derive the same shapes the JSX below already expects, so the
   // render tree needs minimal changes from the old mock-data version. ---
   const accuracyHistory = useMemo(
-    () => (apiData?.accuracy?.history || []).map((h) => h.accuracy).filter((v) => v !== null),
+    () => (apiData?.accuracy?.history || []).filter((h) => h.accuracy !== null),
     [apiData]
   );
   const latestAccuracy = apiData?.accuracy?.value ?? null;
   // errorRate is WMAPE now: "off by about N% of total sales".
   const errorRate = apiData?.accuracy?.errorRate != null ? Number(apiData.accuracy.errorRate).toFixed(1) : null;
-  const baselineErrorRate = apiData?.accuracy?.baselineErrorRate != null
-    ? Number(apiData.accuracy.baselineErrorRate).toFixed(1)
-    : null;
   const beatsBaseline = apiData?.accuracy?.beatsBaseline ?? null;
   // Two states, not four. The old four came from the Lewis (1982) MAPE
   // bands, which do not apply to WMAPE — "good" is now defined by beating
@@ -438,42 +507,43 @@ function Forecasting() {
     return mae != null ? Number(mae).toFixed(1) : null;
   })();
 
-  // The sentence the owner approved, built from real numbers. No
-  // hardcoded percentages — if a value is missing the clause is dropped
-  // rather than invented.
-  const accuracySentence = (() => {
-    if (latestAccuracy === null || errorRate === null) return null;
-    const missedClause = platesPerDishPerDay
-      ? `, about ${platesPerDishPerDay} ${platesPerDishPerDay === "1.0" ? "plate" : "plates"} per dish per day`
-      : "";
-    const head = `We compared past forecasts with what you actually sold. Overall, forecasts were off by about ${errorRate}% of total sales${missedClause}.`;
-    if (baselineErrorRate === null) {
-      return `${head} No simple-average comparison was recorded for this model.`;
-    }
-    return beatsBaseline
-      ? `${head} A simple 7-day average was off by ${baselineErrorRate}%, so the forecast is doing better than guessing from the average.`
-      : `${head} A simple 7-day average was off by ${baselineErrorRate}%, so the forecast is not yet better than a simple average. It should improve as more sales are uploaded.`;
-  })();
+  // K3 lines, built from real numbers only; a missing value drops its line.
+  const baselineAccuracy = apiData?.accuracy?.baselineValue ?? null;
+  const baselineLine = baselineAccuracy != null
+    ? `A simple 7-day average scored ${Number(baselineAccuracy).toFixed(1)}% on the same days.`
+    : "No 7-day average was recorded for this model.";
+  const maeLine = platesPerDishPerDay
+    ? `On average the forecast was off by about ${platesPerDishPerDay} ${platesPerDishPerDay === "1.0" ? "plate" : "plates"} per product per day.`
+    : null;
+  const standingLabel = beatsBaseline === true
+    ? "Beats the 7-day average"
+    : beatsBaseline === false
+      ? "Data Needs Attention — not yet better than the 7-day average"
+      : "No 7-day average comparison recorded";
+  const ACCURACY_CONTEXT_LINE =
+    "Accuracy is measured on the most recent part of the sales history. Unusual weeks, like store closures, lower this number.";
 
   const predictionRows = apiData?.prediction?.rows || [];
+  const predictionSeries = apiData?.prediction?.series || [];
+  const predictionTotals = apiData?.prediction?.totals || null;
+  const predictionToday = apiData?.prediction?.range?.today || null;
   const salesPrediction = buildPredictionSet(predictionRows, true);
-  const demandPrediction = buildPredictionSet(predictionRows, false);
-
-  const featureImportance = (apiData?.modelInsights?.featureImportance || []).map((f) => ({
-    label: f.label,
-    value: Math.round(f.value * 10) / 10,
-  }));
-  const topFeature = featureImportance[0]?.label;
+  const hasForecastData = predictionRows.length > 0 || predictionSeries.some((p) => p.forecast != null || p.future != null);
 
   const trainingInfoData = apiData?.modelInsights?.trainingInfo;
+  const isTrained = trainingInfoData?.modelStatus === "Trained";
   const trainingInfo = {
     modelStatus: trainingInfoData?.modelStatus || "Not Trained",
-    lastTrained: trainingInfoData?.lastTrained ? formatDisplayDate(trainingInfoData.lastTrained) : "—",
-    latestForecast: trainingInfoData?.latestForecastRun ? formatDisplayDateTime(trainingInfoData.latestForecastRun) : "—",
-    trainingRecords: trainingInfoData?.trainingRecords ?? "Not tracked per run",
-    activeProducts: trainingInfoData ? `${trainingInfoData.activeProducts} menu item${trainingInfoData.activeProducts === 1 ? "" : "s"}` : "—",
-    nextTraining: trainingInfoData?.nextTraining || "—",
-    nextForecast: trainingInfoData?.nextForecastRun ? formatDisplayDateTime(trainingInfoData.nextForecastRun) : "—",
+    lastTrained: trainingInfoData?.lastTrained
+      || (isTrained ? "— time not recorded for this model" : "— not trained yet"),
+    latestForecast: trainingInfoData?.latestForecastRunText
+      || (trainingInfoData?.latestForecastRun ? formatDisplayDateTime(trainingInfoData.latestForecastRun) : "— no forecast has run yet"),
+    // null = not tracked per training: the row is hidden, never blank.
+    trainingRecords: trainingInfoData?.trainingRecords ?? null,
+    activeProducts: trainingInfoData ? `${trainingInfoData.activeProducts} menu item${trainingInfoData.activeProducts === 1 ? "" : "s"}` : "— could not load",
+    nextTraining: trainingInfoData?.nextTraining || "Manual (click Start Training).",
+    nextForecast: trainingInfoData?.nextForecastRunText
+      || (trainingInfoData?.nextForecastRun ? formatDisplayDateTime(trainingInfoData.nextForecastRun) : "Every day at 9:00 AM"),
   };
 
   const availableTables = [
@@ -534,7 +604,6 @@ function Forecasting() {
             rows: [
               {
                 ...trainingInfo,
-                featureImportance: featureImportance.map((item) => `${item.label}: ${item.value}%`).join(" | "),
               },
             ],
           },
@@ -561,7 +630,64 @@ function Forecasting() {
     setIsReportModalOpen(false);
   };
 
-  const chartPoints = mode === "Sales" ? salesPrediction.points : demandPrediction.points;
+  const revenueMode = mode === "Sales";
+
+  // Shared by the panel and the full-view modal.
+  const accuracyBody = (
+    <>
+      <div className="accuracy-headline">
+        <p className={`accuracy-headline-value metric-value--${accuracyCssSuffix}`}>
+          Forecast accuracy: {latestAccuracy?.toFixed(1)}%
+        </p>
+        <p className="accuracy-headline-sub">{baselineLine}</p>
+        {maeLine && <p className="accuracy-headline-sub">{maeLine}</p>}
+        <p className={`metric-caption metric-caption--${accuracyCssSuffix}`}>{standingLabel}</p>
+        <p className="accuracy-headline-note">{ACCURACY_CONTEXT_LINE}</p>
+      </div>
+    </>
+  );
+
+  const predictionChart = hasForecastData || predictionSeries.length > 0 ? (
+    <>
+      <LineChart points={predictionSeries} revenueMode={revenueMode} today={predictionToday} />
+      <div className="chart-legend">
+        <span className="legend-item">
+          <span className="legend-swatch legend-swatch--actual" /> {revenueMode ? "Actual Sales" : "Actual Demand"} (solid)
+        </span>
+        <span className="legend-item">
+          <span className="legend-swatch legend-swatch--forecast" /> {revenueMode ? "Forecasted Sales" : "Forecasted Demand"} (dashed)
+        </span>
+        <span className="legend-item">"Closed" = store closed that day</span>
+      </div>
+    </>
+  ) : null;
+
+  const noForecastEmptyState = (
+    <EmptyState
+      title="No forecast yet"
+      message="No forecast yet. It runs every day at 9:00 AM, or click Generate Forecast."
+      actionLabel={isGeneratingForecast ? undefined : "Generate Forecast"}
+      onAction={handleGenerateForecast}
+    />
+  );
+
+  // K4 totals row: only when the table is not filtered by a search, since
+  // the totals cover every product in the range.
+  const showTotals = predictionTotals && !productQuery.trim() && salesPrediction.rows.length > 0;
+  const totalsFootnote = predictionTotals && (predictionTotals.noPriceCount > 0 || predictionTotals.noRecipeCount > 0)
+    ? `Totals leave out ${predictionTotals.noPriceCount} product(s) with no price and ${predictionTotals.noRecipeCount} with no recipe. Add them in Product Management.`
+    : null;
+  const totalsRow = showTotals ? (
+    <tfoot>
+      <tr className="analytics-table-total">
+        <td colSpan={5}><strong>Total</strong></td>
+        <td data-label="Actual Revenue">{formatPeso(predictionTotals.actualRevenue)}</td>
+        <td data-label="Forecast Revenue">{formatPeso(predictionTotals.forecastRevenue)}</td>
+        <td data-label="Est. Total Cost">{formatPeso(predictionTotals.estCost)}</td>
+        <td data-label="Est. Gross Profit">{formatPeso(predictionTotals.estGrossProfit)}</td>
+      </tr>
+    </tfoot>
+  ) : null;
 
   // Product search filters both the paged table and the full-view modal off a
   // single query, so the two never disagree. Page counters are reset in the
@@ -631,30 +757,7 @@ function Forecasting() {
             </InfoBanner>
           ) : (
             <>
-              <div className="metric-pair">
-                <div className="metric-box">
-                  <p className="metric-label">Forecast Accuracy</p>
-                  <p className={`metric-value metric-value--${accuracyCssSuffix}`}>{latestAccuracy.toFixed(1)}%</p>
-                  <p className={`metric-caption metric-caption--${accuracyCssSuffix}`}>
-                    {beatsBaseline === false
-                      ? "Not yet better than a simple average"
-                      : beatsBaseline === true
-                        ? "Better than a simple 7-day average"
-                        : "No simple-average comparison recorded"}
-                  </p>
-                </div>
-                <div className="metric-box">
-                  <p className="metric-label">A simple 7-day average</p>
-                  <p className={`metric-value metric-value--${accuracyCssSuffix}`}>
-                    {apiData?.accuracy?.baselineValue != null
-                      ? `${Number(apiData.accuracy.baselineValue).toFixed(1)}%`
-                      : "N/A"}
-                  </p>
-                  <p className={`metric-caption metric-caption--${accuracyCssSuffix}`}>
-                    what you'd get without the model
-                  </p>
-                </div>
-              </div>
+              {accuracyBody}
 
               {beatsBaseline === false && (
                 <div className="accuracy-warning-banner">
@@ -672,24 +775,22 @@ function Forecasting() {
                   </div>
                 </div>
               )}
-
-              <InfoBanner variant="info">
-                <strong>Forecast Accuracy: {latestAccuracy.toFixed(1)}%</strong> — {accuracySentence}
-              </InfoBanner>
             </>
           )}
 
           <div className="chart-block">
-            <p className="chart-block-title">Accuracy over time</p>
-            <p className="chart-block-subtitle">Accuracy improves as more data is uploaded</p>
-            <AccuracyChart data={accuracyHistory} />
-            {/* The 80%/90% threshold entries are gone with their lines —
-                they were Lewis (1982) MAPE bands and do not apply to WMAPE. */}
-            <div className="chart-legend">
-              <span className="legend-item">
-                <span className="legend-swatch legend-swatch--success" /> Accuracy %
-              </span>
-            </div>
+            <p className="chart-block-title">Accuracy by training</p>
+            <AccuracyChart history={accuracyHistory} />
+            {accuracyHistory.length >= ACCURACY_TREND_MIN_TRAININGS && (
+              <div className="chart-legend">
+                <span className="legend-item">
+                  <span className="legend-swatch legend-swatch--success" /> Forecast accuracy %
+                </span>
+                <span className="legend-item">
+                  <span className="legend-swatch legend-swatch--baseline" /> 7-day average (dashed)
+                </span>
+              </div>
+            )}
           </div>
         </section>
 
@@ -739,15 +840,7 @@ function Forecasting() {
             </select>
           </div>
 
-          <LineChart points={chartPoints} />
-          <div className="chart-legend">
-            <span className="legend-item">
-              <span className="legend-swatch legend-swatch--actual" /> {mode === "Sales" ? "Actual Sales" : "Actual Demand"}
-            </span>
-            <span className="legend-item">
-              <span className="legend-swatch legend-swatch--forecast" /> {mode === "Sales" ? "Forecasted Sales" : "Forecasted Demand"}
-            </span>
-          </div>
+          {isLoading ? null : !hasForecastData ? noForecastEmptyState : predictionChart}
 
           <div className="analytics-scroll-hint">
             Swipe the table sideways to see every column.
@@ -777,14 +870,14 @@ function Forecasting() {
                 <tr>
                   <td colSpan={9} className="empty-row">
                     {salesPrediction.rows.length === 0
-                      ? "Upload sales data to populate this table."
+                      ? "No forecast yet. It runs every day at 9:00 AM, or click Generate Forecast."
                       : `No products match "${productQuery.trim()}".`}
                   </td>
                 </tr>
               ) : (
                 paginatedSalesRows.map((row, i) => (
                   <tr key={i}>
-                    <td data-label="No.">{i + 1}</td>
+                    <td data-label="No.">{(salesPage - 1) * ROWS_PER_PAGE + i + 1}</td>
                     <td data-label="Date">{row.date}</td>
                     <td data-label="Product">{row.product}</td>
                     <td data-label="Actual Qty.">{row.actualQty}</td>
@@ -797,6 +890,7 @@ function Forecasting() {
                 ))
               )}
             </tbody>
+            {totalsRow}
           </table>
           </div>
           <Pagination
@@ -807,6 +901,7 @@ function Forecasting() {
           <p className="table-footnote">
             Total Cost = Cost of Goods &nbsp;·&nbsp; Est. = Estimated
           </p>
+          {totalsFootnote && <p className="table-footnote">{totalsFootnote}</p>}
         </section>
       </div>
 
@@ -863,83 +958,8 @@ function Forecasting() {
             generated at 9:00 AM instead.
           </InfoBanner>
 
-          <div className="feature-importance">
-            <p className="feature-importance-title">
-              Feature Importance
-              <Tippy
-                content={tooltips.featureImportance}
-                placement="top"
-                animation="scale"
-                duration={200}
-                theme="dark"
-                arrow={true}
-                maxWidth={350}
-                interactive={true}
-              >
-                <span className="info-icon-wrapper">
-                  <FiInfo className="info-icon-small" />
-                </span>
-              </Tippy>
-            </p>
-            <p className="feature-importance-subtitle">
-              What factors influence your forecasts the most?
-            </p>
-            <ul className="feature-list">
-              {featureImportance.length === 0 ? (
-                <li className="feature-row">
-                  <span>Not available yet — appears after the next training run.</span>
-                </li>
-              ) : (
-                featureImportance.map((f) => (
-                  <li key={f.label} className="feature-row">
-                    <span>{f.label}</span>
-                    <span className="feature-value">{f.value}%</span>
-                  </li>
-                ))
-              )}
-            </ul>
-          </div>
 
-          {topFeature && (
-            <InfoBanner variant="tip" icon={<FiZap size={14} />}>
-              {topFeature} has the strongest influence on sales.
-            </InfoBanner>
-          )}
-
-          <div className="training-info">
-            <p className="training-info-title">Training Information</p>
-            <p className="training-info-subtitle">Current model status</p>
-            <dl className="training-info-list">
-              <div className="training-info-row">
-                <dt>Model status</dt>
-                <dd className="value--success">{trainingInfo.modelStatus}</dd>
-              </div>
-              <div className="training-info-row">
-                <dt>Last trained</dt>
-                <dd>{trainingInfo.lastTrained}</dd>
-              </div>
-              <div className="training-info-row">
-                <dt>Training records</dt>
-                <dd>{trainingInfo.trainingRecords}</dd>
-              </div>
-              <div className="training-info-row">
-                <dt>Active products</dt>
-                <dd>{trainingInfo.activeProducts}</dd>
-              </div>
-              <div className="training-info-row">
-                <dt>Latest forecast</dt>
-                <dd>{trainingInfo.latestForecast}</dd>
-              </div>
-              <div className="training-info-row">
-                <dt>Next training</dt>
-                <dd>{trainingInfo.nextTraining}</dd>
-              </div>
-              <div className="training-info-row">
-                <dt>Next forecast</dt>
-                <dd className="value--success">{trainingInfo.nextForecast}</dd>
-              </div>
-            </dl>
-          </div>
+          <TrainingInfoList info={trainingInfo} />
         </section>
       </div>
       {isReportModalOpen && (
@@ -963,48 +983,14 @@ function Forecasting() {
           </InfoBanner>
         ) : (
           <>
-            <div className="metric-pair">
-              <div className="metric-box">
-                <p className="metric-label">Forecast Accuracy</p>
-                <p className={`metric-value metric-value--${accuracyCssSuffix}`}>{latestAccuracy.toFixed(1)}%</p>
-                <p className={`metric-caption metric-caption--${accuracyCssSuffix}`}>
-                  {beatsBaseline === false
-                    ? "Not yet better than a simple average"
-                    : beatsBaseline === true
-                      ? "Better than a simple 7-day average"
-                      : "No simple-average comparison recorded"}
-                </p>
-              </div>
-              <div className="metric-box">
-                <p className="metric-label">A simple 7-day average</p>
-                <p className={`metric-value metric-value--${accuracyCssSuffix}`}>
-                  {apiData?.accuracy?.baselineValue != null
-                    ? `${Number(apiData.accuracy.baselineValue).toFixed(1)}%`
-                    : "N/A"}
-                </p>
-                <p className={`metric-caption metric-caption--${accuracyCssSuffix}`}>
-                  what you'd get without the model
-                </p>
-              </div>
-            </div>
-
-            <InfoBanner variant="info">
-              <strong>Forecast Accuracy: {latestAccuracy.toFixed(1)}%</strong> — {accuracySentence}
-            </InfoBanner>
+            {accuracyBody}
           </>
         )}
 
         <div className="chart-block">
-          <p className="chart-block-title">Accuracy over time</p>
-          <p className="chart-block-subtitle">Accuracy improves as more data is uploaded</p>
-          <AccuracyChart data={accuracyHistory} />
-          <div className="chart-legend">
-            <span className="legend-item">
-              <span className="legend-swatch legend-swatch--success" /> Accuracy %
-            </span>
-          </div>
+          <p className="chart-block-title">Accuracy by training</p>
+          <AccuracyChart history={accuracyHistory} />
         </div>
-        <p className="chart-block-subtitle">Accuracy improves as more sales data is uploaded.</p>
       </ExpandableModal>
 
       {/* Expand: Sales and Demand Prediction */}
@@ -1029,15 +1015,7 @@ function Forecasting() {
           </select>
         </div>
 
-        <LineChart points={chartPoints} />
-        <div className="chart-legend">
-          <span className="legend-item">
-            <span className="legend-swatch legend-swatch--actual" /> {mode === "Sales" ? "Actual Sales" : "Actual Demand"}
-          </span>
-          <span className="legend-item">
-            <span className="legend-swatch legend-swatch--forecast" /> {mode === "Sales" ? "Forecasted Sales" : "Forecasted Demand"}
-          </span>
-        </div>
+        {!hasForecastData ? noForecastEmptyState : predictionChart}
 
         <div
           className="table-scroll"
@@ -1064,7 +1042,7 @@ function Forecasting() {
               <tr>
                 <td colSpan={9} className="empty-row">
                   {salesPrediction.rows.length === 0
-                    ? "Upload sales data to populate this table."
+                    ? "No forecast yet. It runs every day at 9:00 AM, or click Generate Forecast."
                     : `No products match "${productQuery.trim()}".`}
                 </td>
               </tr>
@@ -1084,6 +1062,7 @@ function Forecasting() {
               ))
             )}
           </tbody>
+          {totalsRow}
         </table>
         </div>
         <Pagination
@@ -1091,6 +1070,7 @@ function Forecasting() {
           totalPages={modalSalesTotalPages}
           onPageChange={setModalSalesPage}
         />
+        {totalsFootnote && <p className="table-footnote">{totalsFootnote}</p>}
       </ExpandableModal>
 
       {/* Expand: Model Insights */}
@@ -1110,83 +1090,8 @@ function Forecasting() {
           generated at 9:00 AM instead.
         </InfoBanner>
 
-        <div className="feature-importance">
-          <p className="feature-importance-title">
-            Feature Importance
-            <Tippy
-              content={tooltips.featureImportance}
-              placement="top"
-              animation="scale"
-              duration={200}
-              theme="dark"
-              arrow={true}
-              maxWidth={350}
-              interactive={true}
-            >
-              <span className="info-icon-wrapper">
-                <FiInfo className="info-icon-small" />
-              </span>
-            </Tippy>
-          </p>
-          <p className="feature-importance-subtitle">
-            What factors influence your forecasts the most?
-          </p>
-          <ul className="feature-list">
-            {featureImportance.length === 0 ? (
-              <li className="feature-row">
-                <span>Not available yet — appears after the next training run.</span>
-              </li>
-            ) : (
-              featureImportance.map((f) => (
-                <li key={f.label} className="feature-row">
-                  <span>{f.label}</span>
-                  <span className="feature-value">{f.value}%</span>
-                </li>
-              ))
-            )}
-          </ul>
-        </div>
 
-        {topFeature && (
-          <InfoBanner variant="tip" icon={<FiZap size={14} />}>
-            {topFeature} has the strongest influence on sales.
-          </InfoBanner>
-        )}
-
-        <div className="training-info">
-          <p className="training-info-title">Training Information</p>
-          <p className="training-info-subtitle">Current model status</p>
-          <dl className="training-info-list">
-            <div className="training-info-row">
-              <dt>Model status</dt>
-              <dd className="value--success">{trainingInfo.modelStatus}</dd>
-            </div>
-            <div className="training-info-row">
-              <dt>Last trained</dt>
-              <dd>{trainingInfo.lastTrained}</dd>
-            </div>
-            <div className="training-info-row">
-              <dt>Training records</dt>
-              <dd>{trainingInfo.trainingRecords}</dd>
-            </div>
-            <div className="training-info-row">
-              <dt>Active products</dt>
-              <dd>{trainingInfo.activeProducts}</dd>
-            </div>
-              <div className="training-info-row">
-                <dt>Latest forecast</dt>
-                <dd>{trainingInfo.latestForecast}</dd>
-              </div>
-              <div className="training-info-row">
-                <dt>Next training</dt>
-                <dd>{trainingInfo.nextTraining}</dd>
-              </div>
-              <div className="training-info-row">
-                <dt>Next forecast</dt>
-                <dd className="value--success">{trainingInfo.nextForecast}</dd>
-              </div>
-          </dl>
-        </div>
+        <TrainingInfoList info={trainingInfo} />
       </ExpandableModal>
     </>
   );

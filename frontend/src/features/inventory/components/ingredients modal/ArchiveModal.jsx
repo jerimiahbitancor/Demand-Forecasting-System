@@ -1,6 +1,7 @@
 import { FaArchive, FaTimes, FaBoxes } from "react-icons/fa";
 import InventoryModal from "../InventoryModal";
 import "./ArchiveModal.css";
+import { formatStockQty } from "../../../../utils/formatStockQty.js";
 
 const ArchiveModal = ({ item, isSubmitting, onConfirm, onClose }) => {
   if (!item) return null;
@@ -35,7 +36,7 @@ const ArchiveModal = ({ item, isSubmitting, onConfirm, onClose }) => {
               Current Stock
             </span>
             <span className="archive-info-value">
-              {item.quantity || 0} {item.unit || "kg"}
+              {formatStockQty(item.quantity ?? 0, item.unit)} {item.unit || "kg"}
             </span>
           </div>
 
