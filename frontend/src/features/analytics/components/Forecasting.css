@@ -409,15 +409,3 @@
   border-top: 2px solid #e5dede;
 }
 
-/* ---- K1: forecast driver levels ---- */
-.driver-level {
-  font-size: 12px;
-  font-weight: 600;
-  padding: 2px 10px;
-  border-radius: 999px;
-  white-space: nowrap;
-}
-
-.driver-level--main { background-color: #f6e9e9; color: var(--color-red-primary); }
-.driver-level--some { background-color: #fdf3e7; color: #a15c00; }
-.driver-level--small { background-color: #f1f1f1; color: var(--color-text-light); }

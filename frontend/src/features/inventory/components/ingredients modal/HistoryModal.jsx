@@ -5,6 +5,7 @@ import "tippy.js/dist/tippy.css";
 import "tippy.js/animations/scale.css";
 import InventoryModal from "../InventoryModal";
 import "./HistoryModal.css";
+import { formatStockQty } from "../../../../utils/formatStockQty.js";
 import { buildPageItems, ELLIPSIS } from "../../../../utils/pagination";
 
 const HistoryModal = ({ item, apiClient, onClose }) => {
@@ -91,7 +92,7 @@ const HistoryModal = ({ item, apiClient, onClose }) => {
               </span>
               <br />
               <span className="info-card-value-inline">
-                {item.quantity || 0} {item.unit || "kg"}
+                {formatStockQty(item.quantity ?? 0, item.unit)} {item.unit || "kg"}
               </span>
             </div>
 
@@ -226,9 +227,9 @@ const HistoryModal = ({ item, apiClient, onClose }) => {
                         </span>
                       </td>
                       <td className={quantityChange >= 0 ? 'positive-change' : 'negative-change'}>
-                        {quantityChange >= 0 ? '+' : ''}{quantityChange}
+                        {quantityChange >= 0 ? '+' : ''}{formatStockQty(quantityChange, item.unit)}
                       </td>
-                      <td>{transaction.new_quantity ?? 0} {item.unit || 'pcs'}</td>
+                      <td>{formatStockQty(transaction.new_quantity ?? 0, item.unit)} {item.unit || 'pcs'}</td>
                       <td>{transaction.reason || transaction.notes || 'Inventory update'}</td>
                     </tr>
                     );

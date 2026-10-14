@@ -14,6 +14,7 @@ import 'tippy.js/dist/tippy.css';
 import 'tippy.js/animations/scale.css';
 import InfoBanner from "./shared/InfoBanner.jsx";
 import EmptyState from "./shared/EmptyState.jsx";
+import { ratioBarGeometry, ratioBarMax } from "./shared/ratioBar.js";
 import "./shared/InfoBanner.css";
 import "./ProductPerformance.css";
 import { authService } from "../../../services/authService.js";
@@ -232,14 +233,21 @@ function DemandBar({ label, qty, maxQty, zone }) {
   );
 }
 
-function RatioBar({ label, ratio }) {
-  const min = 0.2;
-  const max = 1.8;
-  const center = 50;
-  const pct = ((ratio - min) / (max - min)) * 100;
-  const isAbove = ratio >= 1.0;
-  const barStart = isAbove ? center : pct;
-  const barWidth = Math.abs(pct - center);
+// Each side of the centre line is half the track; bars never leave it (see
+// shared/ratioBar.js). Green = above average, red = below, same as the legend.
+// The value sits at the end of the bar, inside the track: inside the bar
+// when the bar is wide, just past its end when it is short.
+const RATIO_LABEL_INSIDE_MIN_PCT = 30;
+
+function RatioBar({ label, ratio, maxRatio }) {
+  const geometry = ratioBarGeometry(ratio, maxRatio);
+  if (!geometry) return null;
+  const { isAbove, leftPct, widthPct } = geometry;
+  const inside = widthPct >= RATIO_LABEL_INSIDE_MIN_PCT;
+  const endPct = isAbove ? leftPct + widthPct : leftPct; // outer end of the bar
+  const valueStyle = isAbove
+    ? (inside ? { right: `${100 - endPct}%` } : { left: `${endPct}%` })
+    : (inside ? { left: `${endPct}%` } : { right: `${100 - endPct}%` });
 
   return (
     <div className="ratio-bar-row">
@@ -248,8 +256,14 @@ function RatioBar({ label, ratio }) {
         <div className="ratio-bar-center-line" />
         <div
           className={`ratio-bar-fill ${isAbove ? "ratio-bar-fill--above" : "ratio-bar-fill--below"}`}
-          style={{ left: `${barStart}%`, width: `${barWidth}%` }}
+          style={{ left: `${leftPct}%`, width: `${widthPct}%` }}
         />
+        <span
+          className={`ratio-bar-value ${inside ? "ratio-bar-value--inside" : "ratio-bar-value--outside"}`}
+          style={valueStyle}
+        >
+          {Number(ratio).toFixed(2)} ×
+        </span>
       </div>
     </div>
   );
@@ -431,7 +445,8 @@ function ProductPerformance() {
     }
 
     const topPerformers = reportPerformanceRows.filter((r) => r.ratio >= 1).slice(0, 2);
-    const needsReview = reportPerformanceRows.filter((r) => r.ratio < 1).slice(0, 2);
+    // null = no ratio yet (null < 1 is true in JS, so check it first).
+    const needsReview = reportPerformanceRows.filter((r) => r.ratio !== null && r.ratio < 1).slice(0, 2);
 
     try {
     if (format === "pdf") {
@@ -441,7 +456,7 @@ function ProductPerformance() {
         metrics: [
           { label: "Active Products", value: activeProducts.length, caption: "menu products" },
           { label: "High Demand", value: reportDemandRows.filter(r => r.demandLevel === "High Demand").length, caption: "products" },
-          { label: "Below Average", value: reportPerformanceRows.filter(r => r.ratio < 1).length, valueColor: [15, 153, 24], caption: "products" },
+          { label: "Below Average", value: reportPerformanceRows.filter(r => r.ratio !== null && r.ratio < 1).length, valueColor: [15, 153, 24], caption: "products" },
           { label: "Not Enough Data", value: newProducts.length, caption: "product" },
         ],
         statusBullets: [
@@ -542,6 +557,9 @@ function ProductPerformance() {
   const modalRatioRows = filteredPerformanceRows.slice((modalRatioPage - 1) * 10, modalRatioPage * 10);
   const modalDemandChartRows = demandRows.slice((modalDemandChartPage - 1) * 10, modalDemandChartPage * 10);
   const modalRatioChartRows = ratioChartRows.slice((modalRatioChartPage - 1) * 10, modalRatioChartPage * 10);
+  // Scale = the largest ratio on the page being shown (at least 2).
+  const pageRatioMax = ratioBarMax(paginatedRatioChartRows.map((r) => r.ratio));
+  const modalRatioMax = ratioBarMax(modalRatioChartRows.map((r) => r.ratio));
   const modalActiveProducts = activeProducts.slice((modalActiveStatusPage - 1) * 10, modalActiveStatusPage * 10);
   const modalNewProducts = newProducts.slice((modalNewStatusPage - 1) * 10, modalNewStatusPage * 10);
   const modalInactiveProducts = inactiveProducts.slice((modalInactiveStatusPage - 1) * 10, modalInactiveStatusPage * 10);
@@ -724,7 +742,7 @@ function ProductPerformance() {
 
           <div className="ratio-bar-chart">
             {paginatedRatioChartRows.map((row) => (
-              <RatioBar key={row.product} label={row.product} ratio={row.ratio} />
+              <RatioBar key={row.product} label={row.product} ratio={row.ratio} maxRatio={pageRatioMax} />
             ))}
             <div className="ratio-bar-axis">
               <span>← Below Average</span>
@@ -995,7 +1013,7 @@ function ProductPerformance() {
       >
         <div className="ratio-bar-chart">
           {modalRatioChartRows.map((row) => (
-            <RatioBar key={row.product} label={row.product} ratio={row.ratio} />
+            <RatioBar key={row.product} label={row.product} ratio={row.ratio} maxRatio={modalRatioMax} />
           ))}
           <div className="ratio-bar-axis">
             <span>← Below Average</span>

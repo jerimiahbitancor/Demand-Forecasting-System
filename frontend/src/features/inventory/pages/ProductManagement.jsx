@@ -28,6 +28,7 @@ import 'tippy.js/animations/scale.css';
 import ProductDetailsModal from '../product modals/ProductDetailsModal';
 import ProductRestoreModal from '../product modals/ProductRestoreModal';
 import { buildPageItems, ELLIPSIS } from "../../../utils/pagination";
+import { formatStockQty } from "../../../utils/formatStockQty.js";
 import ProductMergeModal from '../product modals/ProductMergeModal';
 import PossibleDuplicates from '../components/PossibleDuplicates';
 
@@ -1863,7 +1864,7 @@ const ProductManagement = () => {
                                 {item.product_ingredients.map((pi, i) => (
                                   <div key={i} className="product-ingredients-tooltip-row">
                                     <span>{pi.ingredients?.name || 'Unknown'}</span>
-                                    <span>{pi.quantity_per_serving}{pi.unit || pi.ingredients?.unit || ''}</span>
+                                    <span>{Number.isFinite(Number(pi.quantity_per_serving)) && String(pi.quantity_per_serving).trim() !== '' ? formatStockQty(pi.quantity_per_serving, pi.unit || pi.ingredients?.unit) : pi.quantity_per_serving}{pi.unit || pi.ingredients?.unit || ''}</span>
                                   </div>
                                 ))}
                               </div>
@@ -2266,7 +2267,7 @@ const ProductManagement = () => {
                             >
                               <span>{item.name}</span>
                               <span className="ingredient-dropdown-stock">
-                                {item.category} • {item.quantity} {item.unit || 'pcs'} in stock
+                                {item.category} • {formatStockQty(item.quantity ?? 0, item.unit)} {item.unit || 'pcs'} in stock
                               </span>
                             </div>
                           ))}
@@ -2317,7 +2318,7 @@ const ProductManagement = () => {
                       <>
                         <strong>{costPreview.name}:</strong> {costPreview.qty} {costPreview.unit}
                         {costPreview.stockUnit.toLowerCase() !== String(costPreview.unit).toLowerCase()
-                          ? ` = ${costPreview.converted} ${costPreview.stockUnit}`
+                          ? ` = ${formatStockQty(costPreview.converted, costPreview.stockUnit)} ${costPreview.stockUnit}`
                           : ''}
                         {' '}× ₱{Number(costPreview.unitPrice).toFixed(2)}/{costPreview.stockUnit} ≈ <strong>₱{Number(costPreview.cost).toFixed(2)}</strong> per serving
                         {costPreview.gramsPerCup ? ` (density ${costPreview.gramsPerCup} g/cup)` : ''}

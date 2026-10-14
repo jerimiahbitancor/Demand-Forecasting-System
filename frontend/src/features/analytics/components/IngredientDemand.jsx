@@ -14,6 +14,7 @@ import 'tippy.js/dist/tippy.css';
 import 'tippy.js/animations/scale.css';
 import InfoBanner from "./shared/InfoBanner.jsx";
 import EmptyState from "./shared/EmptyState.jsx";
+import { formatStockQty } from "../../../utils/formatStockQty.js";
 import { useNavigate } from "react-router-dom";
 import { authService } from "../../../services/authService.js";
 import "./shared/InfoBanner.css";
@@ -44,7 +45,8 @@ function apiLevelToCssSuffix(level) {
 function buildDemandGrid(apiRows) {
   return (apiRows || []).map((r) => ({
     ingredient: r.ingredient,
-    values: r.values.map((v) => Math.round(v * 100) / 100),
+    values: r.values.map((v) => Number(v) || 0),
+    unit: r.unit || null,
     highDay: r.highDay,
     levels: r.levels,
   }));
@@ -463,9 +465,9 @@ function IngredientDemand() {
         return {
           ingredient: item.name,
           linkedDishes: item.usedIn,
-          baseQty: baseQty.toFixed(2),
-          buffer: (total - baseQty).toFixed(2),
-          total: total.toFixed(2),
+          baseQty: formatStockQty(baseQty, item.unit),
+          buffer: formatStockQty(total - baseQty, item.unit),
+          total: formatStockQty(total, item.unit),
           unit: item.unit,
         };
       });
@@ -500,10 +502,18 @@ function IngredientDemand() {
           sheetName: "Weekly Ingredient Demand",
           rows: reportDemandGrid.map((row) => ({
             ingredient: row.ingredient,
-            ...Object.fromEntries(weekDays.map((d, i) => [d, row.values[i]])),
+            ...Object.fromEntries(weekDays.map((d, i) => [d, formatStockQty(row.values[i], row.unit)])),
           })),
         },
-        daily: { sheetName: "Daily Ingredient Demand", rows: reportDailyIngredients.map((row) => ({ ...row })) },
+        daily: {
+          sheetName: "Daily Ingredient Demand",
+          rows: reportDailyIngredients.map((row) => ({
+            ...row,
+            forecasted: formatStockQty(row.forecasted, row.unit),
+            onStock: formatStockQty(row.onStock, row.unit),
+            toBuy: row.toBuy == null ? "—" : formatStockQty(row.toBuy, row.unit),
+          })),
+        },
       };
 
       generateExcel(
@@ -606,7 +616,7 @@ function IngredientDemand() {
                       <td>{row.ingredient}</td>
                       {row.values.map((v, di) => (
                         <td key={di} className={`heatmap-cell heatmap-cell--${cellLevel(row, di)}`}>
-                          {v}
+                          {formatStockQty(v, row.unit)}
                         </td>
                       ))}
                     </tr>
@@ -685,10 +695,10 @@ function IngredientDemand() {
                   <td data-label="No.">{i + 1}</td>
                   <td data-label="Ingredient">{row.name}</td>
                   <td data-label="Used in">{row.usedIn}</td>
-                  <td data-label="Forecasted Need">{row.forecasted.toFixed(2)}</td>
-                  <td data-label="On Stock">{row.onStock.toFixed(2)}</td>
+                  <td data-label="Forecasted Need">{formatStockQty(row.forecasted, row.unit)}</td>
+                  <td data-label="On Stock">{formatStockQty(row.onStock, row.unit)}</td>
                   <td data-label="Status"><span className={`status-badge status-badge--${row.status.toLowerCase()}`}>{row.status}</span></td>
-                  <td data-label="To Buy">{row.toBuy === null ? <span className="value--muted">{row.status === "Normal" ? "— no order" : "— delay restock"}</span> : row.toBuy.toFixed(2)}</td>
+                  <td data-label="To Buy">{row.toBuy === null ? <span className="value--muted">{row.status === "Normal" ? "— no order" : "— delay restock"}</span> : formatStockQty(row.toBuy, row.unit)}</td>
                   <td data-label="Unit">{row.unit}</td>
                   <td data-label="Market Price">{row.marketPrice === null ? "—" : `₱${row.marketPrice}`}</td>
                   <td data-label="Est. Cost">{row.estCost === null ? "—" : `₱${row.estCost.toLocaleString()}`}</td>
@@ -743,7 +753,7 @@ function IngredientDemand() {
             {groceryPreview.slice(0, 5).map((item) => (
               <li key={item.name} className="grocery-preview-row">
                 <div><p className="grocery-preview-name">{item.name}</p><p className="grocery-preview-sub">Used in: {item.usedIn}</p></div>
-                <div style={{ display:'flex', alignItems:'center', gap:8 }}><span className={`status-badge status-badge--${item.status.toLowerCase()}`}>{item.status}</span><span className="grocery-preview-qty">{item.toBuy?.toFixed(2)} {item.unit}</span></div>
+                <div style={{ display:'flex', alignItems:'center', gap:8 }}><span className={`status-badge status-badge--${item.status.toLowerCase()}`}>{item.status}</span><span className="grocery-preview-qty">{formatStockQty(item.toBuy, item.unit)} {item.unit}</span></div>
               </li>
             ))}
             {groceryPreview.length > 5 && <li className="grocery-preview-more">… and {groceryPreview.length - 5} more items</li>}
@@ -767,7 +777,7 @@ function IngredientDemand() {
           <table className="analytics-table heatmap-table">
             <thead><tr><th>No.</th><th>Ingredient</th>{weekDays.map((day) => <th key={day}>{day}</th>)}</tr></thead>
             <tbody>{filteredDemandGrid.slice((modalWeeklyPage - 1) * 10, modalWeeklyPage * 10).map((row, i) => (
-              <tr key={row.ingredient}><td>{(modalWeeklyPage - 1) * 10 + i + 1}</td><td>{row.ingredient}</td>{row.values.map((value, dayIndex) => <td key={dayIndex} className={`heatmap-cell heatmap-cell--${cellLevel(row, dayIndex)}`}>{value}</td>)}</tr>
+              <tr key={row.ingredient}><td>{(modalWeeklyPage - 1) * 10 + i + 1}</td><td>{row.ingredient}</td>{row.values.map((value, dayIndex) => <td key={dayIndex} className={`heatmap-cell heatmap-cell--${cellLevel(row, dayIndex)}`}>{formatStockQty(value, row.unit)}</td>)}</tr>
             ))}</tbody>
           </table>
         </div>
@@ -784,7 +794,7 @@ function IngredientDemand() {
         <table className="analytics-table">
           <thead><tr><th>No.</th><th>Ingredient</th><th>Used in</th><th>Forecasted Need</th><th>On Stock</th><th>Status</th><th>To Buy</th><th>Unit</th><th>Market Price</th><th>Est. Cost</th></tr></thead>
           <tbody>{filteredDailyIngredients.slice((modalDailyPage - 1) * 10, modalDailyPage * 10).map((row, i) => (
-            <tr key={row.name}><td data-label="No.">{i + 1}</td><td data-label="Ingredient">{row.name}</td><td data-label="Used in">{row.usedIn}</td><td data-label="Forecasted Need">{row.forecasted.toFixed(2)}</td><td data-label="On Stock">{row.onStock.toFixed(2)}</td><td data-label="Status"><span className={`status-badge status-badge--${row.status.toLowerCase()}`}>{row.status}</span></td><td data-label="To Buy">{row.toBuy === null ? <span className="value--muted">{row.status === "Normal" ? "— no order" : "— delay restock"}</span> : row.toBuy.toFixed(2)}</td><td data-label="Unit">{row.unit}</td><td data-label="Market Price">{row.marketPrice === null ? "—" : `₱${row.marketPrice}`}</td><td data-label="Est. Cost">{row.estCost === null ? "—" : `₱${row.estCost.toLocaleString()}`}</td></tr>
+            <tr key={row.name}><td data-label="No.">{i + 1}</td><td data-label="Ingredient">{row.name}</td><td data-label="Used in">{row.usedIn}</td><td data-label="Forecasted Need">{formatStockQty(row.forecasted, row.unit)}</td><td data-label="On Stock">{formatStockQty(row.onStock, row.unit)}</td><td data-label="Status"><span className={`status-badge status-badge--${row.status.toLowerCase()}`}>{row.status}</span></td><td data-label="To Buy">{row.toBuy === null ? <span className="value--muted">{row.status === "Normal" ? "— no order" : "— delay restock"}</span> : formatStockQty(row.toBuy, row.unit)}</td><td data-label="Unit">{row.unit}</td><td data-label="Market Price">{row.marketPrice === null ? "—" : `₱${row.marketPrice}`}</td><td data-label="Est. Cost">{row.estCost === null ? "—" : `₱${row.estCost.toLocaleString()}`}</td></tr>
           ))}</tbody>
         </table>
         </div>
@@ -826,7 +836,7 @@ function IngredientDemand() {
                   {items.map((item) => (
                     <tr key={item.name}>
                       <td data-label="Item">{item.name}</td>
-                      <td data-label="Qty">{item.toBuy?.toFixed(2) ?? "—"}</td>
+                      <td data-label="Qty">{formatStockQty(item.toBuy, item.unit)}</td>
                       <td data-label="Unit">{item.unit}</td>
                       <td data-label="Market Price">{item.marketPrice === null ? "—" : `₱${item.marketPrice}/${item.unit}`}</td>
                       <td data-label="Notes">{item.usedIn}</td>

@@ -1,7 +1,7 @@
 // tests/analyticsHelpers.test.js — run: node --test tests/analyticsHelpers.test.js
 //
-// Pure helpers behind Analytics (K1 drivers, K2 times, K4 series/totals,
-// K5 ratio fallback). No network: the fake Supabase client is installed
+// Pure helpers behind Analytics (K2 times, K4 series/totals, K5 ratio
+// fallback). No network: the fake Supabase client is installed
 // before analyticsService loads.
 const test = require('node:test');
 const assert = require('node:assert/strict');
@@ -47,41 +47,6 @@ test('K2: next training = Manila training date + RETRAIN_RECOMMENDED_DAYS', () =
 test('K2: formatManilaDateTime for forecast run times', () => {
   assert.equal(svc.formatManilaDateTime('2026-10-14T01:00:00.000Z'), 'Oct 14, 2026, 9:00 AM');
   assert.equal(svc.formatManilaDateTime(null), null);
-});
-
-// ------------------------------------------------------------- K1 drivers
-test('K1: groups sum shares, levels by threshold, sorted, zero groups hidden', () => {
-  const groups = svc.groupForecastDrivers({
-    rolling_14: 0.48, rolling_7: 0.1, lag_1: 0.05, same_dow_last_open: 0.03, // 0.66
-    dow: 0.1, is_weekend: 0.05,                                             // 0.15
-    is_payday: 0.04, is_holiday: 0.0,                                       // 0.04
-    days_since_last_open: 0.03,                                             // 0.03
-    month: 0.07, day: 0.05,                                                 // 0.12
-    product_id: 0,                                                          // hidden
-  });
-  assert.deepEqual(groups.map((g) => g.label), [
-    'Recent sales (last 1-2 weeks)', 'Day of the week', 'Time of year',
-    'Paydays and holidays', 'Store closures',
-  ]);
-  assert.deepEqual(groups.map((g) => g.level), [
-    'Main factor', 'Some effect', 'Some effect', 'Small effect', 'Small effect',
-  ]);
-  assert.ok(Math.abs(groups[0].share - 0.66) < 1e-9);
-});
-
-test('K1: percentages (sum 100) give the same groups as fractions', () => {
-  const a = svc.groupForecastDrivers({ rolling_7: 0.6, dow: 0.4 });
-  const b = svc.groupForecastDrivers({ rolling_7: 60, dow: 40 });
-  assert.deepEqual(a.map((g) => [g.label, g.level]), b.map((g) => [g.label, g.level]));
-});
-
-test('K1: level thresholds and empty input', () => {
-  assert.equal(svc.forecastDriverLevel(0.5), 'Main factor');
-  assert.equal(svc.forecastDriverLevel(0.1), 'Some effect');
-  assert.equal(svc.forecastDriverLevel(0.0001), 'Small effect');
-  assert.equal(svc.forecastDriverLevel(0), null);
-  assert.equal(svc.groupForecastDrivers(null), null);
-  assert.equal(svc.groupForecastDrivers({}), null);
 });
 
 // -------------------------------------------------------------- K4 series
@@ -222,4 +187,28 @@ test('K5: no forecasts at all -> empty, source none', async () => {
   });
   assert.equal(loaded.source, 'none');
   assert.deepEqual(loaded.rows, []);
+});
+
+// -------------------------------------------------------- L6 weekly units
+test('L6: weekly ingredient rows carry the ingredient record unit', async () => {
+  const egg = { id: 10, name: 'Egg', category: 'Dairy', unit: 'pcs', price: 8, quantity: 36 };
+  const rice = { id: 11, name: 'Rice', category: 'Grains', unit: 'kg', price: 50, quantity: 4.0999999999 };
+  fake.reset({
+    products: [{ id: 1, name: 'Porksilog', price: 120, status: 'active' }],
+    product_ingredients: [
+      // Recipe in grams; the stock unit (kg) is what the row must report.
+      { product_id: 1, unit: 'g', quantity_per_serving: 200, ingredients: rice },
+      { product_id: 1, unit: 'pcs', quantity_per_serving: 1, ingredients: egg },
+    ],
+    forecasts: [
+      { product_id: 1, forecast_date: '2026-10-12', predicted_quantity: 10, model_version: 'm' },
+    ],
+    forecast_config: [{ safety_buffer_percentage: 0 }],
+  });
+  const result = await svc.getIngredientDemandAnalytics({ date: '2026-10-12', weekStart: '2026-10-12' });
+  const byName = new Map(result.weekly.rows.map((r) => [r.ingredient, r]));
+  assert.equal(byName.get('Egg').unit, 'pcs');
+  assert.equal(byName.get('Rice').unit, 'kg');
+  assert.equal(byName.get('Egg').values[0], 10);  // 10 plates × 1 pcs
+  assert.ok(Math.abs(byName.get('Rice').values[0] - 2) < 1e-9); // 10 × 200 g = 2 kg
 });

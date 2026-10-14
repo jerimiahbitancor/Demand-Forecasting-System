@@ -115,6 +115,8 @@
   height: 24px;
   background-color: var(--color-bg-light);
   border-radius: 6px;
+  /* Nothing drawn inside a track may spill out of the card. */
+  overflow: hidden;
 }
 
 .ratio-bar-center-line {
@@ -133,8 +135,26 @@
   border-radius: 4px;
 }
 
-.ratio-bar-fill--above { background-color: #e05555; }
-.ratio-bar-fill--below { background-color: var(--color-warning); }
+/* Same colors as the legend squares (.legend-swatch--above / --below):
+   above average = green, below average = red. */
+.ratio-bar-fill--above { background-color: var(--color-success); }
+.ratio-bar-fill--below { background-color: #e05555; }
+
+/* "6.05 ×" at the outer end of the bar, always inside the track. */
+.ratio-bar-value {
+  position: absolute;
+  top: 50%;
+  transform: translateY(-50%);
+  padding: 0 6px;
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 1;
+  white-space: nowrap;
+  pointer-events: none;
+}
+
+.ratio-bar-value--inside { color: #ffffff; }
+.ratio-bar-value--outside { color: var(--color-text-primary); }
 
 .ratio-bar-axis {
   display: flex;

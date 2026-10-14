@@ -1,6 +1,7 @@
 import { FaArchive, FaTimes, FaTrash, FaUndo } from "react-icons/fa";
 import InventoryModal from "../InventoryModal";
 import "./InventoryConfirmationModal.css";
+import { formatStockQty } from "../../../../utils/formatStockQty.js";
 
 const InventoryConfirmationModal = ({
   type,
@@ -62,7 +63,7 @@ const InventoryConfirmationModal = ({
               <strong>Category:</strong> {item.category || "N/A"}
             </p>
             <p>
-              <strong>Quantity:</strong> {item.quantity || 0}{" "}
+              <strong>Quantity:</strong> {formatStockQty(item.quantity ?? 0, item.unit)}{" "}
               {item.unit || "pcs"}
             </p>
           </div>

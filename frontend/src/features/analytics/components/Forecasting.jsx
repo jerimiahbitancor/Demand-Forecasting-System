@@ -179,7 +179,7 @@ const tooltips = {
       <strong style={{ color: '#FEB161', display: 'block', marginBottom: '6px' }}>
         Model Insights
       </strong>
-      This shows what the forecast pays the most attention to — like recent sales, the day of the week, or paydays and holidays. It also shows when your forecast model was last updated.
+      This shows when your forecast model was last trained and when the next forecast runs.
       <br/><br/>
       Forecasts refresh automatically on a schedule (daily and weekly), or you can generate one on demand.
     </div>
@@ -363,39 +363,6 @@ function LineChart({ points, revenueMode, today }) {
   );
 }
 
-// K1: plain-language "what the forecast pays attention to". No percentages
-// and no feature names — the label and a level only.
-function ForecastDrivers({ drivers }) {
-  return (
-    <div className="feature-importance">
-      <p className="feature-importance-title">What the forecast pays attention to</p>
-      {!drivers || drivers.length === 0 ? (
-        <EmptyState
-          title="Not available yet"
-          message="This appears after the next training."
-        />
-      ) : (
-        <>
-          <p className="feature-importance-subtitle">
-            The forecast mostly follows how much each product sold in the last 1-2 weeks,
-            then adjusts for the day of the week and special days.
-          </p>
-          <ul className="feature-list">
-            {drivers.map((d) => (
-              <li key={d.key} className="feature-row">
-                <span>{d.label}</span>
-                <span className={`driver-level driver-level--${d.level === "Main factor" ? "main" : d.level === "Some effect" ? "some" : "small"}`}>
-                  {d.level}
-                </span>
-              </li>
-            ))}
-          </ul>
-        </>
-      )}
-    </div>
-  );
-}
-
 // K2: never an empty cell. Rows with no value show "—" plus why, and
 // "Training records" is hidden when it is not tracked.
 function TrainingInfoList({ info }) {
@@ -563,10 +530,6 @@ function Forecasting() {
   const salesPrediction = buildPredictionSet(predictionRows, true);
   const hasForecastData = predictionRows.length > 0 || predictionSeries.some((p) => p.forecast != null || p.future != null);
 
-  // K1: grouped plain-language drivers. The raw featureImportance stays in
-  // the API but is not rendered.
-  const forecastDrivers = apiData?.modelInsights?.forecastDrivers || null;
-
   const trainingInfoData = apiData?.modelInsights?.trainingInfo;
   const isTrained = trainingInfoData?.modelStatus === "Trained";
   const trainingInfo = {
@@ -641,7 +604,6 @@ function Forecasting() {
             rows: [
               {
                 ...trainingInfo,
-                forecastPaysAttentionTo: (forecastDrivers || []).map((d) => `${d.label}: ${d.level}`).join(" | "),
               },
             ],
           },
@@ -996,8 +958,6 @@ function Forecasting() {
             generated at 9:00 AM instead.
           </InfoBanner>
 
-          <ForecastDrivers drivers={forecastDrivers} />
-
 
           <TrainingInfoList info={trainingInfo} />
         </section>
@@ -1129,8 +1089,6 @@ function Forecasting() {
           Daily forecasts run every morning at 9:00 AM except Monday. On Monday, a full 7-day weekly forecast is
           generated at 9:00 AM instead.
         </InfoBanner>
-
-        <ForecastDrivers drivers={forecastDrivers} />
 
 
         <TrainingInfoList info={trainingInfo} />

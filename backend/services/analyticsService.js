@@ -188,48 +188,6 @@ function describeNextTraining(metricsRow) {
   return `${manual} Recommended around ${base.add(RETRAIN_RECOMMENDED_DAYS, 'day').format(MANILA_DATE_FORMAT)}.`;
 }
 
-// Plain-language groups for model_metrics.feature_importance. The UI shows
-// the label and level only — no percentages, no feature names.
-// lag_7 is listed for models trained before Oct 1 2026 (it was "sales 7
-// open days back"); newer models never have it.
-const FORECAST_DRIVER_GROUPS = [
-  { key: 'recent_sales', label: 'Recent sales (last 1-2 weeks)', features: ['rolling_7', 'rolling_14', 'lag_1', 'same_dow_last_open', 'lag_7'] },
-  { key: 'day_of_week', label: 'Day of the week', features: ['dow', 'is_weekend'] },
-  { key: 'special_days', label: 'Paydays and holidays', features: ['is_payday', 'is_holiday'] },
-  { key: 'closures', label: 'Store closures', features: ['days_since_last_open'] },
-  { key: 'time_of_year', label: 'Time of year', features: ['month', 'day'] },
-  { key: 'product', label: 'Which product it is', features: ['product_id'] },
-];
-
-function forecastDriverLevel(share) {
-  if (!(share > 0)) return null;
-  if (share >= 0.5) return 'Main factor';
-  if (share >= 0.1) return 'Some effect';
-  return 'Small effect';
-}
-
-// Shares are divided by their own total, so the result is the same whether
-// the row stored fractions (sum 1) or percentages (sum 100).
-function groupForecastDrivers(featureImportance) {
-  if (!featureImportance || typeof featureImportance !== 'object') return null;
-  const values = new Map();
-  let total = 0;
-  for (const [key, raw] of Object.entries(featureImportance)) {
-    const v = Number(raw);
-    if (!Number.isFinite(v) || v <= 0) continue;
-    values.set(key, v);
-    total += v;
-  }
-  if (total <= 0) return null;
-  return FORECAST_DRIVER_GROUPS
-    .map((group) => {
-      const share = group.features.reduce((sum, f) => sum + (values.get(f) || 0), 0) / total;
-      return { key: group.key, label: group.label, share, level: forecastDriverLevel(share) };
-    })
-    .filter((g) => g.level !== null)
-    .sort((a, b) => b.share - a.share);
-}
-
 // A forecast row written for a non-operating day (forecast_service.py
 // writes predicted 0 with model_version "<version>_closed"). Not demand.
 function isClosedForecastRow(row) {
@@ -651,9 +609,9 @@ async function getForecastingAnalytics({ productId, from, to } = {}) {
     },
     prediction: { rows, series, totals, range: { from: rangeFrom, to: rangeTo, today: range.today } },
     modelInsights: {
-      // Raw shares kept for the API; the UI renders forecastDrivers only.
+      // Raw shares kept for the API only; the UI shows no feature
+      // importance in any form (owner decision, Oct 14 2026).
       featureImportance, // null until the NEXT training run after migration 005 — see route-level note
-      forecastDrivers: groupForecastDrivers(latestMetrics?.feature_importance),
       trainingInfo: {
         modelStatus: latestMetrics ? 'Trained' : 'Not Trained',
         modelVersion: latestMetrics?.model_version || null,
@@ -1052,7 +1010,14 @@ async function getIngredientDemandAnalytics({ date, weekStart } = {}) {
     const recipeItems = recipeMap.get(f.product_id) || [];
     for (const item of recipeItems) {
       if (!heatmap.has(item.ingredientId)) {
-        heatmap.set(item.ingredientId, { ingredient: item.name, ingredientId: item.ingredientId, values: [0, 0, 0, 0, 0, 0, 0] });
+        // unit = the ingredient record's own stock unit (recipe amounts are
+        // already converted to it), so the page can format count units.
+        heatmap.set(item.ingredientId, {
+          ingredient: item.name,
+          ingredientId: item.ingredientId,
+          unit: item.unit || null,
+          values: [0, 0, 0, 0, 0, 0, 0],
+        });
       }
       const entry = heatmap.get(item.ingredientId);
       entry.values[dayIndex] += Number(f.predicted_quantity) * item.qtyPerServing * bufferMultiplier;
@@ -1258,8 +1223,6 @@ module.exports = {
   formatManilaDateTime,
   trainingTimeOf,
   describeNextTraining,
-  groupForecastDrivers,
-  forecastDriverLevel,
   isClosedForecastRow,
   buildPredictionSeries,
   summarizePredictionTotals,
