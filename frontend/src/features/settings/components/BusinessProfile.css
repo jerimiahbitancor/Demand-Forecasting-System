@@ -491,3 +491,38 @@
     padding: 4px 12px;
   }
 }
+/* Business email + "Send test reminder email" */
+.business-email-row {
+  display: flex;
+  gap: 8px;
+  align-items: stretch;
+  flex-wrap: wrap;
+}
+
+.business-email-row .form-input {
+  flex: 1 1 220px;
+  min-width: 0;
+}
+
+.test-email-btn {
+  padding: 8px 14px;
+  border-radius: 8px;
+  border: 1.5px solid #7a0101;
+  background: #ffffff;
+  color: #7a0101;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.test-email-btn:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.business-email-hint {
+  margin: 6px 0 0;
+  font-size: 12px;
+  color: #6b7280;
+}

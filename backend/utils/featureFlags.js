@@ -9,6 +9,8 @@
 //                          NODE_ENV=production. A local "npm run dev" points
 //                          at the LIVE database, so it must never send
 //                          reminders or run forecasts by itself.
+//   EMAIL_REMINDERS_ENABLED  email reminder notifications to the business
+//                          email. Default: off; production sets it.
 //   PRODUCT_MERGE_ENABLED  POST /api/products/:id/merge. Default: off.
 //                          merge_products() is live in the database since
 //                          Oct 13 2026; merges wait until after the defense.
@@ -30,4 +32,11 @@ function productMergeEnabled(env = process.env) {
   return envFlag(env.PRODUCT_MERGE_ENABLED, false);
 }
 
-module.exports = { envFlag, schedulersEnabled, productMergeEnabled };
+// EMAIL_REMINDERS_ENABLED: also email reminder notifications (upload
+// reminders, stock alerts) to business_profile.business_email. Default
+// off; production sets it. See services/notificationService.js.
+function emailRemindersEnabled(env = process.env) {
+  return envFlag(env.EMAIL_REMINDERS_ENABLED, false);
+}
+
+module.exports = { envFlag, schedulersEnabled, productMergeEnabled, emailRemindersEnabled };
