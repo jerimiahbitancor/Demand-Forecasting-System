@@ -68,7 +68,7 @@ check('groups are Weight, Volume, Count / pieces in that order', JSON.stringify(
 check('every database unit is listed once', listed.length === fixture.units.length && new Set(listed).size === listed.length, `${listed.length} listed`);
 check('no alias is offered as its own choice (cup, kg, tps, pcs, sacks)', !listed.some((n) => ['cup', 'kg', 'tps', 'pcs', 'sacks', 'tbsp'].includes(n)), listed.join(' | '));
 check('weight is small -> large', JSON.stringify(groups[0].units) === JSON.stringify(['Grams (g)', 'Kilograms (kg)', 'Sack']), JSON.stringify(groups[0].units));
-check('volume is small -> large', JSON.stringify(groups[1].units) === JSON.stringify(['Milliliters (mL)', 'Teaspoons (tsp)', 'Tablespoons (tbsp)', 'Scoop', 'Cups (cup)', 'Liters (L)']), JSON.stringify(groups[1].units));
+check('volume is small -> large', JSON.stringify(groups[1].units) === JSON.stringify(['Milliliters (mL)', 'Teaspoons (tsp)', 'Tablespoons (tbsp)', 'Scoop', 'Cups (cup)', 'Pints (pt)', 'Quarts (qt)', 'Liters (L)', 'Gallons (gal)']), JSON.stringify(groups[1].units));
 const withInactive = [...fixture.units, { name: 'Retired', family: 'mass', base_factor: 7, aliases: [], is_active: false }];
 check('inactive units are not offered', !front.groupUnitsForSelect(withInactive).flatMap((g) => g.units).includes('Retired'));
 check('no rows loaded -> built-in cooking units as a fallback', front.groupUnitsForSelect([]).flatMap((g) => g.units).includes('cup'));

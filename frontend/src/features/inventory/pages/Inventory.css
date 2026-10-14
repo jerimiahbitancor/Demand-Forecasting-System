@@ -682,6 +682,11 @@
       gap: 8px;
     }
 
+    /* Wrapped layout drops the inline divider so it doesn't read as a stray rule. */
+    .product-action-buttons > span {
+      display: contents;
+    }
+
     .inventory-action-btn,
     .product-action-btn {
       width: 40px;
