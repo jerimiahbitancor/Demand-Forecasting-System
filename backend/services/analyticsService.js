@@ -431,6 +431,28 @@ if (!map.has(row.product_id)) map.set(row.product_id, []);
   return map;
 }
 
+// ONE rule for "how much of each ingredient do these forecasts need":
+// for every ingredient, SUM forecastQty × qtyPerServing × bufferMultiplier
+// across ALL products that use it. Used by Ingredient Demand (daily table),
+// the inventory status (getIngredientDailyNeeds) and the Dashboard's stock
+// alerts, so the three can never disagree.
+// -> Map ingredientId -> { ingredientId, item, need, productIds:Set }
+function sumIngredientNeeds(forecastRows, recipeMap, bufferMultiplier) {
+  const byIngredient = new Map();
+  for (const f of forecastRows || []) {
+    for (const item of recipeMap.get(f.product_id) || []) {
+      let entry = byIngredient.get(item.ingredientId);
+      if (!entry) {
+        entry = { ingredientId: item.ingredientId, item, need: 0, productIds: new Set() };
+        byIngredient.set(item.ingredientId, entry);
+      }
+      entry.need += Number(f.predicted_quantity) * item.qtyPerServing * bufferMultiplier;
+      entry.productIds.add(f.product_id);
+    }
+  }
+  return byIngredient;
+}
+
 function cogsPerUnit(recipeItems) {
   return (recipeItems || []).reduce((sum, item) => sum + item.qtyPerServing * item.unitCost, 0);
 }
@@ -695,6 +717,9 @@ async function getProductPerformanceAnalytics({ from, to } = {}) {
     .from('product_classifications')
     .select('product_id, classification_date, demand_tier, basis')
     .order('classification_date', { ascending: false })
+    // Tie-break: two runs on the same date -> the newer row (higher id)
+    // comes first, so the "first row per product wins" loop keeps it.
+    .order('id', { ascending: false })
     .order('product_id'));
   if (classError) throw classError;
   const latestClassificationByProduct = new Map();
@@ -954,12 +979,8 @@ async function getIngredientDailyNeeds(date) {
   const recipeMap = await getRecipeMap();
 
   const needs = new Map();
-  for (const f of forecastRows || []) {
-    const items = recipeMap.get(f.product_id) || [];
-    for (const item of items) {
-      const add = Number(f.predicted_quantity) * item.qtyPerServing * bufferMultiplier;
-      needs.set(item.ingredientId, (needs.get(item.ingredientId) || 0) + add);
-    }
+  for (const entry of sumIngredientNeeds(forecastRows, recipeMap, bufferMultiplier).values()) {
+    needs.set(entry.ingredientId, entry.need);
   }
   return needs;
 }
@@ -1045,25 +1066,18 @@ async function getIngredientDemandAnalytics({ date, weekStart } = {}) {
 
   // --- Daily ingredient demand for targetDate ---
   const dayForecasts = (forecastRows || []).filter((f) => f.forecast_date === targetDate);
+  // Same summing rule as the Dashboard's stock alerts (sumIngredientNeeds).
   const dailyByIngredient = new Map();
-  for (const f of dayForecasts) {
-    const recipeItems = recipeMap.get(f.product_id) || [];
-    for (const item of recipeItems) {
-      if (!dailyByIngredient.has(item.ingredientId)) {
-        dailyByIngredient.set(item.ingredientId, {
-          ingredientId: item.ingredientId,
-          name: item.name,
-          category: item.category,
-          unit: item.unit,
-          forecastedNeed: 0,
-          usedIn: new Set(),
-          currentStock: item.currentStock,
-        });
-      }
-      const entry = dailyByIngredient.get(item.ingredientId);
-      entry.forecastedNeed += Number(f.predicted_quantity) * item.qtyPerServing * bufferMultiplier;
-      entry.usedIn.add(f.product_id);
-    }
+  for (const { ingredientId, item, need, productIds } of sumIngredientNeeds(dayForecasts, recipeMap, bufferMultiplier).values()) {
+    dailyByIngredient.set(ingredientId, {
+      ingredientId,
+      name: item.name,
+      category: item.category,
+      unit: item.unit,
+      forecastedNeed: need,
+      usedIn: productIds,
+      currentStock: item.currentStock,
+    });
   }
 
   const productNamesById = new Map();
@@ -1154,10 +1168,26 @@ async function getForecastSummary() {
     return sum + (product ? Number(s.quantity_sold) * Number(product.price) : 0);
   }, 0);
 
+  // Yesterday's forecast at the same prices, so the Dashboard can say
+  // "N% of yesterday's forecast". null when yesterday had no forecast rows.
+  const { data: yesterdayForecasts, error: yesterdayForecastError } = await supabaseAdmin
+    .from('forecasts')
+    .select('product_id, predicted_quantity')
+    .eq('forecast_date', yesterday);
+  if (yesterdayForecastError) throw yesterdayForecastError;
+  const predictedSalesYesterday = (yesterdayForecasts || []).length
+    ? yesterdayForecasts.reduce((sum, f) => {
+        const product = productById.get(f.product_id);
+        return sum + (product ? Number(f.predicted_quantity) * Number(product.price) : 0);
+      }, 0)
+    : null;
+
   const { data: latestMetrics } = await supabaseAdmin
     .from('model_metrics')
     .select('wmape, baseline_wmape, evaluation_date')
     .order('evaluation_date', { ascending: false })
+    // Tie-break: two trainings on the same day -> the newer row wins.
+    .order('id', { ascending: false })
     .limit(1)
     .maybeSingle();
   const accuracy = latestMetrics ? accuracyFromWmape(latestMetrics.wmape) : null;
@@ -1165,22 +1195,14 @@ async function getForecastSummary() {
     ? accuracyStanding(latestMetrics.wmape, latestMetrics.baseline_wmape)
     : null;
 
+  // Ingredient Demand rule: one status per ingredient, from its need SUMMED
+  // across every product that uses it (sumIngredientNeeds). The old code
+  // judged each product-ingredient pair on its own and kept the worst, so
+  // two "Low" dishes sharing rice never added up to "Critical".
   const recipeMap = await getRecipeMap();
-  const forecastByProduct = new Map(todayForecasts.map((f) => [f.product_id, Number(f.predicted_quantity)]));
   const stockCounts = { Critical: 0, Low: 0, Normal: 0, Excess: 0 };
-  const ingredientStatusById = new Map();
-  for (const [productId, recipeItems] of recipeMap.entries()) {
-    const forecastQty = forecastByProduct.get(productId) || 0;
-    for (const item of recipeItems) {
-      const need = forecastQty * item.qtyPerServing * bufferMultiplier;
-      const status = computeStockStatus(item.currentStock, need);
-      const existing = ingredientStatusById.get(item.ingredientId);
-      if (!existing || worseStockStatus(status, existing) === status) {
-        ingredientStatusById.set(item.ingredientId, status);
-      }
-    }
-  }
-  for (const status of ingredientStatusById.values()) {
+  for (const { item, need } of sumIngredientNeeds(todayForecasts, recipeMap, bufferMultiplier).values()) {
+    const status = computeStockStatus(item.currentStock, need);
     if (stockCounts[status] !== undefined) stockCounts[status] += 1;
   }
 
@@ -1193,6 +1215,7 @@ async function getForecastSummary() {
 
   return {
     predictedSalesToday,
+    predictedSalesYesterday,
     actualSalesYesterday,
     forecastAccuracy: {
       value: accuracy,

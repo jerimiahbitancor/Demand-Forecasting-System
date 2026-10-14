@@ -295,6 +295,8 @@ function buildDefaultChecks(deps = {}) {
         client.from('model_metrics')
           .select('model_version, evaluation_date, wmape, baseline_wmape')
           .order('evaluation_date', { ascending: false })
+          // Tie-break: two trainings on the same day -> the newer row wins.
+          .order('id', { ascending: false })
           .limit(1),
         client.from('forecast_runs')
           .select('run_at, run_type, stale_days, last_confirmed_date')

@@ -1,5 +1,5 @@
 // states/FullyOperational.jsx
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { FaArrowUp, FaArrowDown, FaInfoCircle, FaCalendarAlt } from "react-icons/fa";
 import Tippy from "@tippyjs/react";
 import "tippy.js/dist/tippy.css";
@@ -20,6 +20,11 @@ import {
 import Swal from '../../../utils/swal';
 import axios from 'axios';
 import Navbar from "../../components/Navbar/Navbar";
+import DashboardNotices from "../components/DashboardNotices.jsx";
+import { formatStockQty } from "../../../utils/formatStockQty.js";
+import {
+  chartRange, toChartRows, pickBestSellers, pickIngredients, statusBadgeClass, shortDateLabel,
+} from "../utils/dashboardPanels.js";
 import "../pages/Dashboard.css";
 
 const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:5000/api';
@@ -40,7 +45,10 @@ const NOT_AVAILABLE_STYLE = {
 };
 const NOT_AVAILABLE_TEXT_STYLE = { color: '#6b7280', fontSize: 13, margin: '8px 0', lineHeight: 1.5 };
 
-const FullyOperational = () => {
+// initialState = the /upload/dashboard-state payload. Since Oct 14 2026 a
+// trained model always lands here; its attention/mapping blocks become
+// notice cards above the KPIs (components/DashboardNotices.jsx).
+const FullyOperational = ({ initialState, onRefreshState }) => {
   const [selectedChart, setSelectedChart] = useState("line");
   const [selectedPeriod, setSelectedPeriod] = useState("week");
   const [loading, setLoading] = useState(true);
@@ -54,12 +62,19 @@ const FullyOperational = () => {
     forecastAccuracy: null,
     forecastAccuracyTier: null,
     stockAlert: null,
+    predictedSalesYesterday: null,
     salesTrend: null,
     accuracyTrend: 0,
-    bestSellers: [],
-    ingredients: [],
-    chartData: []
   });
+  // The three panels load on their own (Promise.allSettled), so one failing
+  // panel never blanks the KPIs or the other panels.
+  // status: 'loading' | 'ready' | 'failed'
+  const [panels, setPanels] = useState({
+    chart: { status: 'loading', rows: [] },
+    bestSellers: { status: 'loading', rows: [], range: null },
+    ingredients: { status: 'loading', rows: [], date: null },
+  });
+  const periodEffectRan = useRef(false);
 
   const getAuthToken = () => sessionStorage.getItem('access_token') || localStorage.getItem('token');
 
@@ -92,12 +107,6 @@ const FullyOperational = () => {
     return `Forecast for ${dayOfWeek}`;
   };
 
-  // The demand chart, Top Best Sellers and Top Ingredients to Prepare used
-  // to show invented data (Math.random() and two hardcoded lists). No
-  // endpoint feeds them yet (the Performance Ratio date default is still an
-  // open decision), so they now show an honest "not available yet" panel
-  // instead. Wire them to real data before showing them again.
-
  const fetchDashboardData = async () => {
   try {
     setLoading(true);
@@ -109,14 +118,8 @@ const FullyOperational = () => {
       didOpen: () => Swal.showLoading()
     });
 
-    // GET /api/forecast/summary was purpose-built for this exact KPI row
-    // (see analyticsService.js's getForecastSummary) but the frontend was
-    // never wired to it — predictedSales/actualSales/forecastAccuracy/
-    // stockAlert were all fabricated from Math.random() and unrelated
-    // upload-count arithmetic instead. This call replaces that with the
-    // real numbers. The chart/best-sellers/ingredients panels have no real
-    // source yet and show "not available yet" (see the note above this
-    // function).
+    // GET /api/forecast/summary feeds the KPI row (analyticsService.js
+    // getForecastSummary). The three panels load separately (loadPanels).
     const summaryResponse = await apiClient.get('/forecast/summary');
     Swal.close();
 
@@ -125,16 +128,15 @@ const FullyOperational = () => {
       const predictedSales = Math.round(summary.predictedSalesToday || 0);
       const actualSales = Math.round(summary.actualSalesYesterday || 0);
       const accuracyValue = summary.forecastAccuracy?.value;
-      const forecastAccuracy = accuracyValue != null ? Math.round(accuracyValue) : null;
+      // One decimal, same as the accuracy notice card (64.6%).
+      const forecastAccuracy = accuracyValue != null ? Math.round(accuracyValue * 10) / 10 : null;
+      const predictedSalesYesterday = summary.predictedSalesYesterday != null
+        ? Math.round(summary.predictedSalesYesterday)
+        : null;
       const forecastAccuracyTier = summary.forecastAccuracy?.tier || null;
       const stockAlerts = summary.stockAlerts || { Critical: 0, Low: 0, Normal: 0, Excess: 0 };
       const stockAlert = (stockAlerts.Critical || 0) + (stockAlerts.Low || 0);
 
-      // Chart, best sellers and ingredients: no real source yet (see the
-      // note above fetchDashboardData), so they stay empty.
-      const chartData = [];
-      const bestSellers = [];
-      const ingredients = [];
       const stockBreakdown = [
         { count: stockAlerts.Critical || 0, label: 'Critical', color: '#ef4444' },
         { count: stockAlerts.Low || 0, label: 'Low', color: '#eab308' },
@@ -148,11 +150,10 @@ const FullyOperational = () => {
         forecastAccuracy,
         forecastAccuracyTier,
         stockAlert,
+        predictedSalesYesterday,
+        // Today's forecast vs yesterday's actual sales (labelled on the badge).
         salesTrend: actualSales ? Math.round((predictedSales - actualSales) / actualSales * 100) : null,
         accuracyTrend: 0,
-        bestSellers,
-        ingredients,
-        chartData,
         stockBreakdown
       });
     }
@@ -173,11 +174,9 @@ const FullyOperational = () => {
       forecastAccuracy: null,
       forecastAccuracyTier: null,
       stockAlert: null,
+      predictedSalesYesterday: null,
       salesTrend: null,
       accuracyTrend: 0,
-      bestSellers: [],
-      ingredients: [],
-      chartData: [],
       stockBreakdown: [
         { count: null, label: 'Critical', color: '#ef4444' },
         { count: null, label: 'Low', color: '#eab308' },
@@ -190,8 +189,54 @@ const FullyOperational = () => {
   }
 };
 
+  // The three panels, from the endpoints the Analytics pages use. Every
+  // setState happens after the requests settle.
+  const loadPanels = async (period, includeSidePanels) => {
+    const requests = [
+      apiClient.get('/analytics/forecasting', { params: chartRange(period) }),
+      ...(includeSidePanels
+        ? [apiClient.get('/analytics/product-performance'), apiClient.get('/analytics/ingredient-demand')]
+        : []),
+    ];
+    const [chartRes, perfRes, demandRes] = await Promise.allSettled(requests);
+    const dataOf = (res) => (res && res.status === 'fulfilled' && res.value.data?.success ? res.value.data.data : null);
+
+    setPanels((prev) => {
+      const next = { ...prev };
+      const chartData = dataOf(chartRes);
+      next.chart = chartData
+        ? { status: 'ready', rows: toChartRows(chartData.prediction?.series) }
+        : { status: 'failed', rows: [] };
+      if (includeSidePanels) {
+        const perf = dataOf(perfRes);
+        next.bestSellers = perf
+          ? { status: 'ready', rows: pickBestSellers(perf.performanceRatio?.rows), range: perf.performanceRatio?.range || null }
+          : { status: 'failed', rows: [], range: null };
+        const demand = dataOf(demandRes);
+        next.ingredients = demand
+          ? { status: 'ready', rows: pickIngredients(demand.daily?.rows), date: demand.daily?.date || null }
+          : { status: 'failed', rows: [], date: null };
+      }
+      return next;
+    });
+  };
+
   useEffect(() => {
     fetchDashboardData();
+    loadPanels(selectedPeriod, true);
+  }, []);
+
+  // Period change: reload the chart only (skip the first run; the mount
+  // effect above already loaded it).
+  useEffect(() => {
+    if (!periodEffectRan.current) {
+      periodEffectRan.current = true;
+      return;
+    }
+    loadPanels(selectedPeriod, false);
+    // Runs on a period change only; loadPanels is rebuilt every render and
+    // listing it would reload the chart on every render.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedPeriod]);
 
   const handleChartChange = (e) => setSelectedChart(e.target.value);
@@ -222,24 +267,6 @@ const FullyOperational = () => {
     return 'ratio-low';
   };
 
-  const getStatusClass = (status) => {
-    switch(status) {
-      case 'urgent': return 'urgent';
-      case 'low': return 'warning';
-      case 'ok': return 'ok';
-      default: return 'ok';
-    }
-  };
-
-  const getStatusText = (status) => {
-    switch(status) {
-      case 'urgent': return 'Urgent';
-      case 'low': return 'Low';
-      case 'ok': return 'OK';
-      default: return 'OK';
-    }
-  };
-
   // Get color based on stock alert number (count of Critical + Low
   // ingredients from the real /api/forecast/summary stockAlerts breakdown
   // — a small integer, not the 0-100-ish scale these thresholds were
@@ -255,8 +282,8 @@ const FullyOperational = () => {
   const tooltips = {
     sales: (
       <div style={{ padding: "4px 0", fontSize: "13px", lineHeight: "1.6" }}>
-        This is your estimated total sales for tomorrow.<br /><br />
-        It also tells you if tomorrow is expected to be busier or slower than a typical day.<br /><br />
+        This is your estimated total sales for today.<br /><br />
+        The badge compares it with yesterday's actual sales.<br /><br />
         <strong style={{ color: "#22c55e" }}>✓ If it's higher:</strong> You might need extra staff and ingredients.<br />
         <strong style={{ color: "#ef4444" }}>✓ If it's lower:</strong> You can save money by preparing less.<br /><br />
         <span style={{ color: "#60a5fa", cursor: "pointer", display: "block", textAlign: "center", paddingTop: "8px", borderTop: "1px solid rgba(255,255,255,0.1)" }}>
@@ -504,12 +531,20 @@ const FullyOperational = () => {
           </div>
         </div>
 
+        {/* Things that need attention: shown above the normal dashboard,
+            never instead of it. Renders nothing when all is well. */}
+        <DashboardNotices
+          attention={initialState?.attention}
+          mapping={initialState?.mapping}
+          onRefreshState={onRefreshState}
+        />
+
         {/* Key Metrics Row */}
         <div className="metrics-grid">
-          {/* 1. Predicted Sales Tomorrow */}
+          {/* 1. Predicted Sales Today */}
           <div className="metric-card border-red">
             <div className="card-header">
-              <h3 className="card-title">Predicted Sales Tomorrow</h3>
+              <h3 className="card-title">Predicted Sales Today</h3>
               <Tippy content={tooltips.sales} placement="top" animation="scale" duration={200} theme="dark" arrow={true} delay={[100, 0]} maxWidth={380} interactive={true} trigger="mouseenter focus click">
                 <span className="icon-wrapper"><FaInfoCircle className="card-info" /></span>
               </Tippy>
@@ -517,7 +552,11 @@ const FullyOperational = () => {
             <div className="metric-value-group">
               <span className="metric-value">{dashboardData.predictedSales != null ? formatCurrency(dashboardData.predictedSales) : '—'}</span>
               {dashboardData.salesTrend != null && (
-                <div className={dashboardData.salesTrend >= 0 ? 'badge-success' : 'badge-danger'}>
+                <div
+                  className={dashboardData.salesTrend >= 0 ? 'badge-success' : 'badge-danger'}
+                  title="vs yesterday's actual"
+                  aria-label={`${dashboardData.salesTrend >= 0 ? '+' : ''}${dashboardData.salesTrend}% vs yesterday's actual`}
+                >
                   {dashboardData.salesTrend >= 0 ? <FaArrowUp className="badge-icon" /> : <FaArrowDown className="badge-icon" />}
                   {dashboardData.salesTrend >= 0 ? '+' : ''}{dashboardData.salesTrend}%
                 </div>
@@ -538,9 +577,9 @@ const FullyOperational = () => {
               <span className="metric-value">{dashboardData.actualSales != null ? formatCurrency(dashboardData.actualSales) : '—'}</span>
             </div>
             <p className="metric-subtext">
-              {dashboardData.actualSales != null && dashboardData.predictedSales
-                ? `${Math.round((dashboardData.actualSales / dashboardData.predictedSales) * 100)}% of predicted target`
-                : 'No comparison available yet'}
+              {dashboardData.actualSales != null && dashboardData.predictedSalesYesterday
+                ? `${Math.round((dashboardData.actualSales / dashboardData.predictedSalesYesterday) * 100)}% of yesterday's forecast`
+                : "Yesterday's recorded sales"}
             </p>
           </div>
 
@@ -554,7 +593,7 @@ const FullyOperational = () => {
             </div>
             <div className="metric-value-group">
               <span className="metric-value text-green">
-                {dashboardData.forecastAccuracy != null ? `${dashboardData.forecastAccuracy}%` : '—'}
+                {dashboardData.forecastAccuracy != null ? `${dashboardData.forecastAccuracy.toFixed(1)}%` : '—'}
               </span>
             </div>
             <p className="metric-subtext small">
@@ -640,29 +679,32 @@ const FullyOperational = () => {
             </div>
 
             <div className="chart-container">
-              {dashboardData.chartData.length === 0 ? (
+              {panels.chart.status === 'loading' ? (
+                <div style={NOT_AVAILABLE_STYLE}>Loading the demand chart…</div>
+              ) : panels.chart.rows.length === 0 ? (
                 <div style={NOT_AVAILABLE_STYLE}>
-                  The demand chart is not available yet. It will show your real sales and
-                  forecasts once it is connected to your data.
+                  {panels.chart.status === 'failed'
+                    ? 'The demand chart is not available right now. Please try again later.'
+                    : 'Not available yet. There are no sales or forecasts in this date range.'}
                 </div>
               ) : (
               <ResponsiveContainer width="100%" height={350}>
                 {selectedChart === 'line' ? (
-                  <LineChart data={dashboardData.chartData}>
+                  <LineChart data={panels.chart.rows}>
                     <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" />
                     <XAxis dataKey="day" stroke="#6b7280" />
-                    <YAxis stroke="#6b7280" />
+                    <YAxis stroke="#6b7280" label={{ value: 'Plates', angle: -90, position: 'insideLeft', fill: '#6b7280' }} />
                     <Tooltip content={<CustomTooltip />} />
                     <Legend />
-                    <Line type="monotone" dataKey="actual" stroke="#22c55e" strokeWidth={2} dot={{ r: 4 }} activeDot={{ r: 6 }} name="Actual Sales" />
-                    <Line type="monotone" dataKey="forecast" stroke="#60a5fa" strokeWidth={2} dot={{ r: 4 }} activeDot={{ r: 6 }} name="Forecasted Sales" />
-                    <Line type="monotone" dataKey="future" stroke="#1e40af" strokeWidth={2} strokeDasharray="5 5" dot={{ r: 4 }} activeDot={{ r: 6 }} name="Future Forecast" />
+                    <Line type="monotone" dataKey="actual" stroke="#22c55e" strokeWidth={2} dot={{ r: 4 }} activeDot={{ r: 6 }} name="Actual Sales" connectNulls={false} />
+                    <Line type="monotone" dataKey="forecast" stroke="#60a5fa" strokeWidth={2} dot={{ r: 4 }} activeDot={{ r: 6 }} name="Forecasted Sales" connectNulls={false} />
+                    <Line type="monotone" dataKey="future" stroke="#1e40af" strokeWidth={2} strokeDasharray="5 5" dot={{ r: 4 }} activeDot={{ r: 6 }} name="Future Forecast" connectNulls={false} />
                   </LineChart>
                 ) : selectedChart === 'bar' ? (
-                  <BarChart data={dashboardData.chartData}>
+                  <BarChart data={panels.chart.rows}>
                     <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" />
                     <XAxis dataKey="day" stroke="#6b7280" />
-                    <YAxis stroke="#6b7280" />
+                    <YAxis stroke="#6b7280" label={{ value: 'Plates', angle: -90, position: 'insideLeft', fill: '#6b7280' }} />
                     <Tooltip content={<CustomTooltip />} />
                     <Legend />
                     <Bar dataKey="actual" fill="#22c55e" name="Actual Sales" />
@@ -670,15 +712,15 @@ const FullyOperational = () => {
                     <Bar dataKey="future" fill="#1e40af" name="Future Forecast" />
                   </BarChart>
                 ) : (
-                  <ComposedChart data={dashboardData.chartData}>
+                  <ComposedChart data={panels.chart.rows}>
                     <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" />
                     <XAxis dataKey="day" stroke="#6b7280" />
-                    <YAxis stroke="#6b7280" />
+                    <YAxis stroke="#6b7280" label={{ value: 'Plates', angle: -90, position: 'insideLeft', fill: '#6b7280' }} />
                     <Tooltip content={<CustomTooltip />} />
                     <Legend />
                     <Bar dataKey="actual" fill="#22c55e" name="Actual Sales" />
-                    <Line type="monotone" dataKey="forecast" stroke="#60a5fa" strokeWidth={2} name="Forecasted Sales" />
-                    <Line type="monotone" dataKey="future" stroke="#1e40af" strokeWidth={2} strokeDasharray="5 5" name="Future Forecast" />
+                    <Line type="monotone" dataKey="forecast" stroke="#60a5fa" strokeWidth={2} name="Forecasted Sales" connectNulls={false} />
+                    <Line type="monotone" dataKey="future" stroke="#1e40af" strokeWidth={2} strokeDasharray="5 5" name="Future Forecast" connectNulls={false} />
                   </ComposedChart>
                 )}
               </ResponsiveContainer>
@@ -696,10 +738,21 @@ const FullyOperational = () => {
                 </Tippy>
               </div>
               <div className="scrollable-content">
-                {dashboardData.bestSellers.length === 0 && (
-                  <p style={NOT_AVAILABLE_TEXT_STYLE}>Not available yet. This panel is not connected to your sales data yet.</p>
+                {panels.bestSellers.range && panels.bestSellers.rows.length > 0 && (
+                  <p style={NOT_AVAILABLE_TEXT_STYLE}>
+                    Last 7 uploaded days ({shortDateLabel(panels.bestSellers.range.from)} to {shortDateLabel(panels.bestSellers.range.to)})
+                  </p>
                 )}
-                {dashboardData.bestSellers.map((item, index) => (
+                {panels.bestSellers.rows.length === 0 && (
+                  <p style={NOT_AVAILABLE_TEXT_STYLE}>
+                    {panels.bestSellers.status === 'loading'
+                      ? 'Loading…'
+                      : panels.bestSellers.status === 'failed'
+                        ? 'Not available right now. Please try again later.'
+                        : 'Not available yet. No product has a performance ratio for these days.'}
+                  </p>
+                )}
+                {panels.bestSellers.rows.map((item, index) => (
                   <div key={index} className="best-seller-item">
                     <span className="product-name">{item.name}</span>
                     <div className="product-stats">
@@ -720,16 +773,25 @@ const FullyOperational = () => {
                 </Tippy>
               </div>
               <div className="scrollable-content">
-                {dashboardData.ingredients.length === 0 && (
-                  <p style={NOT_AVAILABLE_TEXT_STYLE}>Not available yet. See Analytics, Ingredient Demand for real figures.</p>
+                {panels.ingredients.date && panels.ingredients.rows.length > 0 && (
+                  <p style={NOT_AVAILABLE_TEXT_STYLE}>For {shortDateLabel(panels.ingredients.date)}</p>
                 )}
-                {dashboardData.ingredients.map((item, index) => (
+                {panels.ingredients.rows.length === 0 && (
+                  <p style={NOT_AVAILABLE_TEXT_STYLE}>
+                    {panels.ingredients.status === 'loading'
+                      ? 'Loading…'
+                      : panels.ingredients.status === 'failed'
+                        ? 'Not available right now. See Analytics, Ingredient Demand.'
+                        : 'Not available yet. No forecast or recipe for today yet.'}
+                  </p>
+                )}
+                {panels.ingredients.rows.map((item, index) => (
                   <div key={index} className="ingredient-item">
                     <span className="ingredient-name">{item.name}</span>
                     <div className="ingredient-stats">
-                      <span className="ingredient-qty">{item.qty}</span>
-                      <span className={`ingredient-status ${getStatusClass(item.status)}`}>
-                        {getStatusText(item.status)}
+                      <span className="ingredient-qty">{formatStockQty(item.need, item.unit)} {item.unit}</span>
+                      <span className={`ingredient-status ${statusBadgeClass(item.status)}`}>
+                        {item.status}
                       </span>
                     </div>
                   </div>
