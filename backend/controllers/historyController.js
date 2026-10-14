@@ -81,13 +81,25 @@ const RESTORE_CHUNK_SIZE = 1000;
 // Flow / history tables that "Reset Historical Data" clears.
 // Catalog and configuration tables are deliberately kept.
 const RESET_TABLES = [
+  'uploads',
+  
   'daily_sales',
+  'daily_sales_modifiers',
   'forecasts',
   'forecast_runs',
   'forecast_cogs',
   'model_metrics',
+  'forecast_config',
   'inventory_transactions',
-  'market_price'
+  'product_categories',
+  'product_classifications',
+  'product_ingredients',
+  'product_aliases',
+  'products',
+  'notifications',
+  'daily_sales_modifiers',
+  'market_price',
+  'business_days'
 ];
 
 const timestampName = (date = new Date()) => {
