@@ -14,6 +14,7 @@ import {
   FaEye,
   FaUndo,
   FaCheck,
+  FaCodeBranch,
 } from "react-icons/fa";
 import axios from 'axios';
 import toast from 'react-hot-toast';
@@ -27,6 +28,9 @@ import 'tippy.js/animations/scale.css';
 import ProductDetailsModal from '../product modals/ProductDetailsModal';
 import ProductRestoreModal from '../product modals/ProductRestoreModal';
 import { buildPageItems, ELLIPSIS } from "../../../utils/pagination";
+import { formatStockQty } from "../../../utils/formatStockQty.js";
+import ProductMergeModal from '../product modals/ProductMergeModal';
+import PossibleDuplicates from '../components/PossibleDuplicates';
 
 const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:5000/api';
 
@@ -133,6 +137,11 @@ const ProductManagement = () => {
   const [isViewMode, setIsViewMode] = useState(false);
   const [isArchiveModalOpen, setIsArchiveModalOpen] = useState(false);
   const [isRestoreModalOpen, setIsRestoreModalOpen] = useState(false);
+  // Merge (owner's v3 flowchart, page 4): { source: {id,name}, targetId }
+  const [mergeRequest, setMergeRequest] = useState(null);
+  const [duplicatesKey, setDuplicatesKey] = useState(0);
+  const [mergeEnabled, setMergeEnabled] = useState(false);
+  const [mergeDisabledMessage, setMergeDisabledMessage] = useState('Merging is turned off for now.');
   const [isProductDetailsModalOpen, setIsProductDetailsModalOpen] = useState(false);
   const [isLowMarginModalOpen, setIsLowMarginModalOpen] = useState(false);
   const [editingId, setEditingId] = useState(null);
@@ -282,6 +291,21 @@ const ProductManagement = () => {
         }
       })
       .catch((error) => console.error('Error fetching food cost threshold:', error));
+    return () => { cancelled = true; };
+  }, [apiClient]);
+
+  // PRODUCT_MERGE_ENABLED (backend, default off): until it is on, the
+  // Merge into... button shows but is disabled. Unknown counts as off.
+  useEffect(() => {
+    let cancelled = false;
+    apiClient.get('/products/settings')
+      .then((response) => {
+        if (cancelled) return;
+        const data = response.data?.data || {};
+        setMergeEnabled(data.mergeEnabled === true);
+        if (data.mergeDisabledMessage) setMergeDisabledMessage(data.mergeDisabledMessage);
+      })
+      .catch(() => { if (!cancelled) setMergeEnabled(false); });
     return () => { cancelled = true; };
   }, [apiClient]);
 
@@ -796,6 +820,16 @@ const ProductManagement = () => {
     setIsRestoreModalOpen(true);
   };
 
+  // After a merge: drop the cached lists, reload, re-check duplicates.
+  const handleMerged = () => {
+    setMergeRequest(null);
+    Object.keys(sessionStorage).forEach((key) => {
+      if (key.startsWith('mapping_')) sessionStorage.removeItem(key);
+    });
+    setDuplicatesKey((k) => k + 1);
+    fetchData(true);
+  };
+
   const confirmRestore = async () => {
     if (!selectedItem) return;
 
@@ -1099,7 +1133,7 @@ const ProductManagement = () => {
   };
 
   // ============ GET STATUS DETAILS ============
-  // Primary status comes from the product lifecycle (Active / Inactive (New) /
+  // Primary status comes from the product lifecycle (Active / Inactive (Not enough data) /
   // Inactive (Discontinued) / Archived). Unmapped and High Food Cost are
   // SECONDARY indicators shown alongside the primary status. They are mutually
   // exclusive: High Food Cost requires a COGS calculation, and COGS requires a
@@ -1112,12 +1146,16 @@ const ProductManagement = () => {
     const isArchived = lifecycleStatus === 'archived' || product?.is_archived === true
       || /^archived\b/i.test(product?.inactive_reason || '');
 
-    const price = product?.price || 0;
+    const price = Number(product?.price) || 0;
+    // Flags (computed here, nothing stored): Unmapped = no recipe;
+    // No Price = price is 0; High Food Cost = recipe cost / price above the
+    // threshold, skipped when there is no price.
+    const isNoPrice = price <= 0;
     const cogs = calculateProductCogs(product);
-    const foodCostPercentage = cogs !== null && price > 0 ? (cogs / price) * 100 : null;
+    const foodCostPercentage = cogs !== null && !isNoPrice ? (cogs / price) * 100 : null;
     const isMapped = hasIngredients;
     const isUnmapped = !isMapped;
-    const isHighFoodCost = isMapped && foodCostPercentage !== null
+    const isHighFoodCost = isMapped && !isNoPrice && foodCostPercentage !== null
       && foodCostPercentage > foodCostThreshold;
 
     const createdDate = new Date(product?.created_at);
@@ -1139,14 +1177,14 @@ const ProductManagement = () => {
       label = 'INACTIVE (DISCONTINUED)';
       className = 'status-discontinued';
       dotColor = '#dc2626';
-      tooltip = 'No sales recorded in the last 28 days. Excluded from active forecasting until sales activity resumes. Historical sales data is retained.';
+      tooltip = 'No sales in the last 28 days the store was open. Excluded from active forecasting until sales activity resumes. Historical sales data is retained.';
     } else if (isNew) {
-      label = 'INACTIVE (NEW)';
+      label = 'INACTIVE (NOT ENOUGH DATA)';
       className = 'status-inactive-new';
       dotColor = '#f59e0b';
       tooltip = hasIngredients
-        ? 'New product with a recipe. COGS and Food Cost Percentage are calculated. Forecasting becomes available after the required 28-day minimum sales history is reached.'
-        : 'New product. Requires a recipe configuration and the 28-day minimum sales history before forecasting is available.';
+        ? 'Fewer than 42 days with sales so far. COGS and Food Cost Percentage are calculated. Forecasting becomes available after 42 days with sales.'
+        : 'Fewer than 42 days with sales so far. Requires a recipe configuration and 42 days with sales before forecasting is available.';
     }
 
     const indicators = [];
@@ -1158,9 +1196,9 @@ const ProductManagement = () => {
           className: 'status-unmapped',
           dotColor: '#9ca3af',
           tooltip: isNew
-            ? 'Requires a recipe configuration and at least 28 days of sales data before forecasting is available.'
+            ? 'Requires a recipe configuration and at least 42 days with sales before forecasting is available.'
             : isDiscontinued
-              ? 'No sales for 28+ days. Requires a recipe configuration. Excluded from forecasting until sales resume.'
+              ? 'No sales in the last 28 open days. Requires a recipe configuration. Excluded from forecasting until sales resume.'
               : 'No ingredient recipe configured. Included in forecasting but excluded from ingredient demand estimation, automatic stock deduction, and COGS/food cost calculation. Add a recipe using the Edit button.',
         });
       } else if (isHighFoodCost) {
@@ -1170,6 +1208,15 @@ const ProductManagement = () => {
           className: 'status-low-margin',
           dotColor: '#ec4899',
           tooltip: `This product's Food Cost Percentage (${foodCostPercentage.toFixed(1)}%) is above the ${foodCostThreshold}% warning threshold. COGS and Food Cost Percentage are calculated from the recipe. Consider reviewing the selling price, recipe, portion size, or ingredient costs.`,
+        });
+      }
+      if (isNoPrice) {
+        indicators.push({
+          key: 'no-price',
+          label: 'NO PRICE',
+          className: 'status-no-price',
+          dotColor: '#b45309',
+          tooltip: 'This product has no selling price (0). Revenue and Food Cost Percentage cannot be calculated until a price is set. Add the price using the Edit button.',
         });
       }
     }
@@ -1331,7 +1378,7 @@ const ProductManagement = () => {
     { label: 'Unmapped', color: '#9ca3af' },
     { label: 'High Food Cost', color: '#ec4899' },
     { label: 'Active', color: '#16a34a' },
-    { label: 'Inactive (New)', color: '#f59e0b' },
+    { label: 'Inactive (Not enough data)', color: '#f59e0b' },
     { label: 'Inactive (Discontinued)', color: '#dc2626' }
   ];
 
@@ -1689,7 +1736,7 @@ const ProductManagement = () => {
           >
             <option value="all">All products</option>
             <option value="active">Active</option>
-            <option value="new">Inactive (New)</option>
+            <option value="new">Inactive (Not enough data)</option>
             <option value="discontinued">Inactive (Discontinued)</option>
             <option value="unmapped">Unmapped</option>
             <option value="high-food-cost">High Food Cost</option>
@@ -1749,6 +1796,11 @@ const ProductManagement = () => {
           </button>
         </div>
       </div>
+
+      <PossibleDuplicates
+        refreshKey={duplicatesKey}
+        onReview={({ source, target }) => setMergeRequest({ source, targetId: target.id })}
+      />
 
       <div className="product-section">
         <div className="product-table-wrapper">
@@ -1812,7 +1864,7 @@ const ProductManagement = () => {
                                 {item.product_ingredients.map((pi, i) => (
                                   <div key={i} className="product-ingredients-tooltip-row">
                                     <span>{pi.ingredients?.name || 'Unknown'}</span>
-                                    <span>{pi.quantity_per_serving}{pi.unit || pi.ingredients?.unit || ''}</span>
+                                    <span>{Number.isFinite(Number(pi.quantity_per_serving)) && String(pi.quantity_per_serving).trim() !== '' ? formatStockQty(pi.quantity_per_serving, pi.unit || pi.ingredients?.unit) : pi.quantity_per_serving}{pi.unit || pi.ingredients?.unit || ''}</span>
                                   </div>
                                 ))}
                               </div>
@@ -1905,13 +1957,27 @@ const ProductManagement = () => {
                               <FaUndo size={14} />
                             </button>
                           ) : (
-                            <button 
-                              className="product-action-btn archive"
-                              onClick={() => handleArchive(item)}
-                              title="Archive"
-                            >
-                              <FaArchive size={14} />
-                            </button>
+                            <>
+                              {/* The span carries the tooltip: browsers show no
+                                  title on a disabled button. */}
+                              <span title={mergeEnabled ? 'Merge into...' : mergeDisabledMessage}>
+                                <button
+                                  className="product-action-btn merge"
+                                  onClick={() => setMergeRequest({ source: { id: item.id, name: item.name }, targetId: null })}
+                                  disabled={!mergeEnabled}
+                                  aria-label={mergeEnabled ? `Merge ${item.name} into another product` : mergeDisabledMessage}
+                                >
+                                  <FaCodeBranch size={14} />
+                                </button>
+                              </span>
+                              <button
+                                className="product-action-btn archive"
+                                onClick={() => handleArchive(item)}
+                                title="Archive"
+                              >
+                                <FaArchive size={14} />
+                              </button>
+                            </>
                           )}
                         </div>
                       </td>
@@ -2201,7 +2267,7 @@ const ProductManagement = () => {
                             >
                               <span>{item.name}</span>
                               <span className="ingredient-dropdown-stock">
-                                {item.category} • {item.quantity} {item.unit || 'pcs'} in stock
+                                {item.category} • {formatStockQty(item.quantity ?? 0, item.unit)} {item.unit || 'pcs'} in stock
                               </span>
                             </div>
                           ))}
@@ -2252,7 +2318,7 @@ const ProductManagement = () => {
                       <>
                         <strong>{costPreview.name}:</strong> {costPreview.qty} {costPreview.unit}
                         {costPreview.stockUnit.toLowerCase() !== String(costPreview.unit).toLowerCase()
-                          ? ` = ${costPreview.converted} ${costPreview.stockUnit}`
+                          ? ` = ${formatStockQty(costPreview.converted, costPreview.stockUnit)} ${costPreview.stockUnit}`
                           : ''}
                         {' '}× ₱{Number(costPreview.unitPrice).toFixed(2)}/{costPreview.stockUnit} ≈ <strong>₱{Number(costPreview.cost).toFixed(2)}</strong> per serving
                         {costPreview.gramsPerCup ? ` (density ${costPreview.gramsPerCup} g/cup)` : ''}
@@ -2433,6 +2499,17 @@ const ProductManagement = () => {
           }}
           onRestore={() => openRestoreModal(selectedItem)}
           onClose={() => setIsProductDetailsModalOpen(false)}
+        />
+      )}
+
+      {mergeRequest && (
+        <ProductMergeModal
+          source={mergeRequest.source}
+          initialTargetId={mergeRequest.targetId}
+          mergeEnabled={mergeEnabled}
+          mergeDisabledMessage={mergeDisabledMessage}
+          onClose={() => setMergeRequest(null)}
+          onMerged={handleMerged}
         />
       )}
 

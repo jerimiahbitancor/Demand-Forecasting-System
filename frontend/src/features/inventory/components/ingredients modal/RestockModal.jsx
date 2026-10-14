@@ -6,6 +6,7 @@ import {
 } from "react-icons/fa";
 import InventoryModal from "../InventoryModal";
 import "./RestockModal.css";
+import { formatStockQty } from "../../../../utils/formatStockQty.js";
 
 const RestockModal = ({
   item,
@@ -63,7 +64,7 @@ const RestockModal = ({
               </span>
               <br />
               <span className="info-card-value-inline">
-                {item.quantity || 0} {item.unit || "kg"}
+                {formatStockQty(item.quantity ?? 0, item.unit)} {item.unit || "kg"}
               </span>
             </div>
 

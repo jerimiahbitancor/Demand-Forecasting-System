@@ -288,7 +288,11 @@
 .product-table td:nth-child(11) { width: 112px; }
 
 .product-table th:nth-child(12),
-.product-table td:nth-child(12) { width: 120px; }
+.product-table td:nth-child(12) {
+  width: 176px;
+  padding-left: 8px;
+  padding-right: 8px;
+}
 
 .product-table tbody tr:hover {
   background: #faf8f7;
@@ -475,6 +479,16 @@
   background: #ec4899;
 }
 
+/* No Price - Amber */
+.product-status-badge.status-no-price {
+  background: #fef3c7;
+  color: #92400e;
+}
+
+.product-status-badge.status-no-price .product-status-dot {
+  background: #b45309;
+}
+
 /* Active - Green */
 .product-status-badge.status-active {
   background: #dcfce7;
@@ -519,9 +533,19 @@
 .product-action-buttons {
 display: flex;
     align-items: center;
-    gap: 4px;
+    gap: 6px;
     flex-wrap: nowrap;
     justify-content: center;
+}
+
+/* The merge button is wrapped in a titled <span>; use it as a visual divider
+   so the row actions read as two groups: [view][edit] | [merge][archive]. */
+.product-action-buttons > span {
+  display: inline-flex;
+  align-items: center;
+  margin-left: 5px;
+  padding-left: 6px;
+  border-left: 1px solid #e2e8f0;
 }
 
 .product-action-btn {
@@ -552,6 +576,20 @@ display: flex;
 .product-action-btn.archive:hover {
   color: #d97706;
   background: #fef3c7;
+}
+
+.product-action-btn:disabled,
+.product-action-btn:disabled:hover {
+  opacity: 0.45;
+  cursor: not-allowed;
+  background: transparent;
+  color: #6b7280;
+  transform: none;
+}
+
+.product-action-btn.merge:hover {
+  color: #8b1538;
+  background: #fdf2f4;
 }
 
 .product-action-btn.restore {
@@ -2447,6 +2485,11 @@ display: flex;
   .product-action-buttons {
     flex-wrap: wrap;
     gap: 8px;
+  }
+
+  /* Wrapped layout drops the inline divider so it doesn't read as a stray rule. */
+  .product-action-buttons > span {
+    display: contents;
   }
 
   .product-action-btn {

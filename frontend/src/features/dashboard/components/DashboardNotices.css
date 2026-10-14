@@ -1,0 +1,21 @@
+/* components/DashboardNotices.css
+   The notice stack reuses the state-kit banner look. `.sk-root` is kept on
+   the wrapper only for its color variables; its full-page frame (min-height,
+   background, fixed attachment) is switched off here. */
+.sk-root.dash-notices {
+  min-height: 0;
+  background: none;
+  background-attachment: initial;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  margin: 0 0 20px;
+}
+
+.sk-root.dash-notices .sk-banner {
+  padding: 16px 20px;
+}
+
+.sk-root.dash-notices .sk-banner-foot {
+  margin-top: 12px;
+}

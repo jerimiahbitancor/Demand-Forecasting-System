@@ -30,6 +30,8 @@ import {
   unpackRun,
   initialRunView,
 } from "../utils/uploadRunState";
+import { mergeUploadSummaries, collectCellErrors } from "../utils/uploadSummary";
+import UploadSummaryReport from "./UploadSummaryReport";
 
 // Runs `worker(item, index)` over `items` in fixed-size batches instead of
 // all at once — firing every file concurrently (e.g. a 284-file historical
@@ -139,6 +141,9 @@ const UploadData = ({
   const [salesUploadedCount, setSalesUploadedCount] = useState(
     () => getStoredUploadStatus('sales')?.uploadedCount || 0
   );
+  // Upload summary of the last sales run (stays until the owner closes it;
+  // the panel itself resets 3 s after a run).
+  const [salesReport, setSalesReport] = useState(null);
 
   // Menu upload state - MULTIPLE FILES
   const [menuFiles, setMenuFiles] = useState(() => getStoredFiles('menu'));
@@ -702,6 +707,7 @@ const UploadData = ({
     salesSubmittingRef.current = true;
     startedUploadHereRef.current = true;
     setRunAlive('sales', true);
+    setSalesReport(null);
 
     try {
       setSalesUploadStatus('loading');
@@ -792,7 +798,9 @@ const UploadData = ({
           // other status (or no response at all) is a genuine error.
           const isDuplicate = err?.response?.data?.duplicate === true || err?.response?.status === 409;
           const message = err?.response?.data?.message || err?.response?.data?.error || err?.message || 'Upload failed';
-          fileOutcomes.set(i, { status: isDuplicate ? 'duplicate' : 'error', message });
+          // 400 "Invalid sales file": the backend lists each bad cell.
+          const cellErrors = err?.response?.status === 400 ? collectCellErrors(file.name, err.response.data) : [];
+          fileOutcomes.set(i, { status: isDuplicate ? 'duplicate' : 'error', message, cellErrors });
           run.failed.set(i, { status: isDuplicate ? 'duplicate' : 'error', message });
           setSalesFailedIndices((prev) => {
             const next = new Map(prev);
@@ -833,6 +841,20 @@ const UploadData = ({
           failedFiles.push({ name: salesFiles[i].name, error, status: outcome?.status || 'error' });
           console.error(`Sales file failed: ${salesFiles[i].name}`, error);
         }
+      });
+
+      // Upload summary (owner's flowchart page 2): one per uploaded file,
+      // merged; plus the per-cell problems of any rejected file.
+      setSalesReport({
+        summary: mergeUploadSummaries(
+          salesResults
+            .filter((result) => result.status === 'fulfilled')
+            .map((result) => result.value?.data?.summary?.uploadSummary)
+            .filter(Boolean)
+        ),
+        cellErrors: [...fileOutcomes.values()].flatMap((outcome) => outcome.cellErrors || []),
+        filesUploaded: uploaded,
+        totalFiles,
       });
 
       if (uploaded === 0 && errorCount === 0 && duplicateCount > 0) {
@@ -1699,6 +1721,8 @@ const UploadData = ({
                     </div>
                   </div>
                 )}
+
+                <UploadSummaryReport report={salesReport} onClose={() => setSalesReport(null)} />
 
                 {/* Action Buttons */}
                 <div className="action-buttons">

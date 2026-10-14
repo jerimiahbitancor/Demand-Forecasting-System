@@ -194,7 +194,13 @@ function request(port, method, urlPath, body) {
   check('rejects a date with sales', !v(['2025-12-24']).ok && /sales/.test(v(['2025-12-24']).errors[0].reason));
   check('rejects a future date', !v(['2026-10-01']).ok && /Future/.test(v(['2026-10-01']).errors[0].reason));
   check('rejects before the first sale', !v(['2025-07-09']).ok && /Outside/.test(v(['2025-07-09']).errors[0].reason));
-  check('rejects after the last sale (past, not future)', !v(['2026-08-01']).ok && /Outside/.test(v(['2026-08-01']).errors[0].reason));
+  // Last sale is 2026-07-09, today 2026-09-30: days after the last sale
+  // up to yesterday are closable ("we were closed yesterday").
+  check('accepts a day after the last sale', v(['2026-08-01']).ok);
+  check('accepts yesterday', v(['2026-09-29']).ok);
+  check('rejects today', !v(['2026-09-30']).ok && /Today/.test(v(['2026-09-30']).errors[0].reason));
+  check('without today, the last sale is still the upper bound', !validateClosableDates(['2026-08-01'], { saleDates: sales }).ok);
+  check('no sales at all -> nothing is closable', !validateClosableDates(['2026-09-29'], { saleDates: [], today }).ok);
   check('rejects a malformed date', !v(['2026-02-30']).ok && !v(['hello']).ok && !v([20251225]).ok);
   check('rejects an empty list', !v([]).ok && !v(undefined).ok);
   check(`rejects more than ${MAX_CLOSE_BATCH} dates`, !v(new Array(MAX_CLOSE_BATCH + 1).fill('2025-12-25')).ok);
@@ -270,6 +276,21 @@ function request(port, method, urlPath, body) {
     check('date becomes confirmed_open', row.status === 'confirmed_open' && row.is_open === true && row.source === 'sales_upload');
     check('reopened list names only the flipped date', JSON.stringify(reopenResult.reopened) === JSON.stringify(['2025-12-25']));
     check('the flip is written to the audit log', flipAudit.length === 1 && flipAudit[0][0] === 'business_day_reopened_by_upload');
+
+    // --- 6. A recent day (after the last sale) can be closed, and a later
+    // upload for it still wins ---
+    console.log('\n[recent day] close yesterday, then its sales file arrives');
+    const closeYesterday = await request(port, 'POST', '/api/business-days/close', { date: '2026-09-29' });
+    check('POST /close for yesterday (after the last sale) -> 200', closeYesterday.status === 200, JSON.stringify(closeYesterday.body));
+    const closedRow = fake.tables.business_days.find((r) => r.business_date === '2026-09-29');
+    check('yesterday is confirmed_closed', closedRow && closedRow.status === 'confirmed_closed');
+    const closeToday = await request(port, 'POST', '/api/business-days/close', { date: '2026-09-30' });
+    check('POST /close for today -> 400', closeToday.status === 400);
+    fake.tables.daily_sales.push(...salesRows(['2026-09-29'], 2));
+    const lateUpload = await service.confirmOpenDates(['2026-09-29']);
+    const reopenedRow = fake.tables.business_days.find((r) => r.business_date === '2026-09-29');
+    check('the later upload flips it to confirmed_open', reopenedRow.status === 'confirmed_open' && reopenedRow.is_open === true && reopenedRow.source === 'sales_upload');
+    check('... and reports it as reopened', JSON.stringify(lateUpload.reopened) === JSON.stringify(['2026-09-29']));
   } finally {
     server.close();
   }

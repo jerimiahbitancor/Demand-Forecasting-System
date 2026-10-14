@@ -222,7 +222,7 @@ function aggregateSalesRecords(records, { productIdByName, keywords = [], upload
 /**
  * Ingredient used by one upload, per ingredient id.
  *
- * For every plate of an active product with a recipe, the full recipe is
+ * For every plate of a deducting product with a recipe, the full recipe is
  * used — except a modifier plate leaves out the ONE ingredient its keyword
  * maps to, and only when that ingredient is in this product's recipe.
  * Worked as "all plates minus the plates without it", per ingredient, so the
@@ -233,15 +233,26 @@ function aggregateSalesRecords(records, { productIdByName, keywords = [], upload
  *
  * perServingFor(recipeRow) returns the per-plate amount in the ingredient's
  * own unit (uploadService passes the recipe-unit conversion).
+ *
+ * deductingProductIds: the products that deduct. Since v3 that is every
+ * product in the file that is not archived (New and Discontinued dishes used
+ * real ingredients too); a product without a recipe simply adds nothing.
+ * `activeProductIds` is the old name, still accepted.
+ *
+ * Returns Map<ingredient_id, Map<sale_date 'YYYY-MM-DD', amount>> — per day,
+ * because each day is checked against the ingredient's last stock count
+ * (shouldDeduct) before anything is taken from stock.
  */
-function computeStockDeductions({
+function computeStockDeductionsByDate({
   dailySalesRows = [],
   modifierRows = [],
   recipeRows = [],
+  deductingProductIds,
   activeProductIds = new Set(),
   ingredientIdByKeyword = new Map(),
   perServingFor,
 }) {
+  const deducting = deductingProductIds || activeProductIds;
   const platesWithoutIngredient = new Map(); // product|date|ingredient -> plates
   for (const modifier of modifierRows) {
     const ingredientId = ingredientIdByKeyword.get(normalizeKeyword(modifier.keyword));
@@ -256,18 +267,110 @@ function computeStockDeductions({
     recipesByProduct.get(recipe.product_id).push(recipe);
   }
 
-  const deductions = new Map();
+  const byIngredient = new Map();
   for (const sale of dailySalesRows) {
-    if (!activeProductIds.has(sale.product_id)) continue;
+    if (!deducting.has(sale.product_id)) continue;
+    const day = String(sale.sale_date).slice(0, 10);
     for (const recipe of recipesByProduct.get(sale.product_id) || []) {
       const without = platesWithoutIngredient.get(`${sale.product_id}|${sale.sale_date}|${recipe.ingredient_id}`) || 0;
       const plates = Math.max(0, Number(sale.quantity_sold) - without);
       const amount = Number(perServingFor(recipe)) * plates;
       if (!Number.isFinite(amount) || amount <= 0) continue;
-      deductions.set(recipe.ingredient_id, (deductions.get(recipe.ingredient_id) || 0) + amount);
+      if (!byIngredient.has(recipe.ingredient_id)) byIngredient.set(recipe.ingredient_id, new Map());
+      const byDay = byIngredient.get(recipe.ingredient_id);
+      byDay.set(day, (byDay.get(day) || 0) + amount);
     }
   }
-  return deductions;
+  return byIngredient;
+}
+
+// Same as computeStockDeductionsByDate, summed over the days:
+// Map<ingredient_id, amount>.
+function computeStockDeductions(args) {
+  const totals = new Map();
+  for (const [ingredientId, byDay] of computeStockDeductionsByDate(args)) {
+    let sum = 0;
+    for (const amount of byDay.values()) sum += amount;
+    totals.set(ingredientId, sum);
+  }
+  return totals;
+}
+
+// ---------------------------------------------------------------------------
+// Stock counts and shortfalls (owner's v3 flowchart, page 2).
+// All times are Asia/Manila, UTC+8 with no daylight saving, so a fixed
+// "+08:00" offset is exact.
+// ---------------------------------------------------------------------------
+
+const MANILA_OFFSET = '+08:00';
+
+const toTime = (value) => {
+  if (value === null || value === undefined || value === '') return null;
+  const t = value instanceof Date ? value.getTime() : Date.parse(value);
+  return Number.isFinite(t) ? t : null;
+};
+
+// The business day for sale_date D ends at D+1 03:00 Asia/Manila (the night
+// runs 3 PM to 3 AM and Loyverse files it under the day it opened).
+function businessDayEnd(saleDate) {
+  const day = String(saleDate).slice(0, 10);
+  const [y, m, d] = day.split('-').map(Number);
+  const next = new Date(Date.UTC(y, m - 1, d + 1));
+  const iso = next.toISOString().slice(0, 10);
+  return new Date(`${iso}T03:00:00${MANILA_OFFSET}`);
+}
+
+// The ingredient's last stock count: the newest of its latest 'adjustment'
+// (an Edit of the stock) and its created_at (creating it with a quantity is a
+// count). A 'restock' is a delivery, not a count, so it is never passed here.
+function lastStockCountAt({ createdAt = null, latestAdjustmentAt = null } = {}) {
+  const times = [toTime(createdAt), toTime(latestAdjustmentAt)].filter((t) => t !== null);
+  return times.length ? new Date(Math.max(...times)) : null;
+}
+
+// Deduct a day's plates only if that day ENDED after the last stock count.
+// A count taken at or after the end already includes those plates.
+// No count known -> deduct.
+function shouldDeduct(saleDate, lastCountAt) {
+  const countTime = toTime(lastCountAt);
+  if (countTime === null) return true;
+  return businessDayEnd(saleDate).getTime() > countTime;
+}
+
+// 'Kilograms (kg)' -> 'kg'; 'kg' -> 'kg'.
+function unitLabel(unit) {
+  const text = String(unit || '').trim();
+  const inner = text.match(/\(([^)]+)\)\s*$/);
+  return inner ? inner[1].trim() : text;
+}
+
+// Up to 3 decimals for display, trailing zeros dropped: 9.07, 0, 1.234.
+// The database keeps the full value.
+function formatAmount(value) {
+  const n = Number(value) || 0;
+  return String(Number(n.toFixed(3)));
+}
+
+/**
+ * The shortfall when a deduction is bigger than the stock it found.
+ * Returns null when there was enough. Stock itself still floors at 0
+ * (deduct_ingredient_stock does that).
+ */
+function describeShortfall({ ingredientName, unit, requested, inStock }) {
+  const requestedN = Number(requested) || 0;
+  const stockN = Math.max(0, Number(inStock) || 0);
+  const shortfall = requestedN - stockN;
+  if (!(shortfall > 0)) return null;
+  const u = unitLabel(unit);
+  const amount = (n) => (u ? `${formatAmount(n)} ${u}` : formatAmount(n));
+  const name = ingredientName || 'This ingredient';
+  return {
+    shortfall,
+    notes: `Requested ${amount(requestedN)}, only ${amount(stockN)} in stock. Shortfall ${amount(shortfall)}.`,
+    // Not "Low stock": that reads like the separate low/out-of-stock alert.
+    title: `Stock shortfall: ${name}`,
+    message: `${name}: ${amount(requestedN)} used but ${amount(stockN)} in stock. Please monitor it.`,
+  };
 }
 
 module.exports = {
@@ -275,4 +378,11 @@ module.exports = {
   splitModifiers,
   aggregateSalesRecords,
   computeStockDeductions,
+  computeStockDeductionsByDate,
+  businessDayEnd,
+  lastStockCountAt,
+  shouldDeduct,
+  unitLabel,
+  formatAmount,
+  describeShortfall,
 };

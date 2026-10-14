@@ -24,6 +24,7 @@ import axios from 'axios';
 import toast from 'react-hot-toast';
 import { useAuth } from "../../../context/AuthContext";
 import { parseRecipeQuantity } from "../../../utils/recipeUnits";
+import { formatStockQty } from "../../../utils/formatStockQty.js";
 import Tippy from '@tippyjs/react';
 import 'tippy.js/dist/tippy.css';
 import 'tippy.js/animations/scale.css';
@@ -189,28 +190,28 @@ const IngredientManagement = () => {
             label: 'Critical Stock',
             className: 'status-critical',
             color: '#dc2626',
-            hint: `Quantity is below 50% of today's forecasted need${item.forecasted_need ? ` (${Math.round(item.forecasted_need * 10) / 10})` : ''}. Prioritize restocking immediately.`
+            hint: `Quantity is below 50% of today's forecasted need${item.forecasted_need ? ` (${formatStockQty(item.forecasted_need, item.unit)})` : ''}. Prioritize restocking immediately.`
           };
         case 'Low Stock':
           return {
             label: 'Low Stock',
             className: 'status-low',
             color: '#f59e0b',
-            hint: `Quantity is below today's forecasted need${item.forecasted_need ? ` (${Math.round(item.forecasted_need * 10) / 10})` : ''}. Consider restocking soon.`
+            hint: `Quantity is below today's forecasted need${item.forecasted_need ? ` (${formatStockQty(item.forecasted_need, item.unit)})` : ''}. Consider restocking soon.`
           };
         case 'Excess Stock':
           return {
             label: 'Excess Stock',
             className: 'status-excess',
             color: '#3b82f6',
-            hint: `Quantity is more than 2x today's forecasted need${item.forecasted_need ? ` (${Math.round(item.forecasted_need * 10) / 10})` : ''}. Excess stock ties up capital and storage space.`
+            hint: `Quantity is more than 2x today's forecasted need${item.forecasted_need ? ` (${formatStockQty(item.forecasted_need, item.unit)})` : ''}. Excess stock ties up capital and storage space.`
           };
         case 'Normal Stock':
           return {
             label: 'Normal Stock',
             className: 'status-normal',
             color: '#16a34a',
-            hint: `Quantity is within 100–200% of today's forecasted need${item.forecasted_need ? ` (${Math.round(item.forecasted_need * 10) / 10})` : ''}.`
+            hint: `Quantity is within 100–200% of today's forecasted need${item.forecasted_need ? ` (${formatStockQty(item.forecasted_need, item.unit)})` : ''}.`
           };
         default:
           return {
@@ -234,7 +235,7 @@ const IngredientManagement = () => {
         label: 'Critical Stock',
         className: 'status-critical',
         color: '#dc2626',
-        hint: `Quantity is at or below 50% of the minimum stock level (${item.min_stock || 0}). Prioritize restocking immediately.`
+        hint: `Quantity is at or below 50% of the minimum stock level (${formatStockQty(item.min_stock || 0, item.unit)}). Prioritize restocking immediately.`
       };
     } else if (item.quantity <= (item.min_stock || 0)) {
       return {
@@ -1071,7 +1072,7 @@ const IngredientManagement = () => {
                         status.className === 'status-excess' ? 'inventory-excess-stock' : 
                         status.className === 'status-normal' ? 'inventory-normal-stock' : ''
                       }>
-                        {item.quantity || 0}
+                        {formatStockQty(item.quantity ?? 0, item.unit)}
                       </td>
                       <td data-label="Unit Cost">{formatCurrency(item.price)}</td>
                       <td data-label="Avg Market Price">
@@ -1592,7 +1593,7 @@ const IngredientManagement = () => {
                 </p>
                 <div className="item-details">
                   <p><strong>Category:</strong> {selectedItem?.category || 'N/A'}</p>
-                  <p><strong>Quantity:</strong> {selectedItem?.quantity || 0} {selectedItem?.unit || 'pcs'}</p>
+                  <p><strong>Quantity:</strong> {formatStockQty(selectedItem?.quantity ?? 0, selectedItem?.unit)} {selectedItem?.unit || 'pcs'}</p>
                   <p><strong>Price:</strong> {formatCurrency(selectedItem?.price)}</p>
                 </div>
               </div>
@@ -1642,8 +1643,8 @@ const IngredientManagement = () => {
             <div className="modal-body">
               <div className="restock-info">
                 <div className="current-stock">
-                  <p><strong>Current Stock:</strong> {selectedItem?.quantity || 0} {selectedItem?.unit || 'pcs'}</p>
-                  <p><strong>Minimum Level:</strong> {selectedItem?.min_stock || 0} {selectedItem?.unit || 'pcs'}</p>
+                  <p><strong>Current Stock:</strong> {formatStockQty(selectedItem?.quantity ?? 0, selectedItem?.unit)} {selectedItem?.unit || 'pcs'}</p>
+                  <p><strong>Minimum Level:</strong> {formatStockQty(selectedItem?.min_stock ?? 0, selectedItem?.unit)} {selectedItem?.unit || 'pcs'}</p>
                 </div>
                 
                 <div className="form-group">
@@ -1729,7 +1730,7 @@ const IngredientManagement = () => {
             <div className="modal-body">
               <div className="history-content">
                 <div className="item-summary">
-                  <p><strong>Current Stock:</strong> {selectedItem?.quantity || 0} {selectedItem?.unit || 'pcs'}</p>
+                  <p><strong>Current Stock:</strong> {formatStockQty(selectedItem?.quantity ?? 0, selectedItem?.unit)} {selectedItem?.unit || 'pcs'}</p>
                   <p><strong>Category:</strong> {selectedItem?.category || 'N/A'}</p>
                 </div>
 
@@ -1773,7 +1774,7 @@ const IngredientManagement = () => {
                 </p>
                 <div className="item-details">
                   <p><strong>Category:</strong> {selectedItem?.category || 'N/A'}</p>
-                  <p><strong>Quantity:</strong> {selectedItem?.quantity || 0} {selectedItem?.unit || 'pcs'}</p>
+                  <p><strong>Quantity:</strong> {formatStockQty(selectedItem?.quantity ?? 0, selectedItem?.unit)} {selectedItem?.unit || 'pcs'}</p>
                 </div>
               </div>
             </div>
@@ -1825,7 +1826,7 @@ const IngredientManagement = () => {
                 </p>
                 <div className="item-details">
                   <p><strong>Category:</strong> {selectedItem?.category || 'N/A'}</p>
-                  <p><strong>Quantity:</strong> {selectedItem?.quantity || 0} {selectedItem?.unit || 'pcs'}</p>
+                  <p><strong>Quantity:</strong> {formatStockQty(selectedItem?.quantity ?? 0, selectedItem?.unit)} {selectedItem?.unit || 'pcs'}</p>
                 </div>
               </div>
             </div>
@@ -1889,7 +1890,7 @@ const IngredientManagement = () => {
                     </div>
                     <div className="detail-item">
                       <label>Quantity</label>
-                      <p>{selectedItem.quantity || 0}</p>
+                      <p>{formatStockQty(selectedItem.quantity ?? 0, selectedItem.unit)}</p>
                     </div>
                     <div className="detail-item">
                       <label>Unit Cost</label>
@@ -1901,7 +1902,7 @@ const IngredientManagement = () => {
                     </div>
                     <div className="detail-item">
                       <label>Minimum Stock</label>
-                      <p>{selectedItem.min_stock || 0}</p>
+                      <p>{formatStockQty(selectedItem.min_stock ?? 0, selectedItem.unit)}</p>
                     </div>
                     <div className="detail-item">
                       <label>Batch</label>

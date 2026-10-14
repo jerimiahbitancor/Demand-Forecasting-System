@@ -8,7 +8,14 @@ import Product from "./ProductManagement";
 import MarketPrice from "./MarketPriceManagement";
 
 const InventoryManagement = () => {
-  const [activeTab, setActiveTab] = useState("ingredient");
+  // ?tab=product opens Product Management directly (the upload summary links here).
+  const [activeTab, setActiveTab] = useState(() => {
+    try {
+      return new URLSearchParams(window.location.search).get("tab") === "product" ? "product" : "ingredient";
+    } catch {
+      return "ingredient";
+    }
+  });
 
   const tabs = [
   { id: "ingredient", label: "Ingredient Management", icon: FaBoxes },

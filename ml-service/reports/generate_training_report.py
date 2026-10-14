@@ -46,10 +46,13 @@ Output:
 """
 import argparse
 import base64
+import csv
 import io
 import os
+import re
 import sys
-from datetime import datetime
+import time
+from datetime import date, datetime, timedelta
 
 import matplotlib
 matplotlib.use("Agg")  # headless — this script has no display attached
@@ -74,10 +77,12 @@ REPORTS_DIR = os.path.dirname(os.path.abspath(__file__))
 if REPORTS_DIR not in sys.path:
     sys.path.insert(0, REPORTS_DIR)
 
-from config import MIN_TRAINING_OBSERVATIONS  # noqa: E402
+from config import MIN_TRAINING_OBSERVATIONS, supabase  # noqa: E402
 from services.data_loader import (  # noqa: E402
     get_active_products, get_confirmed_open_dates, get_daily_sales,
     get_forecast_runs_history, get_model_metrics_history,
+    get_history_gate_inputs, get_operating_days, get_recipe_and_stock,
+    _fetch_all_rows,
 )
 from services.preprocessing import (  # noqa: E402
     validate_sales_data, clean_sales_data, DataValidationError,
@@ -85,7 +90,11 @@ from services.preprocessing import (  # noqa: E402
 from services.feature_engineering import (  # noqa: E402
     engineer_features, FEATURE_COLUMNS,
     build_feature_row, apply_categorical_dtype, WARMUP_OBSERVATIONS,
+    calendar_features,
 )
+from services.zero_fill import build_open_day_series  # noqa: E402
+from services.history_gate import evaluate_history_gate  # noqa: E402
+from services.business_logic import estimate_cogs  # noqa: E402
 from services.model_service import (  # noqa: E402
     filter_training_eligible, chronological_split, train_global_model,
     evaluate_predictions, evaluate_per_product,
@@ -97,6 +106,9 @@ from metrics import wmape, smape, mase  # noqa: E402
 
 REPORT_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "output")
 REPORT_PATH = os.path.join(REPORT_DIR, "training_report.html")
+# Owner-only files with client data (product names, daily quantities).
+# Git-ignored — never commit anything in here.
+LOCAL_OUTPUT_DIR = os.path.join(REPORT_DIR, "local")
 
 # Kept in sync BY HAND with FEATURE_LABELS in
 # backend/services/analyticsService.js (the Model Insights panel's
@@ -128,7 +140,8 @@ LOW_VOLUME_REP_FLOOR = 50       # total_quantity floor for a genuine low-volume 
 REDUCED_FEATURE_COLUMNS = [c for c in FEATURE_COLUMNS if c not in ("rolling_7", "rolling_14")]
 
 FINAL_SECTION_ORDER = [
-    "preprocessing", "outliers", "split", "features", "baseline",
+    "preprocessing", "calendar_coverage", "outliers", "outlier_review",
+    "split", "features", "baseline",
     "importance", "importance_ablation", "metrics", "train_test_metrics",
     "horizon", "predictions", "stability", "production_reality",
 ]
@@ -335,7 +348,11 @@ def _acquire_report_model(eligible_df: pd.DataFrame, force_train: bool):
     metrics = None
     if model is None:
         if not force_train:
-            print("  No saved model found in Supabase Storage.")
+            # Never upload without --train: training here would put a new
+            # model in the bucket /forecast reads from.
+            print("  No saved model found in Supabase Storage. Nothing was uploaded.")
+            print("  Run again with --train if you really want to train and upload one.")
+            sys.exit(1)
         print("  Training a new global model now via train_global_model()...")
         print("  *** This uploads a new model_v... file to the ml-models bucket ***")
         raw_model, metrics, model_version = train_global_model(eligible_df)
@@ -574,6 +591,469 @@ def stage_2_outliers(all_sales_df: pd.DataFrame):
     """
     add_section("outliers", "2. Outlier Check", body)
     print("[2/13] Done.")
+
+
+# ---------------------------------------------------------------------
+# Calendar Coverage (read-only)
+# ---------------------------------------------------------------------
+WEEKDAY_NAMES = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]  # date.weekday() order
+
+
+def _as_date(value) -> date:
+    if isinstance(value, date) and not isinstance(value, datetime):
+        return value
+    if isinstance(value, datetime):
+        return value.date()
+    return date.fromisoformat(str(value)[:10])
+
+
+def compute_calendar_coverage(sale_dates, confirmed_open, confirmed_closed, operating_days) -> dict:
+    """
+    Classifies every calendar day from the first to the last sale date.
+
+    A day is OPEN if it has sales rows (an upload) or a confirmed_open
+    mark; CLOSED if it has a confirmed_closed mark and is not open;
+    otherwise UNCONFIRMED — split into operating weekdays (per
+    business_profile.operating_days) and non-operating weekdays.
+    Weekdays: 0 = Monday ... 6 = Sunday (date.weekday()).
+    """
+    sale_set = {_as_date(d) for d in sale_dates}
+    open_marks = {_as_date(d) for d in confirmed_open}
+    closed_marks = {_as_date(d) for d in confirmed_closed}
+    if not sale_set:
+        return {"empty": True}
+
+    first, last = min(sale_set), max(sale_set)
+    states = {}
+    current = first
+    while current <= last:
+        if current in sale_set or current in open_marks:
+            states[current] = "open"
+        elif current in closed_marks:
+            states[current] = "closed"
+        elif current.weekday() in operating_days:
+            states[current] = "unconfirmed_operating"
+        else:
+            states[current] = "unconfirmed_non_operating"
+        current += timedelta(days=1)
+
+    in_span = set(states)
+    open_days = sorted(d for d, s in states.items() if s == "open")
+    per_weekday = {name: 0 for name in WEEKDAY_NAMES}
+    for d in open_days:
+        per_weekday[WEEKDAY_NAMES[d.weekday()]] += 1
+
+    months = []
+    month_cursor = date(first.year, first.month, 1)
+    while month_cursor <= last:
+        key = (month_cursor.year, month_cursor.month)
+        month_days = [d for d in states if (d.year, d.month) == key]
+        saturdays = [d for d in month_days if d.weekday() == 5]
+        months.append({
+            "month": month_cursor.strftime("%Y-%m"),
+            "days_in_span": len(month_days),
+            "open_days": sum(1 for d in month_days if states[d] == "open"),
+            "saturdays": len(saturdays),
+            "open_saturdays": sum(1 for d in saturdays if states[d] == "open"),
+            "closed_saturdays": sum(1 for d in saturdays if states[d] == "closed"),
+            "unconfirmed_saturdays": sum(1 for d in saturdays if states[d].startswith("unconfirmed")),
+        })
+        month_cursor = (date(month_cursor.year + 1, 1, 1) if month_cursor.month == 12
+                        else date(month_cursor.year, month_cursor.month + 1, 1))
+
+    return {
+        "empty": False,
+        "first_sale_date": first,
+        "last_sale_date": last,
+        "total_calendar_days": len(states),
+        "open_days": len(open_days),
+        "closed_days": sum(1 for s in states.values() if s == "closed"),
+        "unconfirmed_operating_days": sum(1 for s in states.values() if s == "unconfirmed_operating"),
+        "unconfirmed_operating_dates": sorted(d for d, s in states.items() if s == "unconfirmed_operating"),
+        "unconfirmed_non_operating_days": sum(1 for s in states.values() if s == "unconfirmed_non_operating"),
+        "sale_dates_in_span": len(sale_set),
+        "confirmed_open_marks_in_span": len(open_marks & in_span),
+        "sales_without_open_mark": len(sale_set - open_marks),
+        "open_mark_without_sales": len((open_marks & in_span) - sale_set),
+        "closed_mark_on_sales_day": len(closed_marks & sale_set),
+        "operating_days": sorted(operating_days),
+        "open_per_weekday": per_weekday,
+        "months": months,
+    }
+
+
+def calendar_coverage_text(cov: dict, gate: dict) -> str:
+    if cov.get("empty"):
+        return "No sales rows found, so there is no span to check.\n"
+    lines = [
+        "CALENDAR COVERAGE (read-only)",
+        f"Generated {datetime.now():%Y-%m-%d %H:%M:%S}",
+        "",
+        f"Span: {cov['first_sale_date']} to {cov['last_sale_date']} (first sale to last sale)",
+        f"Operating days used for 'unconfirmed': "
+        f"{', '.join(WEEKDAY_NAMES[d] for d in cov['operating_days'])} "
+        f"(business_profile.operating_days; Mon-Fri if not set)",
+        "",
+        f"Total calendar days:            {cov['total_calendar_days']}",
+        f"Open days (sales or open mark): {cov['open_days']}",
+        f"Confirmed-closed days:          {cov['closed_days']}",
+        f"Unconfirmed operating days:     {cov['unconfirmed_operating_days']}",
+        f"Unmarked non-operating days:    {cov['unconfirmed_non_operating_days']}",
+        "",
+        "Cross-checks:",
+        f"  Dates with sales rows:                  {cov['sale_dates_in_span']}",
+        f"  confirmed_open marks in span:           {cov['confirmed_open_marks_in_span']}",
+        f"  Dates with sales but no open mark:      {cov['sales_without_open_mark']}",
+        f"  Open mark but no sales rows:            {cov['open_mark_without_sales']}",
+        f"  Closed mark on a date that has sales:   {cov['closed_mark_on_sales_day']}",
+        f"  History gate (first training): span {gate['span_days']} days, "
+        f"{gate['open_days']} open, {gate['closed_days']} closed, "
+        f"{gate['unconfirmed_days']} unconfirmed (any weekday) -> "
+        f"{'PASSES' if gate['passes'] else 'does not pass'}",
+    ]
+    if cov["unconfirmed_operating_dates"]:
+        lines += ["", "Unconfirmed operating dates:"]
+        lines += [f"  {d} ({WEEKDAY_NAMES[d.weekday()]})" for d in cov["unconfirmed_operating_dates"]]
+    lines += ["", "Open days per weekday:"]
+    lines += [f"  {name}: {count}" for name, count in cov["open_per_weekday"].items()]
+    lines += ["", "Saturdays per month:",
+              f"  {'month':<8} {'days':>5} {'open':>5} {'Sats':>5} {'openSat':>8} {'closedSat':>10} {'unconfSat':>10}"]
+    for m in cov["months"]:
+        lines.append(f"  {m['month']:<8} {m['days_in_span']:>5} {m['open_days']:>5} {m['saturdays']:>5} "
+                     f"{m['open_saturdays']:>8} {m['closed_saturdays']:>10} {m['unconfirmed_saturdays']:>10}")
+    return "\n".join(lines) + "\n"
+
+
+def stage_calendar_coverage():
+    print("[Calendar coverage] Reading business_days and sale dates (read-only)...")
+    sale_dates, closed_dates = get_history_gate_inputs()
+    open_marks = get_confirmed_open_dates()
+    operating_days = get_operating_days()
+    cov = compute_calendar_coverage(sale_dates, open_marks, closed_dates, operating_days)
+    gate = evaluate_history_gate(sale_dates, closed_dates)
+    text = calendar_coverage_text(cov, gate)
+    print(text)
+
+    if cov.get("empty"):
+        add_section("calendar_coverage", "Calendar Coverage", "<p>No sales rows found.</p>")
+        return cov, text
+
+    summary_df = pd.DataFrame([
+        {"measure": "Total calendar days (first to last sale)", "days": cov["total_calendar_days"]},
+        {"measure": "Open (sales rows or confirmed_open mark)", "days": cov["open_days"]},
+        {"measure": "Confirmed closed", "days": cov["closed_days"]},
+        {"measure": "Unconfirmed operating day (no upload, no closed mark)", "days": cov["unconfirmed_operating_days"]},
+        {"measure": "Unmarked non-operating day", "days": cov["unconfirmed_non_operating_days"]},
+        {"measure": "Dates with sales but no confirmed_open mark", "days": cov["sales_without_open_mark"]},
+        {"measure": "Closed mark on a date that has sales", "days": cov["closed_mark_on_sales_day"]},
+    ])
+    weekday_df = pd.DataFrame([cov["open_per_weekday"]])
+    months_df = pd.DataFrame(cov["months"])
+
+    body = f"""
+    <p>Every calendar day from the first sale ({cov['first_sale_date']}) to the last sale
+    ({cov['last_sale_date']}), read from <code>daily_sales</code> and <code>business_days</code>
+    through the same loaders <code>/train</code> uses. Nothing is written. A day counts as
+    <strong>open</strong> if it has sales rows or a confirmed_open mark. "Unconfirmed operating
+    day" means the weekday is in <code>business_profile.operating_days</code>
+    ({', '.join(WEEKDAY_NAMES[d] for d in cov['operating_days'])}) and the date has neither an
+    upload nor a closed mark.</p>
+    {df_to_html_table(summary_df)}
+    <p>First-training history gate on the same data: span {gate['span_days']} days,
+    {gate['unconfirmed_days']} unconfirmed date(s) of any weekday &rarr;
+    <strong>{'passes' if gate['passes'] else 'does not pass'}</strong>.</p>
+    <h3>Open Days per Weekday</h3>
+    {df_to_html_table(weekday_df)}
+    <h3>Open Saturdays per Month</h3>
+    <p>Checks why Saturdays almost disappear in Jul&ndash;Oct 2026. A Saturday that is
+    "closed" was marked closed by the owner; "unconfirmed" has no mark at all.</p>
+    {df_to_html_table(months_df)}
+    """
+    add_section("calendar_coverage", "Calendar Coverage", body)
+    print("[Calendar coverage] Done.")
+    return cov, text
+
+
+# ---------------------------------------------------------------------
+# Outlier Review (report only — no row is removed or changed)
+# ---------------------------------------------------------------------
+OUTLIER_IQR_MULTIPLIER = 3
+OUTLIER_MEDIAN_MULTIPLIER = 2
+OUTLIER_MEDIAN_PLUS = 3
+
+
+def flag_outlier_rows(sales_df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Real sales rows only (no filled zeros). Per product: median, Q1, Q3,
+    IQR. A row is flagged only when ALL of:
+        qty > Q3 + 3 * IQR
+        qty >= 2 * median
+        qty >= median + 3
+    The two median floors stop tiny sellers with IQR = 0 from flagging
+    every day they sold 2. Returns a new frame; the input is untouched.
+    """
+    columns = ["product_id", "sale_date", "quantity_sold", "median", "q1", "q3", "iqr"]
+    if sales_df.empty:
+        return pd.DataFrame(columns=columns)
+    df = sales_df[["product_id", "sale_date", "quantity_sold"]].copy()
+    df["product_id"] = df["product_id"].astype(int)
+    grouped = df.groupby("product_id")["quantity_sold"]
+    df["median"] = grouped.transform("median")
+    df["q1"] = grouped.transform(lambda s: s.quantile(0.25))
+    df["q3"] = grouped.transform(lambda s: s.quantile(0.75))
+    df["iqr"] = df["q3"] - df["q1"]
+    qty = df["quantity_sold"]
+    mask = (
+        (qty > df["q3"] + OUTLIER_IQR_MULTIPLIER * df["iqr"])
+        & (qty >= OUTLIER_MEDIAN_MULTIPLIER * df["median"])
+        & (qty >= df["median"] + OUTLIER_MEDIAN_PLUS)
+    )
+    flagged = df.loc[mask, columns].copy()
+    calendar = [calendar_features(_as_date(d)) for d in flagged["sale_date"]]
+    flagged["weekday"] = [WEEKDAY_NAMES[c["dow"]] for c in calendar]
+    flagged["is_payday"] = [int(c["is_payday"]) for c in calendar]
+    flagged["is_holiday"] = [int(c["is_holiday"]) for c in calendar]
+    # Ranked by how many times the product's usual (median) day it is.
+    flagged["times_median"] = flagged["quantity_sold"] / flagged["median"].clip(lower=1)
+    return flagged.sort_values(["times_median", "quantity_sold"], ascending=False).reset_index(drop=True)
+
+
+def stage_outlier_review(all_sales_df: pd.DataFrame) -> pd.DataFrame:
+    print("[Outlier review] Flagging unusually high days (report only)...")
+    flagged = flag_outlier_rows(all_sales_df)
+
+    rows_per_product = all_sales_df.groupby("product_id")["quantity_sold"].size()
+    tier_rows = []
+    for tier in ["High", "Medium", "Low"]:
+        tier_ids = {pid for pid, t in _VOLUME_TIERS_CACHE.items() if t == tier}
+        tier_flagged = flagged[flagged["product_id"].isin(tier_ids)]
+        total_rows = int(sum(rows_per_product.get(pid, 0) for pid in tier_ids))
+        tier_rows.append({
+            "volume_tier": tier,
+            "products": len(tier_ids),
+            "sales_rows": total_rows,
+            "flagged_days": len(tier_flagged),
+            "products_with_flags": tier_flagged["product_id"].nunique(),
+            "flagged_pct": round(len(tier_flagged) / total_rows * 100, 2) if total_rows else 0.0,
+        })
+    tier_df = pd.DataFrame(tier_rows)
+    print_table("Outlier Review — flagged days per volume tier", tier_df)
+
+    top = flagged.head(30).copy()
+    top_df = pd.DataFrame({
+        "product_id": top["product_id"].astype(int),
+        "date": [_as_date(d).isoformat() for d in top["sale_date"]],
+        "weekday": top["weekday"],
+        "qty": top["quantity_sold"],
+        "median": top["median"],
+        "payday": top["is_payday"],
+        "holiday": top["is_holiday"],
+    })
+    print_table("Outlier Review — top 30 flagged days", top_df)
+
+    body = f"""
+    <p>Real sales rows only (the same rows as the Outlier Check above, no filled zeros).
+    For each product: median, Q1, Q3 and IQR = Q3 &minus; Q1. A day is flagged only when
+    <strong>all three</strong> hold: qty &gt; Q3 + {OUTLIER_IQR_MULTIPLIER}&times;IQR,
+    qty &ge; {OUTLIER_MEDIAN_MULTIPLIER}&times;median, and qty &ge; median + {OUTLIER_MEDIAN_PLUS}.
+    The two median floors stop small sellers whose IQR is 0 from flagging every day
+    they sold 2.</p>
+    <p><strong>This is a review list only.</strong> No row is removed or changed, here or
+    in the training pipeline. {len(flagged)} day(s) flagged in total.</p>
+    <h3>Flagged Days per Volume Tier</h3>
+    {df_to_html_table(tier_df)}
+    <h3>Top 30 Flagged Days</h3>
+    <p>Ranked by how many times the product's median day the sale was.</p>
+    {df_to_html_table(top_df) if not top_df.empty else "<p>No days were flagged.</p>"}
+    """
+    add_section("outlier_review", "Outlier Review", body)
+    print("[Outlier review] Done.")
+    return flagged
+
+
+# ---------------------------------------------------------------------
+# Owner files (client data — written to output/local/, git-ignored)
+# ---------------------------------------------------------------------
+MODIFIER_WORD_RE = re.compile(r"\bNO\s+(EGG|RICE|FRIES)\b", re.IGNORECASE)
+SIZE_WORD_RE = re.compile(r"\b(Small|Medium|Large)\b", re.IGNORECASE)
+
+
+def _fmt_qty(value) -> str:
+    value = float(value)
+    return str(int(value)) if value.is_integer() else f"{value:g}"
+
+
+def _base_name(name: str) -> str:
+    base = MODIFIER_WORD_RE.sub(" ", name)
+    base = SIZE_WORD_RE.sub(" ", base)
+    base = re.sub(r"\(\s*\)", " ", base)
+    base = re.sub(r"\s+", " ", base).strip(" -–()/,")
+    return base
+
+
+def _food_cost_threshold() -> float:
+    try:
+        response = supabase.table("forecast_config").select("food_cost_warning_threshold").limit(1).execute()
+        if response.data and response.data[0].get("food_cost_warning_threshold") is not None:
+            return float(response.data[0]["food_cost_warning_threshold"])
+    except Exception as exc:  # report-only: fall back to the settled default
+        print(f"  (could not read food_cost_warning_threshold, using 35: {exc})")
+    return 35.0
+
+
+def write_local_owner_files(outlier_flagged: pd.DataFrame, open_dates, eligible_ids: set,
+                            coverage_text: str) -> None:
+    """
+    Read-only. Builds the owner's CSV/TXT files. Zero-fill uses the SAME
+    services/zero_fill.build_open_day_series() training uses, on the same
+    confirmed-open calendar; nothing is re-implemented here.
+    """
+    print("[Owner files] Building files in output/local/ (read-only)...")
+    os.makedirs(LOCAL_OUTPUT_DIR, exist_ok=True)
+
+    products = pd.DataFrame(_fetch_all_rows(
+        lambda: supabase.table("products")
+        .select("id, name, price, status, inactive_reason")
+        .order("id")
+    ), columns=["id", "name", "price", "status", "inactive_reason"])
+    names = {int(r.id): r.name for r in products.itertuples()}
+
+    all_sales = get_daily_sales()
+    if not all_sales.empty:
+        all_sales = clean_sales_data(all_sales)
+        all_sales["product_id"] = all_sales["product_id"].astype(int)
+    all_flags = flag_outlier_rows(all_sales)
+    outlier_days = all_flags.groupby("product_id").size().to_dict()
+
+    recipe_df = get_recipe_and_stock()
+    recipe_ids = set(recipe_df["product_id"].astype(int)) if not recipe_df.empty else set()
+    threshold = _food_cost_threshold()
+
+    sorted_open = sorted(open_dates)
+    open_set = set(sorted_open)
+    closed_set = {_as_date(d) for d in get_history_gate_inputs()[1]}
+
+    # 1. outlier_review.csv (same rows as the HTML stage: active products)
+    with open(os.path.join(LOCAL_OUTPUT_DIR, "outlier_review.csv"), "w", newline="", encoding="utf-8") as f:
+        writer = csv.writer(f)
+        writer.writerow(["product_id", "product_name", "date", "weekday", "qty", "median",
+                         "q1", "q3", "iqr", "is_payday", "is_holiday"])
+        for r in outlier_flagged.itertuples():
+            writer.writerow([int(r.product_id), names.get(int(r.product_id), ""),
+                             _as_date(r.sale_date).isoformat(), r.weekday, _fmt_qty(r.quantity_sold),
+                             _fmt_qty(r.median), _fmt_qty(r.q1), _fmt_qty(r.q3), _fmt_qty(r.iqr),
+                             r.is_payday, r.is_holiday])
+
+    # 2. calendar_coverage.txt
+    with open(os.path.join(LOCAL_OUTPUT_DIR, "calendar_coverage.txt"), "w", encoding="utf-8") as f:
+        f.write(coverage_text)
+
+    # 3 + 4. menu_list.csv and zero_fill_detail.csv
+    sales_by_product = {
+        int(pid): dict(zip(g["sale_date"].dt.date, g["quantity_sold"]))
+        for pid, g in all_sales.groupby("product_id")
+    } if not all_sales.empty else {}
+
+    menu_rows, detail_rows = [], []
+    for p in products.itertuples():
+        pid = int(p.id)
+        status = p.status or ""
+        is_archived = status == "archived" or str(p.inactive_reason or "").lower().startswith("archived")
+        series = build_open_day_series(sales_by_product.get(pid, {}), sorted_open, is_archived=is_archived)
+        real = [e for e in series if e["is_real"]]
+        filled = [e for e in series if not e["is_real"]]
+
+        price = float(p.price) if p.price is not None else None
+        has_recipe = pid in recipe_ids
+        flags = []
+        if not has_recipe:
+            flags.append("Unmapped")
+        if price is None or price <= 0:
+            flags.append("No Price")
+        if has_recipe and price and price > 0:
+            food_cost_pct = estimate_cogs(1, pid, recipe_df) / price * 100
+            if food_cost_pct > threshold:
+                flags.append("High Food Cost")
+
+        menu_rows.append([
+            pid, p.name, status, " / ".join(flags), "yes" if has_recipe else "no",
+            "" if price is None else _fmt_qty(price), len(real), len(filled),
+            "yes" if pid in eligible_ids else "no",
+            round(sum(e["quantity_sold"] for e in real) / len(real), 2) if real else "",
+            int(outlier_days.get(pid, 0)),
+            "; ".join(
+                f"{e['sale_date']:%d-%m-%y}: {_fmt_qty(e['quantity_sold']) if e['is_real'] else '0 (filled)'}"
+                for e in series
+            ),
+        ])
+        for e in series:
+            d = e["sale_date"]
+            if d in open_set:
+                day_state = "confirmed_open"
+            elif d in closed_set:
+                day_state = "sales_on_closed_mark"
+            else:
+                day_state = "sales_no_open_mark"
+            detail_rows.append([d, pid, p.name, _fmt_qty(e["quantity_sold"]),
+                                "real" if e["is_real"] else "filled", day_state])
+
+    with open(os.path.join(LOCAL_OUTPUT_DIR, "menu_list.csv"), "w", newline="", encoding="utf-8") as f:
+        writer = csv.writer(f)
+        writer.writerow(["product_id", "name", "status", "flags", "has_recipe", "price",
+                         "real_sales_days", "filled_days", "included_in_training",
+                         "avg_items_sold", "outlier_days", "open_days_list"])
+        writer.writerows(menu_rows)
+
+    detail_rows.sort(key=lambda r: (r[0], r[1]))
+    with open(os.path.join(LOCAL_OUTPUT_DIR, "zero_fill_detail.csv"), "w", newline="", encoding="utf-8") as f:
+        writer = csv.writer(f)
+        writer.writerow(["date", "product_id", "product_name", "net_items_sold", "real_or_filled", "day_state"])
+        for r in detail_rows:
+            writer.writerow([f"{r[0]:%d-%m-%y}", *r[1:]])
+
+    # 5. variants_summary.txt
+    plates = all_sales.groupby("product_id")["quantity_sold"].sum().to_dict() if not all_sales.empty else {}
+    modifier_ids = [int(p.id) for p in products.itertuples() if MODIFIER_WORD_RE.search(p.name or "")]
+    size_ids = [int(p.id) for p in products.itertuples() if SIZE_WORD_RE.search(p.name or "")]
+    variant_ids = set(modifier_ids) | set(size_ids)
+    groups = {}
+    for p in products.itertuples():
+        groups.setdefault(_base_name(p.name or "").casefold(), []).append(int(p.id))
+    lines = [
+        "VARIANT PRODUCTS (read-only)",
+        f"Generated {datetime.now():%Y-%m-%d %H:%M:%S}",
+        "Total plates = sum of net quantity_sold in daily_sales, all dates.",
+        "",
+        f"Products with a modifier word (NO EGG / NO RICE / NO FRIES): {len(modifier_ids)}",
+        f"Products with a size word (Small / Medium / Large): {len(size_ids)}",
+        f"Base-name groups that contain a variant: "
+        f"{sum(1 for ids in groups.values() if variant_ids & set(ids))}",
+        "",
+    ]
+    for key in sorted(groups):
+        ids = groups[key]
+        if not variant_ids & set(ids):
+            continue
+        base_display = _base_name(names.get(ids[0], "")) or key
+        lines.append(f"{base_display}:")
+        for pid in sorted(ids, key=lambda i: names.get(i, "")):
+            kind = []
+            if pid in modifier_ids:
+                kind.append("modifier")
+            if pid in size_ids:
+                kind.append("size")
+            label = ", ".join(kind) if kind else "base (no variant word)"
+            lines.append(f"  [{pid}] {names.get(pid, '')} — {_fmt_qty(plates.get(pid, 0))} plates ({label})")
+        group_total = sum(plates.get(pid, 0) for pid in ids)
+        lines.append(f"  group total: {_fmt_qty(group_total)} plates")
+        lines.append("")
+    with open(os.path.join(LOCAL_OUTPUT_DIR, "variants_summary.txt"), "w", encoding="utf-8") as f:
+        f.write("\n".join(lines) + "\n")
+
+    print(f"  Wrote 5 files to {os.path.abspath(LOCAL_OUTPUT_DIR)} "
+          f"({len(menu_rows)} products, {len(detail_rows)} zero-fill rows, "
+          f"{len(outlier_flagged)} outlier rows, {len(variant_ids)} variant products)")
+    print("[Owner files] Done.")
 
 
 # ---------------------------------------------------------------------
@@ -1668,8 +2148,11 @@ def main():
     print("   Only compare runs from Oct 1 2026 onward with each other.")
     print()
 
+    started = time.perf_counter()
     all_sales_df, _skipped = stage_1_preprocessing()
+    _coverage, coverage_text = stage_calendar_coverage()
     stage_2_outliers(all_sales_df)
+    outlier_flagged = stage_outlier_review(all_sales_df)
 
     # Zero-filled on the confirmed-open calendar, exactly like /train.
     # Without passing open_dates this would silently fall back to
@@ -1692,6 +2175,10 @@ def main():
     if excluded:
         print(f"  ({len(excluded)} product(s) excluded from training eligibility — see model_service.filter_training_eligible)")
     extend_preprocessing_with_excluded(excluded)
+    # Eligible under today's rules (would be trained by a retrain now) —
+    # taken before the saved-model filter below narrows eligible_df.
+    eligible_ids = set(int(p) for p in eligible_df["product_id"].unique())
+    write_local_owner_files(outlier_flagged, open_dates, eligible_ids, coverage_text)
 
     model, model_version, _metrics, trained_now, feature_importance = _acquire_report_model(
         eligible_df, args.train
@@ -1735,8 +2222,12 @@ def main():
     # execution order above (which is chosen for a sensible terminal
     # narrative, not for HTML layout) — see FINAL_SECTION_ORDER.
     _sections.sort(key=lambda s: FINAL_SECTION_ORDER.index(s["id"]))
+    # Number titles in display order (cosmetic only — no computed value changes).
+    for number, section in enumerate(_sections, start=1):
+        section["title"] = f"{number}. " + re.sub(r"^\d+\.\s*", "", section["title"])
 
     render_html()
+    print(f"Runtime: {time.perf_counter() - started:.1f} s")
 
 
 if __name__ == "__main__":

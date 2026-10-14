@@ -429,16 +429,22 @@ const updateInventoryItem = async (req, res) => {
       throw error;
     }
 
-    // Log transaction if quantity changed
-    if (quantity !== undefined && parseRecipeQuantity(quantity) !== currentItem.quantity) {
+    // Log an 'adjustment' only when the quantity was really written above
+    // (valid, >= 0) AND differs from before. The latest adjustment is read
+    // as the ingredient's last stock count, so a rejected or unchanged
+    // value must not leave a row behind (it used to: e.g. quantity null or
+    // -5 was not saved, yet an adjustment was logged).
+    const previousQuantity = Number(currentItem.quantity) || 0;
+    const quantityWritten = Object.prototype.hasOwnProperty.call(updateData, 'quantity');
+    if (quantityWritten && updateData.quantity !== previousQuantity) {
       await supabaseAdmin
         .from('inventory_transactions')
         .insert([{
           ingredient_id: id,
           transaction_type: 'adjustment',
-          quantity: parseRecipeQuantity(quantity) - currentItem.quantity,
-          previous_quantity: currentItem.quantity,
-          new_quantity: parseRecipeQuantity(quantity),
+          quantity: updateData.quantity - previousQuantity,
+          previous_quantity: previousQuantity,
+          new_quantity: updateData.quantity,
           reason: 'Stock adjustment',
           notes: 'Updated via edit',
           created_by: userId

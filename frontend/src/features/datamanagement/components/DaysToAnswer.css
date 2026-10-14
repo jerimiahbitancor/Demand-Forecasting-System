@@ -1,0 +1,103 @@
+/* components/DaysToAnswer.css */
+.days-to-answer {
+  grid-column: 1 / -1;
+  padding: 20px 24px;
+  border-radius: 12px;
+  background: #fff8f6;
+  border: 1px solid #e8c9c9;
+  border-top: 4px solid #a31d1d;
+  box-shadow: 0 4px 20px -2px rgba(0, 0, 0, 0.05);
+  scroll-margin-top: 80px;
+}
+
+.days-to-answer--error,
+.days-to-answer--done {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px;
+  font-size: 14px;
+}
+
+.days-to-answer--error p {
+  margin: 0;
+  color: #7a0101;
+}
+
+.days-to-answer--done p {
+  margin: 0;
+  color: #1c2632;
+}
+
+.days-to-answer__title {
+  margin: 0 0 6px;
+  font-size: 18px;
+  color: #7a0101;
+}
+
+.days-to-answer__intro {
+  margin: 0 0 14px;
+  font-size: 14px;
+  line-height: 1.5;
+  color: #1c2632;
+}
+
+.days-to-answer__list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.days-to-answer__row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px 16px;
+  padding: 10px 0;
+  border-top: 1px solid #f0dcdc;
+}
+
+.days-to-answer__date {
+  font-weight: 600;
+  font-size: 14px;
+  color: #1c2632;
+}
+
+.days-to-answer__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.days-to-answer__btn {
+  padding: 8px 14px;
+  border-radius: 8px;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  border: 1.5px solid #7a0101;
+  background: #ffffff;
+  color: #7a0101;
+}
+
+.days-to-answer__btn--primary {
+  background: #7a0101;
+  color: #ffffff;
+}
+
+.days-to-answer__btn:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+@media (max-width: 600px) {
+  .days-to-answer {
+    padding: 16px;
+  }
+
+  .days-to-answer__actions,
+  .days-to-answer__btn {
+    width: 100%;
+  }
+}

@@ -48,6 +48,7 @@ const categoriesRoutes = require('./routes/categories');
 const unitsRoutes = require('./routes/units');
 const productCategoriesRoutes = require('./routes/productCategories');
 const businessDaysRoutes = require('./routes/businessDays');
+const productsRoutes = require('./routes/products');
 const mlRoutes = require('./routes/ml');
 const analyticsRoutes = require('./routes/analytics');
 const forecastSummaryRoutes = require('./routes/forecastSummary');
@@ -110,6 +111,7 @@ app.use('/api/categories', categoriesRoutes);
 app.use('/api/units', unitsRoutes);
 app.use('/api/product-categories', productCategoriesRoutes);
 app.use('/api/business-days', businessDaysRoutes);
+app.use('/api/products', productsRoutes);
 app.use('/api/ml', mlRoutes);
 app.use('/api/analytics', analyticsRoutes);
 app.use('/api/forecast', forecastSummaryRoutes);
@@ -178,15 +180,6 @@ process.on('uncaughtException', (err) => {
 });
 
 // ============= START SERVER =============
-const { refreshLowStockNotifications } = require('./services/notificationService');
-
-// Keep the notification bell in sync with inventory levels: refresh shortly
-// after boot, then every 6 hours. New low-stock ingredients get alerts and
-// recovered ingredients get their alerts retired automatically.
-const LOW_STOCK_REFRESH_MS = 6 * 60 * 60 * 1000;
-setTimeout(() => refreshLowStockNotifications().catch(() => {}), 15000);
-setInterval(() => refreshLowStockNotifications().catch(() => {}), LOW_STOCK_REFRESH_MS);
-
 // Warm recipe-unit conversion metadata (family, base factor, piece weights)
 // from the ingredient_units table so COGS, demand, and stock-deduction math
 // uses database-driven units instead of only the hardcoded fallbacks.
@@ -194,18 +187,40 @@ const { supabaseAdmin } = require('./config/supabase');
 const { loadUnitMetadataFromDb } = require('./utils/recipeUnits');
 setTimeout(() => loadUnitMetadataFromDb(supabaseAdmin).catch(() => {}), 1000);
 
-// Real scheduled forecast refresh (daily 9:00 AM, weekly Monday 9:00 AM,
-// both Asia/Manila) — see jobs/forecastScheduler.js for why this calls
-// mlService.forecast() directly instead of training auto-triggering it.
-const { registerForecastJobs } = require('./jobs/forecastScheduler');
-registerForecastJobs();
+// Timed jobs. SCHEDULERS_ENABLED (utils/featureFlags.js) defaults to on only
+// when NODE_ENV=production: a local "npm run dev" points at the LIVE
+// database and must never send reminders or run forecasts by itself.
+const { schedulersEnabled } = require('./utils/featureFlags');
+if (schedulersEnabled()) {
+  const { refreshLowStockNotifications } = require('./services/notificationService');
 
-// Daily automated DA "Daily Price Index" import (default 4:00 PM Asia/Manila;
-// see jobs/dailyPriceImportJob.js). Writes matched prices for current
-// inventory ingredients under the da_reference source. Disable entirely with
-// DA_PRICE_IMPORT_ENABLED=false.
-const { registerDailyPriceImportJob } = require('./jobs/dailyPriceImportJob');
-registerDailyPriceImportJob();
+  // Keep the notification bell in sync with inventory levels: refresh shortly
+  // after boot, then every 6 hours. New low-stock ingredients get alerts and
+  // recovered ingredients get their alerts retired automatically.
+  const LOW_STOCK_REFRESH_MS = 6 * 60 * 60 * 1000;
+  setTimeout(() => refreshLowStockNotifications().catch(() => {}), 15000);
+  setInterval(() => refreshLowStockNotifications().catch(() => {}), LOW_STOCK_REFRESH_MS);
+
+  // Real scheduled forecast refresh (daily 9:00 AM except Monday, weekly
+  // Monday 9:00 AM — Monday runs the weekly forecast only — both Asia/Manila) — see jobs/forecastScheduler.js for why this calls
+  // mlService.forecast() directly instead of training auto-triggering it.
+  const { registerForecastJobs } = require('./jobs/forecastScheduler');
+  registerForecastJobs();
+
+  // Daily automated DA "Daily Price Index" import (default 4:00 PM Asia/Manila;
+  // see jobs/dailyPriceImportJob.js). Writes matched prices for current
+  // inventory ingredients under the da_reference source. Disable entirely with
+  // DA_PRICE_IMPORT_ENABLED=false.
+  const { registerDailyPriceImportJob } = require('./jobs/dailyPriceImportJob');
+  registerDailyPriceImportJob();
+
+  // Upload reminders, 4:00 AM and 7:00 AM Asia/Manila: yesterday's sales not
+  // uploaded and not marked closed -> notification (see jobs/uploadReminderJob.js).
+  const { registerUploadReminderJobs } = require('./jobs/uploadReminderJob');
+  registerUploadReminderJobs();
+} else {
+  console.log('[schedulers] SCHEDULERS_ENABLED is off: forecast, upload reminder, DA price import and low-stock jobs are NOT registered.');
+}
 
 app.listen(PORT, () => {
   console.log(`🚀 Server running on port ${PORT}`);

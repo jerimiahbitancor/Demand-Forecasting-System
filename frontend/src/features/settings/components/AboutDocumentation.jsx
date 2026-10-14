@@ -131,7 +131,7 @@ const USER_MANUAL = {
       <li>Summary cards show <strong>Total Menu Items</strong>, <strong>Average COGS</strong>, <strong>High Food Cost Items</strong>, and <strong>Unmapped Products</strong> (products still missing a recipe).</li>
       <li>Each product lists its <strong>Category</strong>, <strong>Modifier</strong>, <strong>Ingredients</strong>, <strong>Selling Price</strong>, <strong>Total Ingredient Cost</strong>, and <strong>Status</strong>.</li>
       <li>Add a product with <strong>Add Product</strong>. In the product form, add each ingredient as a line with its <strong>Quantity</strong> and <strong>Unit</strong>; the ingredient cost is calculated automatically.</li>
-      <li>Products are classified as <strong>Active</strong>, <strong>New</strong> (needs 4 weeks of data before forecasts activate), <strong>Inactive</strong> (auto-flagged after 28 days with no sales), or <strong>Archived</strong>. Archived products can be restored.</li>
+      <li>Products are classified as <strong>Active</strong>, <strong>Inactive (Not enough data)</strong> (fewer than 42 days with sales; forecasting starts at 42), <strong>Inactive (Discontinued)</strong> (no sales in the last 28 days the store was open), or <strong>Archived</strong>. Archived products can be restored.</li>
       <li>The <strong>High Food Cost</strong> modal shows each item's food-cost percentage and profit margin. Note that a high food cost does not always mean the item is unprofitable.</li>
     </ul>
     <h4>Market Price</h4>
@@ -146,7 +146,7 @@ const USER_MANUAL = {
     <p>Open <strong>Analytics</strong> for a deeper analysis of your data. Three tabs sit across the top: <strong>Forecasting</strong>, <strong>Product Performance</strong>, and <strong>Ingredient Demand</strong>. Each tab has a <strong>Generate Report</strong> button to export the current view.</p>
     <h4>Sales Forecast</h4>
     <ul>
-      <li>Select <strong>Generate Forecast</strong> to create fresh predictions. Forecasts also run automatically: daily at <strong>9:00 AM</strong>, and a 7-day forecast every <strong>Monday at 9:00 AM</strong>.</li>
+      <li>Select <strong>Generate Forecast</strong> to create fresh predictions. Forecasts also run automatically: daily at <strong>9:00 AM</strong> every day except Monday, and a 7-day forecast every <strong>Monday at 9:00 AM</strong> (Monday runs the 7-day forecast only).</li>
       <li>The <strong>Forecast Accuracy</strong> card compares your forecast against a simple 7-day average. A higher percentage means the model is beating that baseline.</li>
       <li><strong>Sales and Demand Prediction</strong> shows a line chart and a table with <strong>Actual</strong> and <strong>Forecast</strong> quantities and revenue, plus estimated cost and gross profit. Switch between the <strong>Sales</strong> and <strong>Demand</strong> views and choose a date range.</li>
       <li><strong>Model Insights</strong> lists <strong>Feature Importance</strong> (what influences sales the most) and <strong>Training Information</strong> such as model status, last trained, active products, latest forecast, and the next training and forecast dates.</li>

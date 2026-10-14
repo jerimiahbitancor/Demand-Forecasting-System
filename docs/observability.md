@@ -70,7 +70,7 @@ There is no "critical" here: the app still works, the forecasts are just less tr
 ### Forecast schedule
 | | Normal | Warning |
 |---|---|---|
-| Last daily (9:00 AM) and weekly (Monday 9:00 AM) run, Asia/Manila | succeeded, or not run since the last restart | the last run **failed** (the reason is shown) |
+| Last daily (9:00 AM, every day except Monday) and weekly (Monday 9:00 AM — Monday runs the weekly forecast only) run, Asia/Manila | succeeded, or not run since the last restart | the last run **failed** (the reason is shown) |
 
 **What to do:** read the error. If the ML service was down, check that card. Then run a forecast by hand (Analytics → Forecasting → Generate Forecast).
 
