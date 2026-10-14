@@ -326,3 +326,98 @@
   color: var(--color-red-primary);
   background-color: var(--color-bg-light);
 }
+/* ---- K3: accuracy headline + bars (fewer than 3 trainings) ---- */
+.accuracy-headline {
+  margin-bottom: 12px;
+}
+
+.accuracy-headline-value {
+  font-size: 22px;
+  font-weight: 700;
+  margin: 0 0 6px;
+}
+
+.accuracy-headline-sub {
+  font-size: 14px;
+  color: var(--color-text-primary);
+  margin: 0 0 4px;
+}
+
+.accuracy-headline-note {
+  font-size: 12px;
+  color: var(--color-text-light);
+  margin: 6px 0 0;
+}
+
+.accuracy-bars {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.accuracy-bar-row {
+  display: grid;
+  grid-template-columns: 110px 1fr 56px;
+  align-items: center;
+  gap: 10px;
+  font-size: 13px;
+}
+
+.accuracy-bar-track {
+  height: 14px;
+  border-radius: 7px;
+  background-color: #f1eded;
+  overflow: hidden;
+}
+
+.accuracy-bar-fill {
+  height: 100%;
+  border-radius: 7px;
+}
+
+.accuracy-bar-fill--model { background-color: var(--color-success); }
+.accuracy-bar-fill--baseline { background-color: #9ca3af; }
+
+.accuracy-bar-value {
+  font-weight: 700;
+  text-align: right;
+}
+
+.accuracy-chart-baseline {
+  fill: none;
+  stroke: #9ca3af;
+  stroke-width: 2;
+}
+
+.legend-swatch--baseline { background-color: #9ca3af; }
+
+/* ---- K4: prediction chart markers + totals ---- */
+.sales-chart-today {
+  stroke: var(--color-text-light);
+  stroke-width: 1;
+  stroke-dasharray: 2 4;
+}
+
+.sales-chart-closed {
+  font-size: 10px;
+  font-weight: 600;
+  fill: var(--color-text-light);
+}
+
+.analytics-table-total td {
+  font-weight: 700;
+  border-top: 2px solid #e5dede;
+}
+
+/* ---- K1: forecast driver levels ---- */
+.driver-level {
+  font-size: 12px;
+  font-weight: 600;
+  padding: 2px 10px;
+  border-radius: 999px;
+  white-space: nowrap;
+}
+
+.driver-level--main { background-color: #f6e9e9; color: var(--color-red-primary); }
+.driver-level--some { background-color: #fdf3e7; color: #a15c00; }
+.driver-level--small { background-color: #f1f1f1; color: var(--color-text-light); }

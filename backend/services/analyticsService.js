@@ -128,6 +128,281 @@ function nextDailyForecastRun(now = dayjs().tz(PH_TZ)) {
   return next.toISOString();
 }
 
+// ---------------------------------------------------------------------
+// Pure helpers (unit-tested in tests/analyticsHelpers.test.js)
+// ---------------------------------------------------------------------
+
+// Retraining is manual. This is only the date we SUGGEST, shown next to
+// "Manual (click Start Training)". One constant so the owner can change it.
+const RETRAIN_RECOMMENDED_DAYS = 30;
+const MANILA_DATETIME_FORMAT = 'MMM D, YYYY, h:mm A';
+const MANILA_DATE_FORMAT = 'MMM D, YYYY';
+
+// "model_vYYYYMMDD_HHMMSS" -> dayjs (UTC), or null. ml-service stamps the
+// version with the container clock, which is UTC. Strict: a malformed date
+// (month 13) returns null instead of rolling over.
+function parseModelVersionTime(modelVersion) {
+  const m = /^model_v(\d{4})(\d{2})(\d{2})_(\d{2})(\d{2})(\d{2})/.exec(String(modelVersion || ''));
+  if (!m) return null;
+  const t = dayjs.utc(`${m[1]}-${m[2]}-${m[3]}T${m[4]}:${m[5]}:${m[6]}Z`);
+  if (!t.isValid() || t.format('YYYYMMDDHHmmss') !== m.slice(1).join('')) return null;
+  return t;
+}
+
+// Any instant (ISO string, Date, dayjs) -> "Oct 14, 2026, 4:56 AM" in Manila.
+function formatManilaDateTime(value) {
+  if (!value) return null;
+  const t = dayjs(value);
+  return t.isValid() ? t.tz(PH_TZ).format(MANILA_DATETIME_FORMAT) : null;
+}
+
+// A date-only string ("2026-10-06") -> "Oct 6, 2026". No time zone shift.
+function formatDateOnly(dateStr) {
+  if (!dateStr) return null;
+  const t = dayjs(String(dateStr).slice(0, 10));
+  return t.isValid() ? t.format(MANILA_DATE_FORMAT) : null;
+}
+
+// When was this model trained, as an instant? From model_version first
+// (has a time); evaluation_date only as a date-only fallback.
+function trainingTimeOf(metricsRow) {
+  if (!metricsRow) return { at: null, text: null, sortKey: '' };
+  const t = parseModelVersionTime(metricsRow.model_version);
+  if (t) {
+    return { at: t.toISOString(), text: t.tz(PH_TZ).format(MANILA_DATETIME_FORMAT), sortKey: t.toISOString() };
+  }
+  const date = metricsRow.evaluation_date ? String(metricsRow.evaluation_date).slice(0, 10) : null;
+  return { at: null, text: formatDateOnly(date), sortKey: date || '' };
+}
+
+// "Next training" never blank: training is manual, so say so, plus the
+// suggested date (last training + RETRAIN_RECOMMENDED_DAYS).
+function describeNextTraining(metricsRow) {
+  const manual = 'Manual (click Start Training).';
+  if (!metricsRow) return manual;
+  const t = parseModelVersionTime(metricsRow.model_version);
+  const base = t
+    ? t.tz(PH_TZ)
+    : (metricsRow.evaluation_date ? dayjs(String(metricsRow.evaluation_date).slice(0, 10)) : null);
+  if (!base || !base.isValid()) return manual;
+  return `${manual} Recommended around ${base.add(RETRAIN_RECOMMENDED_DAYS, 'day').format(MANILA_DATE_FORMAT)}.`;
+}
+
+// Plain-language groups for model_metrics.feature_importance. The UI shows
+// the label and level only — no percentages, no feature names.
+// lag_7 is listed for models trained before Oct 1 2026 (it was "sales 7
+// open days back"); newer models never have it.
+const FORECAST_DRIVER_GROUPS = [
+  { key: 'recent_sales', label: 'Recent sales (last 1-2 weeks)', features: ['rolling_7', 'rolling_14', 'lag_1', 'same_dow_last_open', 'lag_7'] },
+  { key: 'day_of_week', label: 'Day of the week', features: ['dow', 'is_weekend'] },
+  { key: 'special_days', label: 'Paydays and holidays', features: ['is_payday', 'is_holiday'] },
+  { key: 'closures', label: 'Store closures', features: ['days_since_last_open'] },
+  { key: 'time_of_year', label: 'Time of year', features: ['month', 'day'] },
+  { key: 'product', label: 'Which product it is', features: ['product_id'] },
+];
+
+function forecastDriverLevel(share) {
+  if (!(share > 0)) return null;
+  if (share >= 0.5) return 'Main factor';
+  if (share >= 0.1) return 'Some effect';
+  return 'Small effect';
+}
+
+// Shares are divided by their own total, so the result is the same whether
+// the row stored fractions (sum 1) or percentages (sum 100).
+function groupForecastDrivers(featureImportance) {
+  if (!featureImportance || typeof featureImportance !== 'object') return null;
+  const values = new Map();
+  let total = 0;
+  for (const [key, raw] of Object.entries(featureImportance)) {
+    const v = Number(raw);
+    if (!Number.isFinite(v) || v <= 0) continue;
+    values.set(key, v);
+    total += v;
+  }
+  if (total <= 0) return null;
+  return FORECAST_DRIVER_GROUPS
+    .map((group) => {
+      const share = group.features.reduce((sum, f) => sum + (values.get(f) || 0), 0) / total;
+      return { key: group.key, label: group.label, share, level: forecastDriverLevel(share) };
+    })
+    .filter((g) => g.level !== null)
+    .sort((a, b) => b.share - a.share);
+}
+
+// A forecast row written for a non-operating day (forecast_service.py
+// writes predicted 0 with model_version "<version>_closed"). Not demand.
+function isClosedForecastRow(row) {
+  return /_closed$/.test(String(row?.model_version || ''));
+}
+
+// Chart series = every date that has sales (up to today) OR a forecast.
+//   actual   = summed quantity_sold (callers pass only the rows to count)
+//   forecast = summed predicted_quantity for dates <= today (solid side)
+//   future   = the same for dates >= today, so TODAY is on both lines and
+//              the dashed line joins the solid one
+//   closed   = the date only has "_closed" forecast rows: forecast stays
+//              null (a gap), never a drop to 0
+// priceOf(productId) -> price or null; revenue sums skip unknown prices.
+function buildPredictionSeries({ salesRows = [], forecastRows = [], today, priceOf = () => null }) {
+  const byDate = new Map();
+  const bucket = (date) => {
+    let b = byDate.get(date);
+    if (!b) {
+      b = { date, actual: 0, actualRevenue: 0, hasActual: false, forecast: 0, forecastRevenue: 0, hasForecast: false, closed: false };
+      byDate.set(date, b);
+    }
+    return b;
+  };
+  for (const s of salesRows) {
+    const date = String(s.sale_date).slice(0, 10);
+    if (today && date > today) continue;
+    const b = bucket(date);
+    const qty = Number(s.quantity_sold) || 0;
+    const price = priceOf(s.product_id);
+    b.actual += qty;
+    if (price > 0) b.actualRevenue += qty * price;
+    b.hasActual = true;
+  }
+  for (const f of forecastRows) {
+    const b = bucket(String(f.forecast_date).slice(0, 10));
+    if (isClosedForecastRow(f)) {
+      b.closed = true;
+      continue;
+    }
+    const qty = Number(f.predicted_quantity) || 0;
+    const price = priceOf(f.product_id);
+    b.forecast += qty;
+    if (price > 0) b.forecastRevenue += qty * price;
+    b.hasForecast = true;
+  }
+  return Array.from(byDate.values())
+    .sort((a, b) => a.date.localeCompare(b.date))
+    .map((b) => {
+      const qty = b.hasForecast ? b.forecast : null;
+      const rev = b.hasForecast ? b.forecastRevenue : null;
+      const past = !today || b.date <= today;
+      const ahead = !today || b.date >= today;
+      return {
+        date: b.date,
+        actual: b.hasActual ? b.actual : null,
+        actualRevenue: b.hasActual ? b.actualRevenue : null,
+        forecast: past ? qty : null,
+        forecastRevenue: past ? rev : null,
+        future: ahead ? qty : null,
+        futureRevenue: ahead ? rev : null,
+        closed: b.closed && !b.hasForecast,
+      };
+    });
+}
+
+// Table totals add only known values. Products with no price add nothing to
+// revenue; no recipe adds nothing to cost; gross profit needs both.
+function summarizePredictionTotals(rows = []) {
+  const totals = {
+    actualRevenue: 0, forecastRevenue: 0, estCost: 0, estGrossProfit: 0,
+    noPriceCount: 0, noRecipeCount: 0,
+  };
+  const noPrice = new Set();
+  const noRecipe = new Set();
+  for (const r of rows) {
+    if (!r.hasPrice) noPrice.add(r.productId);
+    if (!r.hasRecipe) noRecipe.add(r.productId);
+    if (r.actualRevenue != null) totals.actualRevenue += r.actualRevenue;
+    if (r.forecastRevenue != null) totals.forecastRevenue += r.forecastRevenue;
+    if (r.estCost != null) totals.estCost += r.estCost;
+    if (r.estGrossProfit != null) totals.estGrossProfit += r.estGrossProfit;
+  }
+  totals.noPriceCount = noPrice.size;
+  totals.noRecipeCount = noRecipe.size;
+  return totals;
+}
+
+// Performance Ratio (Business Logic Doc v6, 2.2): for each forecast date,
+// a product's own rolling_7 ÷ the average rolling_7 of ACTIVE products that
+// day; a product's ratio = the mean of its daily ratios. Rows with a null
+// rolling_7 (before migration 007) are skipped, not read as 0.
+function computePerformanceRatios(rollingRows = [], activeProductIds = new Set()) {
+  const rollingByDate = new Map();
+  for (const row of rollingRows) {
+    if (!activeProductIds.has(row.product_id)) continue;
+    if (row.rolling_7 === null || row.rolling_7 === undefined) continue;
+    const bucket = rollingByDate.get(row.forecast_date) || [];
+    bucket.push({ productId: row.product_id, rolling7: Number(row.rolling_7) });
+    rollingByDate.set(row.forecast_date, bucket);
+  }
+  const dailyRatiosByProduct = new Map();
+  const dailyStoreAverages = [];
+  for (const entries of rollingByDate.values()) {
+    const storeAvg = entries.reduce((sum, e) => sum + e.rolling7, 0) / entries.length;
+    if (storeAvg <= 0) continue;
+    dailyStoreAverages.push(storeAvg);
+    for (const { productId, rolling7 } of entries) {
+      const list = dailyRatiosByProduct.get(productId) || [];
+      list.push(rolling7 / storeAvg);
+      dailyRatiosByProduct.set(productId, list);
+    }
+  }
+  const ratioByProduct = new Map();
+  for (const [productId, ratios] of dailyRatiosByProduct) {
+    ratioByProduct.set(productId, ratios.reduce((s, r) => s + r, 0) / ratios.length);
+  }
+  const storeAverageRolling7 = dailyStoreAverages.length
+    ? dailyStoreAverages.reduce((s, v) => s + v, 0) / dailyStoreAverages.length
+    : null;
+  return { ratioByProduct, storeAverageRolling7 };
+}
+
+// Performance Ratio default range: the 7 days ending on the newest sale
+// date. Today's sales are uploaded tomorrow, so a "today" default is empty.
+function defaultRatioRange(latestSaleDate, today) {
+  const end = latestSaleDate ? String(latestSaleDate).slice(0, 10) : today;
+  return { from: dayjs(end).subtract(6, 'day').format('YYYY-MM-DD'), to: end };
+}
+
+// rolling_7 rows for the ratio. Uses forecast dates inside the range; if the
+// range has none (for active products), falls back to the newest forecast
+// date <= max(rangeTo, today) that has rolling_7, and reports that date.
+async function loadRatioRollingRows(client, { rangeFrom, rangeTo, today, activeProductIds }) {
+  const select = 'product_id, forecast_date, rolling_7';
+  const { data: inRange, error } = await fetchAllRows(() => client
+    .from('forecasts')
+    .select(select)
+    .gte('forecast_date', rangeFrom)
+    .lte('forecast_date', rangeTo)
+    .not('rolling_7', 'is', null)
+    .order('forecast_date')
+    .order('product_id'));
+  if (error) throw error;
+  const activeInRange = (inRange || []).filter((r) => activeProductIds.has(r.product_id));
+  if (activeInRange.length) return { rows: activeInRange, ratioAsOf: null, source: 'range' };
+
+  const cap = rangeTo > today ? rangeTo : today;
+  const { data: latest, error: latestError } = await client
+    .from('forecasts')
+    .select('forecast_date')
+    .lte('forecast_date', cap)
+    .not('rolling_7', 'is', null)
+    .order('forecast_date', { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  if (latestError) throw latestError;
+  if (!latest) return { rows: [], ratioAsOf: null, source: 'none' };
+
+  const { data: dayRows, error: dayError } = await fetchAllRows(() => client
+    .from('forecasts')
+    .select(select)
+    .eq('forecast_date', latest.forecast_date)
+    .not('rolling_7', 'is', null)
+    .order('product_id'));
+  if (dayError) throw dayError;
+  return {
+    rows: (dayRows || []).filter((r) => activeProductIds.has(r.product_id)),
+    ratioAsOf: latest.forecast_date,
+    source: 'latest_forecast',
+  };
+}
+
 async function getSafetyBufferPercentage() {
   const { data } = await supabaseAdmin
     .from('forecast_config')
@@ -216,16 +491,24 @@ async function getForecastingAnalytics({ productId, from, to } = {}) {
     .order('evaluation_date', { ascending: true });
   if (metricsError) throw metricsError;
 
-  const latestMetrics = metricsRows && metricsRows.length ? metricsRows[metricsRows.length - 1] : null;
+  // Ordered by TRAINING time (from model_version), so two trainings on the
+  // same evaluation_date still come out in the right order. Stable sort.
+  const orderedMetrics = (metricsRows || [])
+    .map((row) => ({ row, trained: trainingTimeOf(row) }))
+    .sort((a, b) => a.trained.sortKey.localeCompare(b.trained.sortKey));
+  const latestMetrics = orderedMetrics.length ? orderedMetrics[orderedMetrics.length - 1].row : null;
+  const latestTrained = trainingTimeOf(latestMetrics);
   // Rows written before migration 008 have no wmape and never will —
   // re-scoring them would mean rebuilding a feature set that no longer
   // exists. They are SKIPPED, not treated as 0% accuracy, so the history
   // line and the chart simply start at the first WMAPE-scored run instead
   // of plunging to zero for every older row.
-  const accuracyHistory = (metricsRows || [])
-    .filter((row) => row.wmape !== null && row.wmape !== undefined)
-    .map((row) => ({
+  const accuracyHistory = orderedMetrics
+    .filter(({ row }) => row.wmape !== null && row.wmape !== undefined)
+    .map(({ row, trained }) => ({
       date: row.evaluation_date,
+      trainedAt: trained.at,
+      trainedAtText: trained.text,
       modelVersion: row.model_version,
       accuracy: accuracyFromWmape(row.wmape),
       baselineAccuracy: accuracyFromWmape(row.baseline_wmape),
@@ -268,12 +551,14 @@ async function getForecastingAnalytics({ productId, from, to } = {}) {
   if (forecastError) throw forecastError;
 
   // Paged: a date range across all products easily passes 1,000 rows.
+  // Sales never go past today (today's file is uploaded tomorrow).
+  const salesTo = rangeTo < range.today ? rangeTo : range.today;
   const buildSalesQuery = () => {
     let q = supabaseAdmin
       .from('daily_sales')
       .select('product_id, sale_date, quantity_sold')
       .gte('sale_date', rangeFrom)
-      .lte('sale_date', rangeTo);
+      .lte('sale_date', salesTo);
     if (productId) q = q.eq('product_id', productId);
     return q.order('sale_date').order('product_id');
   };
@@ -291,49 +576,55 @@ async function getForecastingAnalytics({ productId, from, to } = {}) {
     actualByKey.set(`${row.product_id}_${row.sale_date}`, row.quantity_sold);
   }
 
+  // Price 0 = "No price"; no recipe rows = "No recipe". Unknown money
+  // values stay null (shown as a label), never as ₱0.
+  const priceOf = (pid) => {
+    const p = Number(productById.get(pid)?.price);
+    return p > 0 ? p : null;
+  };
+
   const rows = (forecastRows || [])
     .map((f) => {
       const product = productById.get(f.product_id);
-      const price = product ? Number(product.price) : 0;
+      const price = priceOf(f.product_id);
+      const hasPrice = price !== null;
+      const hasRecipe = recipeMap.has(f.product_id);
+      const closed = isClosedForecastRow(f);
       const actualQty = actualByKey.has(`${f.product_id}_${f.forecast_date}`)
         ? actualByKey.get(`${f.product_id}_${f.forecast_date}`)
         : null;
       const forecastQty = Number(f.predicted_quantity);
-      const unitCogs = cogsPerUnitByProduct.get(f.product_id) || 0;
-      const forecastRevenue = forecastQty * price;
-      const estCost = forecastQty * unitCogs;
+      const forecastRevenue = hasPrice ? forecastQty * price : null;
+      const estCost = hasRecipe ? forecastQty * (cogsPerUnitByProduct.get(f.product_id) || 0) : null;
       return {
         date: f.forecast_date,
         productId: f.product_id,
         product: product?.name || `Product ${f.product_id}`,
+        closed,
+        hasPrice,
+        hasRecipe,
         actualQty,
         forecastQty,
-        actualRevenue: actualQty !== null ? actualQty * price : null,
+        actualRevenue: actualQty !== null && hasPrice ? actualQty * price : null,
         forecastRevenue,
         estCost,
-        estGrossProfit: forecastRevenue - estCost,
+        estGrossProfit: forecastRevenue !== null && estCost !== null ? forecastRevenue - estCost : null,
       };
     })
     .sort((a, b) => a.date.localeCompare(b.date) || a.product.localeCompare(b.product));
 
-  const byDate = new Map();
-  for (const row of rows) {
-    const bucket = byDate.get(row.date) || { date: row.date, actual: 0, forecast: 0, hasActual: false };
-    bucket.forecast += row.forecastQty;
-    if (row.actualQty !== null) {
-      bucket.actual += row.actualQty;
-      bucket.hasActual = true;
-    }
-    byDate.set(row.date, bucket);
-  }
-  const series = Array.from(byDate.values())
-    .sort((a, b) => a.date.localeCompare(b.date))
-    .map((point) => ({
-      date: point.date,
-      actual: point.hasActual ? point.actual : null,
-      forecast: point.date <= range.today ? point.forecast : null,
-      future: point.date > range.today ? point.forecast : null,
-    }));
+  // Chart actuals: active products only (or the one selected product), so
+  // the line compares like with like against the forecast.
+  const countedSales = productId
+    ? (salesRows || [])
+    : (salesRows || []).filter((s) => productById.get(s.product_id)?.status === 'active');
+  const series = buildPredictionSeries({
+    salesRows: countedSales,
+    forecastRows: forecastRows || [],
+    today: range.today,
+    priceOf,
+  });
+  const totals = summarizePredictionTotals(rows);
 
   const { data: latestRun } = await supabaseAdmin
     .from('forecast_runs')
@@ -358,14 +649,21 @@ async function getForecastingAnalytics({ productId, from, to } = {}) {
       standing,
       history: accuracyHistory,
     },
-    prediction: { rows, series, range: { from: rangeFrom, to: rangeTo } },
+    prediction: { rows, series, totals, range: { from: rangeFrom, to: rangeTo, today: range.today } },
     modelInsights: {
+      // Raw shares kept for the API; the UI renders forecastDrivers only.
       featureImportance, // null until the NEXT training run after migration 005 — see route-level note
+      forecastDrivers: groupForecastDrivers(latestMetrics?.feature_importance),
       trainingInfo: {
         modelStatus: latestMetrics ? 'Trained' : 'Not Trained',
         modelVersion: latestMetrics?.model_version || null,
-        lastTrained: latestMetrics?.evaluation_date || null,
+        // Manila date + time from model_version; evaluation_date (date
+        // only) when the version has no timestamp.
+        lastTrained: latestTrained.text,
+        lastTrainedAt: latestTrained.at,
+        evaluationDate: latestMetrics?.evaluation_date || null,
         latestForecastRun: latestRun?.run_at || null,
+        latestForecastRunText: formatManilaDateTime(latestRun?.run_at),
         latestForecastStaleDays: latestRun?.stale_days ?? null,
         activeProducts: activeProductsCount || 0,
         // MAE = average servings missed per product per day. Surfaced so
@@ -376,10 +674,11 @@ async function getForecastingAnalytics({ productId, from, to } = {}) {
         // Not persisted anywhere per training run (see model_service.py) —
         // returning null rather than a fabricated number.
         trainingRecords: null,
-        // Retraining cadence explicitly not finalized per the system
-        // module doc ("still researching") — not guessing at a date.
-        nextTraining: null,
+        // Training is manual; this states that plus a suggested date
+        // (last training + RETRAIN_RECOMMENDED_DAYS). Never null.
+        nextTraining: describeNextTraining(latestMetrics),
         nextForecastRun: nextDailyForecastRun(),
+        nextForecastRunText: formatManilaDateTime(nextDailyForecastRun()),
       },
     },
   };
@@ -390,8 +689,25 @@ async function getForecastingAnalytics({ productId, from, to } = {}) {
 // ---------------------------------------------------------------------
 async function getProductPerformanceAnalytics({ from, to } = {}) {
   const range = defaultDateRange();
+  // Demand Classification keeps the "today" default (it lists forecast rows).
   const rangeFrom = from || range.today;
   const rangeTo = to || range.today;
+  // Performance Ratio defaults to the 7 days ending on the newest sale
+  // date — today's sales are uploaded tomorrow, so "today" is always empty.
+  let ratioFrom = from;
+  let ratioTo = to;
+  if (!from || !to) {
+    const { data: latestSale, error: latestSaleError } = await supabaseAdmin
+      .from('daily_sales')
+      .select('sale_date')
+      .order('sale_date', { ascending: false })
+      .limit(1)
+      .maybeSingle();
+    if (latestSaleError) throw latestSaleError;
+    const fallback = defaultRatioRange(latestSale?.sale_date, range.today);
+    ratioFrom = from || fallback.from;
+    ratioTo = to || fallback.to;
+  }
   const safetyBufferPct = await getSafetyBufferPercentage();
   const bufferMultiplier = 1 + safetyBufferPct / 100;
 
@@ -471,8 +787,8 @@ async function getProductPerformanceAnalytics({ from, to } = {}) {
   const { data: salesRows, error: salesError } = await fetchAllRows(() => supabaseAdmin
     .from('daily_sales')
     .select('product_id, quantity_sold')
-    .gte('sale_date', rangeFrom)
-    .lte('sale_date', rangeTo)
+    .gte('sale_date', ratioFrom)
+    .lte('sale_date', ratioTo)
     .order('sale_date')
     .order('product_id'));
   if (salesError) throw salesError;
@@ -490,59 +806,25 @@ async function getProductPerformanceAnalytics({ from, to } = {}) {
   // /forecast run — see forecast_service.py + migration 007) instead of
   // recomputed here, so this can never drift from what the model itself
   // used. Rows written before that migration shipped have rolling_7 =
-  // null and are excluded below, not treated as 0.
+  // null and are excluded, not treated as 0. If the range has no
+  // forecast rows, the newest forecast date is used (ratioAsOf).
   const activeProductIds = new Set(products.filter((p) => p.status === 'active').map((p) => p.id));
+  const ratioRolling = await loadRatioRollingRows(supabaseAdmin, {
+    rangeFrom: ratioFrom, rangeTo: ratioTo, today: range.today, activeProductIds,
+  });
+  const { ratioByProduct, storeAverageRolling7 } = computePerformanceRatios(ratioRolling.rows, activeProductIds);
 
-  // Paged: products x dates over the requested range.
-  const { data: rollingRows, error: rollingError } = await fetchAllRows(() => supabaseAdmin
-    .from('forecasts')
-    .select('product_id, forecast_date, rolling_7')
-    .gte('forecast_date', rangeFrom)
-    .lte('forecast_date', rangeTo)
-    .not('rolling_7', 'is', null)
-    .order('forecast_date')
-    .order('product_id'));
-  if (rollingError) throw rollingError;
-
-  // forecast_date -> [{ productId, rolling7 }] for active products only
-  const rollingByDate = new Map();
-  for (const row of rollingRows || []) {
-    if (!activeProductIds.has(row.product_id)) continue;
-    const bucket = rollingByDate.get(row.forecast_date) || [];
-    bucket.push({ productId: row.product_id, rolling7: Number(row.rolling_7) });
-    rollingByDate.set(row.forecast_date, bucket);
-  }
-
-  // productId -> list of that product's daily ratios (own rolling_7 ÷
-  // that day's active-product average rolling_7), one entry per day in
-  // range that had data for it.
-  const dailyRatiosByProduct = new Map();
-  const dailyStoreAverages = [];
-  for (const entries of rollingByDate.values()) {
-    const storeAvgRolling7 = entries.reduce((sum, e) => sum + e.rolling7, 0) / entries.length;
-    if (storeAvgRolling7 <= 0) continue;
-    dailyStoreAverages.push(storeAvgRolling7);
-    for (const { productId, rolling7 } of entries) {
-      const list = dailyRatiosByProduct.get(productId) || [];
-      list.push(rolling7 / storeAvgRolling7);
-      dailyRatiosByProduct.set(productId, list);
-    }
-  }
-  const storeAverageRolling7 = dailyStoreAverages.length
-    ? dailyStoreAverages.reduce((sum, v) => sum + v, 0) / dailyStoreAverages.length
-    : null;
-
-  function averagePerformanceRatio(productId) {
-    const ratios = dailyRatiosByProduct.get(productId);
-    if (!ratios || !ratios.length) return null;
-    return ratios.reduce((sum, r) => sum + r, 0) / ratios.length;
-  }
-
-  const performanceRows = Array.from(qtyByProduct.entries())
-    .map(([productId, qty]) => {
+  // Every Active product gets a row (0 sold if no sales in range), plus any
+  // other product that did sell in the range.
+  const performanceProductIds = new Set([...activeProductIds, ...qtyByProduct.keys()]);
+  const performanceRows = Array.from(performanceProductIds)
+    .map((productId) => {
       const product = productById.get(productId);
       if (!product) return null;
-      const ratio = averagePerformanceRatio(productId);
+      const hasSales = qtyByProduct.has(productId);
+      const qty = qtyByProduct.get(productId) || 0;
+      const price = Number(product.price);
+      const ratio = ratioByProduct.has(productId) ? ratioByProduct.get(productId) : null;
       let actionSignal = 'Insufficient data';
       if (ratio !== null) {
         if (ratio > 1.2) actionSignal = 'Keep on Menu — top performer';
@@ -554,13 +836,17 @@ async function getProductPerformanceAnalytics({ from, to } = {}) {
         productId,
         product: product.name,
         quantitySold: qty,
-        revenue: qty * Number(product.price),
+        // Empty (not ₱0) when nothing sold in range or the price is 0.
+        revenue: hasSales && price > 0 ? qty * price : null,
+        hasPrice: price > 0,
         performanceRatio: ratio,
         actionSignal,
       };
     })
     .filter(Boolean)
-    .sort((a, b) => (b.performanceRatio || 0) - (a.performanceRatio || 0))
+    .sort((a, b) => (b.performanceRatio ?? -1) - (a.performanceRatio ?? -1)
+      || b.quantitySold - a.quantitySold
+      || a.product.localeCompare(b.product))
     .map((row, index) => ({ rank: index + 1, ...row }));
 
   // --- Product Status sections ---
@@ -635,8 +921,13 @@ async function getProductPerformanceAnalytics({ from, to } = {}) {
       // computed per-day against that day's own store average, not
       // against this single summary number.
       storeAverageRolling7,
-      range: { from: rangeFrom, to: rangeTo },
+      range: { from: ratioFrom, to: ratioTo },
+      // null when the ratio comes from forecast dates inside the range;
+      // otherwise the newest forecast date it was taken from.
+      ratioAsOf: ratioRolling.ratioAsOf,
+      ratioSource: ratioRolling.source,
     },
+    demandRange: { from: rangeFrom, to: rangeTo },
     productStatus: {
       active: sections.active,
       new: sections.new,
@@ -745,7 +1036,7 @@ async function getIngredientDemandAnalytics({ date, weekStart } = {}) {
 
   const { data: forecastRows, error: forecastError } = await supabaseAdmin
     .from('forecasts')
-    .select('product_id, forecast_date, predicted_quantity')
+    .select('product_id, forecast_date, predicted_quantity, model_version')
     .gte('forecast_date', weekDates[0])
     .lte('forecast_date', weekDates[6]);
   if (forecastError) throw forecastError;
@@ -847,9 +1138,15 @@ async function getIngredientDemandAnalytics({ date, weekStart } = {}) {
     totalItemsToBuy: groceryEligible.length,
   };
 
+  // Lets the page say WHY a table is empty: no forecast vs. no recipe.
+  // Closed-day rows (predicted 0) do not count as a forecast.
+  const openForecasts = (forecastRows || []).filter((f) => !isClosedForecastRow(f));
+  const weekHasForecasts = openForecasts.length > 0;
+  const dayHasForecasts = openForecasts.some((f) => f.forecast_date === targetDate);
+
   return {
-    weekly: { weekStart: weekDates[0], weekEnd: weekDates[6], days: weekDates, rows: weeklyDemand },
-    daily: { date: targetDate, rows: dailyIngredients },
+    weekly: { weekStart: weekDates[0], weekEnd: weekDates[6], days: weekDates, rows: weeklyDemand, hasForecasts: weekHasForecasts },
+    daily: { date: targetDate, rows: dailyIngredients, hasForecasts: dayHasForecasts },
     groceryList: { preview: groceryPreview, all: groceryEligible, totals: groceryTotals },
     safetyBufferPercentage: safetyBufferPct,
   };
@@ -955,4 +1252,18 @@ module.exports = {
   getIngredientDemandAnalytics,
   getForecastSummary,
   getMappedIngredientIds,
+  // Pure helpers, exported for tests.
+  RETRAIN_RECOMMENDED_DAYS,
+  parseModelVersionTime,
+  formatManilaDateTime,
+  trainingTimeOf,
+  describeNextTraining,
+  groupForecastDrivers,
+  forecastDriverLevel,
+  isClosedForecastRow,
+  buildPredictionSeries,
+  summarizePredictionTotals,
+  computePerformanceRatios,
+  defaultRatioRange,
+  loadRatioRollingRows,
 };

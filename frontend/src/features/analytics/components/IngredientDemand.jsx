@@ -13,6 +13,8 @@ import Tippy from '@tippyjs/react';
 import 'tippy.js/dist/tippy.css';
 import 'tippy.js/animations/scale.css';
 import InfoBanner from "./shared/InfoBanner.jsx";
+import EmptyState from "./shared/EmptyState.jsx";
+import { useNavigate } from "react-router-dom";
 import { authService } from "../../../services/authService.js";
 import "./shared/InfoBanner.css";
 import "./IngredientDemand.css";
@@ -251,6 +253,8 @@ function IngredientDemand() {
   const [apiData, setApiData] = useState(null);
   const [isLoading, setIsLoading] = useState(true);
   const [loadError, setLoadError] = useState(null);
+  const navigate = useNavigate();
+  const goToProductManagement = () => navigate("/inventory-management?tab=product");
 
   useEffect(() => {
     let cancelled = false;
@@ -284,6 +288,34 @@ function IngredientDemand() {
   const dailyIngredients = buildDailyIngredients(apiData?.daily?.rows);
   const groceryPreview = buildGroceryList(apiData?.groceryList?.all);
   const safetyBufferPercentage = apiData?.safetyBufferPercentage ?? 15;
+
+  // K6: say WHY a section is empty. No forecast rows -> wait for the 9:00 AM
+  // run; forecasts exist but no demand -> no recipe linked yet.
+  const loaded = !isLoading && !!apiData;
+  const noForecastWeek = (
+    <EmptyState
+      title="No forecast for this week yet"
+      message="No forecast for this week yet. Forecasts run every day at 9:00 AM."
+    />
+  );
+  const noForecastDay = (
+    <EmptyState
+      title="No forecast for this day yet"
+      message="No forecast for this week yet. Forecasts run every day at 9:00 AM."
+    />
+  );
+  const noRecipe = (
+    <EmptyState
+      title="No recipe linked yet"
+      message="No recipe linked to these products yet."
+      actionLabel="Go to Product Management"
+      onAction={goToProductManagement}
+    />
+  );
+  const weeklyEmpty = loaded && demandGrid.length === 0;
+  const weeklyEmptyState = apiData?.weekly?.hasForecasts ? noRecipe : noForecastWeek;
+  const dailyEmpty = loaded && dailyIngredients.length === 0;
+  const dailyEmptyState = apiData?.daily?.hasForecasts ? noRecipe : noForecastDay;
 
   const dailyDateLabel = formatLongDate(apiData?.daily?.date);
   const weeklyRangeLabel = apiData?.weekly
@@ -545,6 +577,7 @@ function IngredientDemand() {
             ingredient's typical amount. Darker = more than usual.
           </p>
 
+          {weeklyEmpty ? weeklyEmptyState : (
           <Tippy
             content={tooltips.weeklyPlanner}
             placement="top"
@@ -582,6 +615,7 @@ function IngredientDemand() {
               </table>
             </div>
           </Tippy>
+          )}
 
           <div className="chart-legend">
             <span className="legend-item">
@@ -633,6 +667,7 @@ function IngredientDemand() {
             <span className="stock-legend-pill stock-legend--critical">● Critical — order now</span>
           </div>
 
+          {dailyEmpty ? dailyEmptyState : (<>
           <div className="analytics-scroll-hint">
             Swipe the table sideways to see every column.
           </div>
@@ -662,6 +697,7 @@ function IngredientDemand() {
             </tbody>
           </table>
           </div>
+          </>)}
           <Pagination currentPage={dailyPage} totalPages={totalDailyPages} onPageChange={setDailyPage} />
         </section>
       </div>
@@ -700,6 +736,9 @@ function IngredientDemand() {
             <div className="grocery-kpi-card"><p className="grocery-kpi-label">Est. Total Cost</p><p className="grocery-kpi-value">₱{groceryPreview.reduce((sum, i) => sum + (i.estCost || 0), 0).toLocaleString()}</p></div>
             <div className="grocery-kpi-card"><p className="grocery-kpi-label">Total Items to Buy</p><p className="grocery-kpi-value">{groceryPreview.length}</p></div>
           </div>
+          {loaded && groceryPreview.length === 0 && (dailyIngredients.length > 0
+            ? <EmptyState title="Nothing to buy" message="Nothing to buy: stock covers the forecast." />
+            : dailyEmptyState)}
           <ul className="grocery-preview-list">
             {groceryPreview.slice(0, 5).map((item) => (
               <li key={item.name} className="grocery-preview-row">

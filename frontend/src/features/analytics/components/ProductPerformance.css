@@ -306,3 +306,5 @@
   color: var(--color-red-primary);
   background-color: var(--color-bg-light);
 }
+/* "—" for a product with no ratio yet */
+.value--muted { color: var(--color-text-light); font-style: italic; }
