@@ -212,32 +212,61 @@ function DataManagementSettings() {
 
   // Reset Historical Data handler
   const handleResetHistoricalData = async () => {
-    const confirmed = window.confirm(
-      "WARNING: This action cannot be undone. Are you sure you want to reset all historical data?"
-    );
-    if (!confirmed) return;
+    const confirmed = await Swal.fire({
+      title: 'Reset all historical data?',
+      html:
+        'This permanently deletes all uploaded sales history, forecasts, and ' +
+        'inventory transactions.<br /><br />' +
+        '<strong>Catalog, accounts, and settings are kept — but this action CANNOT be undone.</strong>',
+      icon: 'warning',
+      showCancelButton: true,
+      confirmButtonText: 'Yes, reset everything',
+      cancelButtonText: 'Cancel',
+      confirmButtonColor: '#d33',
+      cancelButtonColor: '#6b7280',
+      focusCancel: true,
+    });
+    if (!confirmed.isConfirmed) return;
 
     setResetStatus("loading");
-    const loadingToast = toast.loading('Resetting historical data...');
+    Swal.fire({
+      title: 'Resetting historical data...',
+      text: 'Please wait, this may take a moment.',
+      allowOutsideClick: false,
+      allowEscapeKey: false,
+      didOpen: () => {
+        Swal.showLoading();
+      },
+    });
 
     try {
       const response = await apiClient.delete('/settings/reset-data');
-      
-      toast.dismiss(loadingToast);
-      if (response.data.success) {
-        setResetStatus("success");
-        toast.success('Historical data reset successfully!');
-        setTimeout(() => {
-          setResetStatus(null);
-        }, 3000);
-      } else {
-        throw new Error('Reset failed');
+      Swal.close();
+
+      if (!response.data.success) {
+        throw new Error(response.data.error || 'Reset failed');
       }
+
+      setResetStatus("success");
+      await Swal.fire({
+        icon: 'success',
+        title: 'Historical data reset',
+        text: 'All historical data has been cleared successfully.',
+        timer: 2000,
+        showConfirmButton: false,
+      });
+      setTimeout(() => {
+        setResetStatus(null);
+      }, 3000);
     } catch (error) {
-      toast.dismiss(loadingToast);
+      Swal.close();
       console.error('Error resetting data:', error);
       setResetStatus("error");
-      toast.error('Failed to reset historical data');
+      Swal.fire({
+        icon: 'error',
+        title: 'Reset failed',
+        text: error.response?.data?.error || error.message || 'Failed to reset historical data',
+      });
       setTimeout(() => {
         setResetStatus(null);
       }, 3000);

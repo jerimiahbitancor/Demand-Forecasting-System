@@ -32,9 +32,9 @@ const RECIPE_UNIT_BASE_FACTOR = {
   tbsp: 15, tablespoon: 15, tablespoons: 15,
   tsp: 5, tps: 5, teaspoon: 5, teaspoons: 5,
   'fl oz': 30, floz: 30, 'fluid ounce': 30, 'fluid ounces': 30,
-  pt: 473, pint: 473, pints: 473,
-  qt: 946, quart: 946, quarts: 946,
-  gal: 3785, gallon: 3785, gallons: 3785
+  pt: 480, pint: 480, pints: 480,
+  qt: 960, quart: 960, quarts: 960,
+  gal: 3840, gallon: 3840, gallons: 3840
 };
 
 const RECIPE_MASS_UNITS = new Set([

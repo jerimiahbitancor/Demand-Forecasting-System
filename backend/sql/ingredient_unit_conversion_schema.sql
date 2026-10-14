@@ -79,9 +79,9 @@ INSERT INTO ingredient_units (name, family, base_unit, base_factor, aliases, is_
   ('Tablespoons (tbsp)', 'volume', 'mL', 15,     ARRAY['tbsp', 'tablespoon', 'tablespoons', 'tbsp (tbsp)'], true),
   ('Cups (cup)',       'volume', 'mL', 240,      ARRAY['cup', 'cups', 'cup (cup)', 'cups (cup)'], true),
   ('Fluid Ounces (fl oz)', 'volume', 'mL', 30,   ARRAY['fl oz', 'floz', 'fluid ounce', 'fluid ounces', 'fl oz (fl oz)'], true),
-  ('Pints (pt)',       'volume', 'mL', 473,      ARRAY['pt', 'pint', 'pints', 'pt (pt)'], true),
-  ('Quarts (qt)',      'volume', 'mL', 946,      ARRAY['qt', 'quart', 'quarts', 'qt (qt)'], true),
-  ('Gallons (gal)',    'volume', 'mL', 3785,     ARRAY['gal', 'gallon', 'gallons', 'gal (gal)'], true)
+  ('Pints (pt)',       'volume', 'mL', 480,      ARRAY['pt', 'pint', 'pints', 'pt (pt)'], true),
+  ('Quarts (qt)',      'volume', 'mL', 960,      ARRAY['qt', 'quart', 'quarts', 'qt (qt)'], true),
+  ('Gallons (gal)',    'volume', 'mL', 3840,     ARRAY['gal', 'gallon', 'gallons', 'gal (gal)'], true)
 ON CONFLICT (name) DO UPDATE SET
   family = EXCLUDED.family,
   base_unit = EXCLUDED.base_unit,
