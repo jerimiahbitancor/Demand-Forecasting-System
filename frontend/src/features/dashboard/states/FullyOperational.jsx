@@ -20,6 +20,7 @@ import {
 import Swal from '../../../utils/swal';
 import axios from 'axios';
 import Navbar from "../../components/Navbar/Navbar";
+import DashboardNotices from "../components/DashboardNotices.jsx";
 import "../pages/Dashboard.css";
 
 const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:5000/api';
@@ -40,7 +41,10 @@ const NOT_AVAILABLE_STYLE = {
 };
 const NOT_AVAILABLE_TEXT_STYLE = { color: '#6b7280', fontSize: 13, margin: '8px 0', lineHeight: 1.5 };
 
-const FullyOperational = () => {
+// initialState = the /upload/dashboard-state payload. Since Oct 14 2026 a
+// trained model always lands here; its attention/mapping blocks become
+// notice cards above the KPIs (components/DashboardNotices.jsx).
+const FullyOperational = ({ initialState, onRefreshState }) => {
   const [selectedChart, setSelectedChart] = useState("line");
   const [selectedPeriod, setSelectedPeriod] = useState("week");
   const [loading, setLoading] = useState(true);
@@ -503,6 +507,14 @@ const FullyOperational = () => {
            
           </div>
         </div>
+
+        {/* Things that need attention: shown above the normal dashboard,
+            never instead of it. Renders nothing when all is well. */}
+        <DashboardNotices
+          attention={initialState?.attention}
+          mapping={initialState?.mapping}
+          onRefreshState={onRefreshState}
+        />
 
         {/* Key Metrics Row */}
         <div className="metrics-grid">

@@ -496,6 +496,49 @@ function checkStale(now, old, label) {
   assert.ok(['configured', 'default'].includes(now.attention.operatingDaysSource), label);
 }
 
+// DELIBERATE CHANGE (owner-approved Oct 14 2026): once a model is trained
+// and forecasts exist, the state is ALWAYS 'fully-operational'. What used to
+// be 'data-needs-attention' / 'forecasts-ready-recipes-pending' now rides
+// along as `attention` (always present) and `mapping` (always present).
+// The reference above is NOT changed; this maps its answer to the new one
+// and checks every part the reference can vouch for.
+const TRAINED_STATES = new Set(['data-needs-attention', 'forecasts-ready-recipes-pending', 'fully-operational']);
+const newStateOf = (oldState) => (TRAINED_STATES.has(oldState) ? 'fully-operational' : oldState);
+const ATTENTION_FLAGS = ['isStale', 'isLowAccuracy', 'needsRetraining', 'dataQualityIssue'];
+
+function checkTrained(now, old, label) {
+  assert.equal(now.state, 'fully-operational', `${label}: a trained model always shows the full dashboard`);
+  // stats and progress: unchanged, field for field.
+  assert.deepEqual(comparable({ stats: now.stats, progress: now.progress }), comparable({ stats: old.stats, progress: old.progress }), `${label}: stats/progress`);
+  assert.ok(now.attention && typeof now.attention === 'object', `${label}: attention is always sent`);
+  assert.ok(now.mapping && typeof now.mapping === 'object', `${label}: mapping is always sent`);
+  assert.equal(now.mapping.hasUnmapped, now.mapping.unmappedCount > 0, `${label}: hasUnmapped matches the count`);
+  if (old.state === 'data-needs-attention') {
+    // Same attention payload as before (stale fields per Task 2.10).
+    const strip = (a) => { const c = { ...a }; for (const f of STALE_FIELDS) delete c[f]; return c; };
+    assert.deepEqual(strip(now.attention), strip(old.attention), `${label}: attention unchanged`);
+    checkStale(now, old, label);
+  } else {
+    // The baseline found nothing wrong: every flag must still be off.
+    for (const f of ATTENTION_FLAGS) assert.ok(!now.attention[f], `${label}: ${f} stays off`);
+  }
+  if (old.state === 'forecasts-ready-recipes-pending') {
+    assert.equal(now.mapping.unmappedCount, old.mapping.unmappedCount, `${label}: unmappedCount`);
+    assert.equal(now.mapping.activeCount, old.mapping.activeCount, `${label}: activeCount`);
+    assert.equal(now.mapping.hasUnmapped, true, `${label}: hasUnmapped`);
+  }
+  if (old.state === 'fully-operational') {
+    assert.equal(now.mapping.hasUnmapped, false, `${label}: every active product has a recipe`);
+  }
+}
+
+// Compare a new result with the baseline's, by the right rule for its state.
+function checkAgainstBaseline(now, old, label) {
+  if (TRAINED_STATES.has(old.state)) return checkTrained(now, old, label);
+  assert.deepEqual(comparableNew(now), comparableOld(old), label);
+  checkStale(now, old, label);
+}
+
 async function run(fn) {
   const saved = console.log;
   console.log = () => {};
@@ -523,10 +566,8 @@ for (const [name, expected, make, inFlight = false] of SCENARIOS) {
       const warm = await run(() => newSvc.getDashboardState(userId));
 
       assert.equal(old.result.state, expected, `baseline state for user ${userId}`);
-      assert.deepEqual(comparableNew(cold.result), comparableOld(old.result), `first check, user ${userId}`);
-      assert.deepEqual(comparableNew(warm.result), comparableOld(old.result), `cached check, user ${userId}`);
-      checkStale(cold.result, old.result, `first check, user ${userId}`);
-      checkStale(warm.result, old.result, `cached check, user ${userId}`);
+      checkAgainstBaseline(cold.result, old.result, `first check, user ${userId}`);
+      checkAgainstBaseline(warm.result, old.result, `cached check, user ${userId}`);
       assert.ok(warm.calls <= cold.calls, 'a cached check never costs more than a cold one');
     }
     trainingInFlight = false;
@@ -598,8 +639,7 @@ for (const [name, mutate, visible = true] of CHANGES) {
     mutate(db);
     const old = await run(() => reference.getDashboardState(7));
     const now = await run(() => newSvc.getDashboardState(7));
-    assert.deepEqual(comparableNew(now.result), comparableOld(old.result));
-    checkStale(now.result, old.result, name);
+    checkAgainstBaseline(now.result, old.result, name);
     if (visible) assert.notDeepEqual(comparable(now.result), comparable(before.result), 'the change is visible');
   });
 }
@@ -644,14 +684,17 @@ test('a non-operating day in between is not "stale" any more (Task 2.10)', async
   const cold = await run(() => newSvc.getDashboardState(7));
   const warm = await run(() => newSvc.getDashboardState(7));
   assert.equal(cold.result.state, 'fully-operational', 'the new rule does not');
+  assert.equal(cold.result.attention.isStale, false, 'and no stale notice');
   assert.equal(warm.result.state, 'fully-operational');
+  assert.equal(warm.result.attention.isStale, false);
 
   // Same data, but yesterday IS an operating day with no upload -> stale, 1 day.
+  // (Since Oct 14 2026 the state stays 'fully-operational'; stale is a notice.)
   db = make();
   db.business_profile = [{ id: 1, operating_days: [0, 1, 2, 3, 4, 5, 6] }];
   coverage.clearCache();
   const stale = await run(() => newSvc.getDashboardState(7));
-  assert.equal(stale.result.state, 'data-needs-attention');
+  assert.equal(stale.result.state, 'fully-operational');
   assert.equal(stale.result.attention.isStale, true);
   assert.equal(stale.result.attention.missingOperatingDays, 1);
   assert.equal(stale.result.attention.rawStaleDays, 1);
@@ -661,6 +704,25 @@ test('a non-operating day in between is not "stale" any more (Task 2.10)', async
   db.business_days.push({ id: 99001, business_date: today.subtract(1, 'day').format('YYYY-MM-DD'), status: 'confirmed_closed', confirmed_at: new Date().toISOString() });
   const closed = await run(() => newSvc.getDashboardState(7));
   assert.equal(closed.result.state, 'fully-operational');
+  assert.equal(closed.result.attention.isStale, false);
+});
+
+// Oct 14 2026 (owner-approved): trained + forecasts + low accuracy + missing
+// recipes is the full dashboard with two notices, not a different screen.
+test('trained model with low accuracy and unmapped products is fully-operational with notices', async () => {
+  viewMode = 'present';
+  trainingInFlight = false;
+  db = withForecast(build({ days: 50 }), { wmape: 30, baseline_wmape: 25 }); // loses to the 7-day average
+  db.product_ingredients.push({ product_id: 1 }); // 2 of 3 active products have no recipe
+  coverage.clearCache();
+  const { result } = await run(() => newSvc.getDashboardState(7));
+  assert.equal(result.state, 'fully-operational');
+  assert.equal(result.attention.isLowAccuracy, true);
+  assert.equal(result.attention.accuracy, 70);
+  assert.equal(result.attention.baselineAccuracy, 75);
+  assert.equal(result.mapping.hasUnmapped, true);
+  assert.equal(result.mapping.unmappedCount, 2);
+  assert.equal(result.mapping.activeCount, 3);
 });
 
 test('missing operating days add at most 1 request to a cached check (Task 2.10)', async () => {
@@ -674,7 +736,7 @@ test('missing operating days add at most 1 request to a cached check (Task 2.10)
   await run(() => newSvc.getDashboardState(7));
   tableLog = [];
   const warm = await run(() => newSvc.getDashboardState(7));
-  assert.equal(warm.result.state, old.result.state);
+  assert.equal(warm.result.state, newStateOf(old.result.state));
   const reads = (table) => tableLog.filter((t) => t === table).length;
   assert.equal(reads('business_profile'), 1, 'one business_profile read per check');
   assert.equal(reads('business_days:window'), 0, 'the business_days window comes from the fingerprint cache');

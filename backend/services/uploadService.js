@@ -1835,6 +1835,8 @@ class UploadService {
       .from('model_metrics')
       .select('model_version, evaluation_date, mape, wmape, baseline_wmape')
       .order('evaluation_date', { ascending: false })
+      // Tie-break: two trainings on the same day -> the newer row wins.
+      .order('id', { ascending: false })
       .limit(1)
       .maybeSingle();
     if (error) {
@@ -2135,31 +2137,26 @@ class UploadService {
       : null;
     const needsRetraining = daysSinceTraining !== null && daysSinceTraining > UploadService.RETRAINING_CADENCE_DAYS;
 
-    if (isStale || isLowAccuracy || needsRetraining || dataQualityIssue) {
-      return {
-        state: 'data-needs-attention',
-        stats,
-        progress,
-        attention: {
-          isStale, staleDays, lastConfirmedDate,
-          rawStaleDays, missingOperatingDays, operatingDaysSource,
-          isLowAccuracy, accuracy, baselineAccuracy, beatsBaseline: beatsBaselineFlag,
-          needsRetraining, daysSinceTraining,
-          dataQualityIssue,
-        },
-      };
-    }
-
     const { hasUnmapped, unmappedCount, activeCount } = take(unmappedResult);
-    if (hasUnmapped) {
-      return {
-        state: 'forecasts-ready-recipes-pending',
-        stats, progress,
-        mapping: { unmappedCount, activeCount },
-      };
-    }
 
-    return { state: 'fully-operational', stats, progress };
+    // Owner decision (Oct 14 2026): once a model is trained and forecasts
+    // exist, the dashboard is ALWAYS the full operational screen. Problems
+    // (stale data, accuracy, retraining due, data quality, missing recipes)
+    // ride along as notices shown above it, instead of replacing it with
+    // 'data-needs-attention' / 'forecasts-ready-recipes-pending'.
+    return {
+      state: 'fully-operational',
+      stats,
+      progress,
+      attention: {
+        isStale, staleDays, lastConfirmedDate,
+        rawStaleDays, missingOperatingDays, operatingDaysSource,
+        isLowAccuracy, accuracy, baselineAccuracy, beatsBaseline: beatsBaselineFlag,
+        needsRetraining, daysSinceTraining,
+        dataQualityIssue,
+      },
+      mapping: { unmappedCount, activeCount, hasUnmapped },
+    };
   }
 }
 
