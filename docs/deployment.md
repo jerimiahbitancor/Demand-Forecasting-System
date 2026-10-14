@@ -55,7 +55,9 @@ Start command: `npm start` (that is, `node server.js`).
 | `ALLOWED_ORIGINS` | yes | Comma-separated exact origins, e.g. the production Vercel domain. |
 | `ML_SERVICE_URL` | yes | Prefer the **private** address (`http://<ml-service>.railway.internal:<port>`). See below. |
 | `ML_SERVICE_SHARED_SECRET` | yes | Same value as in the `ml` service. |
-| `BREVO_API_KEY`, `BREVO_SENDER_EMAIL`, `BREVO_SENDER_NAME` | yes | OTP and password-reset email. |
+| `BREVO_API_KEY`, `BREVO_SENDER_EMAIL`, `BREVO_SENDER_NAME` | yes | All email: OTP, password reset and reminder emails (`services/emailService.js`, 10 s timeout). `BREVO_SENDER_NAME` defaults to `ChefDuo`. **A Gmail sender address sent through Brevo can land in Spam** (Gmail's own DMARC rules); verifying a sender domain in Brevo fixes that. |
+| `EMAIL_REMINDERS_ENABLED` | **set to `true` on the production host** | Also emails reminder notifications (upload reminders, unanswered days, stock shortfalls, low / out of stock, restock summary) to `business_profile.business_email`. Default `false`. One email per reminder (de-duplicated for 24 h), never one per user; an email failure never blocks the notification. Status messages (upload done, training, forecasts, prices) are never emailed. |
+| `FRONTEND_URL` | recommended | The deployed frontend, e.g. `https://<your-app>.vercel.app`. The "Open ChefDuo" button in reminder emails links here. If unset, the first non-localhost entry of `ALLOWED_ORIGINS` is used. |
 | `CLAMAV_HOST`, `CLAMAV_PORT`, `CLAMAV_TIMEOUT` | no | Upload virus-scan settings. |
 | `LOG_LEVEL` | no | `debug` / `info` / `warn` / `error`. Default `info` in production. |
 | `RATE_LIMIT_AUTH_MAX` | no | Strict limit for OTP and password endpoints. Default 20 per 15 min per IP. |
@@ -69,7 +71,7 @@ Start command: `npm start` (that is, `node server.js`).
 
 ### Running the backend locally
 
-`backend/.env` points at the **live** database. A local `npm run dev` has `NODE_ENV` unset, so `SCHEDULERS_ENABLED` defaults to `false`: it never sends reminders, runs forecasts or imports prices by itself. Do not set `SCHEDULERS_ENABLED=true` locally, and do not set `PRODUCT_MERGE_ENABLED=true` locally unless you mean to merge real products.
+`backend/.env` points at the **live** database. A local `npm run dev` has `NODE_ENV` unset, so `SCHEDULERS_ENABLED` defaults to `false`: it never sends reminders, runs forecasts or imports prices by itself. Do not set `SCHEDULERS_ENABLED=true` locally, and do not set `PRODUCT_MERGE_ENABLED=true` locally unless you mean to merge real products. Leave `EMAIL_REMINDERS_ENABLED` unset locally too. To check that email works, use Settings > Business Profile > **Send test reminder email**: it sends one sample to the saved business email even when reminders are off, at most 3 per 10 minutes.
 
 ## Railway: `ml` (ML service)
 

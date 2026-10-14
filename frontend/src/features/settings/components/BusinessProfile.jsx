@@ -6,6 +6,7 @@ import toast from 'react-hot-toast';
 import "./BusinessProfile.css";
 import { authService } from '../../../services/authService';
 import { publishBusinessProfile } from '../../../context/BusinessProfileContext';
+import sharedApiClient from '../../../services/apiClient';
 
 const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:5000/api';
 
@@ -41,6 +42,9 @@ function BusinessProfile() {
   const [isLoading, setIsLoading] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
   const [isUploadingLogo, setIsUploadingLogo] = useState(false);
+  // "Send test reminder email" goes to the SAVED business email.
+  const [savedEmail, setSavedEmail] = useState("");
+  const [isSendingTestEmail, setIsSendingTestEmail] = useState(false);
   const logoInputRef = useRef(null);
 
   const apiClient = axios.create({
@@ -78,6 +82,7 @@ function BusinessProfile() {
           opens_at: (profile.opens_at || "").slice(0, 5),
           closes_at: (profile.closes_at || "").slice(0, 5),
         });
+        setSavedEmail((profile.business_email || "").trim());
         if (profile.logo) {
           setLogoPreview(profile.logo);
         }
@@ -93,6 +98,25 @@ function BusinessProfile() {
   useEffect(() => {
     fetchBusinessProfile();
   }, []);
+
+  const emailUnsaved = (formData.business_email || "").trim() !== savedEmail;
+
+  // Sends a sample reminder now (POST /notifications/test-email), even when
+  // email reminders are off on the server.
+  const handleSendTestEmail = async () => {
+    if (isSendingTestEmail) return;
+    setIsSendingTestEmail(true);
+    const toastId = toast.loading('Sending test reminder email...');
+    try {
+      const response = await sharedApiClient.post('/notifications/test-email');
+      const sentTo = response.data?.data?.sentTo;
+      toast.success(`Test email sent to ${sentTo || 'the business email'}. Check the Spam folder too.`, { id: toastId });
+    } catch (error) {
+      toast.error(error.apiError?.message || 'Could not send the test email.', { id: toastId });
+    } finally {
+      setIsSendingTestEmail(false);
+    }
+  };
 
   const handleInputChange = (e) => {
     const { name, value } = e.target;
@@ -201,6 +225,7 @@ function BusinessProfile() {
         setLogoFile(null);
         publishBusinessProfile(response.data.data || profileToSave);
         toast.success('Business profile saved successfully!');
+        setSavedEmail((profileToSave.business_email || "").trim());
       } else {
         toast.error('Failed to save business profile');
       }
@@ -252,15 +277,30 @@ function BusinessProfile() {
             <label htmlFor="businessEmail" className="form-label">
               Business Email
             </label>
-            <input
-              type="email"
-              id="businessEmail"
-              name="business_email"
-              className="form-input"
-              placeholder="Enter business email"
-              value={formData.business_email}
-              onChange={handleInputChange}
-            />
+            <div className="business-email-row">
+              <input
+                type="email"
+                id="businessEmail"
+                name="business_email"
+                className="form-input"
+                placeholder="Enter business email"
+                value={formData.business_email}
+                onChange={handleInputChange}
+              />
+              <button
+                type="button"
+                className="test-email-btn"
+                onClick={handleSendTestEmail}
+                disabled={isSendingTestEmail || emailUnsaved}
+                title={emailUnsaved ? 'Save the profile first: the test goes to the saved email.' : 'Send a sample reminder to the saved business email'}
+              >
+                {isSendingTestEmail ? 'Sending...' : 'Send test reminder email'}
+              </button>
+            </div>
+            <p className="business-email-hint">
+              Reminders (upload sales, low stock) are emailed here when reminders are on.
+              {emailUnsaved ? ' Save the profile first to test the new email.' : ''}
+            </p>
           </div>
 
           <div className="form-group">

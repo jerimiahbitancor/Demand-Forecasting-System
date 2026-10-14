@@ -37,51 +37,9 @@ const generateOTP = () => {
   return Math.floor(100000 + Math.random() * 900000).toString();
 };
 
-// ✅ Brevo HTTP API config (replaces nodemailer/SMTP transporter)
-const BREVO_API_URL = 'https://api.brevo.com/v3/smtp/email';
-
-const sendViaBrevo = async ({ to, subject, htmlContent }) => {
-  if (!process.env.BREVO_API_KEY) {
-    throw new Error('BREVO_API_KEY is not set');
-  }
-  if (!process.env.BREVO_SENDER_EMAIL) {
-    throw new Error('BREVO_SENDER_EMAIL is not set');
-  }
-
-  const response = await fetch(BREVO_API_URL, {
-    method: 'POST',
-    headers: {
-      accept: 'application/json',
-      'api-key': process.env.BREVO_API_KEY,
-      'content-type': 'application/json',
-    },
-    body: JSON.stringify({
-      sender: {
-        name: process.env.BREVO_SENDER_NAME || 'ChefDuo',
-        email: process.env.BREVO_SENDER_EMAIL,
-      },
-      to: [{ email: to }],
-      subject,
-      htmlContent,
-    }),
-  });
-
-  if (!response.ok) {
-    let errorBody = {};
-    try {
-      errorBody = await response.json();
-    } catch (_) {
-      // ignore parse failure, fall back to status text below
-    }
-    // Note: do not log the API key or full request body here (PII/secrets logging
-    // is already flagged elsewhere in this backend as a bug to avoid repeating).
-    throw new Error(
-      `Brevo send failed (${response.status} ${response.statusText}): ${JSON.stringify(errorBody)}`
-    );
-  }
-
-  return response.json(); // { messageId: "..." }
-};
+// Email goes through services/emailService.js (Brevo HTTP API, 10 s
+// timeout). Moved there Oct 14 2026 so reminder emails share it.
+const { sendEmail } = require('./emailService');
 
 // Send OTP Email
 const sendOTPEmail = async (email, otp, type) => {
@@ -147,10 +105,10 @@ const sendOTPEmail = async (email, otp, type) => {
       </html>
     `;
 
-    await sendViaBrevo({
+    await sendEmail({
       to: email,
       subject: template.subject,
-      htmlContent,
+      html: htmlContent,
     });
 
     return { success: true };
