@@ -212,3 +212,61 @@ test('L6: weekly ingredient rows carry the ingredient record unit', async () => 
   assert.equal(byName.get('Egg').values[0], 10);  // 10 plates × 1 pcs
   assert.ok(Math.abs(byName.get('Rice').values[0] - 2) < 1e-9); // 10 × 200 g = 2 kg
 });
+
+// ------------------------------------------------- Dashboard summary (A1/A2)
+const dayjs = require('dayjs');
+const todayPh = () => dayjs().tz('Asia/Manila').format('YYYY-MM-DD');
+
+test('A2: stock alerts sum one ingredient across products (Low + Low -> Critical)', async () => {
+  const rice = { id: 11, name: 'Rice', category: 'Grains', unit: 'kg', price: 50, quantity: 10 };
+  fake.reset({
+    products: [
+      { id: 1, name: 'Porksilog', price: 120, status: 'active' },
+      { id: 2, name: 'Tapsilog', price: 130, status: 'active' },
+    ],
+    product_ingredients: [
+      { product_id: 1, unit: 'kg', quantity_per_serving: 1, ingredients: rice },
+      { product_id: 2, unit: 'kg', quantity_per_serving: 1, ingredients: rice },
+    ],
+    // Each alone needs 12 kg against 10 in stock: 0.83 -> Low.
+    // Together they need 24 kg: 0.42 -> Critical.
+    forecasts: [
+      { product_id: 1, forecast_date: todayPh(), predicted_quantity: 12 },
+      { product_id: 2, forecast_date: todayPh(), predicted_quantity: 12 },
+    ],
+    forecast_config: [{ safety_buffer_percentage: 0 }],
+  });
+  assert.equal(svc.computeStockStatus(10, 12), 'Low', 'each product alone is Low');
+  const summary = await svc.getForecastSummary();
+  assert.deepEqual(summary.stockAlerts, { Critical: 1, Low: 0, Normal: 0, Excess: 0 });
+
+  // Same rule as Ingredient Demand's daily table.
+  const demand = await svc.getIngredientDemandAnalytics({ date: todayPh() });
+  assert.equal(demand.daily.rows.length, 1);
+  assert.equal(demand.daily.rows[0].status, 'Critical');
+  assert.equal(demand.daily.rows[0].forecastedNeed, 24);
+});
+
+test('A1: two trainings on the same date -> getForecastSummary uses the higher id', async () => {
+  fake.reset({
+    products: [],
+    // Older row first: without the id tie-break the first row would win.
+    model_metrics: [
+      { id: 1, model_version: 'model_v20261014_010000', evaluation_date: '2026-10-14', wmape: 35.00033, baseline_wmape: 30 },
+      { id: 2, model_version: 'model_v20261014_090000', evaluation_date: '2026-10-14', wmape: 35.356, baseline_wmape: 30 },
+    ],
+  });
+  const summary = await svc.getForecastSummary();
+  assert.ok(Math.abs(summary.forecastAccuracy.value - 64.644) < 1e-9, `got ${summary.forecastAccuracy.value}`);
+});
+
+test('A3: predictedSalesYesterday = yesterday forecasts × price, null without rows', async () => {
+  const yesterday = dayjs().tz('Asia/Manila').subtract(1, 'day').format('YYYY-MM-DD');
+  fake.reset({
+    products: [{ id: 1, name: 'Porksilog', price: 120, status: 'active' }],
+    forecasts: [{ product_id: 1, forecast_date: yesterday, predicted_quantity: 5 }],
+  });
+  assert.equal((await svc.getForecastSummary()).predictedSalesYesterday, 600);
+  fake.reset({ products: [{ id: 1, name: 'Porksilog', price: 120, status: 'active' }] });
+  assert.equal((await svc.getForecastSummary()).predictedSalesYesterday, null);
+});
