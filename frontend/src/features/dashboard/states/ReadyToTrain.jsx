@@ -156,7 +156,7 @@ const ReadyToTrain = ({ initialState }) => {
     // was never true. Using one toast id for the whole lifecycle means
     // there's only ever one message on screen, and it only ever claims
     // "started" once the server has actually accepted the request.
-    const toastId = toast.loading("Starting training…");
+    const toastId = toast.loading("Starting training. If the ML service was asleep, this can take up to a minute.");
     try {
       await axios.post(`${API_URL}/ml/train`, {}, {
         headers: { Authorization: `Bearer ${getAuthToken()}` },

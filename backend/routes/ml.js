@@ -37,6 +37,17 @@ function respondWithMlError(res, error, fallbackMessage) {
 // /train (see ml-service/app.py) since it needs to inspect the actual
 // pooled data, not just upload status.
 router.post('/train', authenticate, async (req, res) => {
+  // A previous training request that ended ambiguously (timeout, or a
+  // network/502/504 after the request was sent) may still be running on
+  // Flask. mlService.train() rejects with 409 on its own, but checking
+  // here first gives a plain 409 without firing a "training failed"
+  // notification for a run that never started on this request.
+  if (mlService.getTrainCooldownRemaining() > 0) {
+    return res.status(409).json({
+      success: false,
+      error: 'A previous training request ended without a result and may still be running. Please wait a few minutes before trying again.',
+    });
+  }
   if (trainRequestInFlight || mlService.isTrainingInFlight()) {
     return res.status(409).json({
       success: false,
