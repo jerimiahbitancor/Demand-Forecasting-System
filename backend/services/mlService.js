@@ -7,6 +7,25 @@
 const ML_SERVICE_URL = (process.env.ML_SERVICE_URL || 'http://localhost:5001').replace(/\/+$/, '');
 const ML_SERVICE_SHARED_SECRET = process.env.ML_SERVICE_SHARED_SECRET;
 
+// Read a positive numeric env var, falling back to the default when unset,
+// non-numeric or <= 0 (a bad value must never make every call time out or
+// make the wake loop spin). All are plain milliseconds.
+const numEnv = (name, fallback) => {
+  const value = Number(process.env[name]);
+  return Number.isFinite(value) && value > 0 ? value : fallback;
+};
+
+const ML_TRAIN_WAKE_TOTAL_MS = numEnv('ML_TRAIN_WAKE_TOTAL_MS', 60000);
+const ML_TRAIN_WAKE_INTERVAL_MS = numEnv('ML_TRAIN_WAKE_INTERVAL_MS', 5000);
+const ML_TRAIN_TIMEOUT_MS = numEnv('ML_TRAIN_TIMEOUT_MS', 125000); // just above gunicorn's 120 s
+// Retries may legitimately be 0, so this one allows zero.
+const ML_TRAIN_RETRIES_429_HIBERNATE = (() => {
+  const value = Number(process.env.ML_TRAIN_RETRIES_429_HIBERNATE);
+  return Number.isFinite(value) && value >= 0 ? value : 2; // 1 initial + 2 retries
+})();
+const ML_TRAIN_RETRY_WAIT_MS = numEnv('ML_TRAIN_RETRY_WAIT_MS', 2000);
+const ML_TRAIN_COOLDOWN_MS = numEnv('ML_TRAIN_COOLDOWN_MS', 180000); // 3 minutes
+
 class MlServiceError extends Error {
   constructor(message, status, details) {
     super(message);
@@ -26,7 +45,21 @@ const RETRY_MAX_HONORED_WAIT_S = 20;
 const BODY_SNIPPET_CHARS = 300;
 const FORECAST_BUSY_MESSAGE = 'The forecast server is busy right now. Please try again in a minute.';
 
+// A connection error with one of these codes never established a connection,
+// so a training request could not have reached Flask. Anything else (a socket
+// reset mid-request) is ambiguous — training may have started.
+const PRE_SEND_NETWORK_CODES = new Set(['ECONNREFUSED', 'ENOTFOUND', 'EAI_AGAIN']);
+
 let sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+// Get current time in Asia/Manila for logging (Ph time zone)
+const nowManila = () => {
+  try {
+    return new Date().toLocaleString('en-US', { timeZone: 'Asia/Manila', hour12: false });
+  } catch (e) {
+    return new Date().toISOString();
+  }
+};
 
 const headerOf = (response, name) => {
   try {
@@ -68,6 +101,14 @@ function retryWaitMs(retryAfter, now = Date.now()) {
   return seconds * 1000;
 }
 
+// Render's edge marker for "refused because the app was hibernating": HTTP
+// 429 with x-render-routing: hibernate-rate-limited. That refusal happens
+// before Flask runs, so a retry cannot duplicate a training run.
+function isHibernate429(response) {
+  if (!response || response.status !== 429) return false;
+  return headerOf(response, 'x-render-routing') === 'hibernate-rate-limited';
+}
+
 async function postOnce(path, body) {
   try {
     return await fetch(`${ML_SERVICE_URL}${path}`, {
@@ -83,6 +124,42 @@ async function postOnce(path, body) {
       `Could not reach ml-service at ${ML_SERVICE_URL}`,
       503,
       networkError.message
+    );
+  }
+}
+
+// Train-only POST: adds an AbortSignal so the request can be given up on
+// after ML_TRAIN_TIMEOUT_MS. Kept separate from postOnce above so the
+// forecast path (which has no timeout) is byte-for-byte unchanged. The
+// thrown network error carries whether the connection was never made
+// (pre-send) so the caller can tell a safe failure from an ambiguous one.
+async function postTrainOnce(body, signal) {
+  try {
+    return await fetch(`${ML_SERVICE_URL}/train`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-ML-Service-Secret': ML_SERVICE_SHARED_SECRET,
+      },
+      body: JSON.stringify(body || {}),
+      signal,
+    });
+  } catch (networkError) {
+    // An abort from our own AbortController is not a network error — let it
+    // through so the caller can label it a timeout.
+    if (networkError && (networkError.name === 'AbortError' || networkError.name === 'TimeoutError')) {
+      throw networkError;
+    }
+    const causeCode = networkError && networkError.cause && networkError.cause.code;
+    throw new MlServiceError(
+      `Could not reach ml-service at ${ML_SERVICE_URL}`,
+      503,
+      {
+        network: true,
+        networkPreSend: PRE_SEND_NETWORK_CODES.has(causeCode),
+        causeCode: causeCode || null,
+        message: networkError.message,
+      }
     );
   }
 }
@@ -151,6 +228,33 @@ async function checkHealth() {
   }
 }
 
+async function waitForMlServiceReady(capMs, intervalMs) {
+  const cap = capMs || ML_TRAIN_WAKE_TOTAL_MS;
+  const interval = intervalMs || ML_TRAIN_WAKE_INTERVAL_MS;
+  // Attempts are bounded too, not only by wall clock: tests (and any
+  // environment with a patched sleep) can make the clock stand still.
+  const maxAttempts = Math.max(1, Math.ceil(cap / interval));
+  const start = Date.now();
+  let attempts = 0;
+  let lastUp = false;
+  while (attempts < maxAttempts && Date.now() - start < cap) {
+    attempts += 1;
+    lastUp = await checkHealth();
+    if (lastUp) {
+      return { ok: true, attempts, elapsedMs: Date.now() - start };
+    }
+    await sleep(interval);
+  }
+  const elapsedMs = Date.now() - start;
+  console.log(`[mlService.train] [${nowManila()}] wake=FAILED attempts=${attempts}/${maxAttempts} elapsed=${elapsedMs}ms outcome=wakeup-timeout`);
+  const err = new MlServiceError(
+    'ML service is still waking up; please try again in a minute.',
+    503,
+    { wakeupTimedOut: true, capMs: cap, attempts }
+  );
+  throw err;
+}
+
 // POST /api/ml/train blocks synchronously until Flask's /train finishes
 // (no job queue) — there's otherwise no way for anything else (the
 // Dashboard state machine, TrainingInProgress.jsx's polling) to know
@@ -161,21 +265,183 @@ async function checkHealth() {
 // capstone/single-owner scale, not something a multi-instance
 // deployment could rely on.
 let trainingInFlight = false;
+let trainCooldownUntil = 0; // epoch ms when cooldown ends (after ambiguous failure)
 
 function isTrainingInFlight() {
   return trainingInFlight;
 }
 
-// Manual-only, per the confirmed design — this function doesn't decide
-// WHETHER to train, it just calls /train. The "should we allow this
-// right now" checks (upload completeness, 12-month gate) live in the
-// route handler and inside ml-service's /train respectively.
-function train() {
-  trainingInFlight = true;
-  return callMlService('/train', {}).finally(() => {
-    trainingInFlight = false;
-  });
+function getTrainCooldownRemaining() {
+  const now = Date.now();
+  if (now < trainCooldownUntil) return trainCooldownUntil - now;
+  return 0;
 }
+
+function setTrainCooldown(ms = ML_TRAIN_COOLDOWN_MS) {
+  trainCooldownUntil = Date.now() + ms;
+}
+
+function clearTrainCooldown() {
+  trainCooldownUntil = 0;
+}
+
+// The one place /train is called. Wakes the service first, then POSTs with an
+// AbortController timeout. Retries ONLY when the host refused the request
+// before Flask ran (HTTP 429 + x-render-routing: hibernate-rate-limited).
+// Never retries any other status, a timeout, or a network error: a retry
+// after training started can save a duplicate model_v{timestamp}.json, and
+// each run uploads a brand-new file (see the file header comment).
+async function callTrainWithRetryAndTimeout() {
+  if (!ML_SERVICE_SHARED_SECRET) {
+    throw new MlServiceError(
+      'ML_SERVICE_SHARED_SECRET is not configured on the Express side',
+      500
+    );
+  }
+
+  const maxAttempts = 1 + Math.max(0, ML_TRAIN_RETRIES_429_HIBERNATE); // 1 initial + N retries
+
+  // Wake-up phase first. A wake-up timeout throws here (503, wakeupTimedOut)
+  // and never reaches /train.
+  const wakeStart = Date.now();
+  const wake = await waitForMlServiceReady(ML_TRAIN_WAKE_TOTAL_MS, ML_TRAIN_WAKE_INTERVAL_MS);
+  const wakeupMs = Date.now() - wakeStart;
+  console.log(`[mlService.train] [${nowManila()}] wake=ok attempts=${wake.attempts} wake_ms=${wakeupMs} outcome=awake`);
+
+  let attempt = 0;
+  let lastError = null;
+  while (attempt < maxAttempts) {
+    attempt += 1;
+    const trainStart = Date.now();
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), ML_TRAIN_TIMEOUT_MS);
+    try {
+      const response = await postTrainOnce({}, controller.signal);
+      const { text, data } = await readBody(response);
+      const trainMs = Date.now() - trainStart;
+
+      if (response.ok) {
+        console.log(`[mlService.train] [${nowManila()}] wake_ms=${wakeupMs} train_req_ms=${trainMs} outcome=success attempt=${attempt}/${maxAttempts}`);
+        return data;
+      }
+
+      const headers = diagnosticHeaders(response);
+      const snippet = String(text || '').slice(0, BODY_SNIPPET_CHARS);
+      const isHibernate = isHibernate429(response);
+      console.error(`ml-service /train HTTP ${response.status} (attempt ${attempt}/${maxAttempts}) hibernate=${isHibernate}: ${JSON.stringify({ headers, body: snippet })}`);
+
+      const message = (data && (data.reason || data.error)) || `ml-service returned HTTP ${response.status}`;
+      lastError = new MlServiceError(message, response.status, {
+        status: response.status,
+        body: snippet,
+        headers,
+        attempts: attempt,
+        ...(data && typeof data === 'object' ? { response: data } : {}),
+      });
+
+      if (isHibernate && attempt < maxAttempts) {
+        console.log(`[mlService.train] [${nowManila()}] wake_ms=${wakeupMs} train_req_ms=${trainMs} outcome=hibernate-retry http=429 attempt=${attempt}/${maxAttempts} retry_in_ms=${ML_TRAIN_RETRY_WAIT_MS}`);
+        await sleep(ML_TRAIN_RETRY_WAIT_MS);
+        continue;
+      }
+
+      if (isHibernate) {
+        console.log(`[mlService.train] [${nowManila()}] wake_ms=${wakeupMs} train_req_ms=${trainMs} outcome=hibernate-exhausted http=429 attempt=${attempt}/${maxAttempts}`);
+      } else {
+        console.log(`[mlService.train] [${nowManila()}] wake_ms=${wakeupMs} train_req_ms=${trainMs} outcome=other-error http=${response.status} attempt=${attempt}/${maxAttempts}`);
+      }
+      throw lastError;
+    } catch (err) {
+      const trainMs = Date.now() - trainStart;
+      // (1) Our AbortController fired: the request was sent, so training may
+      // still be running on Flask. Ambiguous — caller sets the cooldown.
+      if (err && (err.name === 'AbortError' || err.name === 'TimeoutError')) {
+        console.log(`[mlService.train] [${nowManila()}] wake_ms=${wakeupMs} train_req_ms=${trainMs} outcome=timeout attempt=${attempt}/${maxAttempts}`);
+        throw new MlServiceError('Training request timed out waiting for the ML service', 504, {
+          timeoutMs: ML_TRAIN_TIMEOUT_MS,
+          attempts: attempt,
+          ambiguous: true,
+        });
+      }
+      // (2) Network failure from postOnce. Pre-send (connection never made)
+      // is safe; anything else is ambiguous.
+      if (err && err.name === 'MlServiceError' && err.details && err.details.network) {
+        const preSend = err.details.networkPreSend === true;
+        console.log(`[mlService.train] [${nowManila()}] wake_ms=${wakeupMs} train_req_ms=${trainMs} outcome=network-error preSend=${preSend} attempt=${attempt}/${maxAttempts}`);
+        throw new MlServiceError(err.message || 'Network error during training', 503, {
+          network: true,
+          networkPreSend: preSend,
+          attempts: attempt,
+          ambiguous: !preSend,
+        });
+      }
+      // (3) A response-derived MlServiceError we threw ourselves (lastError).
+      throw err;
+    } finally {
+      clearTimeout(timeout);
+    }
+  }
+
+  throw lastError || new MlServiceError('Training failed', 500);
+}
+
+// An ambiguous failure = the request may have reached Flask and training may
+// still be running. Those set a cooldown; a wake-up timeout or a hibernate
+// 429 proves training never started and does NOT.
+function isAmbiguousTrainFailure(error) {
+  if (!error) return false;
+  const details = error.details || {};
+  if (details.wakeupTimedOut) return false; // never reached Flask
+  if (error.status === 429) return false; // hibernate/edge refusal, never reached Flask
+  if (typeof details.ambiguous === 'boolean') return details.ambiguous;
+  if (error.status === 504) return true; // our AbortController timeout
+  if (error.status === 502) return true; // edge/gateway error after forwarding
+  return false;
+}
+
+// Manual-only, per the confirmed design — this function doesn't decide
+// WHETHER to train, it just calls /train. The "should we allow this right
+// now" checks (upload completeness, 12-month gate) live in the route handler
+// and inside ml-service's /train respectively. Rejects with 409 while another
+// run is in flight (TRAINING_IN_FLIGHT) or during the post-ambiguous-failure
+// cooldown (TRAIN_COOLDOWN); the cooldown is NOT set by a wake-up timeout or
+// a hibernate 429, because those prove training never started on Flask.
+function train() {
+  if (trainingInFlight) {
+    const error = new MlServiceError('Training is already in progress', 409);
+    error.code = 'TRAINING_IN_FLIGHT';
+    return Promise.reject(error);
+  }
+  const cooldownMs = getTrainCooldownRemaining();
+  if (cooldownMs > 0) {
+    const err = new MlServiceError(
+      'A previous training request ended without a result and may still be running. Please wait a few minutes before trying again.',
+      409,
+      { cooldownRemainingMs: cooldownMs }
+    );
+    err.code = 'TRAIN_COOLDOWN';
+    return Promise.reject(err);
+  }
+
+  trainingInFlight = true;
+  const startAll = Date.now();
+  return callTrainWithRetryAndTimeout()
+    .then((result) => {
+      console.log(`[mlService.train] [${nowManila()}] total_ms=${Date.now() - startAll} outcome=success`);
+      return result;
+    })
+    .catch((error) => {
+      if (isAmbiguousTrainFailure(error)) {
+        setTrainCooldown(ML_TRAIN_COOLDOWN_MS);
+        console.log(`[mlService.train] [${nowManila()}] total_ms=${Date.now() - startAll} outcome=ambiguous-failure cooldown_ms=${ML_TRAIN_COOLDOWN_MS} status=${error && error.status}`);
+      }
+      throw error;
+    })
+    .finally(() => {
+      trainingInFlight = false;
+    });
+}
+
 
 // One forecast at a time. A manual "Generate Forecast" and a scheduled run
 // (or two clicks) used to reach ml-service together and write the same
@@ -218,6 +484,9 @@ module.exports = {
   train, forecast, checkHealth, isTrainingInFlight, isForecastInFlight,
   MlServiceError, FORECAST_IN_FLIGHT_MESSAGE, FORECAST_BUSY_MESSAGE,
   retryWaitMs,
+  getTrainCooldownRemaining,
   // Tests only: replace the wait between attempts.
   _setSleepForTests(fn) { sleep = fn; },
+  _clearTrainCooldownForTests() { clearTrainCooldown(); },
+  _setTrainCooldownForTests(ms) { setTrainCooldown(ms); },
 };
