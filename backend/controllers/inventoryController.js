@@ -2,9 +2,55 @@
 const { supabaseAdmin } = require('../config/supabase');
 const { logAction } = require('../services/auditService');
 const analyticsService = require('../services/analyticsService');
-const { parseRecipeQuantity } = require('../utils/recipeUnits');
+const { parseRecipeQuantity, deriveUnitPrice, isMissingColumnError } = require('../utils/recipeUnits');
 
 const actorOf = (req) => req.user?.name || req.user?.email || null;
+
+// Purchase pack ("150 g per sachet for ₱200") -> { pack_qty, pack_unit, pack_price }.
+// Anything missing or invalid is stored as NULL so the ingredient simply has
+// no pack recorded and keeps its manually typed unit cost.
+const readPackFields = (body = {}) => {
+  const rawQty = body.pack_qty;
+  const rawPrice = body.pack_price;
+  const qty = rawQty === '' || rawQty === null || rawQty === undefined ? NaN : parseRecipeQuantity(rawQty);
+  const price = rawPrice === '' || rawPrice === null || rawPrice === undefined ? NaN : Number(rawPrice);
+  const unitRaw = body.pack_unit ? String(body.pack_unit).trim() : '';
+  const validQty = Number.isFinite(qty) && qty > 0;
+  return {
+    pack_qty: validQty ? qty : null,
+    pack_unit: validQty && unitRaw ? unitRaw : null,
+    pack_price: Number.isFinite(price) && price > 0 ? price : null,
+  };
+};
+
+// The unit cost saved on the ingredient is always the pack's price spread over
+// the amount it holds, expressed in the stock unit (150 g for ₱200 on a
+// kg-stocked ingredient -> ₱1333.33/kg) so COGS, demand and the grocery list
+// keep reading a plain price-per-stock-unit. Without a usable pack the price
+// the owner typed is kept as-is.
+const resolveUnitPrice = ({ pack, stockUnit, gramsPerCup, ingredientName, fallbackPrice }) => {
+  if (pack.pack_qty && pack.pack_price && pack.pack_unit) {
+    const derived = deriveUnitPrice({
+      packQty: pack.pack_qty,
+      packUnit: pack.pack_unit,
+      packPrice: pack.pack_price,
+      stockUnit,
+      gramsPerCup,
+      ingredientName,
+    });
+    if (derived != null) return derived;
+  }
+  return fallbackPrice;
+};
+
+// Strip the pack columns and retry: migration 012 not applied yet.
+const stripPackColumns = (row) => {
+  const copy = { ...row };
+  delete copy.pack_qty;
+  delete copy.pack_unit;
+  delete copy.pack_price;
+  return copy;
+};
 
 // Helper function to get user ID - SIMPLIFIED
 // Use req.user.id directly since it already contains the numeric user ID
@@ -290,7 +336,9 @@ const createInventoryItem = async (req, res) => {
 
     console.log('📝 Creating inventory item:', { name, category, quantity, price });
 
-    if (!name || !category || quantity === undefined || price === undefined) {
+    const pack = readPackFields(req.body);
+
+    if (!name || !category || quantity === undefined || (price === undefined && !(pack.pack_qty && pack.pack_price && pack.pack_unit))) {
       return res.status(400).json({
         success: false,
         error: 'Name, category, quantity, and price are required'
@@ -310,13 +358,25 @@ const createInventoryItem = async (req, res) => {
     console.log('👤 User ID:', userId);
 
     const parsedMinStock = parseRecipeQuantity(min_stock);
+    const parsedGramsPerCup = parseFloat(req.body.grams_per_cup);
+    const gramsPerCup = Number.isFinite(parsedGramsPerCup) && parsedGramsPerCup > 0 ? parsedGramsPerCup : null;
+    const stockUnit = unit || 'pcs';
     const insertData = {
       name: name.trim(),
       category: category.trim(),
-      unit: unit || 'pcs',
+      unit: stockUnit,
       quantity: parsedQuantity,
-      price: parseFloat(price),
+      price: resolveUnitPrice({
+        pack,
+        stockUnit,
+        gramsPerCup,
+        ingredientName: name.trim(),
+        fallbackPrice: parseFloat(price),
+      }),
       min_stock: Number.isFinite(parsedMinStock) ? (parsedMinStock || 0) : 0,
+      pack_qty: pack.pack_qty,
+      pack_unit: pack.pack_unit,
+      pack_price: pack.pack_price,
       created_by: userId,
       updated_by: userId
     };
@@ -328,11 +388,22 @@ const createInventoryItem = async (req, res) => {
 
     console.log('📦 Insert data:', insertData);
 
-    const { data, error } = await supabaseAdmin
+    let insertResult = await supabaseAdmin
       .from('ingredients')
       .insert([insertData])
       .select()
       .single();
+
+    // Migration 012 not applied yet (pack columns missing): save without them.
+    if (insertResult.error && isMissingColumnError(insertResult.error)) {
+      insertResult = await supabaseAdmin
+        .from('ingredients')
+        .insert([stripPackColumns(insertData)])
+        .select()
+        .single();
+    }
+
+    const { data, error } = insertResult;
 
     if (error) {
       console.error('❌ Error creating item:', error);
@@ -413,16 +484,63 @@ const updateInventoryItem = async (req, res) => {
       const parsedMin = parseRecipeQuantity(min_stock);
       updateData.min_stock = Number.isFinite(parsedMin) ? (parsedMin || 0) : 0;
     }
+    if (req.body.grams_per_cup !== undefined) {
+      const g = parseFloat(req.body.grams_per_cup);
+      updateData.grams_per_cup = Number.isFinite(g) && g > 0 ? g : null;
+    }
+
+    // The pack is only touched when the client actually sent it, so older
+    // callers (and the restock/archive paths) never wipe it by accident.
+    const packSent = req.body.pack_qty !== undefined
+      || req.body.pack_unit !== undefined
+      || req.body.pack_price !== undefined;
+    const pack = readPackFields(req.body);
+    if (packSent) {
+      updateData.pack_qty = pack.pack_qty;
+      updateData.pack_unit = pack.pack_unit;
+      updateData.pack_price = pack.pack_price;
+    }
+
+    // Re-derive the unit cost from the pack when one is set (see
+    // resolveUnitPrice); otherwise keep the price from the request.
+    const effective = {
+      unit: updateData.unit !== undefined ? updateData.unit : currentItem.unit,
+      name: updateData.name !== undefined ? updateData.name : currentItem.name,
+      gramsPerCup: updateData.grams_per_cup !== undefined ? updateData.grams_per_cup : currentItem.grams_per_cup,
+      pack_qty: packSent ? updateData.pack_qty : currentItem.pack_qty,
+      pack_unit: packSent ? updateData.pack_unit : currentItem.pack_unit,
+      pack_price: packSent ? updateData.pack_price : currentItem.pack_price,
+    };
+    const resolvedPrice = resolveUnitPrice({
+      pack: { pack_qty: effective.pack_qty, pack_unit: effective.pack_unit, pack_price: effective.pack_price },
+      stockUnit: effective.unit,
+      gramsPerCup: effective.gramsPerCup,
+      ingredientName: effective.name,
+      fallbackPrice: updateData.price,
+    });
+    if (resolvedPrice !== undefined) updateData.price = resolvedPrice;
 
     console.log('📦 Update data:', updateData);
 
     // Update item
-    const { data, error } = await supabaseAdmin
+    let updateResult = await supabaseAdmin
       .from('ingredients')
       .update(updateData)
       .eq('id', id)
       .select()
       .single();
+
+    // Migration 012 not applied yet (pack columns missing): save the rest.
+    if (updateResult.error && isMissingColumnError(updateResult.error) && packSent) {
+      updateResult = await supabaseAdmin
+        .from('ingredients')
+        .update(stripPackColumns(updateData))
+        .eq('id', id)
+        .select()
+        .single();
+    }
+
+    const { data, error } = updateResult;
 
     if (error) {
       console.error('❌ Error updating item:', error);

@@ -842,18 +842,27 @@ class UploadService {
           (productRows || []).filter((product) => !isArchivedProduct(product)).map((product) => product.id)
         );
         if (deductingProductIds.size > 0) {
-          const recipeColumns = (withUnit) => (withUnit
-            ? 'product_id, ingredient_id, quantity_per_serving, unit, ingredients!inner(name, unit, grams_per_cup, created_at)'
-            : 'product_id, ingredient_id, quantity_per_serving, ingredients!inner(name, unit, grams_per_cup, created_at)');
+          const ingredientCols = (withPack) => (withPack
+            ? 'name, unit, grams_per_cup, created_at, pack_qty, pack_unit'
+            : 'name, unit, grams_per_cup, created_at');
+          const recipeColumns = (withUnit, withPack) => (withUnit
+            ? `product_id, ingredient_id, quantity_per_serving, unit, ingredients!inner(${ingredientCols(withPack)})`
+            : `product_id, ingredient_id, quantity_per_serving, ingredients!inner(${ingredientCols(withPack)})`);
           let recipeResult = await supabaseAdmin
             .from('product_ingredients')
-            .select(recipeColumns(true))
+            .select(recipeColumns(true, true))
             .in('product_id', [...deductingProductIds]);
 
           if (recipeResult.error && isMissingColumnError(recipeResult.error)) {
             recipeResult = await supabaseAdmin
               .from('product_ingredients')
-              .select(recipeColumns(false))
+              .select(recipeColumns(true, false))
+              .in('product_id', [...deductingProductIds]);
+          }
+          if (recipeResult.error && isMissingColumnError(recipeResult.error)) {
+            recipeResult = await supabaseAdmin
+              .from('product_ingredients')
+              .select(recipeColumns(false, false))
               .in('product_id', [...deductingProductIds]);
           }
 
@@ -878,7 +887,12 @@ class UploadService {
                 recipe.quantity_per_serving,
                 recipe.unit,
                 ingredientUnit,
-                { gramsPerCup: recipe.ingredients?.grams_per_cup, ingredientName: recipe.ingredients?.name }
+                {
+                  gramsPerCup: recipe.ingredients?.grams_per_cup,
+                  ingredientName: recipe.ingredients?.name,
+                  packQty: recipe.ingredients?.pack_qty,
+                  packUnit: recipe.ingredients?.pack_unit,
+                }
               );
             },
           });

@@ -80,6 +80,38 @@ function buildGroceryList(apiAllItems) {
   }));
 }
 
+// "Used in" can list every product an ingredient appears in, which is far too
+// long for one table cell and wraps the row into an uneven tower. Show the
+// first product and fold the rest behind a "+N more" that reveals the full
+// list on hover.
+const USED_IN_PREVIEW = 1;
+
+function UsedInCell({ value }) {
+  const text = value && value !== "—" ? String(value) : "";
+  const names = text ? text.split(/\s*,\s*/).filter(Boolean) : [];
+  if (names.length <= USED_IN_PREVIEW) {
+    return <>{value || "—"}</>;
+  }
+  const shown = names.slice(0, USED_IN_PREVIEW).join(", ");
+  const more = names.length - USED_IN_PREVIEW;
+  return (
+    <Tippy
+      content={names.join(", ")}
+      placement="top"
+      animation="scale"
+      duration={200}
+      theme="dark"
+      maxWidth={320}
+      interactive
+    >
+      <span className="used-in-cell" tabIndex={0} aria-label={`Used in: ${names.join(", ")}`}>
+        <span className="used-in-text">{shown}</span>
+        <span className="used-in-more"> +{more} more</span>
+      </span>
+    </Tippy>
+  );
+}
+
 const GROCERY_CATEGORIES = [
   "Meat & Poultry",
   "Seafood",
@@ -687,14 +719,14 @@ function IngredientDemand() {
             role="region"
             aria-label="Daily ingredient demand: need, stock, status, quantity to buy and cost by ingredient"
           >
-          <table className="analytics-table">
+          <table className="analytics-table daily-demand-table">
             <thead><tr><th>No.</th><th>Ingredient</th><th>Used in</th><th>Forecasted Need</th><th>On Stock</th><th>Status</th><th>To Buy</th><th>Unit</th><th>Market Price</th><th>Est. Cost</th></tr></thead>
             <tbody>
               {paginatedDaily.map((row, i) => (
                 <tr key={row.name}>
-                  <td data-label="No.">{i + 1}</td>
+                  <td data-label="No.">{(dailyPage - 1) * ROWS_PER_PAGE + i + 1}</td>
                   <td data-label="Ingredient">{row.name}</td>
-                  <td data-label="Used in">{row.usedIn}</td>
+                  <td data-label="Used in" className="used-in-col"><UsedInCell value={row.usedIn} /></td>
                   <td data-label="Forecasted Need">{formatStockQty(row.forecasted, row.unit)}</td>
                   <td data-label="On Stock">{formatStockQty(row.onStock, row.unit)}</td>
                   <td data-label="Status"><span className={`status-badge status-badge--${row.status.toLowerCase()}`}>{row.status}</span></td>
@@ -791,10 +823,10 @@ function IngredientDemand() {
           role="region"
           aria-label="Daily ingredient demand, full view"
         >
-        <table className="analytics-table">
+        <table className="analytics-table daily-demand-table">
           <thead><tr><th>No.</th><th>Ingredient</th><th>Used in</th><th>Forecasted Need</th><th>On Stock</th><th>Status</th><th>To Buy</th><th>Unit</th><th>Market Price</th><th>Est. Cost</th></tr></thead>
           <tbody>{filteredDailyIngredients.slice((modalDailyPage - 1) * 10, modalDailyPage * 10).map((row, i) => (
-            <tr key={row.name}><td data-label="No.">{i + 1}</td><td data-label="Ingredient">{row.name}</td><td data-label="Used in">{row.usedIn}</td><td data-label="Forecasted Need">{formatStockQty(row.forecasted, row.unit)}</td><td data-label="On Stock">{formatStockQty(row.onStock, row.unit)}</td><td data-label="Status"><span className={`status-badge status-badge--${row.status.toLowerCase()}`}>{row.status}</span></td><td data-label="To Buy">{row.toBuy === null ? <span className="value--muted">{row.status === "Normal" ? "— no order" : "— delay restock"}</span> : formatStockQty(row.toBuy, row.unit)}</td><td data-label="Unit">{row.unit}</td><td data-label="Market Price">{row.marketPrice === null ? "—" : `₱${row.marketPrice}`}</td><td data-label="Est. Cost">{row.estCost === null ? "—" : `₱${row.estCost.toLocaleString()}`}</td></tr>
+            <tr key={row.name}><td data-label="No.">{(modalDailyPage - 1) * 10 + i + 1}</td><td data-label="Ingredient">{row.name}</td><td data-label="Used in" className="used-in-col"><UsedInCell value={row.usedIn} /></td><td data-label="Forecasted Need">{formatStockQty(row.forecasted, row.unit)}</td><td data-label="On Stock">{formatStockQty(row.onStock, row.unit)}</td><td data-label="Status"><span className={`status-badge status-badge--${row.status.toLowerCase()}`}>{row.status}</span></td><td data-label="To Buy">{row.toBuy === null ? <span className="value--muted">{row.status === "Normal" ? "— no order" : "— delay restock"}</span> : formatStockQty(row.toBuy, row.unit)}</td><td data-label="Unit">{row.unit}</td><td data-label="Market Price">{row.marketPrice === null ? "—" : `₱${row.marketPrice}`}</td><td data-label="Est. Cost">{row.estCost === null ? "—" : `₱${row.estCost.toLocaleString()}`}</td></tr>
           ))}</tbody>
         </table>
         </div>

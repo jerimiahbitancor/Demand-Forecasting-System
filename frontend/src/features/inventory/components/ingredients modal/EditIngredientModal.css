@@ -1,11 +1,30 @@
-.inventory-edit-modal .inventory-edit-form-grid {
+.inventory-modal-content.inventory-edit-modal .inventory-edit-form-grid {
+  display: grid;
   grid-template-columns: 1fr 1fr;
+  gap: 0.75rem 1rem;
 }
 
-@media (max-width: 768px) {
-  .inventory-edit-modal .inventory-edit-form-grid {
-    grid-template-columns: 1fr;
+/* Wide screens: three columns so the 10 fields fit in 4 rows instead of 5,
+   keeping the dialog short. Scoped with an extra class so it outranks the
+   generic .inventory-modal-body .form-grid rule regardless of stylesheet
+   order. */
+@media (min-width: 993px) {
+  .inventory-modal-content.inventory-edit-modal .inventory-edit-form-grid {
+    grid-template-columns: repeat(3, 1fr);
+    gap: 0.5rem 0.875rem;
+  }
+
+  .inventory-modal-content.inventory-edit-modal .inventory-modal-header {
+    padding: 1rem 1.5rem 0.5rem;
+  }
+
+  .inventory-modal-content.inventory-edit-modal .inventory-modal-footer {
+    padding: 0.75rem 1.5rem;
   }
 }
 
-
+@media (max-width: 768px) {
+  .inventory-modal-content.inventory-edit-modal .inventory-edit-form-grid {
+    grid-template-columns: 1fr;
+  }
+}

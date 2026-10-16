@@ -46,7 +46,9 @@ const calculateProductCogs = (product) => {
     const quantity = Number(
       convertRecipeQuantity(ingredient.quantity_per_serving, recipeUnit, ingredientUnit, {
         gramsPerCup: ingredient.ingredients?.grams_per_cup,
-        ingredientName: ingredient.ingredients?.name
+        ingredientName: ingredient.ingredients?.name,
+        packQty: ingredient.ingredients?.pack_qty,
+        packUnit: ingredient.ingredients?.pack_unit
       })
     ) || 0;
     return total + ingredientPrice * quantity;
@@ -1003,7 +1005,9 @@ const ProductManagement = () => {
     const pieceWeight = pieceWeightOf(item.name, newIngredient.unit);
     const converted = convertRecipeQuantity(qty, newIngredient.unit, item.unit, {
       gramsPerCup: item.grams_per_cup,
-      ingredientName: item.name
+      ingredientName: item.name,
+      packQty: item.pack_qty,
+      packUnit: item.pack_unit
     });
     const volumeToMass = unitKindOf(newIngredient.unit) === 'volume' && unitKindOf(item.unit) === 'mass';
     return {
@@ -1043,7 +1047,9 @@ const ProductManagement = () => {
       stockUnit: item.unit,
       price: unitPrice,
       gramsPerCup: item.grams_per_cup,
-      ingredientName: item.name
+      ingredientName: item.name,
+      packQty: item.pack_qty,
+      packUnit: item.pack_unit
     });
     return Number.isFinite(cost) && cost > 0 ? cost : null;
     // ingredientUnits: see costPreview above.
