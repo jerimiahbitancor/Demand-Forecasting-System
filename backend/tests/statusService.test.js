@@ -142,7 +142,12 @@ const baseDeps = (over = {}) => ({
   getUploadReminderStatus: () => ({ name: 'uploadReminder', since: '2026-10-06T00:00:00.000Z', jobs: [], lastRuns: { '0400': null, '0700': null } }),
   getMissingOperatingDays: async () => ({ missingOperatingDays: 0, missingDates: [], operatingDaysSource: 'configured' }),
   fetchImpl: async () => ({ status: 200 }),
-  env: { NODE_ENV: 'production', ML_SERVICE_URL: 'http://ml.railway.internal:8080', RAILWAY_GIT_COMMIT_SHA: 'abcdef1234567' },
+  getUploadReminderLog: async () => ({ '0400': null, '0700': null }),
+  // A fully configured server: email on, Brevo set, outside trigger set.
+  env: {
+    NODE_ENV: 'production', ML_SERVICE_URL: 'http://ml.railway.internal:8080', RAILWAY_GIT_COMMIT_SHA: 'abcdef1234567',
+    EMAIL_REMINDERS_ENABLED: 'true', BREVO_API_KEY: 'k', BREVO_SENDER_EMAIL: 's@example.com', JOB_TRIGGER_SECRET: 'x',
+  },
   process: { memoryUsage: () => ({ rss: 200 * 1024 * 1024 }), uptime: () => 3600, version: 'v22.20.0' },
   ...over,
 });
@@ -328,4 +333,36 @@ test('scheduler: timed jobs switched off (SCHEDULERS_ENABLED=false) -> warns, sa
   assert.equal(off.details.schedulersEnabled, false);
   const on = await buildDefaultChecks(baseDeps()).scheduler();
   assert.equal(on.details.schedulersEnabled, true);
+});
+
+test('scheduler: flags shown (no keys); warns when jobs are on but email reminders are off', async () => {
+  const deps = baseDeps();
+  const fine = await buildDefaultChecks(deps).scheduler();
+  assert.equal(fine.status, 'ok');
+  assert.deepEqual(fine.details.flags, {
+    schedulersEnabled: true, emailRemindersEnabled: true, brevoConfigured: true, jobTriggerConfigured: true, service: null,
+  });
+  assert.doesNotMatch(JSON.stringify(fine.details), /"k"|s@example\.com/, 'no key or sender value in the answer');
+
+  const emailOff = await buildDefaultChecks(baseDeps({ env: { ...deps.env, EMAIL_REMINDERS_ENABLED: 'false' } })).scheduler();
+  assert.equal(emailOff.status, 'warn');
+  assert.match(emailOff.reason, /EMAIL_REMINDERS_ENABLED is off/);
+
+  const noSecret = await buildDefaultChecks(baseDeps({ env: { ...deps.env, JOB_TRIGGER_SECRET: '' } })).scheduler();
+  assert.match(noSecret.reason, /JOB_TRIGGER_SECRET is not set/);
+});
+
+test('scheduler: last run per slot from the run log (survives restarts); a logged failure warns', async () => {
+  const logged = {
+    '0400': { slot: '0400', date: '2026-10-17', trigger: 'external', status: 'succeeded', sent: 1, finishedAt: '2026-10-16T20:00:05.000Z' },
+    '0700': { slot: '0700', date: '2026-10-17', trigger: 'boot', status: 'failed', error: 'db down', finishedAt: '2026-10-16T23:10:00.000Z' },
+  };
+  const result = await buildDefaultChecks(baseDeps({ getUploadReminderLog: async () => logged })).scheduler();
+  assert.deepEqual(result.details.uploadReminder.lastRunsFromLog, logged);
+  assert.equal(result.status, 'warn');
+  assert.match(result.reason, /uploadReminder 0700 last logged run failed at .*: db down/);
+
+  const unreadable = await buildDefaultChecks(baseDeps({ getUploadReminderLog: async () => { throw new Error('x'); } })).scheduler();
+  assert.equal(unreadable.status, 'ok');
+  assert.equal(unreadable.details.uploadReminder.lastRunsFromLog, null);
 });

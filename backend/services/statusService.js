@@ -174,6 +174,9 @@ function buildDefaultChecks(deps = {}) {
   const isSchedulersEnabled = deps.schedulersEnabled || (() => require('../utils/featureFlags').schedulersEnabled());
   const getUploadReminderStatus = deps.getUploadReminderStatus
     || (() => require('../jobs/uploadReminderJob').getUploadReminderStatus());
+  // Last 04:00 / 07:00 run per slot from audit_logs (survives restarts).
+  const getUploadReminderLog = deps.getUploadReminderLog
+    || (() => require('../jobs/uploadReminderJob').getLastRunsFromLog(client));
   const getDailyPriceImportStatus = deps.getDailyPriceImportStatus
     || (() => require('../jobs/dailyPriceImportJob').getDailyPriceImportStatus());
   const isTrainingInFlight = deps.isTrainingInFlight || (() => require('./mlService').isTrainingInFlight());
@@ -365,10 +368,35 @@ function buildDefaultChecks(deps = {}) {
       // will ever happen. Say so instead of looking like "not run yet".
       const enabled = isSchedulersEnabled();
       if (!enabled) failed.unshift('timed jobs are off (SCHEDULERS_ENABLED=false)');
+
+      // Effective switches (never a key) + the same warnings as the boot log.
+      const { describeBootFlags, bootFlagWarnings } = require('../utils/bootFlags');
+      const flags = { ...describeBootFlags(env), schedulersEnabled: enabled };
+      failed.push(...bootFlagWarnings(flags));
+
+      // The run log: null when it cannot be read (status still answers).
+      let lastRunsFromLog = null;
+      try {
+        lastRunsFromLog = await getUploadReminderLog();
+      } catch (_) {
+        lastRunsFromLog = null;
+      }
+      const loggedFailures = Object.entries(lastRunsFromLog || {})
+        .filter(([slot, r]) => r && r.status === 'failed'
+          && !(uploadReminder && uploadReminder.lastRuns && uploadReminder.lastRuns[slot]
+            && uploadReminder.lastRuns[slot].status === 'failed'))
+        .map(([slot, r]) => `uploadReminder ${slot} last logged run failed at ${r.finishedAt}${r.error ? `: ${r.error}` : ''}`);
+      failed.push(...loggedFailures);
+
       return {
         status: failed.length ? 'warn' : 'ok',
         reason: failed.join('; ') || null,
-        details: { ...status, uploadReminder, schedulersEnabled: enabled },
+        details: {
+          ...status,
+          uploadReminder: uploadReminder ? { ...uploadReminder, lastRunsFromLog } : uploadReminder,
+          schedulersEnabled: enabled,
+          flags,
+        },
       };
     },
 

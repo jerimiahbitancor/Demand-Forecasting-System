@@ -59,6 +59,7 @@ const marketPriceRoutes = require('./routes/marketPrice');
 const marketPricesReceiptRoutes = require('./routes/marketPrices');
 const auditRoutes = require('./routes/audit');
 const statusRoutes = require('./routes/status');
+const jobsRoutes = require('./routes/jobs');
 
 const app = express();
 const PORT = process.env.PORT || 5000;
@@ -119,6 +120,9 @@ app.use('/api/market-prices', marketPriceRoutes);
 app.use('/api/market-prices', marketPricesReceiptRoutes);
 app.use('/api/audit', auditRoutes);
 app.use('/api/status', statusRoutes);
+// Outside clock (cron-job.org) for the 4:00 / 7:00 AM reminders. Secret
+// header, no JWT; 404 unless JOB_TRIGGER_SECRET is set. See routes/jobs.js.
+app.use('/api/jobs', jobsRoutes);
 
 // ============= HEALTH CHECK =============
 app.get('/health', (req, res) => {
@@ -191,6 +195,19 @@ setTimeout(() => loadUnitMetadataFromDb(supabaseAdmin).catch(() => {}), 1000);
 // when NODE_ENV=production: a local "npm run dev" points at the LIVE
 // database and must never send reminders or run forecasts by itself.
 const { schedulersEnabled } = require('./utils/featureFlags');
+const { describeBootFlags, bootFlagWarnings, bootFlagLine } = require('./utils/bootFlags');
+
+// One line with the effective switches (never a key). A warning when this
+// server runs the timed jobs, so a second server doing the same (an old
+// Railway service next to Render) is easy to spot in both logs.
+const bootFlags = describeBootFlags();
+if (bootFlags.schedulersEnabled) {
+  logger.warn('boot_flags', { line: bootFlagLine(bootFlags), ...bootFlags, warnings: bootFlagWarnings(bootFlags),
+    note: 'This server runs the timed jobs. Only ONE server may have SCHEDULERS_ENABLED=true.' });
+} else {
+  logger.info('boot_flags', { line: bootFlagLine(bootFlags), ...bootFlags });
+}
+
 if (schedulersEnabled()) {
   const { refreshLowStockNotifications } = require('./services/notificationService');
 
@@ -216,8 +233,27 @@ if (schedulersEnabled()) {
 
   // Upload reminders, 4:00 AM and 7:00 AM Asia/Manila: yesterday's sales not
   // uploaded and not marked closed -> notification (see jobs/uploadReminderJob.js).
-  const { registerUploadReminderJobs } = require('./jobs/uploadReminderJob');
+  const { registerUploadReminderJobs, runBootCatchUp } = require('./jobs/uploadReminderJob');
   registerUploadReminderJobs();
+
+  // Boot catch-up: a sleeping instance misses its cron. If 04:00 / 07:00
+  // has passed today and that slot has no run record, run it once now.
+  setTimeout(() => {
+    runBootCatchUp().catch((err) => logger.error('upload_reminder_catchup_failed', { err }));
+  }, 20000);
+
+  // Is a business email saved? Masked; read-only.
+  setTimeout(async () => {
+    try {
+      const { isValidEmail, maskEmail } = require('./services/emailService');
+      const { data } = await supabaseAdmin.from('business_profile').select('business_email').limit(1);
+      const email = data && data[0] && typeof data[0].business_email === 'string' ? data[0].business_email.trim() : '';
+      if (isValidEmail(email)) logger.info('boot_business_email', { saved: true, to: maskEmail(email) });
+      else logger.warn('boot_business_email', { saved: false, reason: email ? 'invalid' : 'missing' });
+    } catch (err) {
+      logger.warn('boot_business_email', { saved: null, err });
+    }
+  }, 5000);
 } else {
   console.log('[schedulers] SCHEDULERS_ENABLED is off: forecast, upload reminder, DA price import and low-stock jobs are NOT registered.');
 }
