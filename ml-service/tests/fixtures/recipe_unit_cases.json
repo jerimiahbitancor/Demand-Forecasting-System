@@ -50,6 +50,18 @@
     { "label": "zero quantity -> 0", "quantity": 0, "from": "kg", "to": "g", "expected": 0 },
     { "label": "unparseable quantity -> 0", "quantity": "abc", "from": "kg", "to": "g", "expected": 0 }
   ],
+  "pack_cases": [
+    { "label": "pack: 1 Packs -> kg with a 150 g pack (0.15 kg)", "quantity": 1, "from": "Packs", "to": "Kilograms (kg)", "packQty": 150, "packUnit": "Grams (g)", "expected": 0.15 },
+    { "label": "pack: pack alias -> g with a 150 g pack", "quantity": 1, "from": "pack", "to": "g", "packQty": 150, "packUnit": "Grams (g)", "expected": 150 },
+    { "label": "pack: 2 Packs -> kg with a 150 g pack (0.3 kg)", "quantity": 2, "from": "Packs", "to": "kg", "packQty": 150, "packUnit": "g", "expected": 0.3 },
+    { "label": "pack: 1 Carton -> kg with a 480 g pack", "quantity": 1, "from": "Carton", "to": "Kilograms (kg)", "packQty": 480, "packUnit": "Grams (g)", "expected": 0.48 },
+    { "label": "pack: 300 g -> Packs with a 150 g pack (2 packs)", "quantity": 300, "from": "g", "to": "Packs", "packQty": 150, "packUnit": "Grams (g)", "expected": 2 },
+    { "label": "pack: 0.3 Kilograms (kg) -> Packs with a 150 g pack (2 packs)", "quantity": "0.3", "from": "Kilograms (kg)", "to": "packs", "packQty": 150, "packUnit": "Grams (g)", "expected": 2 },
+    { "label": "pack: 1 cup of a 120 g/cup powder -> Packs with a 150 g pack (0.8)", "quantity": 1, "from": "Cups (cup)", "to": "Packs", "gramsPerCup": 120, "packQty": 150, "packUnit": "Grams (g)", "expected": 0.8 },
+    { "label": "pack: a pack measured in a count unit cannot be weighed, passes through", "quantity": 1, "from": "Packs", "to": "Kilograms (kg)", "packQty": 12, "packUnit": "Carton", "expected": 1 },
+    { "label": "pack: mass -> volume is still not converted", "quantity": 1, "from": "Kilograms (kg)", "to": "Liters (L)", "packQty": 150, "packUnit": "Grams (g)", "expected": 1 },
+    { "label": "pack: count -> mass without pack info still passes through", "quantity": 1, "from": "Packs", "to": "Kilograms (kg)", "expected": 1 }
+  ],
   "fallback_cases": [
     { "label": "fallback: 1 kg -> g", "quantity": 1, "from": "kg", "to": "g", "expected": 1000 },
     { "label": "fallback: 500 g -> Kilograms (kg)", "quantity": 500, "from": "g", "to": "Kilograms (kg)", "expected": 0.5 },

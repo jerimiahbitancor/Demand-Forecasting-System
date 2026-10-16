@@ -23,7 +23,7 @@ import {
 import axios from 'axios';
 import toast from 'react-hot-toast';
 import { useAuth } from "../../../context/AuthContext";
-import { parseRecipeQuantity } from "../../../utils/recipeUnits";
+import { parseRecipeQuantity, deriveUnitPrice } from "../../../utils/recipeUnits";
 import { formatStockQty } from "../../../utils/formatStockQty.js";
 import Tippy from '@tippyjs/react';
 import 'tippy.js/dist/tippy.css';
@@ -99,7 +99,10 @@ const IngredientManagement = () => {
     batch: '',
     min_stock: '',
     market_price: '',
-    grams_per_cup: ''
+    grams_per_cup: '',
+    pack_qty: '',
+    pack_unit: '',
+    pack_price: ''
   });
 
   const [restockData, setRestockData] = useState({
@@ -391,19 +394,37 @@ const IngredientManagement = () => {
   }, [fetchInventory, fetchCategories, fetchUnits, debouncedFetch, searchTerm, sortField, sortDirection, currentPage, selectedCategory, statusFilter, selectedDate]);
 
   // ============ CRUD OPERATIONS ============
+  // The unit cost is always what one stock unit costs. When a purchase pack is
+  // filled in ("150 g for ₱200") it is derived from the pack, so what the
+  // owner typed as a cost can never drift from the pack.
+  const buildItemPayload = () => {
+    const derived = deriveUnitPrice({
+      packQty: formData.pack_qty,
+      packUnit: formData.pack_unit,
+      packPrice: formData.pack_price,
+      stockUnit: formData.unit,
+      gramsPerCup: formData.grams_per_cup,
+      ingredientName: formData.name
+    });
+    return {
+      ...formData,
+      quantity: parseRecipeQuantity(formData.quantity),
+      price: derived != null ? derived : parseFloat(formData.price),
+      market_price: parseFloat(formData.market_price) || 0,
+      min_stock: parseRecipeQuantity(formData.min_stock) || 0,
+      grams_per_cup: formData.grams_per_cup ? parseFloat(formData.grams_per_cup) : null,
+      pack_qty: formData.pack_qty ? parseRecipeQuantity(formData.pack_qty) : null,
+      pack_unit: formData.pack_unit || null,
+      pack_price: formData.pack_price ? parseFloat(formData.pack_price) : null
+    };
+  };
+
   const handleAddItem = async () => {
     if (!validateForm()) return;
     
     setIsSubmitting(true);
     try {
-      const response = await apiClient.post('/inventory/items', {
-        ...formData,
-        quantity: parseRecipeQuantity(formData.quantity),
-        price: parseFloat(formData.price),
-        market_price: parseFloat(formData.market_price) || 0,
-        min_stock: parseRecipeQuantity(formData.min_stock) || 0,
-        grams_per_cup: formData.grams_per_cup ? parseFloat(formData.grams_per_cup) : null
-      });
+      const response = await apiClient.post('/inventory/items', buildItemPayload());
 
       if (response.data.success) {
         toast.success('Item added successfully!');
@@ -424,14 +445,7 @@ const IngredientManagement = () => {
     
     setIsSubmitting(true);
     try {
-      const response = await apiClient.put(`/inventory/items/${selectedItem.id}`, {
-        ...formData,
-        quantity: parseRecipeQuantity(formData.quantity),
-        price: parseFloat(formData.price),
-        market_price: parseFloat(formData.market_price) || 0,
-        min_stock: parseRecipeQuantity(formData.min_stock) || 0,
-        grams_per_cup: formData.grams_per_cup ? parseFloat(formData.grams_per_cup) : null
-      });
+      const response = await apiClient.put(`/inventory/items/${selectedItem.id}`, buildItemPayload());
 
       if (response.data.success) {
         toast.success('Item updated successfully!');
@@ -594,10 +608,25 @@ const IngredientManagement = () => {
     } else if (!Number.isFinite(parseRecipeQuantity(formData.quantity)) || parseRecipeQuantity(formData.quantity) < 0) {
       errors.quantity = 'Quantity must be a valid number';
     }
+    const derived = deriveUnitPrice({
+      packQty: formData.pack_qty,
+      packUnit: formData.pack_unit,
+      packPrice: formData.pack_price,
+      stockUnit: formData.unit,
+      gramsPerCup: formData.grams_per_cup,
+      ingredientName: formData.name
+    });
+
     if (!formData.price || formData.price === '') {
-      errors.price = 'Price is required';
+      if (derived == null) errors.price = 'Price is required';
     } else if (!Number.isFinite(Number(formData.price)) || Number(formData.price) <= 0) {
-      errors.price = 'Price must be greater than 0';
+      if (derived == null) errors.price = 'Price must be greater than 0';
+    }
+    if (formData.pack_qty && !Number.isFinite(parseRecipeQuantity(formData.pack_qty))) {
+      errors.pack_qty = 'Pack size must be a valid number';
+    }
+    if (formData.pack_price && (!Number.isFinite(Number(formData.pack_price)) || Number(formData.pack_price) <= 0)) {
+      errors.pack_price = 'Pack price must be greater than 0';
     }
 
     setFormErrors(errors);
@@ -614,7 +643,10 @@ const IngredientManagement = () => {
       batch: '',
       min_stock: '',
       market_price: '',
-      grams_per_cup: ''
+      grams_per_cup: '',
+      pack_qty: '',
+      pack_unit: '',
+      pack_price: ''
     });
     setFormErrors({});
   };
@@ -630,7 +662,10 @@ const IngredientManagement = () => {
       batch: item.batch || '',
       min_stock: item.min_stock?.toString() || '',
       market_price: item.market_price?.toString() || '',
-      grams_per_cup: item.grams_per_cup?.toString() || ''
+      grams_per_cup: item.grams_per_cup?.toString() || '',
+      pack_qty: item.pack_qty?.toString() || '',
+      pack_unit: item.pack_unit || '',
+      pack_price: item.pack_price?.toString() || ''
     });
     setIsEditModalOpen(true);
   };
@@ -1035,6 +1070,7 @@ const IngredientManagement = () => {
                   <th className="sortable" onClick={() => handleSort('price')}>
                     Unit Cost {sortField === 'price' && (sortDirection === 'asc' ? <FaSortAmountUp /> : <FaSortAmountDown />)}
                   </th>
+                  <th title="How much one purchase pack / sachet holds and what it costs, e.g. 150 Grams (g) for ₱200. The unit cost is derived from this.">Pack / Count</th>
                   <th title="Average of the latest recorded price across all market price sources (Robinson's, SM, Puregold, Wet Market, DA Reference).">Avg Market Price</th>
                   <th className="sortable" onClick={() => handleSort('updated_at')}>
                     Last Updated {sortField === 'updated_at' && (sortDirection === 'asc' ? <FaSortAmountUp /> : <FaSortAmountDown />)}
@@ -1075,6 +1111,14 @@ const IngredientManagement = () => {
                         {formatStockQty(item.quantity ?? 0, item.unit)}
                       </td>
                       <td data-label="Unit Cost">{formatCurrency(item.price)}</td>
+                      <td data-label="Pack / Count">
+                        {item.pack_qty && item.pack_unit
+                          ? `${formatStockQty(item.pack_qty, item.pack_unit)} ${item.pack_unit}`
+                          : <span className="market-price-empty">—</span>}
+                        {item.pack_qty && item.pack_unit && item.pack_price
+                          ? ` · ${formatCurrency(item.pack_price)}`
+                          : ''}
+                      </td>
                       <td data-label="Avg Market Price">
                         {item.avg_market_price !== null && item.avg_market_price !== undefined
                           ? formatCurrency(item.avg_market_price)

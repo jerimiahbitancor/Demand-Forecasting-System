@@ -208,6 +208,67 @@
 
 .value--muted { color: var(--color-text-light); font-style: italic; }
 
+/* Daily Ingredient Demand: let each column size to its contents so every
+   header reads on one line instead of breaking mid-word. The table keeps its
+   floor and the surrounding .table-scroll pans when the card is narrower. */
+.analytics-table.daily-demand-table {
+  table-layout: auto;
+}
+.analytics-table.daily-demand-table th,
+.analytics-table.daily-demand-table td {
+  white-space: nowrap;
+}
+/* "Used in" is folded to a preview, so cap it rather than let a long list
+   stretch the table. */
+.analytics-table.daily-demand-table td.used-in-col {
+  max-width: 240px;
+  overflow: hidden;
+}
+
+.used-in-cell {
+  display: flex;
+  align-items: baseline;
+  gap: 4px;
+  min-width: 0;
+  cursor: default;
+}
+.used-in-text {
+  min-width: 0;
+  flex: 1 1 auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--color-text-primary);
+}
+.used-in-more {
+  flex: 0 0 auto;
+  font-weight: 600;
+  color: var(--color-red-primary);
+  white-space: nowrap;
+}
+
+/* Phone tier: rows are stacked cards with the label on the left, so let the
+   cells wrap again instead of forcing a wide, scrolling table. */
+@media (max-width: 640px) {
+  .analytics-table.daily-demand-table th,
+  .analytics-table.daily-demand-table td {
+    white-space: normal;
+  }
+  .analytics-table.daily-demand-table td.used-in-col {
+    max-width: none;
+    overflow: visible;
+  }
+  .used-in-cell {
+    display: block;
+    text-align: right;
+  }
+  .used-in-text {
+    overflow: visible;
+    text-overflow: clip;
+    white-space: normal;
+  }
+}
+
 /* Grocery List panel */
 .grocery-toggle {
   display: flex;

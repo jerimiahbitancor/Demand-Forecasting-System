@@ -283,7 +283,13 @@ export const parseRecipeQuantity = (value) => {
 // piece unit (pcs, slices, cloves, sticks) and `toUnit` is a mass unit, each
 // piece is weighed at `pieceWeightGrams` (e.g. 150 g per potato). Without a
 // piece weight the quantity passes through unchanged.
-export const normalizeRecipeQuantityToUnit = (quantity, fromUnit, toUnit, gramsPerCup, pieceWeightGrams) => {
+//
+// `pack` ({ qty, unit } = ingredients.pack_qty/pack_unit) enables the
+// purchase-pack conversion: "one sachet of blue lemonade powder is 150 g".
+// A count unit in the recipe then weighs out in the stock unit (1 sachet ->
+// 0.15 kg), and a measured amount counts out in packs when the ingredient is
+// stocked by the pack (300 g -> 2 packs).
+export const normalizeRecipeQuantityToUnit = (quantity, fromUnit, toUnit, gramsPerCup, pieceWeightGrams, pack) => {
   const qty = parseRecipeQuantity(quantity);
   if (!Number.isFinite(qty) || qty <= 0) return qty || 0;
   const fromKind = unitKindOf(fromUnit);
@@ -311,29 +317,88 @@ export const normalizeRecipeQuantityToUnit = (quantity, fromUnit, toUnit, gramsP
     return roundTo((qty * Number(pieceWeightGrams)) / toFactor);
   }
 
+  const packQty = pack ? Number(pack.qty) : NaN;
+  const packUnit = pack ? String(pack.unit || '').trim() : '';
+  if (packQty > 0 && packUnit) {
+    const packTargetOk = (toKind === 'mass' || toKind === 'volume')
+      && canConvertBetween(packUnit, toUnit, gramsPerCup);
+    if (
+      (fromKind === 'count' || fromKind === null) &&
+      fromKind !== 'piece' &&
+      packTargetOk
+    ) {
+      const onePackInTarget = normalizeRecipeQuantityToUnit(packQty, packUnit, toUnit, gramsPerCup, null, null);
+      if (onePackInTarget > 0) return roundTo(qty * onePackInTarget);
+    }
+    if (
+      (toKind === 'count' || toKind === null) &&
+      (fromKind === 'mass' || fromKind === 'volume') &&
+      canConvertBetween(fromUnit, packUnit, gramsPerCup)
+    ) {
+      const inPackUnit = normalizeRecipeQuantityToUnit(qty, fromUnit, packUnit, gramsPerCup, null, null);
+      if (inPackUnit > 0) return roundTo(inPackUnit / packQty);
+    }
+  }
+
   const sameFamily = fromKind != null && fromKind === toKind && (fromKind === 'mass' || fromKind === 'volume');
   if (!sameFamily || fromFactor == null || toFactor == null) return qty;
   return roundTo((qty * fromFactor) / toFactor);
+};
+
+// True when `from` can be expressed in `to` with the rules above: the same
+// unit, the same mass/volume family, or a volume weighed out in mass when a
+// density (gramsPerCup) is known. Mass -> volume and unknown units do not
+// convert, matching the backend / ml-service copies.
+export const canConvertBetween = (from, to, gramsPerCup) => {
+  const f = String(from || '').trim().toLowerCase();
+  const t = String(to || '').trim().toLowerCase();
+  if (!f || !t) return false;
+  if (f === t) return true;
+  const fromKind = unitKindOf(f);
+  const toKind = unitKindOf(t);
+  if (fromKind == null || toKind == null) return false;
+  if (fromKind === toKind && (fromKind === 'mass' || fromKind === 'volume')) return true;
+  if (fromKind === 'volume' && toKind === 'mass' && Number(gramsPerCup) > 0) return true;
+  return false;
 };
 
 // The one entry point cost previews should use: converts a recipe line into the
 // ingredient's stock unit, looking up the density and per-piece weight itself.
 // Same result as the backend's convertRecipeQuantity (demand / COGS / stock
 // deduction), so what the owner sees matches what the system books.
-export const convertRecipeQuantity = (quantity, fromUnit, toUnit, { gramsPerCup = null, ingredientName = '' } = {}) =>
+export const convertRecipeQuantity = (quantity, fromUnit, toUnit, { gramsPerCup = null, ingredientName = '', packQty = null, packUnit = '' } = {}) =>
   normalizeRecipeQuantityToUnit(
     quantity,
     fromUnit,
     toUnit,
     recipeDensityFor(gramsPerCup, ingredientName),
-    pieceWeightOf(ingredientName, fromUnit)
+    pieceWeightOf(ingredientName, fromUnit),
+    Number(packQty) > 0 && packUnit ? { qty: Number(packQty), unit: packUnit } : null
   );
+
+// Unit cost (price per the ingredient's stock unit) derived from a purchase
+// pack: "150 g for ₱200" on a kg-stocked ingredient -> ₱1333.33 per kg.
+// Returns null when the pack is incomplete or its unit cannot be expressed in
+// the stock unit, so the owner's own unit cost is kept instead.
+export const deriveUnitPrice = ({ packQty, packUnit, packPrice, stockUnit, gramsPerCup = null, ingredientName = '' }) => {
+  const qty = Number(parseRecipeQuantity(packQty));
+  const price = Number(parseRecipeQuantity(packPrice));
+  const from = String(packUnit || '').trim();
+  const to = String(stockUnit || '').trim();
+  if (!(qty > 0) || !(price > 0) || !from || !to) return null;
+  if (from.toLowerCase() === to.toLowerCase()) return roundTo(price / qty, 6);
+  const density = recipeDensityFor(gramsPerCup, ingredientName);
+  if (!canConvertBetween(from, to, density)) return null;
+  const inStockUnit = normalizeRecipeQuantityToUnit(qty, from, to, density, null, null);
+  if (!(inStockUnit > 0)) return null;
+  return roundTo(price / inStockUnit, 6);
+};
 
 // Cost of `quantity` `recipeUnit` of an ingredient priced `price` per its
 // stock unit, converted to the stock unit and scaled by price:
 //   cost = convertedAmount x unit price
 // Returns { converted, cost, gramsPerCupUsed, needsDensity, pieceWeight, needsPieceWeight }.
-export const priceRecipeIngredient = ({ quantity, recipeUnit, stockUnit, price, gramsPerCup, ingredientName }) => {
+export const priceRecipeIngredient = ({ quantity, recipeUnit, stockUnit, price, gramsPerCup, ingredientName, packQty = null, packUnit = '' }) => {
   const qty = Number(quantity);
   const unitPrice = Number(price) || 0;
   if (!Number.isFinite(qty) || qty <= 0 || !recipeUnit || !stockUnit) {
@@ -341,7 +406,8 @@ export const priceRecipeIngredient = ({ quantity, recipeUnit, stockUnit, price, 
   }
   const density = recipeDensityFor(gramsPerCup, ingredientName);
   const pieceWeight = pieceWeightOf(ingredientName, recipeUnit);
-  const converted = normalizeRecipeQuantityToUnit(qty, recipeUnit, stockUnit, density, pieceWeight);
+  const pack = Number(packQty) > 0 && packUnit ? { qty: Number(packQty), unit: packUnit } : null;
+  const converted = normalizeRecipeQuantityToUnit(qty, recipeUnit, stockUnit, density, pieceWeight, pack);
   const fromKind = unitKindOf(recipeUnit);
   const toKind = unitKindOf(stockUnit);
   const volumeToMass = fromKind === 'volume' && toKind === 'mass';

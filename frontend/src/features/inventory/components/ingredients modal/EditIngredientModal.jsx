@@ -1,5 +1,7 @@
 import { FaSave, FaTimes } from "react-icons/fa";
 import InventoryModal from "../InventoryModal";
+import InfoTip from "../InfoTip";
+import { deriveUnitPrice } from "../../../../utils/recipeUnits";
 import "./EditIngredientModal.css";
 
 const EditIngredientModal = ({
@@ -15,10 +17,34 @@ const EditIngredientModal = ({
 }) => {
 	if (!isOpen) return null;
 
-	const update = (field, value) => onChange({ ...formData, [field]: value });
+	// Pack edits also refresh the unit cost (see InventoryFormModal).
+	const update = (field, value) => {
+		const next = { ...formData, [field]: value };
+		if (["pack_qty", "pack_unit", "pack_price", "unit", "grams_per_cup", "name"].includes(field)) {
+			const derived = deriveUnitPrice({
+				packQty: next.pack_qty,
+				packUnit: next.pack_unit,
+				packPrice: next.pack_price,
+				stockUnit: next.unit,
+				gramsPerCup: next.grams_per_cup,
+				ingredientName: next.name,
+			});
+			if (derived != null) next.price = String(derived);
+		}
+		onChange(next);
+	};
 	const close = () => {
 		if (!isSubmitting) onClose();
 	};
+
+	const derivedUnitCost = deriveUnitPrice({
+		packQty: formData.pack_qty,
+		packUnit: formData.pack_unit,
+		packPrice: formData.pack_price,
+		stockUnit: formData.unit,
+		gramsPerCup: formData.grams_per_cup,
+		ingredientName: formData.name,
+	});
 
 	return (
 		<InventoryModal
@@ -47,8 +73,11 @@ const EditIngredientModal = ({
 						{formErrors.name && <span className="form-error">{formErrors.name}</span>}
 					</div>
 
-                    	<div className="form-group">
-						<label className="form-label">Unit</label>
+					<div className="form-group">
+						<label className="form-label">
+							Stock Unit
+							<InfoTip>How you count this ingredient in stock and how its unit cost is quoted (e.g. Kilograms (kg)).</InfoTip>
+						</label>
 						<select className="form-input" value={formData.unit} onChange={(event) => update("unit", event.target.value)}>
 							{(units || []).map((unit) => (
 								<option key={unit.id || unit.name} value={unit.name}>{unit.name}</option>
@@ -72,15 +101,6 @@ const EditIngredientModal = ({
 						{formErrors.category && <span className="form-error">{formErrors.category}</span>}
 					</div>
 
-				
-
-
-					<div className="form-group">
-						<label className="form-label">Unit Cost <span className="required-star">*</span></label>
-						<input type="number" className={`form-input ${formErrors.price ? "error" : ""}`} value={formData.price} onChange={(event) => update("price", event.target.value)} placeholder="0.01" min="0.01" step="0.01" />
-						{formErrors.price && <span className="form-error">{formErrors.price}</span>}
-					</div>
-
 					<div className="form-group">
 						<label className="form-label">Quantity <span className="required-star">*</span></label>
 						<input
@@ -95,6 +115,79 @@ const EditIngredientModal = ({
 					</div>
 
 					<div className="form-group">
+						<label className="form-label">
+							Pack Size (amount per pack)
+							<InfoTip>How much one sachet / pack holds (e.g. 150 for a 150 g sachet).</InfoTip>
+						</label>
+						<input
+							type="text"
+							inputMode="decimal"
+							className="form-input"
+							value={formData.pack_qty}
+							onChange={(event) => update("pack_qty", event.target.value)}
+							placeholder="e.g. 150"
+						/>
+					</div>
+
+					<div className="form-group">
+						<label className="form-label">
+							Pack Unit
+							<InfoTip>The unit the pack size is measured in (e.g. Grams (g) for a 150 g sachet).</InfoTip>
+						</label>
+						<select className="form-input" value={formData.pack_unit} onChange={(event) => update("pack_unit", event.target.value)}>
+							<option value="">Same as stock unit</option>
+							{(units || []).map((unit) => (
+								<option key={unit.id || unit.name} value={unit.name}>{unit.name}</option>
+							))}
+						</select>
+					</div>
+
+					<div className="form-group">
+						<label className="form-label">
+							Pack Price (₱ per pack)
+							<InfoTip>What you pay for one pack / sachet.</InfoTip>
+						</label>
+						<input
+							type="number"
+							className="form-input"
+							value={formData.pack_price}
+							onChange={(event) => update("pack_price", event.target.value)}
+							placeholder="e.g. 200"
+							min="0"
+							step="0.01"
+						/>
+					</div>
+
+					<div className="form-group">
+						<label className="form-label">
+							Unit Cost {derivedUnitCost == null && <span className="required-star">*</span>}
+							{derivedUnitCost != null && (
+								<InfoTip>
+									Derived from the pack: ₱{derivedUnitCost} per {formData.unit || "unit"}. The pack wins over a manually typed cost.
+								</InfoTip>
+							)}
+						</label>
+						<input type="number" className={`form-input ${formErrors.price ? "error" : ""}`} value={formData.price} onChange={(event) => update("price", event.target.value)} placeholder="0.01" min="0" step="0.01" />
+						{formErrors.price && <span className="form-error">{formErrors.price}</span>}
+					</div>
+
+					<div className="form-group">
+						<label className="form-label">
+							Grams per Cup (optional)
+							<InfoTip>Weight of 1 cup in grams, so recipe cups/tbsp/tsp convert to the stock unit when pricing.</InfoTip>
+						</label>
+						<input
+							type="number"
+							className="form-input"
+							value={formData.grams_per_cup}
+							onChange={(event) => update("grams_per_cup", event.target.value)}
+							placeholder="e.g. 125 for all-purpose flour"
+							min="0"
+							step="0.1"
+						/>
+					</div>
+
+					<div className="form-group">
 						<label className="form-label">Market Price</label>
 						<input
 							type="number"
@@ -106,10 +199,6 @@ const EditIngredientModal = ({
 							step="0.01"
 						/>
 					</div>
-
-
-					
-					
 				</div>
 			</div>
 
