@@ -44,7 +44,8 @@ const ACTION_TYPES = [
   'backup_deleted',
   'backup_restored',
   'data_reset',
-  'report_generated'
+  'report_generated',
+  'upload_reminder_run'
 ];
 
 // GET /api/audit/logs?action=&actor=&search=&from=&to=&page=&limit=

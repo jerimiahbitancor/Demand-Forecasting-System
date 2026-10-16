@@ -111,6 +111,8 @@ async function alreadySent(client, userId, key) {
 /**
  * Plans the reminders for `slot` and sends each one to every user who has
  * not had that key yet. Returns a summary for the scheduler status.
+ * summary.results: one entry per (reminder, user) — { key, userId,
+ * duplicate, row } — so the job can look up each email's outcome.
  */
 async function sendUploadReminders(client, createNotification, { slot, now = new Date() }) {
   const today = todayManila(now);
@@ -118,6 +120,7 @@ async function sendUploadReminders(client, createNotification, { slot, now = new
   const reminders = planUploadReminders({ ...inputs, slot, link: REMINDER_LINK });
   const summary = {
     today, slot, modelExists: inputs.modelExists, planned: reminders.map((r) => r.key), sent: 0, duplicates: 0,
+    results: [],
   };
   if (reminders.length === 0) return summary;
 
@@ -129,6 +132,7 @@ async function sendUploadReminders(client, createNotification, { slot, now = new
     for (const reminder of reminders) {
       if (await alreadySent(client, user.id, reminder.key)) {
         summary.duplicates += 1;
+        summary.results.push({ key: reminder.key, userId: user.id, duplicate: true, row: null });
         continue;
       }
       const created = await createNotification({
@@ -140,6 +144,7 @@ async function sendUploadReminders(client, createNotification, { slot, now = new
         metadata: reminder.metadata,
       });
       if (created) summary.sent += 1;
+      summary.results.push({ key: reminder.key, userId: user.id, duplicate: false, row: created || null });
     }
   }
   return summary;

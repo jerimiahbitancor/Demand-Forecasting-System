@@ -35,6 +35,11 @@ const EMAIL_FOOTER = 'You get this email because reminders are on. Change the em
 
 const sentEmailKeys = new Map(); // dedupe key -> sent at (ms)
 const pendingEmails = new Set(); // in-flight sends (tests wait on these)
+// notification id -> promise of emailReminder()'s { sent, reason }, so a job
+// can record what happened to each email (jobs/uploadReminderJob.js run log).
+// Read once with emailOutcomeOf(); unread entries expire after 10 minutes.
+const emailOutcomes = new Map();
+const EMAIL_OUTCOME_TTL_MS = 10 * 60 * 1000;
 
 const manilaDate = (now = new Date()) => new Intl.DateTimeFormat('en-CA', {
   timeZone: 'Asia/Manila', year: 'numeric', month: '2-digit', day: '2-digit',
@@ -95,6 +100,11 @@ async function loadBusinessEmail(client = supabaseAdmin) {
 /**
  * Emails one reminder notification, if it should be. Never throws.
  * Returns { sent, reason, to } (`to` masked) — for logs and tests.
+ *
+ * 'disabled', 'not_a_reminder' and 'duplicate' are not logged here: they
+ * happen once per notification row, which would flood the log. The job
+ * that created the rows logs them once per run instead
+ * (jobs/uploadReminderJob.js, reminder_email_skipped).
  */
 async function emailReminder(notification, {
   client = supabaseAdmin, send = sendEmail, env = process.env, now = new Date(),
@@ -132,15 +142,35 @@ async function emailReminder(notification, {
   }
 }
 
-// Starts emailReminder without waiting for it.
+// Starts emailReminder without waiting for it. emailReminder() never
+// throws by design; if it ever does, the error is logged (not swallowed)
+// and the notification flow is still untouched.
 function queueReminderEmail(notification) {
   try {
-    const p = emailReminder(notification).catch(() => {});
+    const p = emailReminder(notification).catch((error) => {
+      logger.error('reminder_email_failed', { kind: notification?.metadata?.kind, err: error });
+      return { sent: false, reason: 'send_failed' };
+    });
     pendingEmails.add(p);
     p.finally(() => pendingEmails.delete(p));
-  } catch (_) {
-    // never let email handling touch the notification flow
+    if (notification && notification.id != null) {
+      emailOutcomes.set(notification.id, p);
+      const timer = setTimeout(() => emailOutcomes.delete(notification.id), EMAIL_OUTCOME_TTL_MS);
+      if (timer.unref) timer.unref();
+    }
+  } catch (error) {
+    logger.error('reminder_email_failed', { kind: notification?.metadata?.kind, err: error });
   }
+}
+
+// What happened to the email for a notification row createNotification()
+// returned: { sent, reason } (reason null when sent). Waits for an email
+// still in flight. 'not_queued' when no email was attempted for that row.
+async function emailOutcomeOf(row) {
+  const p = row && row.id != null ? emailOutcomes.get(row.id) : null;
+  if (!p) return { sent: false, reason: 'not_queued' };
+  emailOutcomes.delete(row.id);
+  return p;
 }
 
 class TestEmailError extends Error {
@@ -347,6 +377,7 @@ module.exports = {
   createNotificationOnce,
   refreshLowStockNotifications,
   emailReminder,
+  emailOutcomeOf,
   sendTestReminderEmail,
   buildReminderEmail,
   emailDedupeKey,
@@ -355,5 +386,5 @@ module.exports = {
   EMAIL_REMINDER_KINDS,
   // test hooks
   _waitForEmails: () => Promise.all([...pendingEmails]),
-  _resetEmailState: () => { sentEmailKeys.clear(); pendingEmails.clear(); },
+  _resetEmailState: () => { sentEmailKeys.clear(); pendingEmails.clear(); emailOutcomes.clear(); },
 };

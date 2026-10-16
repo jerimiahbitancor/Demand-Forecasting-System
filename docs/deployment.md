@@ -1,20 +1,26 @@
 # Deployment
 
 How the Demand Forecasting System is deployed, what each service needs, and how to roll back.
-Last updated: Oct 6, 2026.
+Last updated: Oct 17, 2026. (Hosting moved from Railway to Render in Oct 2026.)
 
 ## The three services
 
 | Part | Where | What it is |
 |---|---|---|
 | Frontend | **Vercel** | React + Vite. Production plus a preview for each branch or PR. |
-| API | **Railway** service `api` | Node.js + Express (`backend/`). 1 replica, 0.5 GB RAM. |
-| ML service | **Railway** service `ml` | Python Flask (`ml-service/`), training and forecasting only. 1 replica, 0.5 GB RAM. |
+| API | **Render** web service (`demand-forecasting-system-wami.onrender.com`) | Node.js + Express (`backend/`). |
+| ML service | **Render** web service (`demand-forecasting-system-1-6ozx.onrender.com`) | Python Flask (`ml-service/`), training and forecasting only. |
 | Database + auth + model files | **Supabase** | Postgres, Supabase Auth, and the private Storage bucket `ml-models`. |
 
 **Important:** Vercel previews and production use **the same API and the same database.** There is no staging database. Anything done on a preview site (uploads, closing days, training) changes production data.
 
-The Railway trial started 2026-09-18. It ends on 2026-10-18, or sooner if the $5 credit runs out. After that the Free plan limits apply.
+Railway is **no longer used**. If an old Railway `api` service still exists, stop it or set `SCHEDULERS_ENABLED=false` there: two servers with the timed jobs on would both run every 4:00 / 7:00 / 9:00 job against the same database. The boot log line `boot_flags` and every reminder run log row (`host.service`) say which server ran a job.
+
+### Render free plan: the server sleeps
+
+A Render **free** web service stops after about 15 minutes with no incoming request and starts again on the next one (a "cold start", often 30-60 s). While it sleeps, **nothing inside it runs**: the in-process cron (node-cron) never fires at 4:00 / 7:00 AM, and node-cron never makes up a missed run. So on the free plan the upload reminders need an outside clock. See **Upload reminders at 4:00 / 7:00 AM** below. The other choice is a paid instance, which never sleeps.
+
+The free plan also limits running hours per month across all free services, so do **not** keep the API awake around the clock with a ping every few minutes. Wake it only when a job is due.
 
 ## Vercel (frontend)
 
@@ -39,7 +45,7 @@ It then refuses every request. It does not call `localhost`. About 30 older file
 
 `frontend/vercel.json` rewrites every path to `index.html`, so links like `/admin/health` work on refresh.
 
-## Railway: `api` (backend)
+## Render: API (backend)
 
 Start command: `npm start` (that is, `node server.js`).
 
@@ -48,12 +54,12 @@ Start command: `npm start` (that is, `node server.js`).
 | Name | Required | Notes |
 |---|---|---|
 | `NODE_ENV` | yes | `production`. Also sets the default log level (`info`) and rate limits. |
-| `PORT` | set by Railway | |
+| `PORT` | set by Render | |
 | `SUPABASE_URL` | yes | |
 | `SUPABASE_ANON_KEY` | yes | |
 | `SUPABASE_SERVICE_ROLE_KEY` | yes | Service role. Server-side only. |
 | `ALLOWED_ORIGINS` | yes | Comma-separated exact origins, e.g. the production Vercel domain. |
-| `ML_SERVICE_URL` | yes | Prefer the **private** address (`http://<ml-service>.railway.internal:<port>`). See below. |
+| `ML_SERVICE_URL` | yes | The ML service URL, e.g. `https://demand-forecasting-system-1-6ozx.onrender.com`. |
 | `ML_SERVICE_SHARED_SECRET` | yes | Same value as in the `ml` service. |
 | `BREVO_API_KEY`, `BREVO_SENDER_EMAIL`, `BREVO_SENDER_NAME` | yes | All email: OTP, password reset and reminder emails (`services/emailService.js`, 10 s timeout). `BREVO_SENDER_NAME` defaults to `ChefDuo`. **A Gmail sender address sent through Brevo can land in Spam** (Gmail's own DMARC rules); verifying a sender domain in Brevo fixes that. |
 | `EMAIL_REMINDERS_ENABLED` | **set to `true` on the production host** | Also emails reminder notifications (upload reminders, unanswered days, stock shortfalls, low / out of stock, restock summary) to `business_profile.business_email`. Default `false`. One email per reminder (de-duplicated for 24 h), never one per user; an email failure never blocks the notification. Status messages (upload done, training, forecasts, prices) are never emailed. |
@@ -65,19 +71,57 @@ Start command: `npm start` (that is, `node server.js`).
 | `MEMORY_LIMIT_MB` | no | Used by `/api/status` for the memory warning. Default 512. |
 | `NETWORK_ATTEMPT_TIMEOUT_MS` | no | Per-address connect timeout. Default 5000. |
 | `DEV_NOW_OVERRIDE` | **never in production** | Development only: fakes "today". |
-| `RAILWAY_GIT_COMMIT_SHA` | set by Railway | Shown on `/admin/health`. |
-| `SCHEDULERS_ENABLED` | **set to `true` on Railway** | Turns the timed jobs on: forecasts (9:00 AM), upload reminders (4:00 / 7:00 AM), the DA price import and the low-stock refresh. Default: `true` only when `NODE_ENV=production`, otherwise `false`. Set it explicitly to `true` here so the jobs never depend on `NODE_ENV` alone. When off, the server logs one line saying so and System Health shows a warning. |
+| `RENDER_SERVICE_NAME` | set by Render | Recorded in the boot log and in each reminder run log row, so a second server running jobs is visible. (`/admin/health` still reads the Railway-only `RAILWAY_GIT_COMMIT_SHA` for the commit, so it shows no commit on Render.) |
+| `SCHEDULERS_ENABLED` | **set to `true` on Render (this one server only)** | Turns the timed jobs on: forecasts (9:00 AM), upload reminders (4:00 / 7:00 AM), the DA price import and the low-stock refresh. Default: `true` only when `NODE_ENV=production`, otherwise `false`. Set it explicitly to `true` here so the jobs never depend on `NODE_ENV` alone. When off, the server logs one line saying so and System Health shows a warning. |
+| `JOB_TRIGGER_SECRET` | **yes on the free plan** | A long random value (e.g. `openssl rand -hex 32`). Lets cron-job.org start the 4:00 / 7:00 AM reminder runs through `POST /api/jobs/upload-reminders`. Unset: that endpoint answers 404 and System Health warns. Keep it secret; it is never logged. |
 | `PRODUCT_MERGE_ENABLED` | no | `true` allows `POST /api/products/:id/merge` (runs `merge_products()`). Default `false`: the request answers 403 `MERGE_DISABLED` and the database is never touched; preview and "Possible duplicates" still work, and the Merge into... button is shown disabled. Keep `false` until the merges are scheduled (after the defense). |
+
+### What the server says about these at boot
+
+Right after start the API logs one `boot_flags` line, for example:
+
+```
+SCHEDULERS_ENABLED=on EMAIL_REMINDERS_ENABLED=on brevo=configured JOB_TRIGGER_SECRET=set service=<render service name>
+```
+
+It is a **warning** whenever the timed jobs are on (only one server may run them) and lists problems such as "timed jobs are on but EMAIL_REMINDERS_ENABLED is off". About 5 s later a `boot_business_email` line says whether a valid business email is saved (masked, e.g. `n***@gmail.com`). Keys and secrets are never logged, only whether they are set. The same flags and warnings appear on `/admin/health` (Scheduler card).
+
+### Upload reminders at 4:00 / 7:00 AM
+
+A reminder run can start three ways. All three are safe together: the database dedupe (`notifications.metadata.key`) means one notification and one email per reminder, however many times a slot runs.
+
+1. **cron**: node-cron inside the API. Works only while the server is awake.
+2. **external**: `POST /api/jobs/upload-reminders?slot=0400` (or `0700`) with the header `X-Job-Secret: <JOB_TRIGGER_SECRET>`. No login. Answers `202` at once and runs in the background. `401` = wrong or missing secret, `404` = `JOB_TRIGGER_SECRET` unset, `409` = `SCHEDULERS_ENABLED` off, `400` = bad slot. At most 10 calls per 15 min per IP.
+3. **boot**: about 20 s after the server starts, each slot whose time has already passed today (Manila) and has no run record today runs once. A server woken at 7:30 AM therefore runs 4:00 and then 7:00.
+
+Every run writes one `audit_logs` row, `action_type = 'upload_reminder_run'`, with `details` as JSON: slot, Manila date, trigger, host, status, planned keys, sent, duplicates, and the email outcome per reminder (`sent`, `disabled`, `duplicate`, `not_configured`, `no_business_email`, `failed`). Filter by it in Settings > Audit Trail. `/admin/health` shows the newest row per slot.
+
+#### cron-job.org setup (free)
+
+Create an account at cron-job.org. In account settings set the time zone to **Asia/Manila**. Then create these four jobs:
+
+| Job | URL | When (Asia/Manila) | Method | Header |
+|---|---|---|---|---|
+| Wake-up before 4:00 (**recommended**) | `https://demand-forecasting-system-wami.onrender.com/health` | every day 03:55 | GET | none |
+| Upload reminder 4:00 | `https://demand-forecasting-system-wami.onrender.com/api/jobs/upload-reminders?slot=0400` | every day 04:00 | **POST** | `X-Job-Secret` = the `JOB_TRIGGER_SECRET` value |
+| Wake-up before 7:00 (**recommended**) | `https://demand-forecasting-system-wami.onrender.com/health` | every day 06:55 | GET | none |
+| Upload reminder 7:00 | `https://demand-forecasting-system-wami.onrender.com/api/jobs/upload-reminders?slot=0700` | every day 07:00 | **POST** | `X-Job-Secret` = the `JOB_TRIGGER_SECRET` value |
+
+For each POST job: open the **Advanced** tab, set Request method to `POST`, add the header under *Headers*, leave the request body empty, and turn on *Notify me when the job fails*. Schedule: *Custom*, every day, hour and minute as above.
+
+Why the wake-ups: a cold start can take longer than cron-job.org waits for an answer. With the wake-up at 03:55 / 06:55 the POST reaches a warm server and gets its `202` in under a second. If a POST still times out, the server it woke runs the slot anyway through the boot catch-up.
+
+Checking it works: after 4:00 AM, the bell has "Upload yesterday's sales" (if yesterday is not uploaded or marked closed), the Render log has `[uploadReminder] 0400 run done (external)`, and Audit Trail has an `upload_reminder_run` row. No reminder is planned when yesterday is already answered, is not an operating day, or no model has been trained yet; the run row then shows `planned: []`.
 
 ### Running the backend locally
 
-`backend/.env` points at the **live** database. A local `npm run dev` has `NODE_ENV` unset, so `SCHEDULERS_ENABLED` defaults to `false`: it never sends reminders, runs forecasts or imports prices by itself. Do not set `SCHEDULERS_ENABLED=true` locally, and do not set `PRODUCT_MERGE_ENABLED=true` locally unless you mean to merge real products. Leave `EMAIL_REMINDERS_ENABLED` unset locally too. To check that email works, use Settings > Business Profile > **Send test reminder email**: it sends one sample to the saved business email even when reminders are off, at most 3 per 10 minutes.
+`backend/.env` points at the **live** database. A local `npm run dev` has `NODE_ENV` unset, so `SCHEDULERS_ENABLED` defaults to `false`: it never sends reminders, runs forecasts or imports prices by itself. Do not set `SCHEDULERS_ENABLED=true` locally, and do not set `PRODUCT_MERGE_ENABLED=true` locally unless you mean to merge real products. Leave `EMAIL_REMINDERS_ENABLED` and `JOB_TRIGGER_SECRET` unset locally too (with `SCHEDULERS_ENABLED` off, the trigger endpoint answers 409 anyway). To check that email works, use Settings > Business Profile > **Send test reminder email**: it sends one sample to the saved business email even when reminders are off, at most 3 per 10 minutes.
 
-## Railway: `ml` (ML service)
+## Render: ML service
 
-### Start command: set this in Railway
+### Start command
 
-Set it in the `ml` service: **Settings → Deploy → Custom Start Command**. This overrides `ml-service/Procfile`, which still says `--timeout 120`.
+Set it in the ML service: **Settings → Start Command**. This overrides `ml-service/Procfile`, which still says `--timeout 120`.
 
 ```
 gunicorn app:app --bind 0.0.0.0:$PORT --timeout 900 --workers 1 --threads 2
@@ -90,13 +134,14 @@ Why:
 
 **There are other limits on top of gunicorn's:**
 - **Express's call to the ML service has no timeout of its own**, so Node's built-in `fetch` default applies: it stops waiting for response headers after **300 s**. A training run longer than about 5 minutes fails on the API side even with gunicorn at 900 s.
-- **A public ML URL** goes through Railway's edge proxy, which can cut long requests (the status page warns: "public URL: long ML calls can be cut by the edge after ~60 s"). Use the private `*.railway.internal` address for `ML_SERVICE_URL`.
+- **Render's edge** sometimes answers the ML service with **HTTP 429** in about 0.5 s (Render, not Flask). `/forecast` retries once and logs Render's headers.
+- **[CHECK]** On Render the ML service is called through its public `onrender.com` URL. Long requests through the public edge may be cut; this has not been measured on Render yet.
 
 ### Variables (names only)
 
 | Name | Required | Notes |
 |---|---|---|
-| `PORT` | set by Railway | |
+| `PORT` | set by Render | |
 | `SUPABASE_URL` | yes | |
 | `SUPABASE_SERVICE_KEY` | yes | Service role key. **Different name from the api's `SUPABASE_SERVICE_ROLE_KEY`; same key.** |
 | `ML_SERVICE_SHARED_SECRET` | yes | Same value as in `api`. |
@@ -123,10 +168,10 @@ Browsers cache the preflight (OPTIONS) answer for 10 minutes (`Access-Control-Ma
 
 ## Rolling back
 
-### Railway (api or ml)
-1. Open the service → **Deployments**.
-2. Find the last good deployment (the commit hash is shown).
-3. Its menu (⋯) → **Redeploy**. Railway builds that exact commit again.
+### Render (API or ML service)
+1. Open the service → **Events** (deploy history).
+2. Find the last good deploy (the commit is shown).
+3. Choose **Rollback** on it. Render redeploys that build.
 4. Check `/health` (public) and `/admin/health` (logged in).
 
 Variables are not part of a deployment. Rolling back the code does not undo a variable change; change it back by hand.

@@ -21,7 +21,8 @@ const RICH_LOG_ROUTES = [
   '/api/auth/verify-otp',
   '/api/auth/create-password',
   '/api/auth/resend-otp',
-  '/api/auth/forgot-password'
+  '/api/auth/forgot-password',
+  '/api/jobs' // each run writes its own 'upload_reminder_run' row
 ];
 
 // Known routes: readable action_type + human description. IDs are captured
