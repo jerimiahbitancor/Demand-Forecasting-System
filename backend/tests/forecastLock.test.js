@@ -21,7 +21,10 @@ const fakeClient = { from: () => ({ select: async () => ({ data: [], error: null
 stubModule('config/supabase.js', { supabase: fakeClient, supabaseAdmin: fakeClient, isConfigured: true });
 stubModule('middleware/auth.js', (req, res, next) => { req.user = { id: 7, user_id: 7 }; next(); });
 const notifications = [];
-stubModule('services/notificationService.js', { createNotification: async (n) => { notifications.push(n); return n; } });
+stubModule('services/notificationService.js', {
+  createNotification: async (n) => { notifications.push(n); return n; },
+  queueStockRefresh: () => null, // the stock refresh after a forecast is not under test here
+});
 
 // Controllable ml-service: each /forecast call waits until released.
 const fetchCalls = [];

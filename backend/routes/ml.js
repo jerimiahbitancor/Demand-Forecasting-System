@@ -3,7 +3,7 @@ const express = require('express');
 const router = express.Router();
 const authenticate = require('../middleware/auth');
 const mlService = require('../services/mlService');
-const { createNotification } = require('../services/notificationService');
+const { createNotification, queueStockRefresh } = require('../services/notificationService');
 const { supabaseAdmin } = require('../config/supabase');
 
 const userIdOf = (req) => req.user?.user_id || req.user?.id || null;
@@ -148,6 +148,8 @@ router.post('/forecast', authenticate, async (req, res) => {
   try {
     const { horizonDays, runType } = req.body || {};
     const result = await mlService.forecast({ horizonDays, runType });
+    // New forecast -> new ingredient needs: refresh the stock alerts.
+    queueStockRefresh('forecast');
 
     await createNotification({
       userId: userIdOf(req),

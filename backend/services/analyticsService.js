@@ -436,18 +436,23 @@ if (!map.has(row.product_id)) map.set(row.product_id, []);
 // across ALL products that use it. Used by Ingredient Demand (daily table),
 // the inventory status (getIngredientDailyNeeds) and the Dashboard's stock
 // alerts, so the three can never disagree.
-// -> Map ingredientId -> { ingredientId, item, need, productIds:Set }
+// -> Map ingredientId -> { ingredientId, item, need, productIds:Set,
+//                          byProduct: Map productId -> that product's part of need }
+// byProduct lets a caller name the products that use the most of an
+// ingredient (restock email "For ..."); it never changes `need`.
 function sumIngredientNeeds(forecastRows, recipeMap, bufferMultiplier) {
   const byIngredient = new Map();
   for (const f of forecastRows || []) {
     for (const item of recipeMap.get(f.product_id) || []) {
       let entry = byIngredient.get(item.ingredientId);
       if (!entry) {
-        entry = { ingredientId: item.ingredientId, item, need: 0, productIds: new Set() };
+        entry = { ingredientId: item.ingredientId, item, need: 0, productIds: new Set(), byProduct: new Map() };
         byIngredient.set(item.ingredientId, entry);
       }
-      entry.need += Number(f.predicted_quantity) * item.qtyPerServing * bufferMultiplier;
+      const part = Number(f.predicted_quantity) * item.qtyPerServing * bufferMultiplier;
+      entry.need += part;
       entry.productIds.add(f.product_id);
+      entry.byProduct.set(f.product_id, (entry.byProduct.get(f.product_id) || 0) + part);
     }
   }
   return byIngredient;
@@ -966,6 +971,20 @@ function startOfWeekMonday(dateStr) {
 // per-row status (see inventoryController.js), so the table, the legend,
 // and Analytics > Ingredient Demand always agree.
 async function getIngredientDailyNeeds(date) {
+  const { entries } = await getIngredientDailyNeedDetails(date);
+  const needs = new Map();
+  for (const entry of entries.values()) {
+    needs.set(entry.ingredientId, entry.need);
+  }
+  return needs;
+}
+
+// The same need, with what is behind it: the sumIngredientNeeds() entries
+// (need, productIds, byProduct), the date used and the safety buffer %.
+// Used by getIngredientDailyNeeds() (Ingredient Management) and by the
+// stock alerts + restock email (services/stockAlertService.js), so all
+// three read the same number.
+async function getIngredientDailyNeedDetails(date) {
   const safetyBufferPct = await getSafetyBufferPercentage();
   const bufferMultiplier = 1 + safetyBufferPct / 100;
   const targetDate = date || defaultDateRange().today;
@@ -977,12 +996,11 @@ async function getIngredientDailyNeeds(date) {
   if (error) throw error;
 
   const recipeMap = await getRecipeMap();
-
-  const needs = new Map();
-  for (const entry of sumIngredientNeeds(forecastRows, recipeMap, bufferMultiplier).values()) {
-    needs.set(entry.ingredientId, entry.need);
-  }
-  return needs;
+  return {
+    date: targetDate,
+    safetyBufferPct,
+    entries: sumIngredientNeeds(forecastRows, recipeMap, bufferMultiplier),
+  };
 }
 
 // ingredientId set for every ingredient that appears in at least one product
@@ -1233,6 +1251,9 @@ async function getForecastSummary() {
 module.exports = {
   computeStockStatus,
   getIngredientDailyNeeds,
+  getIngredientDailyNeedDetails,
+  getSafetyBufferPercentage,
+  getLatestMarketPriceMap,
   accuracyFromWmape,
   accuracyStanding,
   getForecastingAnalytics,

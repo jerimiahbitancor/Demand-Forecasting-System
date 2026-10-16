@@ -1,11 +1,16 @@
 // services/notificationService.js
 const { supabaseAdmin } = require('../config/supabase');
 const logger = require('../utils/logger');
-const { emailRemindersEnabled } = require('../utils/featureFlags');
+const { emailRemindersEnabled, schedulersEnabled } = require('../utils/featureFlags');
+const { escapeHtml } = require('../utils/escapeHtml');
 const { parseAllowedOrigins } = require('../middleware/corsConfig');
 const {
   sendEmail, isEmailConfigured, isValidEmail, maskEmail,
 } = require('./emailService');
+const { buildRestockEmail, restockListFromMetadata, fmtNum } = require('./restockEmail');
+// Required lazily in runStockRefresh: stockAlertService -> analyticsService
+// is a heavy require chain that most callers of this file never need.
+const loadRestockListLazy = (...args) => require('./stockAlertService').loadRestockList(...args);
 
 // ---------------------------------------------------------------------------
 // Email reminders (Oct 14 2026)
@@ -27,8 +32,10 @@ const EMAIL_REMINDER_KINDS = Object.freeze([
   'upload_reminder',   // 4:00 / 7:00 AM: upload yesterday's sales or mark closed
   'unconfirmed_days',  // 4:00 AM summary of other unanswered days
   'stock_shortfall',   // an upload used more of an ingredient than was in stock
-  'low_stock',         // low or out of stock (keys low_<id> / out_<id>)
-  'restock_summary',   // "N ingredients need attention"
+  'restock_summary',   // the daily restock email (ingredient list); only rows
+                       // with metadata.emailed === true are sent, see
+                       // runStockRefresh. Per-ingredient 'low_stock' alerts
+                       // stay in the bell and are never emailed.
 ]);
 const EMAIL_DEDUPE_MS = 24 * 60 * 60 * 1000;
 const EMAIL_FOOTER = 'You get this email because reminders are on. Change the email in Settings > Business Profile.';
@@ -53,6 +60,7 @@ function emailDedupeKey(notification, now = new Date()) {
   if (md.kind === 'stock_shortfall' && md.ingredient_id != null) {
     return `stock_shortfall:${md.ingredient_id}:${manilaDate(now)}`;
   }
+  if (md.kind === 'restock_summary' && md.email_key) return String(md.email_key);
   if (md.key) return String(md.key);
   return `${md.kind}|${notification.title}|${manilaDate(now)}`;
 }
@@ -67,10 +75,6 @@ function frontendBaseUrl(env = process.env) {
   const deployed = origins.find((o) => !/localhost|127\.0\.0\.1/.test(o));
   return (deployed || origins[0] || '').replace(/\/+$/, '');
 }
-
-const escapeHtml = (s) => String(s == null ? '' : s)
-  .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
-  .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
 
 function buildReminderEmail({ title, message, link }, env = process.env) {
   const base = frontendBaseUrl(env);
@@ -112,6 +116,11 @@ async function emailReminder(notification, {
   const kind = notification && notification.metadata && notification.metadata.kind;
   if (!emailRemindersEnabled(env)) return { sent: false, reason: 'disabled' };
   if (!EMAIL_REMINDER_KINDS.includes(kind)) return { sent: false, reason: 'not_a_reminder' };
+  // A restock summary row is emailed only when runStockRefresh chose it
+  // (first list of the Manila day, or a NEW out of stock / critical item).
+  if (kind === 'restock_summary' && notification.metadata.emailed !== true) {
+    return { sent: false, reason: 'not_selected' };
+  }
 
   const key = emailDedupeKey(notification, now);
   const nowMs = now.getTime();
@@ -131,7 +140,10 @@ async function emailReminder(notification, {
       logger.warn('reminder_email_skipped', { reason: to ? 'invalid_business_email' : 'no_business_email', kind, to: to ? maskEmail(to) : null });
       return { sent: false, reason: 'no_business_email' };
     }
-    const email = buildReminderEmail(notification, env);
+    const md = notification.metadata || {};
+    const email = kind === 'restock_summary' && Array.isArray(md.items)
+      ? buildRestockEmail(restockListFromMetadata(md), { baseUrl: frontendBaseUrl(env) })
+      : buildReminderEmail(notification, env);
     await send({ to, subject: email.subject, html: email.html, text: email.text });
     logger.info('reminder_email_sent', { kind, to: maskEmail(to) });
     return { sent: true, reason: null, to: maskEmail(to) };
@@ -213,6 +225,12 @@ const createNotification = async ({ userId, type = 'info', title, message, link 
       .select()
       .single();
     if (error) {
+      // 23505: the reminder key index (migration 012) refused a second
+      // copy, e.g. two servers racing. Not an error; nothing to email.
+      if (error.code === '23505') {
+        logger.info('notification_duplicate_skipped', { kind: metadata && metadata.kind, key: metadata && metadata.key });
+        return null;
+      }
       console.error('Error creating notification:', error);
       return null;
     }
@@ -249,133 +267,280 @@ const createNotificationOnce = async (notification) => {
   return createNotification(notification);
 };
 
-// Reconcile low-stock / out-of-stock alerts for every user, based on the
-// ingredients table (quantity vs min_stock). This is "dynamic" in both
-// directions:
-//   - new alerts are created for ingredients that just went low,
-//   - alerts for ingredients that recovered are automatically marked read,
-//   - ingredients that are still low are NOT re-notified (no duplicates).
-const refreshLowStockNotifications = async () => {
-  try {
-    const { data: ingredients, error: ingError } = await supabaseAdmin
-      .from('ingredients')
-      .select('id, name, quantity, min_stock, unit')
-      .eq('is_archived', false);
+// ---------------------------------------------------------------------------
+// Stock alerts + the daily restock email (Oct 17 2026)
+//
+// Every ingredient's status comes from services/stockAlertService.js, the
+// SAME rule as the Ingredient Management page: out of stock (quantity 0),
+// Critical (< 50% of the forecast need), Low (< 100%), and for ingredients
+// with no forecast need the old rule, quantity <= min_stock.
+//
+// Bell, per user ("dynamic" both ways, as before):
+//   - one alert per ingredient, key out_<id> / critical_<id> / low_<id>
+//     (kind 'low_stock'); still-current alerts are not repeated, alerts
+//     for ingredients that recovered or changed group are marked read;
+//   - one restock_summary row with the whole list in metadata (items,
+//     for_date, counts), replacing the previous one.
+// Email: at most one restock email per Manila date, decided from the DB
+// (key restock_summary:<YYYY-MM-DD>, metadata.emailed) so restarts never
+// resend it. A second one goes out only when a NEW ingredient is out of
+// stock or Critical. Per-ingredient alerts are never emailed.
+//
+// Runs after every successful forecast (scheduled and manual), after an
+// upload's stock deduction, and every 6 hours as a fallback. Overlapping
+// calls are merged: one run at a time, plus one more if asked meanwhile.
+// ---------------------------------------------------------------------------
 
-    if (ingError) throw ingError;
+const STOCK_ALERT_PREFIXES = ['out_', 'critical_', 'low_'];
+const isStockAlertKey = (key) => typeof key === 'string' && STOCK_ALERT_PREFIXES.some((p) => key.startsWith(p));
+const qtyText = (value, unit) => (unit ? `${fmtNum(value)} ${unit}` : fmtNum(value));
 
-    // Desired alerts: key = `low_<id>` or `out_<id>` (stored in metadata.key so
-    // recovered alerts can be matched and retired).
-    const desired = {};
-    const setDesired = (ingredient, key, title, message) => {
-      if (!desired[key]) {
-        desired[key] = { ingredientId: ingredient.id, title, message };
-      }
+function stockAlertFor(item, weekday) {
+  const { name, unit } = item;
+  const needText = item.need != null ? `; ${qtyText(item.need, unit)} needed for ${weekday}` : '';
+  if (item.group === 'out') {
+    return {
+      key: `out_${item.ingredientId}`,
+      title: `Out of stock: ${name}`,
+      message: item.need != null
+        ? `${name} has 0 ${unit || 'units'} left${needText}.`
+        : `${name} has 0 ${unit || 'units'} left and needs to be restocked.`,
     };
-
-    for (const ingredient of ingredients || []) {
-      const quantity = Number(ingredient.quantity) || 0;
-      const minStock = Number(ingredient.min_stock) || 0;
-      const name = ingredient.name || `ingredient #${ingredient.id}`;
-      const unit = ingredient.unit || '';
-
-      if (quantity === 0) {
-        setDesired(
-          ingredient,
-          `out_${ingredient.id}`,
-          `Out of stock: ${name}`,
-          `${name} has 0 units left and needs to be restocked.`
-        );
-      } else if (quantity <= minStock) {
-        setDesired(
-          ingredient,
-          `low_${ingredient.id}`,
-          `Low stock: ${name}`,
-          `${name} is down to ${quantity} ${unit} (minimum ${minStock}). Consider restocking soon.`
-        );
-      }
-    }
-
-    const { data: users, error: userError } = await supabaseAdmin
-      .from('user')
-      .select('id');
-
-    if (userError) throw userError;
-
-    for (const user of users || []) {
-      // All of this user's current unread inventory alerts.
-      const { data: existing, error: existingError } = await supabaseAdmin
-        .from('notifications')
-        .select('id, metadata')
-        .eq('user_id', user.id)
-        .eq('type', 'warning')
-        .eq('read', false)
-        .limit(500);
-
-      if (existingError) throw existingError;
-
-      const missing = new Set(Object.keys(desired));
-
-      for (const notification of existing || []) {
-        const key = notification.metadata?.key;
-        const kind = notification.metadata?.kind;
-
-        if (kind === 'restock_summary') {
-          // Retire the previous aggregate reminder so there is always exactly
-          // one fresh "restock alert for N ingredients" per user.
-          await supabaseAdmin
-            .from('notifications')
-            .update({ read: true, updated_at: new Date() })
-            .eq('id', notification.id);
-          continue;
-        }
-
-        if (key && desired[key]) {
-          // Still low — leave it unread, don't notify again.
-          missing.delete(key);
-        } else if (key && (key.startsWith('low_') || key.startsWith('out_'))) {
-          // No longer low — retire the alert.
-          await supabaseAdmin
-            .from('notifications')
-            .update({ read: true, updated_at: new Date() })
-            .eq('id', notification.id);
-        }
-      }
-
-      for (const key of missing) {
-        const item = desired[key];
-        await createNotification({
-          userId: user.id,
-          type: 'warning',
-          title: item.title,
-          message: item.message,
-          link: '/inventory-management',
-          metadata: { kind: 'low_stock', key, ingredient_id: item.ingredientId },
-        });
-      }
-
-      // Aggregate "Restock reminder for N ingredients" alert.
-      const alertCount = Object.keys(desired).length;
-      if (alertCount > 0) {
-        await createNotification({
-          userId: user.id,
-          type: 'warning',
-          title: `Restock reminder: ${alertCount} ingredient${alertCount > 1 ? 's' : ''} need attention`,
-          message: `${alertCount} ingredient(s) are low or out of stock. Open Ingredient Management to restock them.`,
-          link: '/inventory-management',
-          metadata: { kind: 'restock_summary' },
-        });
-      }
-    }
-  } catch (error) {
-    console.error('Error refreshing low-stock notifications:', error);
   }
-};
+  if (item.group === 'critical') {
+    return {
+      key: `critical_${item.ingredientId}`,
+      title: `Critical stock: ${name}`,
+      message: `${name} is down to ${qtyText(item.stock, unit)}${needText}.`,
+    };
+  }
+  return {
+    key: `low_${item.ingredientId}`,
+    title: `Low stock: ${name}`,
+    message: item.rule === 'min_stock'
+      ? `${name} is down to ${qtyText(item.stock, unit)} (minimum ${fmtNum(item.minStock)}). Consider restocking soon.`
+      : `${name} is down to ${qtyText(item.stock, unit)}${needText}.`,
+  };
+}
+
+function summaryCountsText(counts) {
+  return [
+    counts.out ? `${counts.out} out of stock` : null,
+    counts.critical ? `${counts.critical} critical` : null,
+    counts.low ? `${counts.low} low` : null,
+  ].filter(Boolean).join(', ');
+}
+
+/**
+ * Should this refresh send the restock email? Read-only.
+ * Returns { send, reason, dayKey, emailKey, urgentIds, newUrgentIds }.
+ * reason: 'first_today' | 'new_urgent' | 'duplicate' | 'disabled' |
+ *         'not_configured' | 'nothing_to_restock'
+ */
+async function decideRestockEmail(client, list, { now = new Date(), env = process.env } = {}) {
+  const dayKey = `restock_summary:${manilaDate(now)}`;
+  const urgentIds = list.items
+    .filter((i) => i.group === 'out' || i.group === 'critical')
+    .map((i) => i.ingredientId)
+    .sort((a, b) => Number(a) - Number(b));
+  const base = { send: false, dayKey, emailKey: null, urgentIds, newUrgentIds: [] };
+  if (list.items.length === 0) return { ...base, reason: 'nothing_to_restock' };
+  if (!emailRemindersEnabled(env)) return { ...base, reason: 'disabled' };
+  if (!isEmailConfigured(env)) return { ...base, reason: 'not_configured' };
+
+  const { data, error } = await client
+    .from('notifications')
+    .select('id, metadata')
+    .eq('metadata->>key', dayKey)
+    .eq('metadata->>emailed', 'true')
+    .limit(500);
+  if (error) throw error;
+  const sentRows = data || [];
+  if (sentRows.length === 0) return { ...base, send: true, reason: 'first_today', emailKey: `${dayKey}#1` };
+
+  const known = new Set();
+  const emailKeys = new Set();
+  for (const row of sentRows) {
+    for (const id of (row.metadata && row.metadata.urgent_ids) || []) known.add(String(id));
+    if (row.metadata && row.metadata.email_key) emailKeys.add(row.metadata.email_key);
+  }
+  const newUrgentIds = urgentIds.filter((id) => !known.has(String(id)));
+  if (newUrgentIds.length === 0) return { ...base, reason: 'duplicate' };
+  return { ...base, send: true, reason: 'new_urgent', emailKey: `${dayKey}#${emailKeys.size + 1}`, newUrgentIds };
+}
+
+async function markRead(client, id) {
+  await client.from('notifications').update({ read: true, updated_at: new Date() }).eq('id', id);
+}
+
+/**
+ * One stock refresh. Returns a summary (for logs and tests). Throws on a
+ * read failure; refreshLowStockNotifications() catches.
+ */
+async function runStockRefresh({
+  client = supabaseAdmin, now = new Date(), trigger = 'timer', env = process.env,
+  loadList = loadRestockListLazy, notify = createNotification, emailOutcome = emailOutcomeOf,
+} = {}) {
+  const list = await loadList({ client, now });
+  const weekday = new Intl.DateTimeFormat('en-US', { timeZone: 'Asia/Manila', weekday: 'long' })
+    .format(new Date(`${list.forDate}T12:00:00+08:00`));
+
+  const desired = new Map();
+  for (const item of list.items) {
+    const alert = stockAlertFor(item, weekday);
+    desired.set(alert.key, { ...alert, ingredientId: item.ingredientId, group: item.group });
+  }
+
+  const decision = await decideRestockEmail(client, list, { now, env });
+
+  const { data: users, error: userError } = await client.from('user').select('id');
+  if (userError) throw userError;
+
+  const result = {
+    trigger, forDate: list.forDate, items: list.items.length, counts: list.counts,
+    alertsCreated: 0, alertsRetired: 0, summaries: 0, email: { decision: decision.reason, sent: false, outcome: null },
+  };
+  let emailRow = null;
+
+  for (const [index, user] of (users || []).entries()) {
+    const { data: existing, error: existingError } = await client
+      .from('notifications')
+      .select('id, metadata')
+      .eq('user_id', user.id)
+      .eq('type', 'warning')
+      .eq('read', false)
+      .limit(500);
+    if (existingError) throw existingError;
+
+    const missing = new Set(desired.keys());
+    for (const n of existing || []) {
+      const key = n.metadata && n.metadata.key;
+      const kind = n.metadata && n.metadata.kind;
+      if (kind === 'restock_summary') {
+        // Always exactly one fresh summary per user.
+        await markRead(client, n.id);
+        continue;
+      }
+      if (key && desired.has(key)) {
+        missing.delete(key); // still in the same group: don't notify again
+      } else if (isStockAlertKey(key)) {
+        await markRead(client, n.id); // recovered, or moved to another group
+        result.alertsRetired += 1;
+      }
+    }
+
+    for (const key of missing) {
+      const a = desired.get(key);
+      const row = await notify({
+        userId: user.id,
+        type: 'warning',
+        title: a.title,
+        message: a.message,
+        link: '/inventory-management',
+        metadata: { kind: 'low_stock', key, ingredient_id: a.ingredientId, group: a.group },
+      });
+      if (row) result.alertsCreated += 1;
+    }
+
+    if (list.items.length > 0) {
+      const n = list.counts.total;
+      // Only the first user's row carries the email (one business email).
+      const emailed = decision.send && index === 0;
+      const row = await notify({
+        userId: user.id,
+        type: 'warning',
+        title: `Restock: ${n} ingredient${n === 1 ? '' : 's'} (${list.counts.critical} critical)`,
+        message: `${summaryCountsText(list.counts)}. Open the grocery list to see what to buy.`,
+        link: '/ingredient-demand',
+        metadata: {
+          kind: 'restock_summary',
+          key: decision.dayKey,
+          for_date: list.forDate,
+          safety_buffer_pct: list.safetyBufferPct,
+          stock_at: list.stockAt,
+          counts: list.counts,
+          total_est_cost: list.totalEstCost,
+          unpriced_count: list.unpricedCount,
+          items: list.items,
+          urgent_ids: decision.urgentIds,
+          emailed,
+          email_key: emailed ? decision.emailKey : null,
+        },
+      });
+      if (row) result.summaries += 1;
+      if (emailed && row) emailRow = row;
+    }
+  }
+
+  // The DB says "emailed" only if the email really went out, so a failed
+  // or skipped send is tried again by the next refresh.
+  if (emailRow) {
+    const outcome = await emailOutcome(emailRow);
+    result.email.sent = Boolean(outcome && outcome.sent);
+    result.email.outcome = outcome && outcome.sent ? 'sent' : (outcome && outcome.reason) || 'failed';
+    if (!result.email.sent) {
+      await client.from('notifications')
+        .update({ metadata: { ...emailRow.metadata, emailed: false, email_key: null } })
+        .eq('id', emailRow.id);
+    }
+  }
+
+  // Once per run, not once per row.
+  if (['disabled', 'not_configured', 'duplicate'].includes(decision.reason)) {
+    logger[decision.reason === 'duplicate' ? 'info' : 'warn']('reminder_email_skipped', {
+      job: 'stockRefresh', trigger, kind: 'restock_summary', reason: decision.reason, items: list.items.length,
+    });
+  }
+  logger.info('stock_refresh_done', result);
+  return result;
+}
+
+let refreshInFlight = null;
+let refreshAgain = null;
+
+// Runs runStockRefresh(); calls that arrive while one runs are merged into
+// ONE more run afterwards (a 288-file backfill must not mean 288 runs).
+// Never throws; resolves to the last run's summary, or null on failure.
+function refreshLowStockNotifications(options = {}) {
+  if (refreshInFlight) {
+    refreshAgain = options;
+    return refreshInFlight;
+  }
+  refreshInFlight = (async () => {
+    let current = options;
+    let last = null;
+    for (;;) {
+      try {
+        last = await runStockRefresh(current);
+      } catch (error) {
+        console.error('Error refreshing low-stock notifications:', error);
+        last = null;
+      }
+      if (!refreshAgain) break;
+      current = refreshAgain;
+      refreshAgain = null;
+    }
+    return last;
+  })().finally(() => { refreshInFlight = null; });
+  return refreshInFlight;
+}
+
+// Fire-and-forget refresh after a forecast or an upload. Only where the
+// timed jobs are on: a local server points at the LIVE database and must
+// not write alerts or send email by itself.
+function queueStockRefresh(trigger, { env = process.env } = {}) {
+  if (!schedulersEnabled(env)) return null;
+  return refreshLowStockNotifications({ trigger }).catch(() => null);
+}
 
 module.exports = {
   createNotification,
   createNotificationOnce,
   refreshLowStockNotifications,
+  runStockRefresh,
+  queueStockRefresh,
+  decideRestockEmail,
+  stockAlertFor,
   emailReminder,
   emailOutcomeOf,
   sendTestReminderEmail,
@@ -387,4 +552,5 @@ module.exports = {
   // test hooks
   _waitForEmails: () => Promise.all([...pendingEmails]),
   _resetEmailState: () => { sentEmailKeys.clear(); pendingEmails.clear(); emailOutcomes.clear(); },
+  _waitForStockRefresh: () => refreshInFlight || Promise.resolve(null),
 };

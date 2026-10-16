@@ -11,7 +11,7 @@ const menuService = require('../services/menuService');
 const mappingService = require('../services/mappingService');
 const businessDayService = require('../services/businessDayService');
 const { logAction } = require('../services/auditService');
-const { createNotification } = require('../services/notificationService');
+const { createNotification, queueStockRefresh } = require('../services/notificationService');
 
 const actorOf = (req) => req.user?.name || req.user?.email || null;
 
@@ -330,6 +330,10 @@ router.post(
           // what makes the row count as a real duplicate for future
           // uploads of the same filename (see checkDuplicateUpload).
           await uploadService.updateUploadStatus(uploadId, 'processed');
+
+          // processSalesData() deducted stock: refresh the stock alerts.
+          // Fire-and-forget; overlapping calls (bulk uploads) are merged.
+          queueStockRefresh('upload');
 
           return res.status(201).json({
             success: true,

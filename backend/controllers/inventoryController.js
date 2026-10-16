@@ -2,6 +2,7 @@
 const { supabaseAdmin } = require('../config/supabase');
 const { logAction } = require('../services/auditService');
 const analyticsService = require('../services/analyticsService');
+const { classifyStock } = require('../services/stockAlertService');
 const { parseRecipeQuantity } = require('../utils/recipeUnits');
 
 const actorOf = (req) => req.user?.name || req.user?.email || null;
@@ -89,14 +90,14 @@ const getInventoryItems = async (req, res) => {
     // Analytics > Ingredient Demand view uses, and derive status from it.
     const dailyNeeds = await analyticsService.getIngredientDailyNeeds();
 
-    const statusFor = (item) => {
-      if (item.is_archived) return 'Archived';
-      // Out of stock is always urgent, regardless of whether a forecast exists.
-      if ((Number(item.quantity) || 0) === 0) return 'Critical Stock';
-      const need = dailyNeeds.get(item.id) || 0;
-      const status = analyticsService.computeStockStatus(Number(item.quantity) || 0, need);
-      return status === 'No Forecast' ? 'No Forecast' : `${status} Stock`;
-    };
+    // One rule shared with the bell's stock alerts and the restock email
+    // (services/stockAlertService.js classifyStock): out of stock is always
+    // "Critical Stock" on this page, whether or not a forecast exists.
+    const statusFor = (item) => classifyStock({
+      quantity: item.quantity,
+      isArchived: item.is_archived,
+      need: dailyNeeds.get(item.id) || 0,
+    }).pageLabel;
 
     const totalItems = summaryData?.length || 0;
     const totalStockValue = (summaryData || []).reduce((sum, item) => {
