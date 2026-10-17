@@ -1,5 +1,5 @@
 // pages/Analytics.jsx
-import { useState } from "react";
+import { useSearchParams } from "react-router-dom";
 import Navbar from "../../components/Navbar/Navbar.jsx";
 import Forecasting from "../components/Forecasting.jsx";
 import ProductPerformance from "../components/ProductPerformance.jsx";
@@ -16,8 +16,22 @@ const TABS = [
   { id: "ingredient-demand", label: "Ingredient Demand", component: IngredientDemand },
 ];
 
+const DEFAULT_TAB = TABS[0].id;
+const TAB_IDS = TABS.map((tab) => tab.id);
+
 const Analytics = () => {
-  const [activeTab, setActiveTab] = useState("forecasting");
+  // The URL is the source of truth for the active tab so a notification (or
+  // a shared link) can open a specific one: /analytics?tab=ingredient-demand.
+  // Selecting a tab keeps the URL in step, which also makes back/forward work.
+  const [searchParams, setSearchParams] = useSearchParams();
+  const tabParam = searchParams.get("tab");
+  const activeTab = TAB_IDS.includes(tabParam) ? tabParam : DEFAULT_TAB;
+
+  const selectTab = (id) => {
+    const next = new URLSearchParams(searchParams);
+    next.set("tab", id);
+    setSearchParams(next, { replace: true });
+  };
 
   const activeTabMeta = TABS.find((tab) => tab.id === activeTab) ?? TABS[0];
   const ActiveComponent = activeTabMeta.component;
@@ -48,7 +62,7 @@ const Analytics = () => {
             <button
               key={tab.id}
               className={`analytics-tab ${activeTab === tab.id ? "active" : ""}`}
-              onClick={() => setActiveTab(tab.id)}
+              onClick={() => selectTab(tab.id)}
               aria-current={activeTab === tab.id ? "page" : undefined}
             >
               {tab.label}

@@ -10,6 +10,7 @@ import {
   
 } from 'react-icons/fa';
 import { useNavigate } from 'react-router-dom';
+import { resolveNotificationLink } from './notificationLinks';
 import './NotificationDropdown.css';
 
 const NotificationDropdown = () => {
@@ -92,8 +93,9 @@ const NotificationDropdown = () => {
     setNotifications(prev => 
       prev.map(n => n.id === notification.id ? { ...n, read: true } : n)
     );
-    if (notification.link) {
-      navigate(notification.link);
+    const target = resolveNotificationLink(notification);
+    if (target) {
+      navigate(target);
       setIsOpen(false);
     }
   };
