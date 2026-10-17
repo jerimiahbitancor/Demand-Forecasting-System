@@ -7,7 +7,7 @@ design): with 61 SKUs at varying volumes, several low-volume products
 would never individually reach enough history to train a reliable
 model of their own. Pooling all products into one training set lets
 the model share what it learns about calendar effects (weekends,
-paydays, holidays) across every product, including sparse ones, while
+paydays) across every product, including sparse ones, while
 `product_id` as a feature lets it still tell products apart. The
 tradeoff: a single high-volume product's patterns could dominate
 training loss if left unchecked, which is why evaluation below always
@@ -106,18 +106,112 @@ def filter_training_eligible(features_df: pd.DataFrame, min_observations: int):
     return filtered_df, excluded_report
 
 
+# ---------------------------------------------------------------------
+# Training settings (owner-approved Oct 17 2026)
+# ---------------------------------------------------------------------
+# Tuned settings: the best trial of reports/experiment_accuracy_tuning.py
+# (lowest validation WMAPE among 30 trials, scored on a validation slice,
+# never on the test set). They replace the old fixed defaults
+# (min_child_weight=1, subsample=0.9, reg_lambda=1.0, n_estimators=200).
+TUNED_PARAMS = {
+    "max_depth": 5,            # how many questions deep one tree can go
+    "min_child_weight": 5,     # a leaf needs enough data behind it (was 1)
+    "subsample": 0.7,          # each tree sees a random 70% of the rows (was 0.9)
+    "colsample_bytree": 1.0,   # each tree may use every feature
+    "reg_lambda": 5.0,         # stronger shrinking of leaf values (was 1.0)
+    "reg_alpha": 0.0,
+    "gamma": 0.1,              # a split must reduce the loss by at least this much
+    "learning_rate": 0.1,      # each tree adds 10% of its correction
+}
+
+# Early stopping: trees are added one at a time up to MAX_TREES, and
+# training stops once the error on the VALIDATION period has not improved
+# for EARLY_STOPPING_ROUNDS trees in a row. The best tree count found that
+# way is then used to train the final model on the whole training period.
+MAX_TREES = 500
+EARLY_STOPPING_ROUNDS = 30
+
+# Share of DATES (not rows) in each part of the time-ordered split:
+#   test       = the last 20% of dates  -> scored once, never used to tune
+#   validation = the last 20% of the remaining training dates -> picks the tree count
+#   fit        = everything before that
+TEST_FRACTION = 0.2
+VALIDATION_FRACTION = 0.2
+
+
 def chronological_split(df: pd.DataFrame, train_fraction: float = 0.8):
     """
-    Time-ordered split, never random — and done GLOBALLY across the
-    pooled multi-product dataset, on `sale_date`. This means every
-    product's test set starts from the same calendar cutoff, which is
-    simpler to reason about than each product having its own separate
-    80/20 boundary, and matches the fact that there's now only one
-    model being evaluated, not 61.
+    Time-ordered split, never random, done GLOBALLY across the pooled
+    multi-product dataset — every product's test set starts on the same
+    calendar date.
+
+    CHANGED Oct 17 2026: the cutoff is now a DATE, chosen on the list of
+    distinct dates, not a row index. The old row-index cut could fall in
+    the middle of one day, so the same date appeared in both the training
+    and the test set (some products' rows for that day on each side).
+    Now every row of a date is on the same side. Because the cut is on
+    dates, the row split is close to, but not exactly, 80/20.
     """
     df = df.sort_values("sale_date").reset_index(drop=True)
-    split_idx = int(len(df) * train_fraction)
-    return df.iloc[:split_idx], df.iloc[split_idx:]
+    dates = np.sort(df["sale_date"].unique())
+    if len(dates) < 2:
+        return df, df.iloc[0:0]
+    cut_index = min(max(int(len(dates) * train_fraction), 1), len(dates) - 1)
+    cutoff = dates[cut_index]
+    return df[df["sale_date"] < cutoff], df[df["sale_date"] >= cutoff]
+
+
+def three_way_split(df: pd.DataFrame):
+    """
+    fit / validation / test, all by date (see chronological_split).
+    Returns (fit_df, val_df, test_df, train_df) where train_df = fit + validation.
+    """
+    train_df, test_df = chronological_split(df, train_fraction=1 - TEST_FRACTION)
+    fit_df, val_df = chronological_split(train_df, train_fraction=1 - VALIDATION_FRACTION)
+    return fit_df, val_df, test_df, train_df
+
+
+def build_regressor(n_estimators: int, early_stopping: bool = False) -> xgb.XGBRegressor:
+    """The one place the XGBoost settings are written down."""
+    extra = {"early_stopping_rounds": EARLY_STOPPING_ROUNDS} if early_stopping else {}
+    return xgb.XGBRegressor(
+        n_estimators=n_estimators,
+        **TUNED_PARAMS,
+        tree_method="hist",        # required for enable_categorical
+        enable_categorical=True,   # native categorical splits on product_id
+        random_state=42,
+        eval_metric="mae",
+        **extra,
+    )
+
+
+def fit_with_early_stopping(fit_df: pd.DataFrame, val_df: pd.DataFrame, columns: list):
+    """
+    Grows up to MAX_TREES trees on fit_df and watches the MAE on val_df
+    after every tree. Stops when val_df has not improved for
+    EARLY_STOPPING_ROUNDS trees.
+
+    Returns (model, n_trees, curve):
+      n_trees  — the best number of trees (best_iteration + 1)
+      curve    — {"fit_mae": [...], "val_mae": [...]}, one value per tree,
+                 used by the training report to draw the learning curve.
+    XGBoost stops on the LAST set in eval_set, so val_df must be last.
+    """
+    model = build_regressor(MAX_TREES, early_stopping=True)
+    model.fit(
+        fit_df[columns], fit_df["quantity_sold"],
+        eval_set=[(fit_df[columns], fit_df["quantity_sold"]), (val_df[columns], val_df["quantity_sold"])],
+        verbose=False,
+    )
+    history = model.evals_result()
+    curve = {"fit_mae": list(history["validation_0"]["mae"]), "val_mae": list(history["validation_1"]["mae"])}
+    return model, int(model.best_iteration) + 1, curve
+
+
+def _period(df: pd.DataFrame):
+    if df.empty:
+        return None
+    return [str(df["sale_date"].min().date()), str(df["sale_date"].max().date())]
 
 
 def train_global_model(features_df: pd.DataFrame, persist: bool = True, feature_columns: list = None):
@@ -132,6 +226,12 @@ def train_global_model(features_df: pd.DataFrame, persist: bool = True, feature_
     Returns (model, metrics, version) where metrics contains both the
     aggregate scores and a per-product breakdown.
 
+    HOW IT TRAINS (Oct 17 2026): the data is split by date into fit,
+    validation and test periods (three_way_split). Early stopping on the
+    validation period picks the number of trees; the final model is then
+    trained with that many trees on fit + validation and scored once on
+    the test period. The test period is never used to choose anything.
+
     persist and feature_columns are report/diagnostic-only additions —
     every production call site (app.py's /train) omits both and gets
     byte-for-byte today's behavior. persist=False skips the Supabase
@@ -143,8 +243,9 @@ def train_global_model(features_df: pd.DataFrame, persist: bool = True, feature_
     function.
     """
     columns = feature_columns if feature_columns is not None else FEATURE_COLUMNS
-    train_df, test_df = chronological_split(features_df)
-    log_stage("train split", train_df, extra={"train_fraction": 0.8})
+    fit_df, val_df, test_df, train_df = three_way_split(features_df)
+    log_stage("train split", train_df, extra={"train_fraction": 1 - TEST_FRACTION})
+    log_stage("validation split", val_df, extra={"validation_period": _period(val_df)})
     log_stage("test split", test_df, extra={
         "train_ends": str(train_df["sale_date"].max()) if not train_df.empty else None,
         "test_starts": str(test_df["sale_date"].min()) if not test_df.empty else None,
@@ -155,22 +256,21 @@ def train_global_model(features_df: pd.DataFrame, persist: bool = True, feature_
             f"Only {len(train_df)} pooled training rows — not enough "
             "history across active products to train reliably yet."
         )
+    if val_df.empty or fit_df.empty:
+        raise ValueError("Not enough distinct dates to carve out a validation period.")
 
+    # Step 1 — find the tree count. Fit on the fit period, watch the
+    # validation period, stop when it stops improving.
+    _, n_trees, curve = fit_with_early_stopping(fit_df, val_df, columns)
+    validation_mae = float(curve["val_mae"][n_trees - 1])
+
+    # Step 2 — the final model: same settings, exactly n_trees trees,
+    # trained on the WHOLE training period (fit + validation), so the most
+    # recent pre-test weeks are not thrown away. The test period is still
+    # untouched; it is scored once, below.
     X_train, y_train = train_df[columns], train_df["quantity_sold"]
     X_test, y_test = test_df[columns], test_df["quantity_sold"]
-
-    model = xgb.XGBRegressor(
-        n_estimators=200,          # more trees than the per-product version,
-                                    # since the pooled dataset is much larger
-        max_depth=5,
-        learning_rate=0.1,
-        reg_lambda=1.0,
-        gamma=0.1,
-        subsample=0.9,
-        tree_method="hist",        # required for enable_categorical
-        enable_categorical=True,   # native categorical splits on product_id
-        random_state=42,
-    )
+    model = build_regressor(n_trees)
     model.fit(X_train, y_train)
 
     predictions = model.predict(X_test)
@@ -185,6 +285,8 @@ def train_global_model(features_df: pd.DataFrame, persist: bool = True, feature_
     # says so instead of quoting a MAPE-derived accuracy in a vacuum.
     aggregate_metrics["wmape"] = wmape(y_test.values, predictions)
     aggregate_metrics["baseline_wmape"] = wmape(y_test.values, test_df["rolling_7"].values)
+    # Second naive benchmark: the seasonal naive ("same weekday, last time open").
+    aggregate_metrics["baseline_same_dow_wmape"] = wmape(y_test.values, test_df["same_dow_last_open"].values)
 
     # Native categorical support (enable_categorical=True) keeps product_id
     # as ONE column, not one-hot expanded — so feature_importances_ lines
@@ -212,6 +314,21 @@ def train_global_model(features_df: pd.DataFrame, persist: bool = True, feature_
         "trained_product_ids": trained_product_ids,
         "feature_columns": list(columns),
         "train_end_date": str(train_df["sale_date"].max().date()),
+        # How this model was trained — read back by the training report so a
+        # read-only report run can still show the settings and the split.
+        "training": {
+            "params": dict(TUNED_PARAMS),
+            "n_estimators": n_trees,
+            "max_trees": MAX_TREES,
+            "early_stopping_rounds": EARLY_STOPPING_ROUNDS,
+            "fit_period": _period(fit_df),
+            "validation_period": _period(val_df),
+            "test_period": _period(test_df),
+            "fit_rows": len(fit_df),
+            "validation_rows": len(val_df),
+            "test_rows": len(test_df),
+            "validation_mae": validation_mae,
+        },
     }
 
     version = new_model_version()

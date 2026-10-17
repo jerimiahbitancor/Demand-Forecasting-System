@@ -17,6 +17,8 @@ python tests/test_feature_parity.py     # training vs forecast feature parity
 python tests/test_forecast_guard.py     # /forecast feature-set guard (real Flask route)
 python tests/test_modifier_demand.py    # POS modifier share in ingredient demand
 python tests/test_report_saved_categories.py  # report scores with the saved category list
+python tests/test_paydays.py            # payday rule: 15th/30th, Feb last day, Sat -> Fri, Sun -> Mon
+python tests/test_training_split.py     # date split, validation period, early stopping, tuned settings
 ```
 
 None of these touch Supabase or the network. `test_paging.py` and
@@ -42,6 +44,8 @@ The matching JS tests live in `backend/tests/`
 | `test_forecast_guard.py` | `/forecast` predicting with a model trained on a different feature set. Drives the real Flask route and proves it refuses an 11-feature model, a model with no metadata sidecar, and the same 12 columns in a different ORDER — without ever calling `predict()`. |
 | `test_modifier_demand.py` | Ingredient demand ignoring POS modifiers, or applying them wrongly. Worked example: forecast 20, NO EGG share 20%, NO RICE 13.3% -> egg 16, rice 17.33 before the buffer, buffer applied after; a dish without the modifier keeps its full recipe; no rules (migration 010 not run) -> the old formula. |
 | `test_report_saved_categories.py` | The training report scoring a saved model with today's product order. Shuffles the category list and proves the raw model swaps products while the report's `SavedModel` wrapper does not; also refuses a model with no `_meta.json`, a different feature list or order, and an unknown product. |
+| `test_paydays.py` | The payday rule drifting from the owner-approved definition: the 15th and the 30th, February's last day, a 31-day month still using the 30th, Saturday -> Friday, Sunday -> Monday (including across a month boundary). |
+| `test_training_split.py` | The Oct 17 2026 training flow: no date on two sides of a split, fit < validation < test, early stopping choosing the tree count on the validation period, the final model having exactly that many trees, the tuned settings being used, and the metadata recording all of it. |
 | `test_recipe_units.py` | The three copies of the recipe unit-conversion rules (backend, frontend, ml-service) drifting apart, so the screen shows one cost and the system books another. All three run the same hand-computed cases in `fixtures/recipe_unit_cases.json` (database units, and built-in-tables-only). Also checks `load_unit_metadata()` picks up units added in Settings and survives an unreadable table. |
 
 `backend/tests/historyGate.test.js` covers the JS side of the same rule plus the real `/api/business-days` endpoints (rejects sales/future/out-of-span/malformed dates, all-or-nothing, idempotent repeat calls, audit entry, late upload reopening a closed date). It mounts the real router with an in-memory fake database — no Supabase writes.

@@ -41,7 +41,7 @@ from datetime import date
 import pandas as pd
 
 from services.zero_fill import build_open_day_series, previous_open_date
-from utils.holidays import is_holiday
+from utils.paydays import is_payday
 
 # product_id is listed first deliberately — see engineer_features()
 # for how its dtype gets set to 'category' before this list is used
@@ -59,12 +59,24 @@ from utils.holidays import is_holiday
 #     a two-week closure), so it can tell a normal Tuesday from the first
 #     day back after a shutdown.
 # `month` and `day` were deliberately KEPT (the owner declined removing
-# them). If FEATURE_COLUMNS changes again, every saved model becomes
-# unusable until retrained — /forecast refuses to predict on a mismatch,
-# see app.py.
+# them).
+#
+# 11 features as of Oct 17 2026 (owner-approved change from 12):
+#   - `is_holiday` REMOVED. ChefDuo was closed on many holidays, so the
+#     data held too few OPEN holiday days to learn an effect from, and its
+#     importance was under 1%. To be reconsidered once there are about
+#     three years of sales data. utils/holidays.py is kept, but only the
+#     training report reads it now (as context in the outlier review).
+#   - `is_weekend` KEPT (owner decision), even though `dow` already
+#     carries the same information.
+#   - `is_payday` now follows utils/paydays.py: the 15th and the 30th
+#     (last day of February), Saturday -> Friday, Sunday -> Monday.
+#
+# If FEATURE_COLUMNS changes again, every saved model becomes unusable
+# until retrained — /forecast refuses to predict on a mismatch, see app.py.
 FEATURE_COLUMNS = [
     "product_id",
-    "dow", "month", "day", "is_weekend", "is_holiday", "is_payday",
+    "dow", "month", "day", "is_weekend", "is_payday",
     "lag_1", "same_dow_last_open", "days_since_last_open",
     "rolling_7", "rolling_14",
 ]
@@ -79,7 +91,7 @@ WARMUP_OBSERVATIONS = 14
 
 def calendar_features(d: date) -> dict:
     """
-    The 6 calendar-derived features. Pure function of the date alone —
+    The 5 calendar-derived features. Pure function of the date alone —
     these never depend on sales history, so they're always knowable in
     advance for both training rows and future forecast dates.
     """
@@ -89,8 +101,7 @@ def calendar_features(d: date) -> dict:
         "month": d.month,
         "day": d.day,
         "is_weekend": 1 if dow in (5, 6) else 0,
-        "is_holiday": is_holiday(d),
-        "is_payday": 1 if d.day in (15, 30) else 0,
+        "is_payday": is_payday(d),
     }
 
 

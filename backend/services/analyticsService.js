@@ -63,7 +63,7 @@ function accuracyStanding(wmape, baselineWmape) {
   };
 }
 
-// Human labels for the 12 FEATURE_COLUMNS (ml-service/services/
+// Human labels for the 11 FEATURE_COLUMNS (ml-service/services/
 // feature_engineering.py) — used only for display; the DB key stays
 // the raw column name so this never has to be kept in sync with a
 // separate id scheme.
@@ -73,6 +73,10 @@ function accuracyStanding(wmape, baselineWmape) {
 // `same_dow_last_open`, and `days_since_last_open` was added. An unknown
 // key still falls back to the raw column name, so an older model's
 // feature_importance keys render readably rather than crashing.
+//
+// Updated Oct 17 2026: `is_holiday` was removed from the model. Its label
+// stays below only so model_metrics rows from models trained before that
+// date still show "Holiday" instead of the raw key.
 const FEATURE_LABELS = {
   product_id: 'Product',
   dow: 'Day of Week',

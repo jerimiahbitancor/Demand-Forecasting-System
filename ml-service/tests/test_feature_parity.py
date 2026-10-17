@@ -109,8 +109,8 @@ for i, fc_row in enumerate(forecast_rows):
 
 check("every feature value matches between the two paths",
       not mismatches, f"{len(mismatches)} mismatch(es), first 5: {mismatches[:5]}")
-check("the parity check actually exercised all 12 features",
-      len(FEATURE_COLUMNS) == 12, f"got {len(FEATURE_COLUMNS)}")
+check("the parity check actually exercised all 11 features (is_holiday removed Oct 17 2026)",
+      len(FEATURE_COLUMNS) == 11 and "is_holiday" not in FEATURE_COLUMNS, f"got {len(FEATURE_COLUMNS)}")
 check("zero-fill really engaged in the fixture (otherwise parity is trivial)",
       (~training_rows["is_real"]).sum() > 0,
       f"filled zeros: {(~training_rows['is_real']).sum()}")
