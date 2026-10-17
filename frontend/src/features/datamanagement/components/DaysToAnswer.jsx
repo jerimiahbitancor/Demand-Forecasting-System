@@ -25,6 +25,10 @@ const DaysToAnswer = ({ refreshKey = 0, onUploadClick }) => {
   const scrolledRef = useRef(false);
   const linkedHere = typeof window !== "undefined" && window.location.hash === `#${ANCHOR}`;
 
+  // Collapsed by default so the section stays out of the way; a reminder that
+  // linked here (#days-to-answer) opens it straight away instead.
+  const [open, setOpen] = useState(linkedHere);
+
   const reload = useCallback(() => setReloadKey((k) => k + 1), []);
 
   useEffect(() => {
@@ -53,6 +57,15 @@ const DaysToAnswer = ({ refreshKey = 0, onUploadClick }) => {
     scrolledRef.current = true;
     cardRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
   }, [days, linkedHere]);
+
+  // A reminder can also land on the hash while we are already here: open then too.
+  useEffect(() => {
+    const openFromHash = () => {
+      if (window.location.hash === `#${ANCHOR}`) setOpen(true);
+    };
+    window.addEventListener("hashchange", openFromHash);
+    return () => window.removeEventListener("hashchange", openFromHash);
+  }, []);
 
   const handleMarkClosed = async (day) => {
     const confirmation = await Swal.fire({
@@ -101,37 +114,73 @@ const DaysToAnswer = ({ refreshKey = 0, onUploadClick }) => {
     ) : null;
   }
 
+  const bodyId = "days-to-answer-body";
+
   return (
-    <section id={ANCHOR} ref={cardRef} className="days-to-answer" aria-labelledby="days-to-answer-title">
-      <h2 id="days-to-answer-title" className="days-to-answer__title">Days that need your answer</h2>
-      <p className="days-to-answer__intro">
-        Your store usually opens on these days, but no sales file was uploaded and the day
-        is not marked closed. Upload the sales file, or mark the store as closed.
-      </p>
-      <ul className="days-to-answer__list">
-        {days.map((day) => (
-          <li key={day.date} className="days-to-answer__row">
-            <span className="days-to-answer__date">{day.label}</span>
-            <span className="days-to-answer__actions">
-              <button
-                type="button"
-                className="days-to-answer__btn days-to-answer__btn--primary"
-                onClick={() => onUploadClick && onUploadClick(day.date)}
-              >
-                Upload Sales Data
-              </button>
-              <button
-                type="button"
-                className="days-to-answer__btn"
-                disabled={closingDate !== null}
-                onClick={() => handleMarkClosed(day)}
-              >
-                {closingDate === day.date ? "Saving..." : "Mark Store as Closed"}
-              </button>
-            </span>
-          </li>
-        ))}
-      </ul>
+    <section
+      id={ANCHOR}
+      ref={cardRef}
+      className="days-to-answer"
+      aria-labelledby="days-to-answer-title"
+    >
+      <button
+        type="button"
+        id="days-to-answer-title"
+        className="days-to-answer__header"
+        aria-expanded={open}
+        aria-controls={bodyId}
+        onClick={() => setOpen((value) => !value)}
+      >
+        <span className="days-to-answer__heading">
+          Days that need your answer
+          <span className="days-to-answer__count">{days.length}</span>
+        </span>
+        <svg
+          className={`days-to-answer__chevron${open ? " is-open" : ""}`}
+          width="18"
+          height="18"
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          strokeWidth="2.5"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+          aria-hidden="true"
+        >
+          <polyline points="6 9 12 15 18 9" />
+        </svg>
+      </button>
+
+      <div id={bodyId} className="days-to-answer__body" hidden={!open}>
+        <p className="days-to-answer__intro">
+          Your store usually opens on these days, but no sales file was uploaded and the day
+          is not marked closed. Upload the sales file, or mark the store as closed.
+        </p>
+        <ul className="days-to-answer__list">
+          {days.map((day) => (
+            <li key={day.date} className="days-to-answer__row">
+              <span className="days-to-answer__date">{day.label}</span>
+              <span className="days-to-answer__actions">
+                <button
+                  type="button"
+                  className="days-to-answer__btn days-to-answer__btn--primary"
+                  onClick={() => onUploadClick && onUploadClick(day.date)}
+                >
+                  Upload Sales Data
+                </button>
+                <button
+                  type="button"
+                  className="days-to-answer__btn"
+                  disabled={closingDate !== null}
+                  onClick={() => handleMarkClosed(day)}
+                >
+                  {closingDate === day.date ? "Saving..." : "Mark Store as Closed"}
+                </button>
+              </span>
+            </li>
+          ))}
+        </ul>
+      </div>
     </section>
   );
 };

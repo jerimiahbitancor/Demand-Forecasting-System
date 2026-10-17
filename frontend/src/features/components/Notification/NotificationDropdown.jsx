@@ -17,6 +17,7 @@ import toast from 'react-hot-toast';
 import sharedApiClient from '../../../services/apiClient';
 import usePolling from '../../../hooks/usePolling';
 import { createChangeDetector, createNewestDetector, emitDataChanged, onNotificationCheck } from '../../../utils/appEvents';
+import { resolveNotificationLink } from './notificationLinks';
 import './NotificationDropdown.css';
 
 const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:5000/api';
@@ -382,11 +383,8 @@ const NotificationDropdown = () => {
       }
     }
     
-    if (notification.link) {
-      const target =
-        notification.link === '/ingredient-management'
-          ? '/inventory-management'
-          : notification.link;
+    const target = resolveNotificationLink(notification);
+    if (target) {
       navigate(target);
       setIsOpen(false);
     }

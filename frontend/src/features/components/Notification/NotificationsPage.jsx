@@ -18,6 +18,7 @@ import { useNavigate } from 'react-router-dom';
 import axios from 'axios';
 import toast from 'react-hot-toast';
 import './NotificationsPage.css';
+import { resolveNotificationLink } from './notificationLinks';
 import { buildPageItems, ELLIPSIS } from '../../../utils/pagination';
 
 const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:5000/api';
@@ -105,11 +106,8 @@ const NotificationsPage = () => {
         console.error('Error marking notification as read:', error);
       }
     }
-    if (notification.link) {
-      const target =
-        notification.link === '/ingredient-management'
-          ? '/inventory-management'
-          : notification.link;
+    const target = resolveNotificationLink(notification);
+    if (target) {
       navigate(target);
     }
   };

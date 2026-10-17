@@ -8,7 +8,7 @@ import CreatePassword from './features/auth/pages/register/CreatePassword';
 import Login from './features/auth/pages/login/Login';
 import { useSetupGuard } from './hooks/useSetupGuard';
 import ProtectedRoute from './features/components/ProtectedRoute';
-import { TEMPORARY_ACCESS_BYPASS } from './config/accessControl';
+import { TEMPORARY_ACCESS_BYPASS, STATE_PREVIEW_ENABLED } from './config/accessControl';
 import ForgotPassword from './features/auth/pages/forgotpass/ForgotPassword';
 import ResetPassword from './features/auth/pages/forgotpass/ResetPassword';
 import ChefDuoLanding from './features/landing/ChefDuoLanding';
@@ -133,8 +133,10 @@ function DashboardWrapper() {
     'data-needs-attention': DataNeedsAttention,
   };
   
-  // If state parameter is provided, show specific state
-  if (stateParam) {
+  // ?state= is a preview-only shortcut. Outside preview mode it is ignored and
+  // the real, backend-computed Dashboard is shown instead — a visitor typing
+  // it just sees their own true state rather than a fabricated one.
+  if (STATE_PREVIEW_ENABLED && stateParam) {
     const SpecificState = stateMap[stateParam];
     if (SpecificState) {
       return (
@@ -149,6 +151,22 @@ function DashboardWrapper() {
   return (
     <Gated>
       <Dashboard />
+    </Gated>
+  );
+}
+
+// Direct /dashboard/<state> routes are preview-only too. In a production build
+// they render the 404 page so the individual states aren't reachable by URL.
+function StatePreviewRoute({ children }) {
+  if (!STATE_PREVIEW_ENABLED) {
+    return <NotFound />;
+  }
+
+  return (
+    <Gated>
+      <Suspense fallback={<DashboardLoading />}>
+        {children}
+      </Suspense>
     </Gated>
   );
 }
@@ -275,26 +293,27 @@ function App() {
         
         {/* ============================================================ */}
         {/* DIRECT ROUTES - Access individual dashboard states */}
-        {/* These work in all environments */}
-        {/* Each screen is a separate chunk now, so they need a boundary. */}
+        {/* Preview-only (see STATE_PREVIEW_ENABLED). Each screen is a */}
+        {/* separate chunk, so they need their own Suspense boundary. */}
+        {/* In production these render the 404 page instead. */}
         {/* ============================================================ */}
         <Route path="/dashboard/fully-operational" element={
-          <Gated><Suspense fallback={<DashboardLoading />}><FullyOperational /></Suspense></Gated>
+          <StatePreviewRoute><FullyOperational /></StatePreviewRoute>
         } />
         <Route path="/dashboard/no-data" element={
-          <Gated><Suspense fallback={<DashboardLoading />}><NoData /></Suspense></Gated>
+          <StatePreviewRoute><NoData /></StatePreviewRoute>
         } />
         <Route path="/dashboard/uploaded-insufficient" element={
-          <Gated><Suspense fallback={<DashboardLoading />}><UploadedInsufficient /></Suspense></Gated>
+          <StatePreviewRoute><UploadedInsufficient /></StatePreviewRoute>
         } />
         <Route path="/dashboard/training" element={
-          <Gated><Suspense fallback={<DashboardLoading />}><TrainingInProgress /></Suspense></Gated>
+          <StatePreviewRoute><TrainingInProgress /></StatePreviewRoute>
         } />
         <Route path="/dashboard/forecasts-ready" element={
-          <Gated><Suspense fallback={<DashboardLoading />}><ForecastsReady /></Suspense></Gated>
+          <StatePreviewRoute><ForecastsReady /></StatePreviewRoute>
         } />
         <Route path="/dashboard/data-needs-attention" element={
-          <Gated><Suspense fallback={<DashboardLoading />}><DataNeedsAttention /></Suspense></Gated>
+          <StatePreviewRoute><DataNeedsAttention /></StatePreviewRoute>
         } />
         
         {/* Catch-all - custom 404 */}
