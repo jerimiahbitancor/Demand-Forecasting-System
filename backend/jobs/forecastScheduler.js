@@ -42,6 +42,15 @@ const COLD_STATUSES = new Set([429, 502, 503, 504]);
 const TRIGGER_ACTION_TYPE = 'forecast_trigger_run';
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
+// Wake the ML service before forecasting. ml.forecast() also wakes and
+// retries on its own, so a wake failure here is swallowed.
+async function wakeMl(ml) {
+  try {
+    if (typeof ml.ensureMlServiceAwake === 'function') await ml.ensureMlServiceAwake();
+    else if (typeof ml.checkHealth === 'function') await ml.checkHealth();
+  } catch (_) { /* the forecast call wakes and retries */ }
+}
+
 // A failure that a cold (sleeping) ML service causes: the host's 429/502/
 // 503/504, or the network giving up (Node fetch: TypeError "fetch failed").
 // A plain Error from Flask (bad data, no model) is not cold: no retry.
@@ -134,7 +143,7 @@ async function runScheduledForecast({
       console.warn(`[forecastScheduler] ${label} forecast: ML service looks cold `
         + `(${firstError.status || firstError.message}); retrying once in ${coldRetryWaitMs / 1000}s.`);
       await wait(coldRetryWaitMs);
-      if (typeof ml.checkHealth === 'function') await ml.checkHealth();
+      await wakeMl(ml);
       result = await ml.forecast({ horizonDays, runType });
     }
     const forecastedCount = (result?.results || []).filter((r) => r.status === 'forecasted').length;
@@ -254,9 +263,7 @@ async function runTriggeredForecast({
   }
 
   // Wake the ML service before the real call (Render free sleeps too).
-  if (typeof ml.checkHealth === 'function') {
-    try { await ml.checkHealth(); } catch (_) { /* the forecast call retries */ }
-  }
+  await wakeMl(ml);
   const outcome = await runScheduledForecast({
     horizonDays: slot.horizonDays, runType: slot.runType, trigger, ml, wait, coldRetryWaitMs,
   });

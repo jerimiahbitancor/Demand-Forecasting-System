@@ -462,7 +462,7 @@ function Forecasting() {
     if (!confirmation.isConfirmed) return;
 
     setIsGeneratingForecast(true);
-    const toastId = toast.loading("Generating forecast…");
+    const toastId = toast.loading("Generating forecast… (the first run after a quiet period can take about a minute)");
     try {
       const headers = await authService.getAuthHeaders();
       const response = await axios.post(
