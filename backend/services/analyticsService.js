@@ -20,7 +20,7 @@ const timezone = require('dayjs/plugin/timezone');
 dayjs.extend(utc);
 dayjs.extend(timezone);
 const PH_TZ = 'Asia/Manila';
-const { convertRecipeQuantity, parseRecipeQuantity, isMissingColumnError } = require('../utils/recipeUnits');
+const { convertRecipeQuantity, parseRecipeQuantity, isMissingColumnError, toBuyQuantity } = require('../utils/recipeUnits');
 
 // Critical <50%, Low <100%, Normal 100-200%, Excess >200% of forecasted
 // demand — locked thresholds, matches ml-service/services/business_logic.py's
@@ -1108,7 +1108,9 @@ async function getIngredientDemandAnalytics({ date, weekStart } = {}) {
     .map((entry) => {
       const marketPrice = marketPriceMap.get(entry.ingredientId)?.price ?? null;
       const status = computeStockStatus(entry.currentStock, entry.forecastedNeed);
-      const toBuy = Math.max(0, entry.forecastedNeed - entry.currentStock);
+      // Count units round UP (utils/recipeUnits.js toBuyQuantity); est.
+      // cost is for what is actually bought.
+      const toBuy = toBuyQuantity(entry.forecastedNeed, entry.currentStock, entry.unit);
       return {
         ingredientId: entry.ingredientId,
         name: entry.name,

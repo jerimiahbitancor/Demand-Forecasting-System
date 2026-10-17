@@ -15,11 +15,16 @@ const express = require('express');
 const { createFakeSupabase, installFake } = require('./helpers/fakeSupabase');
 
 process.env.LOG_LEVEL = 'error';
+process.env.ML_SERVICE_SHARED_SECRET = 'test-secret'; // read when mlService loads
 
 const fake = createFakeSupabase();
 installFake(fake);
 const cronPath = require.resolve('node-cron', { paths: [path.join(__dirname, '..')] });
-require.cache[cronPath] = { id: cronPath, filename: cronPath, loaded: true, exports: { schedule: () => {} } };
+const scheduled = [];
+require.cache[cronPath] = {
+  id: cronPath, filename: cronPath, loaded: true,
+  exports: { schedule: (expression, fn, options) => scheduled.push({ expression, fn, options }) },
+};
 
 const quiet = () => {
   const saved = { log: console.log, warn: console.warn, error: console.error };
@@ -31,6 +36,7 @@ const quiet = () => {
 
 const restoreLoad = quiet();
 const scheduler = require('../jobs/forecastScheduler');
+const mlService = require('../services/mlService');
 const { createJobsRouter } = require('../routes/jobs');
 restoreLoad();
 
@@ -244,3 +250,57 @@ test('POST /api/jobs/forecast: 404 unset, 401 wrong, 409 jobs off, 202 + backgro
   await new Promise((r) => setTimeout(r, 10));
   assert.equal(started, 1, 'only the authorised call with jobs on ran');
 });
+
+// ---------------------------------------------------------------- ONE lock (item 8)
+//
+// The 9:00 cron and POST /api/jobs/forecast both end in the REAL
+// mlService.forecast(), whose in-process lock allows one /forecast at a
+// time. fetch is mocked: /health answers at once, /forecast waits.
+
+function controllableFetch() {
+  const calls = [];
+  global.fetch = (url) => {
+    if (String(url).endsWith('/health')) return Promise.resolve({ ok: true, status: 200, json: async () => ({}) });
+    return new Promise((resolve) => {
+      calls.push({ url, release: () => resolve({ ok: true, status: 200, json: async () => ({ results: [{ status: 'forecasted' }] }) }) });
+    });
+  };
+  return calls;
+}
+const tick = (ms = 20) => new Promise((r) => setTimeout(r, ms));
+
+function dailyCronFn() {
+  if (!scheduled.length) { const r = quiet(); scheduler.registerForecastJobs(); r(); }
+  return scheduled.find((j) => j.expression === '0 9 * * 0,2-6').fn;
+}
+
+for (const order of ['cron first', 'external first']) {
+  test(`one lock: 9:00 cron + POST /api/jobs/forecast at the same moment (${order}) -> ONE /forecast call`, async () => {
+    seedWorld();
+    const calls = controllableFetch();
+    const restore = quiet();
+    let external;
+    try {
+      const cronFn = dailyCronFn();
+      if (order === 'cron first') {
+        cronFn();
+        external = scheduler.runTriggeredForecast({ trigger: 'external', now: SAT_1000, ml: mlService, wait: noWait });
+      } else {
+        external = scheduler.runTriggeredForecast({ trigger: 'external', now: SAT_1000, ml: mlService, wait: noWait });
+        cronFn();
+      }
+      await tick();
+      assert.equal(calls.length, 1, 'only one /forecast reached the ML service');
+      assert.equal(mlService.isForecastInFlight(), true);
+      calls[0].release();
+      const ext = await external;
+      await tick();
+      assert.equal(ext.status, 'skipped', 'the external call stood down');
+      assert.equal(calls.length, 1);
+      assert.equal(mlService.isForecastInFlight(), false, 'lock released');
+      assert.equal(scheduler.getSchedulerStatus().lastRuns.daily.status, 'succeeded', 'the run that held the lock is the one shown');
+    } finally {
+      restore();
+    }
+  });
+}

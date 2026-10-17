@@ -30,19 +30,13 @@
 // service (/health); a cold-start failure is retried once (every run type).
 // After a successful forecast the stock alerts are refreshed.
 const cron = require('node-cron');
-const dayjs = require('dayjs');
-const utc = require('dayjs/plugin/utc');
-const timezone = require('dayjs/plugin/timezone');
 const mlService = require('../services/mlService');
 const { createNotification, queueStockRefresh } = require('../services/notificationService');
 const { supabaseAdmin } = require('../config/supabase');
 const logger = require('../utils/logger');
-
-dayjs.extend(utc);
-dayjs.extend(timezone);
+const { forecastSlotFor, forecastRanSince } = require('../utils/forecastSlot');
 
 const PH_TZ = 'Asia/Manila';
-const FORECAST_HOUR = 9;
 const COLD_RETRY_WAIT_MS = 30 * 1000;
 const COLD_STATUSES = new Set([429, 502, 503, 504]);
 const TRIGGER_ACTION_TYPE = 'forecast_trigger_run';
@@ -91,8 +85,16 @@ async function runScheduledForecast({
   horizonDays, runType, trigger = 'cron', ml = mlService, wait = sleep, coldRetryWaitMs = COLD_RETRY_WAIT_MS,
 }) {
   const label = runType === 'weekly' ? 'Weekly (7-day)' : 'Daily (1-day)';
+  let ownRun = null;
   const skipRun = () => {
     const at = new Date().toISOString();
+    // ANOTHER run of the same type holds the lock (the 9:00 cron vs
+    // POST /api/jobs/forecast): keep showing that one as running.
+    const current = lastRuns[runType];
+    if (current && current.status === 'running' && current !== ownRun) {
+      console.warn(`[forecastScheduler] ${label} forecast (${trigger}) skipped — ${mlService.FORECAST_IN_FLIGHT_MESSAGE}.`);
+      return;
+    }
     lastRuns[runType] = {
       startedAt: at,
       finishedAt: at,
@@ -120,6 +122,7 @@ async function runScheduledForecast({
     error: null,
   };
   lastRuns[runType] = run;
+  ownRun = run;
 
   try {
     let result;
@@ -181,34 +184,6 @@ async function runScheduledForecast({
     });
     return { status: 'failed', error: run.error };
   }
-}
-
-// Monday runs the weekly 7-day forecast; every other day the daily one
-// (same as the two crons below).
-function forecastSlotFor(now = new Date()) {
-  const manila = dayjs(now).tz(PH_TZ);
-  const isMonday = manila.day() === 1;
-  return {
-    today: manila.format('YYYY-MM-DD'),
-    runType: isMonday ? 'weekly' : 'daily',
-    horizonDays: isMonday ? 7 : 1,
-    // Today's 9:00 AM Manila as an ISO instant (UTC).
-    slotStart: dayjs.tz(`${manila.format('YYYY-MM-DD')} 09:00`, PH_TZ).toISOString(),
-    pastSlot: manila.hour() >= FORECAST_HOUR,
-  };
-}
-
-// forecast_runs is the record: a run at/after today's 9:00 AM means done.
-async function forecastRanSince(client, slotStart) {
-  const { data, error } = await client
-    .from('forecast_runs')
-    .select('id, run_at, run_type')
-    .gte('run_at', slotStart)
-    .order('run_at', { ascending: false })
-    .order('id', { ascending: false })
-    .limit(1);
-  if (error) throw error;
-  return Array.isArray(data) && data.length > 0 ? data[0] : null;
 }
 
 async function hasTrainedModel(client) {

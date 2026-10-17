@@ -3,6 +3,7 @@ const { supabaseAdmin } = require('../config/supabase');
 const { logAction } = require('../services/auditService');
 const analyticsService = require('../services/analyticsService');
 const { classifyStock } = require('../services/stockAlertService');
+const { queueStockRefresh } = require('../services/notificationService');
 const { parseRecipeQuantity } = require('../utils/recipeUnits');
 
 const actorOf = (req) => req.user?.name || req.user?.email || null;
@@ -460,6 +461,10 @@ const updateInventoryItem = async (req, res) => {
       actorOf(req)
     );
 
+    // Stock, min_stock or unit may have changed: refresh the stock alerts.
+    // Not awaited and never throws (see queueStockRefresh).
+    queueStockRefresh('stock_edit');
+
     res.json({ success: true, data, message: 'Item updated successfully' });
   } catch (error) {
     console.error('❌ Error updating item:', error);
@@ -557,6 +562,9 @@ const archiveInventoryItem = async (req, res) => {
     );
 
     console.log('✅ Item archived successfully:', id);
+    // Archived ingredients have no alerts (the refresh retires them); this
+    // endpoint also un-archives. Not awaited, never throws.
+    queueStockRefresh('archive');
     res.json({ 
       success: true, 
       data, 
@@ -600,6 +608,8 @@ const restoreInventoryItem = async (req, res) => {
     );
 
     console.log('✅ Item restored successfully:', id);
+    // A restored ingredient that is low alerts again. Not awaited, never throws.
+    queueStockRefresh('restore');
     res.json({
       success: true,
       data,
@@ -674,6 +684,8 @@ const restockInventoryItem = async (req, res) => {
     );
 
     console.log('✅ Item restocked successfully:', { id, newQuantity });
+    // A delivery can clear alerts. Not awaited and never throws.
+    queueStockRefresh('restock');
     res.json({
       success: true,
       data,

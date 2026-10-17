@@ -335,7 +335,47 @@ async function loadUnitMetadataFromDb(client) {
   }
 }
 
+// Count units (pcs, sachets, packs...). Same rule as the frontend's
+// isCountUnit() in frontend/src/utils/formatStockQty.js (kept in step by
+// tests/toBuy.crosscheck.test.mjs): the unit tables first, then a word list
+// for units they may not list, also matched on the abbreviation in
+// brackets ("Pieces (pcs)" -> "pcs").
+const COUNT_UNIT_WORDS = new Set([
+  'pc', 'pcs', 'piece', 'pieces',
+  'sachet', 'sachets', 'pack', 'packs', 'packet', 'packets',
+  'bottle', 'bottles', 'can', 'cans', 'box', 'boxes', 'bag', 'bags',
+  'tray', 'trays', 'bunch', 'bunches', 'roll', 'rolls',
+  'slice', 'slices', 'clove', 'cloves', 'stick', 'sticks',
+  'head', 'heads', 'dozen', 'dozens',
+]);
+
+function isCountUnit(unit) {
+  const text = String(unit || '').trim().toLowerCase();
+  if (!text) return false;
+  const kind = unitKind(text);
+  if (kind === 'count' || kind === 'piece') return true;
+  if (kind === 'mass' || kind === 'volume') return false;
+  const inBrackets = /\(([^)]+)\)/.exec(text);
+  const candidates = [text, inBrackets ? inBrackets[1].trim() : null].filter(Boolean);
+  return candidates.some((c) => {
+    const k = unitKind(c);
+    return k === 'count' || k === 'piece' || COUNT_UNIT_WORDS.has(c);
+  });
+}
+
+// "To buy" (Grocery List, restock email): max(0, need - stock), rounded UP
+// to a whole number for count units — nobody buys 47.3 eggs. Mass and
+// volume units stay exact. The 1e-9 keeps float noise (48.0000000001)
+// from becoming 49.
+function toBuyQuantity(need, stock, unit) {
+  const raw = Math.max(0, (Number(need) || 0) - (Number(stock) || 0));
+  if (!isCountUnit(unit)) return raw;
+  return Math.max(0, Math.ceil(raw - 1e-9));
+}
+
 module.exports = {
+  isCountUnit,
+  toBuyQuantity,
   normalizeRecipeQuantityToUnit,
   convertRecipeQuantity,
   densityOf,

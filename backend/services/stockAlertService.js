@@ -18,7 +18,8 @@
 // The need is analyticsService.getIngredientDailyNeedDetails(): the same
 // number the page shows (forecast plates x recipe amount x safety buffer,
 // summed over all products). To buy and est. cost follow the Grocery List
-// (getIngredientDemandAnalytics): to buy = max(0, need - stock),
+// (getIngredientDemandAnalytics): to buy = max(0, need - stock), rounded
+// UP for count units (utils/recipeUnits.js toBuyQuantity),
 // est. cost = to buy x latest market price.
 
 const dayjs = require('dayjs');
@@ -27,6 +28,7 @@ const timezone = require('dayjs/plugin/timezone');
 const { supabaseAdmin } = require('../config/supabase');
 const { fetchAllRows } = require('../utils/fetchAllRows');
 const analyticsService = require('./analyticsService');
+const { toBuyQuantity } = require('../utils/recipeUnits');
 
 dayjs.extend(utc);
 dayjs.extend(timezone);
@@ -100,7 +102,7 @@ function buildRestockItems({ ingredients = [], needs = new Map(), prices = new M
 
     // min_stock rule: no forecast need, so nothing to compute a "to buy" from.
     const rule = need > 0 ? 'forecast' : 'min_stock';
-    const toBuy = rule === 'forecast' ? Math.max(0, need - stock) : null;
+    const toBuy = rule === 'forecast' ? toBuyQuantity(need, stock, ing.unit) : null;
     const priceRow = prices.get(ing.id);
     const price = priceRow && priceRow.price != null && Number.isFinite(Number(priceRow.price)) ? Number(priceRow.price) : null;
     const estCost = toBuy != null && toBuy > 0 && price !== null ? toBuy * price : null;

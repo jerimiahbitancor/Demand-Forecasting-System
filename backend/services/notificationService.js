@@ -7,7 +7,10 @@ const { parseAllowedOrigins } = require('../middleware/corsConfig');
 const {
   sendEmail, isEmailConfigured, isValidEmail, maskEmail,
 } = require('./emailService');
-const { buildRestockEmail, restockListFromMetadata, fmtNum } = require('./restockEmail');
+const { buildRestockEmail, restockListFromMetadata, fmtNum, urgentCountsText } = require('./restockEmail');
+const { forecastSlotFor, forecastRanSince } = require('../utils/forecastSlot');
+const { loadReminderInputs, todayManila } = require('./uploadReminderService');
+const { findUnresolvedOperatingDays, addDays } = require('../utils/uploadReminders');
 // Required lazily in runStockRefresh: stockAlertService -> analyticsService
 // is a heavy require chain that most callers of this file never need.
 const loadRestockListLazy = (...args) => require('./stockAlertService').loadRestockList(...args);
@@ -237,6 +240,10 @@ const createNotification = async ({ userId, type = 'info', title, message, link 
     if (data) queueReminderEmail(data);
     return data;
   } catch (error) {
+    if (error && error.code === '23505') {
+      logger.info('notification_duplicate_skipped', { kind: metadata && metadata.kind, key: metadata && metadata.key });
+      return null;
+    }
     console.error('Error creating notification:', error);
     return null;
   }
@@ -283,11 +290,15 @@ const createNotificationOnce = async (notification) => {
 //     for_date, counts), replacing the previous one.
 // Email: at most one restock email per Manila date, decided from the DB
 // (key restock_summary:<YYYY-MM-DD>, metadata.emailed) so restarts never
-// resend it. A second one goes out only when a NEW ingredient is out of
-// stock or Critical. Per-ingredient alerts are never emailed.
+// resend it. The FIRST one of the day waits until today's 9:00 forecast
+// has run (forecast_runs, utils/forecastSlot.js); before that only the
+// bell is updated. A second one goes out only when a NEW ingredient is out
+// of stock or Critical. Per-ingredient alerts are never emailed. If
+// yesterday's sales are not uploaded yet, the summary says so.
 //
 // Runs after every successful forecast (scheduled and manual), after an
-// upload's stock deduction, and every 6 hours as a fallback. Overlapping
+// upload's stock deduction, after a restock, a stock edit, a recipe change
+// or a safety buffer change, and every 6 hours as a fallback. Overlapping
 // calls are merged: one run at a time, plus one more if asked meanwhile.
 // ---------------------------------------------------------------------------
 
@@ -335,7 +346,7 @@ function summaryCountsText(counts) {
  * Should this refresh send the restock email? Read-only.
  * Returns { send, reason, dayKey, emailKey, urgentIds, newUrgentIds }.
  * reason: 'first_today' | 'new_urgent' | 'duplicate' | 'disabled' |
- *         'not_configured' | 'nothing_to_restock'
+ *         'not_configured' | 'nothing_to_restock' | 'waiting_for_forecast'
  */
 async function decideRestockEmail(client, list, { now = new Date(), env = process.env } = {}) {
   const dayKey = `restock_summary:${manilaDate(now)}`;
@@ -356,7 +367,12 @@ async function decideRestockEmail(client, list, { now = new Date(), env = proces
     .limit(500);
   if (error) throw error;
   const sentRows = data || [];
-  if (sentRows.length === 0) return { ...base, send: true, reason: 'first_today', emailKey: `${dayKey}#1` };
+  if (sentRows.length === 0) {
+    // The first email of the day waits for today's 9:00 forecast.
+    const ran = await forecastRanSince(client, forecastSlotFor(now).slotStart);
+    if (!ran) return { ...base, reason: 'waiting_for_forecast' };
+    return { ...base, send: true, reason: 'first_today', emailKey: `${dayKey}#1` };
+  }
 
   const known = new Set();
   const emailKeys = new Set();
@@ -367,6 +383,22 @@ async function decideRestockEmail(client, list, { now = new Date(), env = proces
   const newUrgentIds = urgentIds.filter((id) => !known.has(String(id)));
   if (newUrgentIds.length === 0) return { ...base, reason: 'duplicate' };
   return { ...base, send: true, reason: 'new_urgent', emailKey: `${dayKey}#${emailKeys.size + 1}`, newUrgentIds };
+}
+
+// Yesterday (Manila), when it is an operating day with no upload and no
+// closed mark yet — the stock then does not include that night's sales.
+// Same rule as the 4:00 AM upload reminder. null otherwise, or on a read
+// failure (the line is a hint; it must not stop the refresh).
+async function pendingSalesDate(client, now) {
+  try {
+    const today = todayManila(now);
+    const yesterday = addDays(today, -1);
+    const inputs = await loadReminderInputs(client, today);
+    return findUnresolvedOperatingDays(inputs).includes(yesterday) ? yesterday : null;
+  } catch (error) {
+    logger.warn('pending_sales_check_failed', { err: error });
+    return null;
+  }
 }
 
 async function markRead(client, id) {
@@ -392,6 +424,7 @@ async function runStockRefresh({
   }
 
   const decision = await decideRestockEmail(client, list, { now, env });
+  const salesPending = list.items.length > 0 ? await pendingSalesDate(client, now) : null;
 
   const { data: users, error: userError } = await client.from('user').select('id');
   if (userError) throw userError;
@@ -446,10 +479,11 @@ async function runStockRefresh({
       const n = list.counts.total;
       // Only the first user's row carries the email (one business email).
       const emailed = decision.send && index === 0;
+      const urgent = urgentCountsText(list.counts);
       const row = await notify({
         userId: user.id,
         type: 'warning',
-        title: `Restock: ${n} ingredient${n === 1 ? '' : 's'} (${list.counts.critical} critical)`,
+        title: `Restock: ${n} ingredient${n === 1 ? '' : 's'}${urgent ? ` (${urgent})` : ''}`,
         message: `${summaryCountsText(list.counts)}. Open the grocery list to see what to buy.`,
         link: '/ingredient-demand',
         metadata: {
@@ -461,6 +495,7 @@ async function runStockRefresh({
           counts: list.counts,
           total_est_cost: list.totalEstCost,
           unpriced_count: list.unpricedCount,
+          sales_pending_date: salesPending,
           items: list.items,
           urgent_ids: decision.urgentIds,
           emailed,
@@ -525,12 +560,21 @@ function refreshLowStockNotifications(options = {}) {
   return refreshInFlight;
 }
 
-// Fire-and-forget refresh after a forecast or an upload. Only where the
-// timed jobs are on: a local server points at the LIVE database and must
-// not write alerts or send email by itself.
+// Fire-and-forget refresh after a forecast, an upload, a restock, a stock
+// edit, a recipe change or a safety buffer change. Only where the timed
+// jobs are on: a local server points at the LIVE database and must not
+// write alerts or send email by itself.
+// NEVER throws and is never awaited by its callers: they call it just
+// before sending their own response, so a failure here must not be able
+// to turn a saved upload/restock into an error answer.
 function queueStockRefresh(trigger, { env = process.env } = {}) {
-  if (!schedulersEnabled(env)) return null;
-  return refreshLowStockNotifications({ trigger }).catch(() => null);
+  try {
+    if (!schedulersEnabled(env)) return null;
+    return refreshLowStockNotifications({ trigger }).catch(() => null);
+  } catch (error) {
+    logger.error('stock_refresh_queue_failed', { trigger, err: error });
+    return null;
+  }
 }
 
 module.exports = {

@@ -163,7 +163,7 @@ test('email: subject, heading, sub-line, summary, row, bar, cost, caveat and but
     item({ ingredientId: 3, name: 'Cooking oil', unit: 'L', group: 'out', status: 'Out of stock', stock: 0, need: 2, toBuy: 2, coveragePct: 0, price: 95, estCost: 190, usedIn: ['Tapsilog'] }),
     item({}),
   ]), { baseUrl: 'https://chefduo.example.app/' });
-  assert.equal(email.subject, 'ChefDuo: 2 ingredients to restock (1 critical)');
+  assert.equal(email.subject, 'ChefDuo: 2 ingredients to restock (1 out of stock, 1 critical)');
   assert.match(email.html, />2 ingredients to restock for Saturday</);
   assert.match(email.html, /Based on Saturday&#39;s forecast plus your 15% safety buffer\. Stock counted as of 6:39 AM, Sat 17 Oct 2026\./);
   assert.match(email.preheader, /^1 out of stock, 1 critical\. About ₱1,361 at current market prices\.$/);
@@ -250,7 +250,9 @@ function setEmail(on) {
 }
 
 const ingredientRow = (id, name, quantity, unit = 'kg', min_stock = 0) => ({ id, name, quantity, unit, min_stock, is_archived: false, category: 'x', price: 0, grams_per_cup: null });
-function seedWorld({ riceQty = 8, eggQty = 50, users = [{ id: 7 }] } = {}) {
+// forecastRan: today's (and tomorrow's) 9:00 forecast_runs rows exist.
+// salesUploaded: Fri 16 and Sat 17 are answered in business_days.
+function seedWorld({ riceQty = 8, eggQty = 50, users = [{ id: 7 }], forecastRan = true, salesUploaded = true } = {}) {
   const ingredients = [
     ingredientRow(1, 'Rice', riceQty),
     ingredientRow(2, 'Egg', eggQty, 'pcs'),
@@ -263,8 +265,15 @@ function seedWorld({ riceQty = 8, eggQty = 50, users = [{ id: 7 }] } = {}) {
   });
   fake.reset({
     user: users,
-    business_profile: [{ id: 1, business_email: 'owner@example.com' }],
+    business_profile: [{ id: 1, business_email: 'owner@example.com', operating_days: [0, 1, 2, 3, 4, 5] }],
     forecast_config: [{ id: 1, safety_buffer_percentage: 15 }],
+    model_metrics: [{ id: 1 }],
+    forecast_runs: forecastRan
+      ? [{ id: 1, run_at: '2026-10-17T01:00:30.000Z', run_type: 'daily' }, { id: 2, run_at: '2026-10-18T01:00:30.000Z', run_type: 'daily' }]
+      : [],
+    business_days: salesUploaded
+      ? [{ id: 1, business_date: '2026-10-16', status: 'confirmed_open' }, { id: 2, business_date: '2026-10-17', status: 'confirmed_open' }]
+      : [],
     ingredients,
     products: [{ id: 11, name: 'Tapsilog' }],
     product_ingredients: [recipe(1, 0.2, 'kg'), recipe(2, 1, 'pcs')],
@@ -439,4 +448,228 @@ test('refreshLowStockNotifications: overlapping calls are merged (one extra run,
 
 test('queueStockRefresh: does nothing where the timed jobs are off (local dev against the LIVE DB)', () => {
   assert.equal(notificationService.queueStockRefresh('upload', { env: { NODE_ENV: 'development' } }), null);
+});
+
+// ---------------------------------------------------------------- Oct 17 review
+
+test('subject: out of stock and critical counted; neither -> no brackets', () => {
+  const mk = (group, n) => Array.from({ length: n }, (_, i) => item({ ingredientId: `${group}${i}`, group, status: group }));
+  const seven = buildRestockEmail(listOf([...mk('out', 1), ...mk('critical', 3), ...mk('low', 3)]));
+  assert.equal(seven.subject, 'ChefDuo: 7 ingredients to restock (1 out of stock, 3 critical)');
+  assert.equal(buildRestockEmail(listOf(mk('critical', 2))).subject, 'ChefDuo: 2 ingredients to restock (2 critical)');
+  assert.equal(buildRestockEmail(listOf(mk('out', 1))).subject, 'ChefDuo: 1 ingredient to restock (1 out of stock)');
+  assert.equal(buildRestockEmail(listOf(mk('low', 2))).subject, 'ChefDuo: 2 ingredients to restock');
+});
+
+test('to buy: count units round UP (email list); mass/volume stay exact; est. cost uses what is bought', () => {
+  const items = stock.buildRestockItems({
+    ingredients: [ing(1, 'Eggs', 12.4, { unit: 'pcs' }), ing(2, 'Rice', 8), ing(3, 'Buns', 0, { unit: 'Pieces (pcs)' })],
+    needs: new Map([[1, needOf(59.7)], [2, needOf(32.45)], [3, needOf(10)]]),
+    prices: new Map([[1, { price: 7.5 }], [2, { price: 50 }]]),
+  });
+  const by = Object.fromEntries(items.map((i) => [i.name, i]));
+  assert.equal(by.Eggs.toBuy, 48, '47.3 eggs -> 48');
+  assert.equal(by.Eggs.estCost, 360, '48 x 7.50');
+  assert.equal(Number(by.Rice.toBuy.toFixed(6)), 24.45, 'kg not rounded');
+  assert.equal(by.Buns.toBuy, 10, 'already whole stays whole');
+  assert.match(buildRestockEmail(listOf(items)).html, />Buy 48 pcs</);
+});
+
+test('to buy: the Grocery List (getIngredientDemandAnalytics) rounds count units UP too', async () => {
+  seedWorld({ eggQty: 50.5 }); // egg need 115 -> 64.5 -> 65; rice 23 - 8 = 15 kg exact
+  const restore = quiet();
+  let out;
+  try {
+    out = await analyticsService.getIngredientDemandAnalytics({ date: '2026-10-17' });
+  } finally {
+    restore();
+  }
+  const egg = out.groceryList.all.find((r) => r.name === 'Egg');
+  const rice = out.groceryList.all.find((r) => r.name === 'Rice');
+  assert.equal(egg.toBuy, 65);
+  assert.equal(Number(rice.toBuy.toFixed(6)), 15);
+  assert.equal(Number(rice.estCost.toFixed(6)), 750);
+});
+
+test("first email of the day waits for today's 9:00 forecast; bell is updated meanwhile", async () => {
+  seedWorld({ forecastRan: false });
+  setEmail(true);
+  const early = await refresh(new Date('2026-10-16T22:00:00Z')); // 06:00 Manila Sat 17
+  assert.equal(early.email.decision, 'waiting_for_forecast');
+  assert.equal(brevoCalls.length, 0);
+  assert.equal(summaries().length, 1, 'the bell still gets the list');
+  assert.equal(summaries()[0].metadata.emailed, false);
+
+  fake.tables.forecast_runs.push({ id: 9, run_at: '2026-10-16T23:00:00.000Z', run_type: 'daily' }); // a 7:00 manual run
+  assert.equal((await refresh(new Date('2026-10-16T23:30:00Z'))).email.decision, 'waiting_for_forecast', 'a run before 9:00 does not count');
+
+  fake.tables.forecast_runs.push({ id: 10, run_at: '2026-10-17T01:00:40.000Z', run_type: 'daily' }); // today's 9:00 run
+  const after = await refresh(NOW);
+  setEmail(false);
+  assert.equal(after.email.decision, 'first_today');
+  assert.equal(brevoCalls.length, 1);
+});
+
+test('yesterday not uploaded -> the email says so; after the upload the line is gone and no new email', async () => {
+  seedWorld({ salesUploaded: false });
+  setEmail(true);
+  await refresh(NOW);
+  assert.equal(summaries()[0].metadata.sales_pending_date, '2026-10-16');
+  assert.match(brevoCalls[0].body.htmlContent, /Stock does not yet include Fri 16-10 sales\. Upload them to update this list\./);
+  assert.match(brevoCalls[0].body.textContent, /Stock does not yet include Fri 16-10 sales\./);
+
+  fake.tables.business_days.push({ id: 5, business_date: '2026-10-16', status: 'confirmed_open' });
+  const afterUpload = await refresh(LATER);
+  setEmail(false);
+  const fresh = summaries().find((n) => !n.read);
+  assert.equal(fresh.metadata.sales_pending_date, null);
+  assert.equal(afterUpload.email.decision, 'duplicate', 'nothing NEW out of stock / critical -> no second email');
+  assert.equal(brevoCalls.length, 1);
+});
+
+test('yesterday marked closed (or not an operating day) -> no "not uploaded" line', async () => {
+  seedWorld({ salesUploaded: false });
+  fake.tables.business_days.push({ id: 5, business_date: '2026-10-16', status: 'confirmed_closed' });
+  await refresh(NOW);
+  assert.equal(summaries()[0].metadata.sales_pending_date, null);
+
+  seedWorld({ salesUploaded: false });
+  // Mon 19 Oct: yesterday is Sunday, not an operating day.
+  await refresh(new Date('2026-10-19T02:00:00Z'));
+  assert.equal(summaries()[0].metadata.sales_pending_date, null);
+});
+
+test('a restock (Ingredient Management) refreshes the alerts: the alert is retired, no email', async () => {
+  seedWorld();
+  setEmail(true);
+  await refresh(NOW);
+  assert.equal(brevoCalls.length, 1);
+  assert.ok(stockAlerts().some((n) => n.metadata.key === 'critical_1' && !n.read));
+
+  const { restockInventoryItem } = require('../controllers/inventoryController');
+  const savedFlag = process.env.SCHEDULERS_ENABLED;
+  process.env.SCHEDULERS_ENABLED = 'true'; // the in-memory fake only
+  const res = { statusCode: 200, body: null, status(c) { this.statusCode = c; return this; }, json(b) { this.body = b; return this; } };
+  const restore = quiet();
+  try {
+    await restockInventoryItem({ params: { id: 1 }, body: { quantity: 100 }, user: { id: 7, user_id: 7, name: 'Owner' }, headers: {} }, res);
+    await notificationService._waitForStockRefresh();
+    await _waitForEmails();
+  } finally {
+    restore();
+    if (savedFlag === undefined) delete process.env.SCHEDULERS_ENABLED; else process.env.SCHEDULERS_ENABLED = savedFlag;
+    setEmail(false);
+  }
+  assert.equal(res.statusCode, 200);
+  assert.equal(res.body.success, true);
+  const rice = stockAlerts().filter((n) => n.metadata.ingredient_id === 1);
+  assert.ok(rice.length > 0 && rice.every((n) => n.read), 'Rice recovered: its alert is retired');
+  assert.equal(brevoCalls.length, 1, 'an improvement never sends an email');
+});
+
+test('queueStockRefresh never throws, even if reading the switches throws', () => {
+  const env = {};
+  Object.defineProperty(env, 'SCHEDULERS_ENABLED', { get() { throw new Error('boom'); }, enumerable: true });
+  const restore = quiet();
+  let out;
+  try {
+    out = notificationService.queueStockRefresh('upload', { env });
+  } finally {
+    restore();
+  }
+  assert.equal(out, null);
+});
+
+// ---------------------------------------------------------------- 23505 (migration 012)
+
+function stubNotificationsInsert(behaviour) {
+  const realFrom = fake.from;
+  fake.from = (table) => {
+    if (table !== 'notifications') return realFrom(table);
+    const b = realFrom(table);
+    b.insert = () => {
+      if (behaviour === 'throw') throw { code: '23505', message: 'duplicate key value violates unique constraint "notifications_reminder_key_uniq"' };
+      return { select: () => ({ single: async () => ({ data: null, error: { code: '23505', message: 'duplicate key' } }) }) };
+    };
+    return b;
+  };
+  return () => { fake.from = realFrom; };
+}
+
+for (const behaviour of ['returned', 'throw']) {
+  test(`createNotification: unique violation 23505 (${behaviour}) -> null, logged as a duplicate, no error, no email`, async () => {
+    seedWorld();
+    setEmail(true);
+    const errors = [];
+    const savedError = console.error;
+    const lines = [];
+    const savedWrite = process.stdout.write;
+    const savedLevel = process.env.LOG_LEVEL;
+    process.env.LOG_LEVEL = 'debug';
+    console.error = (...a) => errors.push(a);
+    process.stdout.write = (chunk, ...rest) => {
+      const t = String(chunk);
+      if (t.startsWith('{')) { try { lines.push(JSON.parse(t)); return true; } catch (_) { /* not ours */ } }
+      return savedWrite.call(process.stdout, chunk, ...rest);
+    };
+    const unstub = stubNotificationsInsert(behaviour);
+    let row;
+    try {
+      row = await notificationService.createNotification({
+        userId: 7, type: 'warning', title: "Upload yesterday's sales", message: 'm',
+        metadata: { kind: 'upload_reminder', key: 'upload_reminder:2026-10-16:0400' },
+      });
+      await _waitForEmails();
+    } finally {
+      unstub();
+      console.error = savedError;
+      process.stdout.write = savedWrite;
+      process.env.LOG_LEVEL = savedLevel;
+      setEmail(false);
+    }
+    assert.equal(row, null);
+    assert.equal(errors.length, 0, 'not logged as an error');
+    assert.ok(lines.some((l) => l.msg === 'notification_duplicate_skipped' && l.key === 'upload_reminder:2026-10-16:0400'));
+    assert.equal(brevoCalls.length, 0);
+  });
+}
+
+// ---------------------------------------------------------------- archive / restore
+
+async function callController(fn, req) {
+  const res = { statusCode: 200, body: null, status(c) { this.statusCode = c; return this; }, json(b) { this.body = b; return this; } };
+  const savedFlag = process.env.SCHEDULERS_ENABLED;
+  process.env.SCHEDULERS_ENABLED = 'true'; // the in-memory fake only
+  const restore = quiet();
+  try {
+    await fn({ user: { id: 7, user_id: 7, name: 'Owner' }, headers: {}, body: {}, ...req }, res);
+    await notificationService._waitForStockRefresh();
+    await _waitForEmails();
+  } finally {
+    restore();
+    if (savedFlag === undefined) delete process.env.SCHEDULERS_ENABLED; else process.env.SCHEDULERS_ENABLED = savedFlag;
+  }
+  return res;
+}
+
+test('archive retires the ingredient\'s bell alert; restoring a still-low ingredient alerts again (no email)', async () => {
+  seedWorld();
+  setEmail(true);
+  await refresh(NOW);
+  assert.equal(brevoCalls.length, 1);
+  const unreadRice = () => stockAlerts().filter((n) => n.metadata.ingredient_id === 1 && !n.read);
+  assert.equal(unreadRice().length, 1, 'Rice is Critical before');
+
+  const { archiveInventoryItem, restoreInventoryItem } = require('../controllers/inventoryController');
+  const archived = await callController(archiveInventoryItem, { params: { id: 1 } });
+  assert.equal(archived.statusCode, 200);
+  assert.equal(fake.tables.ingredients.find((i) => i.id === 1).is_archived, true);
+  assert.equal(unreadRice().length, 0, 'archived -> alert retired');
+
+  const restored = await callController(restoreInventoryItem, { params: { id: 1 } });
+  setEmail(false);
+  assert.equal(restored.statusCode, 200);
+  assert.equal(fake.tables.ingredients.find((i) => i.id === 1).is_archived, false);
+  assert.deepEqual(unreadRice().map((n) => n.metadata.key), ['critical_1'], 'restored and still Critical -> alerts again');
+  assert.equal(brevoCalls.length, 1, 'Rice was already in today\'s email: not NEW, so no second email');
 });

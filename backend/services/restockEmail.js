@@ -63,6 +63,20 @@ function stockTimeOf(stockAt) {
   return dayjs(stockAt).tz(PH_TZ).format('h:mm A, ddd D MMM YYYY');
 }
 
+// "1 out of stock, 3 critical" (zero parts left out), or '' when neither.
+// Used in the subject and the bell title.
+function urgentCountsText(counts = {}) {
+  return [
+    counts.out ? `${counts.out} out of stock` : null,
+    counts.critical ? `${counts.critical} critical` : null,
+  ].filter(Boolean).join(', ');
+}
+
+// 'Fri 16-10' — the night whose sales are not uploaded yet.
+function shortDayOf(isoDate) {
+  return dayjs.tz(isoDate, PH_TZ).format('ddd DD-MM');
+}
+
 function summaryParts(counts) {
   return GROUP_ORDER.filter((g) => counts[g] > 0).map((g) => ({ group: g, text: GROUPS[g].summary(counts[g]) }));
 }
@@ -132,7 +146,8 @@ function groupHeaderHtml(group, count, weekday, first) {
 }
 
 /**
- * @param {object} list { forDate, safetyBufferPct, stockAt, items, counts, totalEstCost, unpricedCount }
+ * @param {object} list { forDate, safetyBufferPct, stockAt, items, counts, totalEstCost,
+ *                        unpricedCount, salesPendingDate? }
  * @param {object} [opts] { baseUrl, unitsCaveat = true, maxRows = 15 }
  */
 function buildRestockEmail(list, { baseUrl = '', unitsCaveat = true, maxRows = MAX_ROWS } = {}) {
@@ -144,7 +159,11 @@ function buildRestockEmail(list, { baseUrl = '', unitsCaveat = true, maxRows = M
   const unpriced = Number(list.unpricedCount) || 0;
   const url = `${String(baseUrl || '').replace(/\/+$/, '')}${LINK_PATH}`;
 
-  const subject = `ChefDuo: ${total} ${plural(total, 'ingredient', 'ingredients')} to restock (${counts.critical || 0} critical)`;
+  const urgent = urgentCountsText(counts);
+  const subject = `ChefDuo: ${total} ${plural(total, 'ingredient', 'ingredients')} to restock${urgent ? ` (${urgent})` : ''}`;
+  const pendingLine = list.salesPendingDate
+    ? `Stock does not yet include ${shortDayOf(list.salesPendingDate)} sales. Upload them to update this list.`
+    : null;
   const heading = `${total} ${plural(total, 'ingredient', 'ingredients')} to restock for ${weekday}`;
   const subLine = `Based on ${weekday}'s forecast plus your ${fmtNum(list.safetyBufferPct)}% safety buffer. `
     + `Stock counted as of ${stockTimeOf(list.stockAt)}.`;
@@ -208,7 +227,10 @@ function buildRestockEmail(list, { baseUrl = '', unitsCaveat = true, maxRows = M
     <h1 style="margin:0;font-size:23px;line-height:1.3;font-weight:700;color:${C.ink};">${escapeHtml(heading)}</h1>
     <p style="margin:8px 0 0 0;font-size:14px;line-height:1.55;color:${C.muted};">
       ${escapeHtml(subLine)}
-    </p>
+    </p>${pendingLine ? `
+    <p style="margin:8px 0 0 0;font-size:14px;line-height:1.55;font-weight:700;color:${GROUPS.low.head};">
+      ${escapeHtml(pendingLine)}
+    </p>` : ''}
   </td></tr>
 
   <tr><td style="padding:18px 24px 6px 24px;${FONT}">
@@ -256,7 +278,7 @@ ${moreText ? `
 `;
 
   // ---- plain text: same rows, one per line ----
-  const lines = [heading, subLine, '', `${summaryText} Est. cost ${costText}.`];
+  const lines = [heading, subLine, ...(pendingLine ? [pendingLine] : []), '', `${summaryText} Est. cost ${costText}.`];
   for (const group of GROUP_ORDER) {
     const inGroup = shown.filter((i) => i.group === group);
     if (inGroup.length === 0) continue;
@@ -283,6 +305,7 @@ function restockListFromMetadata(md = {}) {
     counts: md.counts || {},
     totalEstCost: md.total_est_cost,
     unpricedCount: md.unpriced_count,
+    salesPendingDate: md.sales_pending_date || null,
   };
 }
 
@@ -291,6 +314,7 @@ module.exports = {
   restockListFromMetadata,
   fmtNum,
   fmtPeso,
+  urgentCountsText,
   MAX_ROWS,
   LINK_PATH,
   UNITS_CAVEAT,
