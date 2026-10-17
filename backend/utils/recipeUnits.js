@@ -239,7 +239,13 @@ function parseRecipeQuantity(value) {
 // piece unit (pcs, slices, cloves, sticks) and `toUnit` is a mass unit, each
 // piece is weighed at `pieceWeightGrams`. Without a piece weight the quantity
 // passes through unchanged.
-function normalizeRecipeQuantityToUnit(quantity, fromUnit, toUnit, gramsPerCup, pieceWeightGrams) {
+//
+// `pack` ({ qty, unit }, ingredients.pack_qty/pack_unit) enables the
+// purchase-pack conversion: "one sachet of blue lemonade powder is 150 g".
+// It lets an opaque count unit in a recipe weigh out in the ingredient's
+// stock unit (1 Sachets -> 0.15 kg) and lets a measured amount count out in
+// packs when the ingredient is stocked by the pack (300 g -> 2 Packs).
+function normalizeRecipeQuantityToUnit(quantity, fromUnit, toUnit, gramsPerCup, pieceWeightGrams, pack) {
   const qty = parseRecipeQuantity(quantity);
   if (!Number.isFinite(qty) || qty <= 0) return qty || 0;
   const from = String(fromUnit || '').trim().toLowerCase();
@@ -271,9 +277,61 @@ function normalizeRecipeQuantityToUnit(quantity, fromUnit, toUnit, gramsPerCup, 
     return roundTo((qty * Number(pieceWeightGrams)) / toFactor);
   }
 
+  const packQty = pack ? Number(pack.qty) : NaN;
+  const packUnit = pack ? String(pack.unit || '').trim() : '';
+  if (packQty > 0 && packUnit) {
+    const packTargetOk = (toKind === 'mass' || toKind === 'volume')
+      && canConvertBetween(packUnit, toUnit, gramsPerCup);
+    // 1 Sachets of a 150 g sachet -> 0.15 kg. `fromKind === null` covers a
+    // count word that was never registered as a unit (e.g. an old free-text
+    // recipe row saying "sachet"), as long as it is not a known mass,
+    // volume or piece unit.
+    if (
+      (fromKind === 'count' || fromKind === null) &&
+      fromKind !== 'piece' &&
+      packTargetOk
+    ) {
+      const onePackInTarget = normalizeRecipeQuantityToUnit(
+        packQty, packUnit, toUnit, gramsPerCup, null, null
+      );
+      if (onePackInTarget > 0) return roundTo(qty * onePackInTarget);
+    }
+
+    // The other direction: the ingredient is stocked by the pack, so an
+    // amount is measured out in packs (300 g of a 150 g pack -> 2 packs).
+    if (
+      (toKind === 'count' || toKind === null) &&
+      (fromKind === 'mass' || fromKind === 'volume') &&
+      canConvertBetween(fromUnit, packUnit, gramsPerCup)
+    ) {
+      const inPackUnit = normalizeRecipeQuantityToUnit(
+        qty, fromUnit, packUnit, gramsPerCup, null, null
+      );
+      if (inPackUnit > 0) return roundTo(inPackUnit / packQty);
+    }
+  }
+
   const sameFamily = fromKind != null && fromKind === toKind && (fromKind === 'mass' || fromKind === 'volume');
   if (!sameFamily || fromFactor == null || toFactor == null) return qty;
   return roundTo((qty * fromFactor) / toFactor);
+}
+
+// True when `from` can be expressed in `to` with the rules this file
+// implements: the same unit, the same mass/volume family, or a volume amount
+// weighed out in grams when a density (gramsPerCup, already resolved) is
+// known. Mass -> volume is deliberately NOT converted (see the "1 kg ->
+// Liters (L)" case in the shared fixture), and unknown units never convert.
+function canConvertBetween(from, to, gramsPerCup) {
+  const f = String(from || '').trim().toLowerCase();
+  const t = String(to || '').trim().toLowerCase();
+  if (!f || !t) return false;
+  if (f === t) return true;
+  const fromKind = unitKind(f);
+  const toKind = unitKind(t);
+  if (fromKind == null || toKind == null) return false;
+  if (fromKind === toKind && (fromKind === 'mass' || fromKind === 'volume')) return true;
+  if (fromKind === 'volume' && toKind === 'mass' && Number(gramsPerCup) > 0) return true;
+  return false;
 }
 
 // The one entry point costing, demand and stock deduction should use: converts
@@ -284,14 +342,35 @@ function normalizeRecipeQuantityToUnit(quantity, fromUnit, toUnit, gramsPerCup, 
 //   toUnit         unit the ingredient is stocked/priced in (ingredients.unit)
 //   gramsPerCup    ingredients.grams_per_cup (may be null -> name estimate)
 //   ingredientName used for the density / per-piece estimates
-function convertRecipeQuantity(quantity, fromUnit, toUnit, { gramsPerCup = null, ingredientName = '' } = {}) {
+//   packQty/packUnit ingredients.pack_qty / pack_unit, so an opaque count
+//                    unit (sachet, pack...) can weigh out via the pack.
+function convertRecipeQuantity(quantity, fromUnit, toUnit, { gramsPerCup = null, ingredientName = '', packQty = null, packUnit = '' } = {}) {
   return normalizeRecipeQuantityToUnit(
     quantity,
     fromUnit,
     toUnit,
     densityOf(gramsPerCup, ingredientName),
-    pieceWeightOf(ingredientName, fromUnit)
+    pieceWeightOf(ingredientName, fromUnit),
+    Number(packQty) > 0 && packUnit ? { qty: Number(packQty), unit: packUnit } : null
   );
+}
+
+// Unit cost (price per ingredients.unit) derived from a purchase pack:
+// "150 g for ₱200" on a kg-stocked ingredient -> ₱1333.33 per kg. Returns
+// null when the pack is incomplete or its unit cannot be expressed in the
+// stock unit (then the owner's own unit cost is kept instead).
+function deriveUnitPrice({ packQty, packUnit, packPrice, stockUnit, gramsPerCup = null, ingredientName = '' }) {
+  const qty = Number(parseRecipeQuantity(packQty));
+  const price = Number(parseRecipeQuantity(packPrice));
+  const from = String(packUnit || '').trim();
+  const to = String(stockUnit || '').trim();
+  if (!(qty > 0) || !(price > 0) || !from || !to) return null;
+  if (from.toLowerCase() === to.toLowerCase()) return roundTo(price / qty, 6);
+  const density = densityOf(gramsPerCup, ingredientName);
+  if (!canConvertBetween(from, to, density)) return null;
+  const inStockUnit = normalizeRecipeQuantityToUnit(qty, from, to, density, null, null);
+  if (!(inStockUnit > 0)) return null;
+  return roundTo(price / inStockUnit, 6);
 }
 
 // True when a Supabase/Postgres error means the product_ingredients.unit
@@ -378,6 +457,8 @@ module.exports = {
   toBuyQuantity,
   normalizeRecipeQuantityToUnit,
   convertRecipeQuantity,
+  deriveUnitPrice,
+  canConvertBetween,
   densityOf,
   parseRecipeQuantity,
   pieceWeightOf,

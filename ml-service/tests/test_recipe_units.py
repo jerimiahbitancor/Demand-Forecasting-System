@@ -51,8 +51,11 @@ def check(label, condition, detail=""):
 
 def run(cases):
     for c in cases:
+        pack = None
+        if c.get("packQty") and c.get("packUnit"):
+            pack = {"qty": c["packQty"], "unit": c["packUnit"]}
         got = dl._normalize_recipe_quantity(
-            c["quantity"], c["from"], c["to"], c.get("gramsPerCup"), c.get("ingredient", "")
+            c["quantity"], c["from"], c["to"], c.get("gramsPerCup"), c.get("ingredient", ""), pack
         )
         check(c["label"], math.isclose(got, c["expected"], abs_tol=1e-9), f"expected {c['expected']}, got {got}")
 
@@ -60,6 +63,9 @@ def run(cases):
 print("with database units")
 dl.set_unit_metadata(FIXTURE["units"])
 run(FIXTURE["cases"])
+
+print("with purchase packs (\"150 g per sachet\")")
+run(FIXTURE["pack_cases"])
 
 print("built-in tables only (no database units)")
 dl.set_unit_metadata([])

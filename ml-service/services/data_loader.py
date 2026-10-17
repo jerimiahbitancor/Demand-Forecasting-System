@@ -268,7 +268,7 @@ def _parse_recipe_quantity(value):
         return float("nan")
 
 
-def _normalize_recipe_quantity(quantity, from_unit, to_unit, grams_per_cup=None, ingredient_name=None):
+def _normalize_recipe_quantity(quantity, from_unit, to_unit, grams_per_cup=None, ingredient_name=None, pack=None):
     qty = _parse_recipe_quantity(quantity)
     if not math.isfinite(qty) or qty <= 0:
         return 0.0
@@ -298,10 +298,67 @@ def _normalize_recipe_quantity(quantity, from_unit, to_unit, grams_per_cup=None,
         if piece_weight_grams and piece_weight_grams > 0:
             return round((qty * piece_weight_grams) / to_factor, 4)
 
+    # Purchase pack ({qty, unit} = ingredients.pack_qty/pack_unit),
+    # "one sachet of blue lemonade powder is 150 g": a count unit in the recipe
+    # weighs out in the stock unit, and a measured amount counts out in packs
+    # when the ingredient is stocked by the pack. Mirrors the JS copies.
+    pack_qty = 0.0
+    pack_unit = ""
+    if pack:
+        try:
+            pack_qty = float(pack.get("qty") or 0)
+        except (TypeError, ValueError):
+            pack_qty = 0.0
+        pack_unit = str(pack.get("unit") or "").strip()
+    if pack_qty > 0 and pack_unit:
+        if (
+            from_kind in ("count", None)
+            and from_kind != "piece"
+            and to_kind in ("mass", "volume")
+            and _can_convert_between(pack_unit, to_unit, density)
+        ):
+            one_pack_in_target = _normalize_recipe_quantity(
+                pack_qty, pack_unit, to_unit, grams_per_cup, ingredient_name, None
+            )
+            if one_pack_in_target > 0:
+                return round(qty * one_pack_in_target, 4)
+        if (
+            to_kind in ("count", None)
+            and from_kind in ("mass", "volume")
+            and _can_convert_between(from_unit, pack_unit, density)
+        ):
+            in_pack_unit = _normalize_recipe_quantity(
+                qty, from_unit, pack_unit, grams_per_cup, ingredient_name, None
+            )
+            if in_pack_unit > 0:
+                return round(in_pack_unit / pack_qty, 4)
+
     same_family = from_kind is not None and from_kind == to_kind and from_kind in ("mass", "volume")
     if not same_family or from_factor is None or to_factor is None:
         return qty
     return round((qty * from_factor) / to_factor, 4)
+
+
+def _can_convert_between(from_unit, to_unit, density):
+    """True when `from_unit` can be expressed in `to_unit` with the rules this
+    module implements: the same unit, the same mass/volume family, or a volume
+    weighed out in mass when a density (already resolved) is known. Mass ->
+    volume and unknown units do not convert, matching the JS copies."""
+    f = (from_unit or "").strip().lower()
+    t = (to_unit or "").strip().lower()
+    if not f or not t:
+        return False
+    if f == t:
+        return True
+    from_kind = _unit_kind(f)
+    to_kind = _unit_kind(t)
+    if from_kind is None or to_kind is None:
+        return False
+    if from_kind == to_kind and from_kind in ("mass", "volume"):
+        return True
+    if from_kind == "volume" and to_kind == "mass" and density:
+        return True
+    return False
 
 
 def _fetch_all_rows(build_query) -> list:
@@ -547,44 +604,55 @@ def get_recipe_and_stock() -> pd.DataFrame:
     # Pick up units added / edited in Settings since the last run.
     load_unit_metadata()
 
-    def _fetch(with_unit):
+    def _fetch(with_unit, with_pack=True):
+        ingredient_cols = (
+            "id, name, unit, price, quantity, grams_per_cup, pack_qty, pack_unit"
+            if with_pack else
+            "id, name, unit, price, quantity, grams_per_cup"
+        )
         columns = (
-            "product_id, quantity_per_serving, unit, "
-            "ingredients!inner(id, name, unit, price, quantity, grams_per_cup)"
-        ) if with_unit else (
-            "product_id, quantity_per_serving, "
-            "ingredients!inner(id, name, unit, price, quantity, grams_per_cup)"
+            f"product_id, quantity_per_serving, unit, ingredients!inner({ingredient_cols})"
+            if with_unit else
+            f"product_id, quantity_per_serving, ingredients!inner({ingredient_cols})"
         )
         return supabase.table("product_ingredients").select(columns).execute()
 
-    try:
-        response = _fetch(True)
-    except Exception as exc:
-        # Migration 008 not applied yet: product_ingredients.unit is missing.
-        # SELECT on a missing column surfaces as Postgres 42703 (".* does not
-        # exist"), while the supabase-py client often surfaces PostgREST's
-        # PGRST204 ("Could not find the 'unit' column ... in the schema
-        # cache"). Both mean the recipe-unit column is absent, so fall back to
-        # the previous schema where every quantity is already in the
-        # ingredient's own unit.
-        msg = str(exc).lower()
-        if (
-            "does not exist" not in msg
-            and "could not find the" not in msg
-            and "schema cache" not in msg
-        ):
+    # Column ladder, same as the backend: migration 012 (pack) -> migration 008
+    # (recipe unit) -> oldest schema. A missing column drops that level; any
+    # other error is re-raised.
+    response = None
+    recipe_unit_from_row = True
+    last_error = None
+    for with_unit, with_pack in ((True, True), (True, False), (False, False)):
+        try:
+            response = _fetch(with_unit, with_pack)
+        except Exception as exc:  # noqa: BLE001 - inspected below
+            last_error = exc
+            msg = str(exc).lower()
+            # Postgres 42703 (".* does not exist") and PostgREST PGRST204
+            # ("Could not find the 'x' column ... in the schema cache") both
+            # mean that column is absent.
+            if (
+                "does not exist" in msg
+                or "could not find the" in msg
+                or "schema cache" in msg
+            ):
+                continue
             raise
-        response = _fetch(False)
-        # The fallback response carries no recipe-unit info; treat every
-        # quantity as already in the ingredient's own unit (no-op conversion).
-        recipe_unit_from_row = False
-    else:
-        recipe_unit_from_row = True
+        recipe_unit_from_row = with_unit
+        break
+    if response is None:
+        raise last_error if last_error else RuntimeError(
+            "Could not read product_ingredients"
+        )
 
     rows = []
     for r in response.data:
         item = r["ingredients"]
         recipe_unit = r.get("unit") if recipe_unit_from_row else item["unit"]
+        pack = None
+        if item.get("pack_qty") and item.get("pack_unit"):
+            pack = {"qty": item["pack_qty"], "unit": item["pack_unit"]}
         rows.append({
             "product_id": r["product_id"],
             "qty_per_serving": _normalize_recipe_quantity(
@@ -593,6 +661,7 @@ def get_recipe_and_stock() -> pd.DataFrame:
                 item["unit"],
                 item.get("grams_per_cup"),
                 item.get("name"),
+                pack,
             ),
             "ingredient_id": item["id"],
             "ingredient_name": item["name"],

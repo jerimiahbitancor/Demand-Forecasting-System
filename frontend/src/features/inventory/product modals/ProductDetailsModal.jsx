@@ -56,7 +56,12 @@ const ProductDetailsModal = ({
       ingredient.quantity_per_serving ?? ingredient.quantity,
       recipeUnit,
       ingredientUnit,
-      { gramsPerCup: ingredient.ingredients?.grams_per_cup, ingredientName: stockName }
+      {
+        gramsPerCup: ingredient.ingredients?.grams_per_cup,
+        ingredientName: stockName,
+        packQty: ingredient.ingredients?.pack_qty,
+        packUnit: ingredient.ingredients?.pack_unit
+      }
     )) || 0;
     return {
       id: ingredient.id || ingredient.inventory_item_id || null,

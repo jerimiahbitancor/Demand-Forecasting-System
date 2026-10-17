@@ -28,7 +28,12 @@ function check(label, condition, detail = '') {
 
 function run(cases) {
   for (const c of cases) {
-    const opts = { gramsPerCup: c.gramsPerCup ?? null, ingredientName: c.ingredient || '' };
+    const opts = {
+      gramsPerCup: c.gramsPerCup ?? null,
+      ingredientName: c.ingredient || '',
+      packQty: c.packQty ?? null,
+      packUnit: c.packUnit ?? '',
+    };
     const f = Number(front.convertRecipeQuantity(c.quantity, c.from, c.to, opts));
     const b = Number(back.convertRecipeQuantity(c.quantity, c.from, c.to, opts));
     check(`${c.label} (frontend = ${c.expected})`, Math.abs(f - c.expected) < 1e-9, `expected ${c.expected}, got ${f}`);
@@ -40,6 +45,9 @@ console.log('with database units');
 front.setUnitMetadata(fixture.units);
 back.setUnitMetadata(fixture.units);
 run(fixture.cases);
+
+console.log('with purchase packs ("150 g per sachet")');
+run(fixture.pack_cases);
 
 console.log('built-in tables only (no database units)');
 front.setUnitMetadata([]);
@@ -82,6 +90,30 @@ check('already canonical stays', front.canonicalUnitName('Sack') === 'Sack');
 check('unknown unit is returned unchanged', front.canonicalUnitName('flurb') === 'flurb');
 front.setUnitMetadata([]);
 check('with no database units nothing is renamed', front.canonicalUnitName('cup') === 'cup');
+
+console.log('deriveUnitPrice (frontend = backend)');
+front.setUnitMetadata(fixture.units);
+back.setUnitMetadata(fixture.units);
+const packDeriveCases = [
+  { args: { packQty: 150, packUnit: 'Grams (g)', packPrice: 200, stockUnit: 'Kilograms (kg)' }, expected: 200 / 0.15 },
+  { args: { packQty: 100, packUnit: 'Grams (g)', packPrice: 25, stockUnit: 'Grams (g)' }, expected: 0.25 },
+  { args: { packQty: 12, packUnit: 'Pieces (pcs)', packPrice: 60, stockUnit: 'Pieces (pcs)' }, expected: 5 },
+  { args: { packQty: 1, packUnit: 'Cups (cup)', packPrice: 50, stockUnit: 'Grams (g)', gramsPerCup: 120 }, expected: 50 / 120 },
+  { args: { packQty: 1, packUnit: 'Cups (cup)', packPrice: 50, stockUnit: 'Kilograms (kg)' }, expected: null },
+  { args: { packQty: 12, packUnit: 'Carton', packPrice: 60, stockUnit: 'Kilograms (kg)' }, expected: null },
+  { args: { packQty: 150, packUnit: '', packPrice: 200, stockUnit: 'Kilograms (kg)' }, expected: null },
+];
+for (const { args, expected } of packDeriveCases) {
+  const f = front.deriveUnitPrice(args);
+  const b = back.deriveUnitPrice(args);
+  const label = `deriveUnitPrice ${JSON.stringify(args)}`;
+  if (expected === null) {
+    check(`${label} -> null (frontend = backend)`, f === null && b === null, `frontend ${f} vs backend ${b}`);
+  } else {
+    check(`${label} -> ${expected}`, Math.abs(f - expected) < 1e-6, `expected ${expected}, got ${f}`);
+    check(`${label} (frontend = backend)`, Math.abs(f - b) < 1e-12, `frontend ${f} vs backend ${b}`);
+  }
+}
 
 if (failures.length) {
   console.log(`\n${failures.length} check(s) FAILED`);
