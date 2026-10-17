@@ -9,6 +9,7 @@ import autoTable from 'jspdf-autotable';
 import * as XLSX from 'xlsx';
 import { getStoredBusinessLogo } from '../context/BusinessProfileContext';
 import { formatStockQty } from '../utils/formatStockQty.js';
+import { formatItemsSold } from '../utils/formatItemsSold.js';
 
 // ---------------------------------------------------------------------
 // Palette — pulled directly from the app's CSS variables so the PDF
@@ -356,7 +357,8 @@ export async function buildProductPerformancePDF({
   y = drawSectionTitle(doc, y, 'Demand classification \u2014 tomorrow');
   y = drawTable(doc, y, {
     head: ['No.', 'Product', 'Forecast Qty. (Tomorrow)', 'Demand Level', 'Action Signal'],
-    body: demandRows.map((r, i) => [i + 1, r.product, `${r.forecastQty} orders`, r.demandLevel, r.actionSignal]),
+    // Forecast = an expected value (decimal); printed as whole items sold.
+    body: demandRows.map((r, i) => [i + 1, r.product, formatItemsSold(r.forecastQty, { withUnit: true }), r.demandLevel, r.actionSignal]),
     columnStyles: { 0: { cellWidth: 12 } },
     didParseCell: (data) => {
       if (data.section === 'body' && data.column.index === 3) {

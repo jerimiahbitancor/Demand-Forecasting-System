@@ -18,6 +18,7 @@ import { ratioBarGeometry, ratioBarMax } from "./shared/ratioBar.js";
 import "./shared/InfoBanner.css";
 import "./ProductPerformance.css";
 import { authService } from "../../../services/authService.js";
+import { roundItems, formatItemsSold } from "../../../utils/formatItemsSold.js";
 
 const API_URL = import.meta.env.VITE_API_URL || "http://localhost:5000/api";
 
@@ -228,7 +229,9 @@ function DemandBar({ label, qty, maxQty, zone }) {
           white label spilling onto the light track where it was unreadable.
           As its own column it is always legible and always the same distance
           from the bar, so the numbers line up down the chart. */}
-      <span className="demand-bar-value">{qty} servings</span>
+      {/* Whole number for display only; the bar width above uses the raw
+          forecast (an expected value, so a decimal). */}
+      <span className="demand-bar-value">{formatItemsSold(qty, { withUnit: true })}</span>
     </div>
   );
 }
@@ -471,7 +474,9 @@ function ProductPerformance() {
       doc.save("product-performance-report.pdf");
     } else {
       const sheetMap = {
-        demand: { sheetName: "Demand Classification", rows: reportDemandRows },
+        // Whole numbers in the spreadsheet; the rows themselves keep the raw
+        // forecast because the bar chart sizes its bars from it.
+        demand: { sheetName: "Demand Classification", rows: reportDemandRows.map((r) => ({ ...r, forecastQty: roundItems(r.forecastQty) })) },
         ratio: { sheetName: "Performance Ratio", rows: reportPerformanceRows },
         status: { sheetName: "Product Status", rows: [...activeProducts, ...newProducts, ...inactiveProducts] },
       };
@@ -663,7 +668,7 @@ function ProductPerformance() {
                     <td data-label="No.">{i + 1}</td>
                     <td data-label="Date">{row.date}</td>
                     <td data-label="Product">{row.product}</td>
-                    <td data-label="Forecast Qty. (Tomorrow)">{row.forecastQty} servings</td>
+                    <td data-label="Forecast Qty. (Tomorrow)">{formatItemsSold(row.forecastQty, { withUnit: true })}</td>
                     <td data-label="Demand Level">
                       <span className={`pill ${pillClass[row.demandLevel]}`}>{row.demandLevel}</span>
                     </td>
@@ -991,7 +996,7 @@ function ProductPerformance() {
                   <td>{(modalDemandPage - 1) * 10 + i + 1}</td>
                   <td>{row.date}</td>
                   <td>{row.product}</td>
-                  <td>{row.forecastQty} servings</td>
+                  <td>{formatItemsSold(row.forecastQty, { withUnit: true })}</td>
                   <td><span className={`pill ${pillClass[row.demandLevel]}`}>{row.demandLevel}</span></td>
                   <td className="action-signal">{getActionSignal(row.demandLevel, row.bottleneckIngredient, row.bottleneckStatus)}</td>
                 </tr>

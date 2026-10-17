@@ -271,6 +271,16 @@ const getInventoryItems = async (req, res) => {
       });
     }
 
+    // Which forecast the statuses above are measured against, for the
+    // "As of Latest Forecast" note. Its own try/catch: a failure here must
+    // never stop the table from loading.
+    let forecastBasis = null;
+    try {
+      forecastBasis = await analyticsService.getForecastBasis();
+    } catch (basisError) {
+      console.warn('Could not load the forecast basis for Ingredient Management:', basisError.message);
+    }
+
     const data = (paginatedData || []).map((item) => ({
       ...item,
       forecasted_need: dailyNeeds.get(item.id) || 0,
@@ -294,7 +304,8 @@ const getInventoryItems = async (req, res) => {
         normalStock: stockCounts.normalStock,
         criticalStock: stockCounts.criticalStock,
         unmappedIngredients
-      }
+      },
+      forecastBasis
     });
   } catch (error) {
     console.error('❌ Error fetching inventory:', error);

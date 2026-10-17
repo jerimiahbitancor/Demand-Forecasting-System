@@ -22,6 +22,7 @@ import axios from 'axios';
 import Navbar from "../../components/Navbar/Navbar";
 import DashboardNotices from "../components/DashboardNotices.jsx";
 import { formatStockQty } from "../../../utils/formatStockQty.js";
+import { formatItemsSold } from "../../../utils/formatItemsSold.js";
 import {
   chartRange, toChartRows, pickBestSellers, pickIngredients, statusBadgeClass, shortDateLabel,
 } from "../utils/dashboardPanels.js";
@@ -45,6 +46,33 @@ const NOT_AVAILABLE_STYLE = {
 };
 const NOT_AVAILABLE_TEXT_STYLE = { color: '#6b7280', fontSize: 13, margin: '8px 0', lineHeight: 1.5 };
 
+// Stock Alert card: same colours as the Ingredient Management legend.
+const STOCK_STATUSES = [
+  { key: 'Critical', label: 'Critical', color: '#dc2626' },
+  { key: 'Low', label: 'Low', color: '#f59e0b' },
+  { key: 'Normal', label: 'Normal', color: '#16a34a' },
+  { key: 'Excess', label: 'Excess', color: '#3b82f6' },
+];
+const STOCK_NO_DATA_COLOR = '#9ca3af';
+
+// Headline colour = the WORST status present, not a count threshold (the old
+// 10/5/1 thresholds showed 7 Critical ingredients in yellow).
+const stockHeadlineColor = (counts) => {
+  if (!counts) return STOCK_NO_DATA_COLOR;
+  if (counts.Critical > 0) return '#dc2626';
+  if (counts.Low > 0) return '#f59e0b';
+  return '#16a34a';
+};
+
+// "2026-10-16" -> "Oct 16", from its parts: new Date("YYYY-MM-DD") is read
+// as UTC midnight and can land on the day before.
+const shortMonthDay = (iso) => {
+  const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(String(iso || ''));
+  if (!m) return null;
+  return new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]))
+    .toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+};
+
 // initialState = the /upload/dashboard-state payload. Since Oct 14 2026 a
 // trained model always lands here; its attention/mapping blocks become
 // notice cards above the KPIs (components/DashboardNotices.jsx).
@@ -59,9 +87,13 @@ const FullyOperational = ({ initialState, onRefreshState }) => {
   const [dashboardData, setDashboardData] = useState({
     predictedSales: null,
     actualSales: null,
+    actualSalesDate: null,
     forecastAccuracy: null,
-    forecastAccuracyTier: null,
+    forecastAccuracyLabel: null,
+    accuracyBeatsBaseline: null,
+    baselineAccuracy: null,
     stockAlert: null,
+    stockCounts: null,
     predictedSalesYesterday: null,
     salesTrend: null,
     accuracyTrend: 0,
@@ -126,35 +158,43 @@ const FullyOperational = ({ initialState, onRefreshState }) => {
     if (summaryResponse.data.success) {
       const summary = summaryResponse.data.data;
       const predictedSales = Math.round(summary.predictedSalesToday || 0);
-      const actualSales = Math.round(summary.actualSalesYesterday || 0);
+      // null = nothing uploaded for yesterday: the card shows "—", never ₱0.
+      const actualSales = summary.actualSalesYesterday != null ? Math.round(summary.actualSalesYesterday) : null;
       const accuracyValue = summary.forecastAccuracy?.value;
       // One decimal, same as the accuracy notice card (64.6%).
       const forecastAccuracy = accuracyValue != null ? Math.round(accuracyValue * 10) / 10 : null;
       const predictedSalesYesterday = summary.predictedSalesYesterday != null
         ? Math.round(summary.predictedSalesYesterday)
         : null;
-      const forecastAccuracyTier = summary.forecastAccuracy?.tier || null;
+      // The backend never sent a `tier`; the label is standing.label
+      // ("Better than a simple average" / "Not yet better ...").
+      const forecastAccuracyLabel = summary.forecastAccuracy?.standing?.label || null;
+      const accuracyBeatsBaseline = summary.forecastAccuracy?.beatsBaseline ?? null;
+      const baselineValue = summary.forecastAccuracy?.baselineValue;
+      const baselineAccuracy = baselineValue != null ? Math.round(baselineValue * 10) / 10 : null;
       const stockAlerts = summary.stockAlerts || { Critical: 0, Low: 0, Normal: 0, Excess: 0 };
-      const stockAlert = (stockAlerts.Critical || 0) + (stockAlerts.Low || 0);
-
-      const stockBreakdown = [
-        { count: stockAlerts.Critical || 0, label: 'Critical', color: '#ef4444' },
-        { count: stockAlerts.Low || 0, label: 'Low', color: '#eab308' },
-        { count: stockAlerts.Normal || 0, label: 'Normal', color: '#22c55e' },
-        { count: stockAlerts.Excess || 0, label: 'Excess', color: '#3b82f6' }
-      ];
+      const stockCounts = {
+        Critical: stockAlerts.Critical || 0,
+        Low: stockAlerts.Low || 0,
+        Normal: stockAlerts.Normal || 0,
+        Excess: stockAlerts.Excess || 0,
+      };
+      const stockAlert = stockCounts.Critical + stockCounts.Low;
 
       setDashboardData({
         predictedSales,
         actualSales,
+        actualSalesDate: summary.yesterday || null,
         forecastAccuracy,
-        forecastAccuracyTier,
+        forecastAccuracyLabel,
+        accuracyBeatsBaseline,
+        baselineAccuracy,
         stockAlert,
+        stockCounts,
         predictedSalesYesterday,
         // Today's forecast vs yesterday's actual sales (labelled on the badge).
         salesTrend: actualSales ? Math.round((predictedSales - actualSales) / actualSales * 100) : null,
         accuracyTrend: 0,
-        stockBreakdown
       });
     }
   } catch (error) {
@@ -171,18 +211,16 @@ const FullyOperational = ({ initialState, onRefreshState }) => {
     setDashboardData({
       predictedSales: null,
       actualSales: null,
+      actualSalesDate: null,
       forecastAccuracy: null,
-      forecastAccuracyTier: null,
+      forecastAccuracyLabel: null,
+      accuracyBeatsBaseline: null,
+      baselineAccuracy: null,
       stockAlert: null,
+      stockCounts: null,
       predictedSalesYesterday: null,
       salesTrend: null,
       accuracyTrend: 0,
-      stockBreakdown: [
-        { count: null, label: 'Critical', color: '#ef4444' },
-        { count: null, label: 'Low', color: '#eab308' },
-        { count: null, label: 'Normal', color: '#22c55e' },
-        { count: null, label: 'Excess', color: '#3b82f6' }
-      ]
     });
   } finally {
     setLoading(false);
@@ -252,7 +290,9 @@ const FullyOperational = ({ initialState, onRefreshState }) => {
         <div className="custom-tooltip">
           <p className="tooltip-label">{label}</p>
           {payload.map((entry, index) => (
-            <p key={index} style={{ color: entry.color }}>{entry.name}: {entry.value}</p>
+            // Items sold, as a whole number: forecasts are expected values
+            // (decimals); the chart itself still plots the raw values.
+            <p key={index} style={{ color: entry.color }}>{entry.name}: {formatItemsSold(entry.value)}</p>
           ))}
         </div>
       );
@@ -265,17 +305,6 @@ const FullyOperational = ({ initialState, onRefreshState }) => {
     if (num >= 1.5) return 'ratio-high';
     if (num >= 1.0) return 'ratio-medium';
     return 'ratio-low';
-  };
-
-  // Get color based on stock alert number (count of Critical + Low
-  // ingredients from the real /api/forecast/summary stockAlerts breakdown
-  // — a small integer, not the 0-100-ish scale these thresholds were
-  // originally tuned for back when the value itself was fabricated).
-  const getStockAlertColor = (value) => {
-    if (value >= 10) return '#ef4444'; // Red — many ingredients need attention
-    if (value >= 5) return '#eab308'; // Yellow
-    if (value >= 1) return '#22c55e'; // Green
-    return '#3b82f6'; // Blue — none
   };
 
   // Tooltips
@@ -301,42 +330,39 @@ const FullyOperational = ({ initialState, onRefreshState }) => {
         </span>
       </div>
     ),
+    // Accuracy = 100% - WMAPE judged against a 7-day average (owner rule,
+    // Oct 1 2026). The old 90/80/70% bands were dropped and are not used.
     accuracy: (
       <div style={{ padding: "4px 0", fontSize: "13px", lineHeight: "1.6" }}>
-        This tells you how reliable today's quantity forecasts are.<br /><br />
+        Accuracy = 100% − WMAPE on the test period: the days held back when
+        the model was trained, so it is scored on sales it had not seen.<br /><br />
+        It is compared with a simple 7-day average on the same days:<br />
         <div style={{ margin: "8px 0" }}>
           <div style={{ display: "flex", alignItems: "center", gap: "8px", marginBottom: "4px" }}>
             <span style={{ color: "#22c55e", fontWeight: "bold" }}>●</span>
-            <span><strong>Above 90%</strong> → Excellent. You can rely on these numbers.</span>
-          </div>
-          <div style={{ display: "flex", alignItems: "center", gap: "8px", marginBottom: "4px" }}>
-            <span style={{ color: "#60a5fa", fontWeight: "bold" }}>●</span>
-            <span><strong>80-90%</strong> → Good. Still useful for planning.</span>
-          </div>
-          <div style={{ display: "flex", alignItems: "center", gap: "8px", marginBottom: "4px" }}>
-            <span style={{ color: "#fbbf24", fontWeight: "bold" }}>●</span>
-            <span><strong>70-80%</strong> → Fair. Use with caution.</span>
+            <span><strong>Better than a simple average</strong>: the forecast adds real value.</span>
           </div>
           <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
-            <span style={{ color: "#ef4444", fontWeight: "bold" }}>●</span>
-            <span><strong>Below 70%</strong> → Low. Consider uploading more data.</span>
+            <span style={{ color: "#f59e0b", fontWeight: "bold" }}>●</span>
+            <span><strong>Not yet better</strong>: use the forecast as a planning guide.</span>
           </div>
         </div>
-        <br />
-        <span style={{ color: "#60a5fa", cursor: "pointer", display: "block", textAlign: "center", paddingTop: "8px", borderTop: "1px solid rgba(255,255,255,0.1)" }}>
-          Click to view detailed accuracy report →
-        </span>
+        This is a past score. It only changes after the model is retrained.
       </div>
     ),
+    // Matches the backend rule (analyticsService computeStockStatus): stock
+    // vs TODAY's forecasted need, recipe ingredients only.
     stock: (
       <div style={{ padding: "4px 0", fontSize: "13px", lineHeight: "1.6" }}>
-        These are the top ingredients you should prepare or buy for tomorrow.<br /><br />
-        This is based on your predicted menu sales and your recipe portions.<br /><br />
-        <strong style={{ color: "#fbbf24" }}>Pro Tip:</strong><br />
-        Double-check your actual fridge/freezer stock before buying.<br /><br />
-        <span style={{ color: "#60a5fa", cursor: "pointer", display: "block", textAlign: "center", paddingTop: "8px", borderTop: "1px solid rgba(255,255,255,0.1)" }}>
-          Click to view full ingredient demand breakdown →
-        </span>
+        Compares each ingredient's current stock with today's forecasted need,
+        worked out from the forecast and your recipes.<br /><br />
+        <div style={{ margin: "8px 0" }}>
+          <div><strong style={{ color: "#f87171" }}>Critical</strong>: less than half of the need</div>
+          <div><strong style={{ color: "#fbbf24" }}>Low</strong>: less than the need</div>
+          <div><strong style={{ color: "#4ade80" }}>Normal</strong>: 1 to 2 times the need</div>
+          <div><strong style={{ color: "#60a5fa" }}>Excess</strong>: more than 2 times the need</div>
+        </div>
+        Only ingredients used in a product recipe are counted.
       </div>
     ),
     chart: (
@@ -482,7 +508,12 @@ const FullyOperational = ({ initialState, onRefreshState }) => {
   }
 
   const comparisonMessage = getComparisonMessage();
-  const stockColor = getStockAlertColor(dashboardData.stockAlert);
+  const stockCounts = dashboardData.stockCounts;
+  const stockColor = stockHeadlineColor(stockCounts);
+  const stockTotal = stockCounts ? STOCK_STATUSES.reduce((sum, st) => sum + stockCounts[st.key], 0) : null;
+  // Amber only when the model is known NOT to beat the 7-day average;
+  // unknown (no baseline) stays green, as before.
+  const accuracyTone = dashboardData.accuracyBeatsBaseline === false ? 'amber' : 'green';
 
   return (
     <div className="dashboard-container">
@@ -574,17 +605,26 @@ const FullyOperational = ({ initialState, onRefreshState }) => {
               </Tippy>
             </div>
             <div className="metric-value-group">
-              <span className="metric-value">{dashboardData.actualSales != null ? formatCurrency(dashboardData.actualSales) : '—'}</span>
+              <span className={`metric-value${dashboardData.actualSales == null ? ' metric-value--empty' : ''}`}>
+                {dashboardData.actualSales != null ? formatCurrency(dashboardData.actualSales) : '—'}
+              </span>
             </div>
-            <p className="metric-subtext">
-              {dashboardData.actualSales != null && dashboardData.predictedSalesYesterday
-                ? `${Math.round((dashboardData.actualSales / dashboardData.predictedSalesYesterday) * 100)}% of yesterday's forecast`
-                : "Yesterday's recorded sales"}
-            </p>
+            {dashboardData.actualSales == null ? (
+              // Nothing uploaded for yesterday: say so instead of showing ₱0.
+              <p className="metric-subtext metric-subtext--muted">
+                No sales uploaded for {shortMonthDay(dashboardData.actualSalesDate) || 'yesterday'}
+              </p>
+            ) : (
+              <p className="metric-subtext">
+                {dashboardData.predictedSalesYesterday
+                  ? `${Math.round((dashboardData.actualSales / dashboardData.predictedSalesYesterday) * 100)}% of yesterday's forecast`
+                  : "Yesterday's recorded sales"}
+              </p>
+            )}
           </div>
 
           {/* 3. Forecast Accuracy */}
-          <div className="metric-card border-green">
+          <div className={`metric-card border-${accuracyTone}`}>
             <div className="card-header">
               <h3 className="card-title">Forecast Accuracy</h3>
               <Tippy content={tooltips.accuracy} placement="top" animation="scale" duration={200} theme="dark" arrow={true} delay={[100, 0]} maxWidth={380} interactive={true} trigger="mouseenter focus click">
@@ -592,61 +632,78 @@ const FullyOperational = ({ initialState, onRefreshState }) => {
               </Tippy>
             </div>
             <div className="metric-value-group">
-              <span className="metric-value text-green">
+              <span className={`metric-value text-${accuracyTone}`}>
                 {dashboardData.forecastAccuracy != null ? `${dashboardData.forecastAccuracy.toFixed(1)}%` : '—'}
               </span>
             </div>
             <p className="metric-subtext small">
               {dashboardData.forecastAccuracy != null
-                ? `${dashboardData.forecastAccuracyTier || ''} — based on the latest trained model`
+                ? (dashboardData.forecastAccuracyLabel || 'Latest trained model')
                 : 'No trained model yet'}
             </p>
+            {dashboardData.baselineAccuracy != null && (
+              <p className="metric-footnote">7-day average: {dashboardData.baselineAccuracy.toFixed(1)}%</p>
+            )}
           </div>
 
-          {/* 4. Stock Alert */}
-         {/* 4. Stock Alert */}
-<div className="metric-card" style={{ borderTop: `4px solid ${stockColor}` }}>
-  <div className="card-header">
-    <h3 className="card-title">Stock Alert</h3>
-    <Tippy content={tooltips.stock} placement="top" animation="scale" duration={200} theme="dark" arrow={true} delay={[100, 0]} maxWidth={380} interactive={true} trigger="mouseenter focus click">
-      <span className="icon-wrapper"><FaInfoCircle className="card-info" /></span>
-    </Tippy>
-  </div>
-  
-  <div className="metric-value-group">
-    <span className="metric-value" style={{ color: stockColor }}>{dashboardData.stockAlert ?? '—'}</span>
-  </div>
-  
-  {/* Dynamic Stock Alert Breakdown */}
-  <div style={{
-    display: 'flex',
-    gap: '16px',
-    justifyContent: 'center',
-    marginTop: '8px',
-    marginBottom: '12px'
-  }}>
-    {dashboardData.stockBreakdown && dashboardData.stockBreakdown.map((item, index) => (
-      <div key={index} style={{ 
-        display: 'flex', 
-        flexDirection: 'column', 
-        alignItems: 'center',
-        gap: '2px'
-      }}>
-        <span style={{ 
-          fontSize: '24px', 
-          fontWeight: 'bold', 
-          color: item.color,
-          lineHeight: '1'
-        }}>{item.count ?? '—'}</span>
-        <span style={{ fontSize: '10px', color: '#9ca3af' }}>{item.label}</span>
-      </div>
-    ))}
-  </div>
-  
-  <p className="metric-subtext" style={{ marginTop: '4px' }}>
-    {dashboardData.stockAlert != null ? 'Ingredients compared with the latest forecast' : 'No stock data yet'}
-  </p>
-</div>
+          {/* 4. Stock Alert: the headline is Critical + Low (ingredients that
+              need restocking), labelled so it no longer looks like a stray
+              duplicate of the Critical count. */}
+          <div className="metric-card" style={{ borderTopColor: stockColor }}>
+            <div className="card-header">
+              <h3 className="card-title">Stock Alert</h3>
+              <Tippy content={tooltips.stock} placement="top" animation="scale" duration={200} theme="dark" arrow={true} delay={[100, 0]} maxWidth={380} interactive={true} trigger="mouseenter focus click">
+                <span className="icon-wrapper"><FaInfoCircle className="card-info" /></span>
+              </Tippy>
+            </div>
+
+            <div className="metric-value-group stock-headline">
+              <span className="metric-value" style={{ color: stockColor }}>{dashboardData.stockAlert ?? '—'}</span>
+              {dashboardData.stockAlert != null && (
+                <span className="stock-headline-label">
+                  {dashboardData.stockAlert === 1 ? 'ingredient needs restocking' : 'ingredients need restocking'}
+                </span>
+              )}
+            </div>
+
+            {stockCounts && (
+              <>
+                <div
+                  className="stock-bar"
+                  role="img"
+                  aria-label={STOCK_STATUSES.map((st) => `${st.label} ${stockCounts[st.key]}`).join(', ')}
+                >
+                  {STOCK_STATUSES.filter((st) => stockCounts[st.key] > 0).map((st) => (
+                    <span
+                      key={st.key}
+                      className="stock-bar-segment"
+                      style={{ flexGrow: stockCounts[st.key], backgroundColor: st.color }}
+                    />
+                  ))}
+                </div>
+                <ul className="stock-grid">
+                  {STOCK_STATUSES.map((st) => {
+                    const count = stockCounts[st.key];
+                    return (
+                      <li key={st.key} className={`stock-grid-item${count === 0 ? ' stock-grid-item--zero' : ''}`}>
+                        <span className="stock-dot" style={{ backgroundColor: count === 0 ? STOCK_NO_DATA_COLOR : st.color }} aria-hidden="true" />
+                        <span className="stock-grid-count">{count}</span>
+                        <span className="stock-grid-label">{st.label}</span>
+                      </li>
+                    );
+                  })}
+                </ul>
+              </>
+            )}
+
+            <p className="metric-footnote">
+              {!stockCounts
+                ? 'No stock data yet'
+                : stockTotal === 0
+                  ? 'No recipe ingredients to compare yet'
+                  : `Of ${stockTotal} ingredient${stockTotal === 1 ? '' : 's'} used in recipes, vs today's forecast`}
+            </p>
+          </div>
         </div>
 
         {/* Main Content Area */}

@@ -18,6 +18,7 @@ import EmptyState from "./shared/EmptyState.jsx";
 import "./shared/InfoBanner.css";
 import "./Forecasting.css";
 import { authService } from "../../../services/authService.js";
+import { roundItems, formatItemsSold } from "../../../utils/formatItemsSold.js";
 
 const API_URL = import.meta.env.VITE_API_URL || "http://localhost:5000/api";
 
@@ -61,7 +62,10 @@ function buildPredictionSet(predictionRows, revenueMode) {
       rawDate: r.date,
       product: r.product,
       actualQty: r.actualQty ?? "—",
-      forecastQty: r.closed ? "Closed" : r.forecastQty,
+      // Shown as a whole number of items sold (table AND Excel export read
+      // this row). The forecast itself is an expected value (a decimal); the
+      // chart buckets below add up the raw r.forecastQty, never this one.
+      forecastQty: r.closed ? "Closed" : roundItems(r.forecastQty),
       actualRevenue: revenueMode ? (noPrice ? "" : formatPeso(r.actualRevenue)) : undefined,
       forecastRevenue: revenueMode ? (noPrice ? "No price" : formatPeso(r.forecastRevenue)) : undefined,
       estCost: revenueMode ? (noRecipe ? "No recipe" : formatPeso(r.estCost)) : undefined,
@@ -881,7 +885,7 @@ function Forecasting() {
                     <td data-label="Date">{row.date}</td>
                     <td data-label="Product">{row.product}</td>
                     <td data-label="Actual Qty.">{row.actualQty}</td>
-                    <td data-label="Forecast Qty.">{row.forecastQty}</td>
+                    <td data-label="Forecast Qty.">{row.forecastQty === "Closed" ? "Closed" : formatItemsSold(row.forecastQty)}</td>
                     <td data-label="Actual Revenue">{row.actualRevenue}</td>
                     <td data-label="Forecast Revenue">{row.forecastRevenue}</td>
                     <td data-label="Est. Total Cost">{row.estCost}</td>
@@ -1053,7 +1057,7 @@ function Forecasting() {
                   <td data-label="Date">{row.date}</td>
                   <td data-label="Product">{row.product}</td>
                   <td data-label="Actual Qty.">{row.actualQty}</td>
-                  <td data-label="Forecast Qty.">{row.forecastQty}</td>
+                  <td data-label="Forecast Qty.">{row.forecastQty === "Closed" ? "Closed" : formatItemsSold(row.forecastQty)}</td>
                   <td data-label="Actual Revenue">{row.actualRevenue}</td>
                   <td data-label="Forecast Revenue">{row.forecastRevenue}</td>
                   <td data-label="Est. Total Cost">{row.estCost}</td>

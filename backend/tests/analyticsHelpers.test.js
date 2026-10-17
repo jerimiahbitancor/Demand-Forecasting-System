@@ -270,3 +270,71 @@ test('A3: predictedSalesYesterday = yesterday forecasts × price, null without r
   fake.reset({ products: [{ id: 1, name: 'Porksilog', price: 120, status: 'active' }] });
   assert.equal((await svc.getForecastSummary()).predictedSalesYesterday, null);
 });
+
+test('B1: actualSalesYesterday = null with no rows, 0 for a real zero day, peso sum otherwise; yesterday returned', async () => {
+  const yesterday = dayjs().tz('Asia/Manila').subtract(1, 'day').format('YYYY-MM-DD');
+  const products = [
+    { id: 1, name: 'Porksilog', price: 120, status: 'active' },
+    { id: 2, name: 'Tapsilog', price: 130, status: 'active' },
+  ];
+
+  // Nothing uploaded for yesterday -> null (the card shows "—", not ₱0).
+  fake.reset({ products });
+  let summary = await svc.getForecastSummary();
+  assert.equal(summary.actualSalesYesterday, null);
+  assert.equal(summary.yesterday, yesterday);
+
+  // Rows exist but nothing sold -> a real 0.
+  fake.reset({
+    products,
+    daily_sales: [
+      { product_id: 1, sale_date: yesterday, quantity_sold: 0 },
+      { product_id: 2, sale_date: yesterday, quantity_sold: 0 },
+    ],
+  });
+  assert.equal((await svc.getForecastSummary()).actualSalesYesterday, 0);
+
+  // 3 x 120 + 2 x 130 = 620. A row from another day is ignored.
+  fake.reset({
+    products,
+    daily_sales: [
+      { product_id: 1, sale_date: yesterday, quantity_sold: 3 },
+      { product_id: 2, sale_date: yesterday, quantity_sold: 2 },
+      { product_id: 1, sale_date: '2020-01-01', quantity_sold: 99 },
+    ],
+  });
+  summary = await svc.getForecastSummary();
+  assert.equal(summary.actualSalesYesterday, 620);
+});
+
+test('C: getForecastBasis -> null without a run; newest run wins, labelled in Manila time', async () => {
+  fake.reset({});
+  assert.equal(await svc.getForecastBasis('2026-10-17'), null);
+
+  fake.reset({
+    forecast_runs: [
+      { id: 1, run_at: '2026-10-16T01:00:30.000Z', run_type: 'daily' },
+      { id: 2, run_at: '2026-10-17T07:31:00.000Z', run_type: 'weekly' }, // 3:31 PM Manila
+    ],
+    forecasts: [{ id: 5, product_id: 1, forecast_date: '2026-10-17', predicted_quantity: 4.37 }],
+  });
+  assert.deepEqual(await svc.getForecastBasis('2026-10-17'), {
+    runAt: '2026-10-17T07:31:00.000Z',
+    runAtLabel: 'October 17, 2026 • 03:31 PM',
+    runType: 'weekly',
+    forecastDate: '2026-10-17',
+    forecastDateLabel: 'Oct 17, 2026',
+    hasForecastForDate: true,
+  });
+});
+
+test('C: getForecastBasis -> hasForecastForDate false when the date has no forecast rows (e.g. a closed day)', async () => {
+  fake.reset({
+    forecast_runs: [{ id: 2, run_at: '2026-10-17T07:31:00.000Z', run_type: 'daily' }],
+    forecasts: [{ id: 5, product_id: 1, forecast_date: '2026-10-17', predicted_quantity: 4 }],
+  });
+  const basis = await svc.getForecastBasis('2026-10-18');
+  assert.equal(basis.hasForecastForDate, false);
+  assert.equal(basis.forecastDateLabel, 'Oct 18, 2026');
+  assert.equal(basis.runAtLabel, 'October 17, 2026 • 03:31 PM');
+});

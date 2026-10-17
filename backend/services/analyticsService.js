@@ -1201,10 +1201,15 @@ async function getForecastSummary() {
     .eq('sale_date', yesterday);
   if (salesError) throw salesError;
 
-  const actualSalesYesterday = (yesterdaySales || []).reduce((sum, s) => {
-    const product = productById.get(s.product_id);
-    return sum + (product ? Number(s.quantity_sold) * Number(product.price) : 0);
-  }, 0);
+  // null = nothing uploaded for yesterday (the Dashboard shows "—"), so a
+  // missing upload never reads as a ₱0 day. A real zero-sales day (rows
+  // exist, quantities 0) still sums to 0.
+  const actualSalesYesterday = (yesterdaySales || []).length
+    ? yesterdaySales.reduce((sum, s) => {
+        const product = productById.get(s.product_id);
+        return sum + (product ? Number(s.quantity_sold) * Number(product.price) : 0);
+      }, 0)
+    : null;
 
   // Yesterday's forecast at the same prices, so the Dashboard can say
   // "N% of yesterday's forecast". null when yesterday had no forecast rows.
@@ -1255,6 +1260,8 @@ async function getForecastSummary() {
     predictedSalesToday,
     predictedSalesYesterday,
     actualSalesYesterday,
+    // YYYY-MM-DD (Manila), so the card can say "No sales uploaded for Oct 16".
+    yesterday,
     forecastAccuracy: {
       value: accuracy,
       baselineValue: accuracyFromWmape(latestMetrics?.baseline_wmape),
@@ -1265,6 +1272,42 @@ async function getForecastSummary() {
     freshness: latestRun
       ? { staleDays: latestRun.stale_days, lastConfirmedDate: latestRun.last_confirmed_date, runAt: latestRun.run_at }
       : null,
+  };
+}
+
+// Which forecast the Ingredient Management statuses are measured against
+// (the page shows "As of Latest Forecast (...)"). The statuses use TODAY's
+// forecasts rows (getIngredientDailyNeeds); this names the newest
+// forecast_runs row and says whether it has rows for that date (a closed
+// day has none, so every ingredient reads No Forecast). Labels are made
+// here in Manila time so the browser's time zone never matters.
+// null when no forecast has ever run.
+async function getForecastBasis(date) {
+  const targetDate = date || defaultDateRange().today;
+  const [runRes, forecastRes] = await Promise.all([
+    supabaseAdmin
+      .from('forecast_runs')
+      .select('run_at, run_type')
+      .order('run_at', { ascending: false })
+      .limit(1)
+      .maybeSingle(),
+    supabaseAdmin
+      .from('forecasts')
+      .select('id')
+      .eq('forecast_date', targetDate)
+      .limit(1),
+  ]);
+  if (runRes.error) throw runRes.error;
+  if (forecastRes.error) throw forecastRes.error;
+  const run = runRes.data;
+  if (!run) return null;
+  return {
+    runAt: run.run_at,
+    runAtLabel: dayjs(run.run_at).tz(PH_TZ).format('MMMM D, YYYY • hh:mm A'),
+    runType: run.run_type || null,
+    forecastDate: targetDate,
+    forecastDateLabel: formatDateOnly(targetDate),
+    hasForecastForDate: Array.isArray(forecastRes.data) && forecastRes.data.length > 0,
   };
 }
 
@@ -1280,6 +1323,7 @@ module.exports = {
   getProductPerformanceAnalytics,
   getIngredientDemandAnalytics,
   getForecastSummary,
+  getForecastBasis,
   getMappedIngredientIds,
   // Pure helpers, exported for tests.
   RETRAIN_RECOMMENDED_DAYS,
