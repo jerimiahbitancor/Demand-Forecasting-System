@@ -1,5 +1,6 @@
 // states/FullyOperational.jsx
 import { useState, useEffect, useRef } from "react";
+import { useNavigate } from "react-router-dom";
 import { FaArrowUp, FaArrowDown, FaInfoCircle, FaCalendarAlt } from "react-icons/fa";
 import Tippy from "@tippyjs/react";
 import "tippy.js/dist/tippy.css";
@@ -75,6 +76,27 @@ const FullyOperational = ({ initialState, onRefreshState }) => {
     ingredients: { status: 'loading', rows: [], date: null },
   });
   const periodEffectRan = useRef(false);
+  const navigate = useNavigate();
+
+  // The two right-panel cards open the matching Analytics tab. Using the
+  // /analytics?tab= URL (instead of the bare sub-route) keeps the Analytics
+  // chrome — navbar, tab bar, breadcrumb — around the panel, so the owner
+  // can navigate away.
+  const openAnalyticsTab = (tabId) => navigate(`/analytics?tab=${tabId}`);
+
+  // Card-level click/keyboard handler. The info icon stops propagation so
+  // opening a tooltip never triggers navigation.
+  const cardClickProps = (tabId) => ({
+    role: 'button',
+    tabIndex: 0,
+    onClick: () => openAnalyticsTab(tabId),
+    onKeyDown: (event) => {
+      if (event.key === 'Enter' || event.key === ' ') {
+        event.preventDefault();
+        openAnalyticsTab(tabId);
+      }
+    },
+  });
 
   const getAuthToken = () => sessionStorage.getItem('access_token') || localStorage.getItem('token');
 
@@ -135,7 +157,10 @@ const FullyOperational = ({ initialState, onRefreshState }) => {
         : null;
       const forecastAccuracyTier = summary.forecastAccuracy?.tier || null;
       const stockAlerts = summary.stockAlerts || { Critical: 0, Low: 0, Normal: 0, Excess: 0 };
-      const stockAlert = (stockAlerts.Critical || 0) + (stockAlerts.Low || 0);
+      // Headline total = all tracked ingredients, so it always equals the sum
+      // of the Critical/Low/Normal/Excess breakdown shown in the card.
+      const stockAlert = (stockAlerts.Critical || 0) + (stockAlerts.Low || 0)
+        + (stockAlerts.Normal || 0) + (stockAlerts.Excess || 0);
 
       const stockBreakdown = [
         { count: stockAlerts.Critical || 0, label: 'Critical', color: '#ef4444' },
@@ -604,49 +629,32 @@ const FullyOperational = ({ initialState, onRefreshState }) => {
           </div>
 
           {/* 4. Stock Alert */}
-         {/* 4. Stock Alert */}
-<div className="metric-card" style={{ borderTop: `4px solid ${stockColor}` }}>
-  <div className="card-header">
-    <h3 className="card-title">Stock Alert</h3>
-    <Tippy content={tooltips.stock} placement="top" animation="scale" duration={200} theme="dark" arrow={true} delay={[100, 0]} maxWidth={380} interactive={true} trigger="mouseenter focus click">
-      <span className="icon-wrapper"><FaInfoCircle className="card-info" /></span>
-    </Tippy>
-  </div>
-  
-  <div className="metric-value-group">
-    <span className="metric-value" style={{ color: stockColor }}>{dashboardData.stockAlert ?? '—'}</span>
-  </div>
-  
-  {/* Dynamic Stock Alert Breakdown */}
-  <div style={{
-    display: 'flex',
-    gap: '16px',
-    justifyContent: 'center',
-    marginTop: '8px',
-    marginBottom: '12px'
-  }}>
-    {dashboardData.stockBreakdown && dashboardData.stockBreakdown.map((item, index) => (
-      <div key={index} style={{ 
-        display: 'flex', 
-        flexDirection: 'column', 
-        alignItems: 'center',
-        gap: '2px'
-      }}>
-        <span style={{ 
-          fontSize: '24px', 
-          fontWeight: 'bold', 
-          color: item.color,
-          lineHeight: '1'
-        }}>{item.count ?? '—'}</span>
-        <span style={{ fontSize: '10px', color: '#9ca3af' }}>{item.label}</span>
-      </div>
-    ))}
-  </div>
-  
-  <p className="metric-subtext" style={{ marginTop: '4px' }}>
-    {dashboardData.stockAlert != null ? 'Ingredients compared with the latest forecast' : 'No stock data yet'}
-  </p>
-</div>
+          <div className="metric-card" style={{ borderTop: `4px solid ${stockColor}` }}>
+            <div className="card-header">
+              <h3 className="card-title">Stock Alert</h3>
+              <Tippy content={tooltips.stock} placement="top" animation="scale" duration={200} theme="dark" arrow={true} delay={[100, 0]} maxWidth={380} interactive={true} trigger="mouseenter focus click">
+                <span className="icon-wrapper"><FaInfoCircle className="card-info" /></span>
+              </Tippy>
+            </div>
+
+            {/* Stock status breakdown — the Total sits beside the categories. */}
+            <div className="stock-breakdown">
+              {dashboardData.stockBreakdown && dashboardData.stockBreakdown.map((item, index) => (
+                <div key={index} className="stock-breakdown-item">
+                  <span className="stock-breakdown-count" style={{ color: item.color }}>{item.count ?? '—'}</span>
+                  <span className="stock-breakdown-label">{item.label}</span>
+                </div>
+              ))}
+              <div className="stock-breakdown-item stock-breakdown-total">
+                <span className="stock-breakdown-count">{dashboardData.stockAlert ?? '—'}</span>
+                <span className="stock-breakdown-label">Total</span>
+              </div>
+            </div>
+
+            <p className="metric-subtext small" style={{ marginTop: '12px' }}>
+              {dashboardData.stockAlert != null ? 'Ingredients compared with the latest forecast' : 'No stock data yet'}
+            </p>
+          </div>
         </div>
 
         {/* Main Content Area */}
@@ -730,11 +738,11 @@ const FullyOperational = ({ initialState, onRefreshState }) => {
 
           <div className="right-panel">
             {/* Top Best Sellers */}
-            <div className="placeholder-card">
+            <div className="placeholder-card clickable-card" {...cardClickProps('product-performance')}>
               <div className="placeholder-header">
                 <h3 className="placeholder-title">Top Best Sellers</h3>
                 <Tippy content={tooltips.bestSellers} placement="top" animation="scale" duration={200} theme="dark" arrow={true} delay={[100, 0]} maxWidth={380} interactive={true} trigger="mouseenter focus click">
-                  <span className="icon-wrapper"><FaInfoCircle className="card-info" /></span>
+                  <span className="icon-wrapper" onClick={(e) => e.stopPropagation()} onKeyDown={(e) => e.stopPropagation()}><FaInfoCircle className="card-info" /></span>
                 </Tippy>
               </div>
               <div className="scrollable-content">
@@ -765,11 +773,11 @@ const FullyOperational = ({ initialState, onRefreshState }) => {
             </div>
 
             {/* Top Ingredients to Prepare */}
-            <div className="placeholder-card">
+            <div className="placeholder-card clickable-card" {...cardClickProps('ingredient-demand')}>
               <div className="placeholder-header">
                 <h3 className="placeholder-title">Top Ingredients to Prepare</h3>
                 <Tippy content={tooltips.ingredients} placement="top" animation="scale" duration={200} theme="dark" arrow={true} delay={[100, 0]} maxWidth={380} interactive={true} trigger="mouseenter focus click">
-                  <span className="icon-wrapper"><FaInfoCircle className="card-info" /></span>
+                  <span className="icon-wrapper" onClick={(e) => e.stopPropagation()} onKeyDown={(e) => e.stopPropagation()}><FaInfoCircle className="card-info" /></span>
                 </Tippy>
               </div>
               <div className="scrollable-content">

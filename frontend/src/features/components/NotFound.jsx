@@ -4,7 +4,7 @@
 // design scheme as the rest of the app (see App.css): cream surface, deep
 // maroon primary, orange accent, Plus Jakarta Sans.
 import { Link, useLocation, useNavigate } from 'react-router-dom';
-import { FaUtensils, FaHome, FaArrowLeft } from 'react-icons/fa';
+import { FaUtensils, FaHome, FaArrowLeft, FaChartLine } from 'react-icons/fa';
 import './NotFound.css';
 
 const NotFound = () => {
@@ -34,7 +34,11 @@ const NotFound = () => {
         )}
 
         <div className="not-found-actions">
-          <Link to="/" className="btn-primary not-found-btn">
+          <Link to="/dashboard" className="btn-primary not-found-btn">
+            <FaChartLine aria-hidden="true" />
+            Go to Dashboard
+          </Link>
+          <Link to="/" className="btn-secondary not-found-btn">
             <FaHome aria-hidden="true" />
             Back to Home
           </Link>

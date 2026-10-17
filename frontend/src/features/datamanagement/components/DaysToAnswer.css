@@ -29,10 +29,65 @@
   color: #1c2632;
 }
 
-.days-to-answer__title {
-  margin: 0 0 6px;
-  font-size: 18px;
+.days-to-answer__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  width: 100%;
+  margin: 0;
+  padding: 4px 0;
+  border: 0;
+  background: none;
+  cursor: pointer;
+  text-align: left;
   color: #7a0101;
+}
+
+.days-to-answer__header:focus-visible {
+  outline: 2px solid #7a0101;
+  outline-offset: 3px;
+  border-radius: 6px;
+}
+
+.days-to-answer__heading {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 18px;
+  font-weight: 700;
+}
+
+.days-to-answer__count {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 24px;
+  height: 24px;
+  padding: 0 8px;
+  border-radius: 999px;
+  font-size: 13px;
+  font-weight: 700;
+  color: #ffffff;
+  background: #a31d1d;
+}
+
+.days-to-answer__chevron {
+  flex-shrink: 0;
+  color: #7a0101;
+  transition: transform 0.2s ease;
+}
+
+.days-to-answer__chevron.is-open {
+  transform: rotate(180deg);
+}
+
+.days-to-answer__body {
+  padding-top: 10px;
+}
+
+.days-to-answer__body[hidden] {
+  display: none;
 }
 
 .days-to-answer__intro {
