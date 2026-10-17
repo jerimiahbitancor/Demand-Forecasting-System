@@ -194,18 +194,18 @@ const FullyOperational = ({ initialState, onRefreshState }) => {
       const accuracyBeatsBaseline = summary.forecastAccuracy?.beatsBaseline ?? null;
       const baselineValue = summary.forecastAccuracy?.baselineValue;
       const baselineAccuracy = baselineValue != null ? Math.round(baselineValue * 10) / 10 : null;
-      const stockAlerts = summary.stockAlerts || { Critical: 0, Low: 0, Normal: 0, Excess: 0 };
-      // Headline total = all tracked ingredients, so it always equals the sum
-      // of the Critical/Low/Normal/Excess breakdown shown in the card.
-      const stockAlert = (stockAlerts.Critical || 0) + (stockAlerts.Low || 0)
-        + (stockAlerts.Normal || 0) + (stockAlerts.Excess || 0);
-
-      const stockBreakdown = [
-        { count: stockAlerts.Critical || 0, label: 'Critical', color: '#ef4444' },
-        { count: stockAlerts.Low || 0, label: 'Low', color: '#eab308' },
-        { count: stockAlerts.Normal || 0, label: 'Normal', color: '#22c55e' },
-        { count: stockAlerts.Excess || 0, label: 'Excess', color: '#3b82f6' }
-      ];
+      // Local name on purpose: the component also has a render-scope
+      // `stockCounts` declared AFTER the `if (loading) return`. Referencing
+      // that one from here threw "Cannot access before initialization".
+      const rawStock = summary.stockAlerts || {};
+      const summaryStockCounts = {
+        Critical: Number(rawStock.Critical) || 0,
+        Low: Number(rawStock.Low) || 0,
+        Normal: Number(rawStock.Normal) || 0,
+        Excess: Number(rawStock.Excess) || 0,
+      };
+      // Headline = ingredients that need restocking (Critical + Low).
+      const stockAlert = summaryStockCounts.Critical + summaryStockCounts.Low;
 
       setDashboardData({
         predictedSales,
@@ -216,7 +216,7 @@ const FullyOperational = ({ initialState, onRefreshState }) => {
         accuracyBeatsBaseline,
         baselineAccuracy,
         stockAlert,
-        stockCounts,
+        stockCounts: summaryStockCounts,
         predictedSalesYesterday,
         // Today's forecast vs yesterday's actual sales (labelled on the badge).
         salesTrend: actualSales ? Math.round((predictedSales - actualSales) / actualSales * 100) : null,
@@ -673,49 +673,63 @@ const FullyOperational = ({ initialState, onRefreshState }) => {
           </div>
 
           {/* 4. Stock Alert */}
-         {/* 4. Stock Alert */}
-<div className="metric-card" style={{ borderTop: `4px solid ${stockColor}` }}>
-  <div className="card-header">
-    <h3 className="card-title">Stock Alert</h3>
-    <Tippy content={tooltips.stock} placement="top" animation="scale" duration={200} theme="dark" arrow={true} delay={[100, 0]} maxWidth={380} interactive={true} trigger="mouseenter focus click">
-      <span className="icon-wrapper"><FaInfoCircle className="card-info" /></span>
-    </Tippy>
-  </div>
-  
-  <div className="metric-value-group">
-    <span className="metric-value" style={{ color: stockColor }}>{dashboardData.stockAlert ?? '—'}</span>
-  </div>
-  
-  {/* Dynamic Stock Alert Breakdown */}
-  <div style={{
-    display: 'flex',
-    gap: '16px',
-    justifyContent: 'center',
-    marginTop: '8px',
-    marginBottom: '12px'
-  }}>
-    {dashboardData.stockBreakdown && dashboardData.stockBreakdown.map((item, index) => (
-      <div key={index} style={{ 
-        display: 'flex', 
-        flexDirection: 'column', 
-        alignItems: 'center',
-        gap: '2px'
-      }}>
-        <span style={{ 
-          fontSize: '24px', 
-          fontWeight: 'bold', 
-          color: item.color,
-          lineHeight: '1'
-        }}>{item.count ?? '—'}</span>
-        <span style={{ fontSize: '10px', color: '#9ca3af' }}>{item.label}</span>
-      </div>
-    ))}
-  </div>
-  
-  <p className="metric-subtext" style={{ marginTop: '4px' }}>
-    {dashboardData.stockAlert != null ? 'Ingredients compared with the latest forecast' : 'No stock data yet'}
-  </p>
-</div>
+          <div className="metric-card" style={{ borderTop: `4px solid ${stockColor}` }}>
+            <div className="card-header">
+              <h3 className="card-title">Stock Alert</h3>
+              <Tippy content={tooltips.stock} placement="top" animation="scale" duration={200} theme="dark" arrow={true} delay={[100, 0]} maxWidth={380} interactive={true} trigger="mouseenter focus click">
+                <span className="icon-wrapper"><FaInfoCircle className="card-info" /></span>
+              </Tippy>
+            </div>
+
+            <div className="metric-value-group stock-headline">
+              <span className="metric-value" style={{ color: stockColor }}>{dashboardData.stockAlert ?? '—'}</span>
+              {dashboardData.stockAlert != null && (
+                <span className="stock-headline-label">
+                  {dashboardData.stockAlert === 1 ? 'ingredient needs restocking' : 'ingredients need restocking'}
+                </span>
+              )}
+            </div>
+
+            {stockTotal > 0 && (
+              <div
+                className="stock-bar"
+                role="img"
+                aria-label={STOCK_STATUSES.map((st) => `${stockCounts[st.key]} ${st.label}`).join(', ')}
+              >
+                {STOCK_STATUSES.filter((st) => stockCounts[st.key] > 0).map((st) => (
+                  <span
+                    key={st.key}
+                    className="stock-bar-segment"
+                    style={{ flexGrow: stockCounts[st.key], backgroundColor: st.color }}
+                  />
+                ))}
+              </div>
+            )}
+
+            {stockCounts && (
+              <ul className="stock-grid">
+                {STOCK_STATUSES.map((st) => (
+                  <li key={st.key} className={`stock-grid-item${stockCounts[st.key] === 0 ? ' stock-grid-item--zero' : ''}`}>
+                    <span
+                      className="stock-dot"
+                      aria-hidden="true"
+                      style={{ backgroundColor: st.color, opacity: stockCounts[st.key] === 0 ? 0.4 : 1 }}
+                    />
+                    <span className="stock-grid-count">{stockCounts[st.key]}</span>
+                    <span>{st.label}</span>
+                  </li>
+                ))}
+              </ul>
+            )}
+
+            <p className="metric-footnote">
+              {stockCounts == null
+                ? 'No stock data yet'
+                : stockTotal > 0
+                  ? `Of ${stockTotal} ingredients used in recipes, vs today's forecast`
+                  : 'No recipe ingredients to compare yet'}
+            </p>
+          </div>
         </div>
 
         {/* Main Content Area */}
@@ -762,7 +776,7 @@ const FullyOperational = ({ initialState, onRefreshState }) => {
                   <LineChart data={panels.chart.rows}>
                     <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" />
                     <XAxis dataKey="day" stroke="#6b7280" />
-                    <YAxis stroke="#6b7280" label={{ value: 'Plates', angle: -90, position: 'insideLeft', fill: '#6b7280' }} />
+                    <YAxis stroke="#6b7280" label={{ value: 'Items sold', angle: -90, position: 'insideLeft', fill: '#6b7280' }} />
                     <Tooltip content={<CustomTooltip />} />
                     <Legend />
                     <Line type="monotone" dataKey="actual" stroke="#22c55e" strokeWidth={2} dot={{ r: 4 }} activeDot={{ r: 6 }} name="Actual Sales" connectNulls={false} />
@@ -773,7 +787,7 @@ const FullyOperational = ({ initialState, onRefreshState }) => {
                   <BarChart data={panels.chart.rows}>
                     <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" />
                     <XAxis dataKey="day" stroke="#6b7280" />
-                    <YAxis stroke="#6b7280" label={{ value: 'Plates', angle: -90, position: 'insideLeft', fill: '#6b7280' }} />
+                    <YAxis stroke="#6b7280" label={{ value: 'Items sold', angle: -90, position: 'insideLeft', fill: '#6b7280' }} />
                     <Tooltip content={<CustomTooltip />} />
                     <Legend />
                     <Bar dataKey="actual" fill="#22c55e" name="Actual Sales" />
@@ -784,7 +798,7 @@ const FullyOperational = ({ initialState, onRefreshState }) => {
                   <ComposedChart data={panels.chart.rows}>
                     <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" />
                     <XAxis dataKey="day" stroke="#6b7280" />
-                    <YAxis stroke="#6b7280" label={{ value: 'Plates', angle: -90, position: 'insideLeft', fill: '#6b7280' }} />
+                    <YAxis stroke="#6b7280" label={{ value: 'Items sold', angle: -90, position: 'insideLeft', fill: '#6b7280' }} />
                     <Tooltip content={<CustomTooltip />} />
                     <Legend />
                     <Bar dataKey="actual" fill="#22c55e" name="Actual Sales" />
