@@ -21,12 +21,12 @@ import { useNavigate } from "react-router-dom";
 import { FaArrowRight, FaDatabase, FaRedo, FaUpload, FaClipboardList } from "react-icons/fa";
 import { RiErrorWarningLine } from "react-icons/ri";
 import Swal from "../../../utils/swal";
+import { lowAccuracyNotice } from "../../../utils/accuracyText.js";
 import "./DashboardNotices.css";
 
 const API_URL = import.meta.env.VITE_API_URL || "http://localhost:5000/api";
 const getAuthToken = () => sessionStorage.getItem("access_token") || localStorage.getItem("token");
 
-const pct = (value) => (typeof value === "number" ? value.toFixed(1) : null);
 const plural = (n, word) => `${n} ${word}${n === 1 ? "" : "s"}`;
 
 // "2026-09-28" -> "Sep 28, 2026". Built from its parts: new Date("YYYY-MM-DD")
@@ -113,18 +113,14 @@ const DashboardNotices = ({ attention, mapping, onRefreshState }) => {
   }
 
   if (attention?.isLowAccuracy) {
-    const accuracy = pct(attention.accuracy);
-    const baseline = pct(attention.baselineAccuracy);
+    // isLowAccuracy = the forecast does not beat the weekly average.
+    // Wording lives in utils/accuracyText.js.
     notices.push({
       key: "accuracy",
       tone: "warn",
       icon: <RiErrorWarningLine />,
       title: "Forecast accuracy",
-      text:
-        accuracy && baseline
-          ? `${accuracy}% accurate vs ${baseline}% for a simple 7-day average. Treat forecasts as a planning guide.`
-          : "The forecast is not yet better than a simple 7-day average. " +
-            "Use the forecast as a planning guide, not an exact number.",
+      text: lowAccuracyNotice(attention.accuracy),
       actionLabel: "View details",
       onAction: () => navigate("/forecasting"),
     });

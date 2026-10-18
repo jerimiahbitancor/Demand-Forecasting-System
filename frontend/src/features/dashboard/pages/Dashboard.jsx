@@ -4,6 +4,7 @@ import toast from 'react-hot-toast';
 import apiClient from '../../../services/apiClient';
 import usePolling from '../../../hooks/usePolling';
 import { describeChange, onDataChanged } from '../../../utils/appEvents';
+import { DASHBOARD_TIMEOUT_MS } from '../utils/dashboardTimeout.js';
 import './Dashboard.css';
 
 import DashboardLoading from '../components/DashboardLoading.jsx';
@@ -142,7 +143,7 @@ const loadScreen = async (nextKey) => {
 // which are real answers. usePolling keeps the last good state and reports
 // the error instead.
 const loadDashboardState = async (signal) => {
-  const response = await apiClient.get('/upload/dashboard-state', { signal });
+  const response = await apiClient.get('/upload/dashboard-state', { signal, timeout: DASHBOARD_TIMEOUT_MS });
   const payload = response.data.success ? response.data.data : null;
   let state = payload ? payload.state : 'no-data';
 
@@ -150,7 +151,7 @@ const loadDashboardState = async (signal) => {
   // owner just dropped can still read as 'no-data' here. Ask whether an
   // upload exists at all before believing that.
   if (state === 'no-data') {
-    const uploadsResponse = await apiClient.get('/upload?limit=1', { signal });
+    const uploadsResponse = await apiClient.get('/upload?limit=1', { signal, timeout: DASHBOARD_TIMEOUT_MS });
     const uploadCount = uploadsResponse.data.count
       || uploadsResponse.data.data?.length
       || 0;

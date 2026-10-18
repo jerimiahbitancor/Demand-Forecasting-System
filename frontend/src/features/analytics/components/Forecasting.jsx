@@ -1,5 +1,5 @@
 // components/Forecasting.jsx
-import { useState, useEffect, useMemo, useCallback } from "react";
+import { useState, useEffect, useMemo, useCallback, useRef } from "react";
 import axios from "axios";
 import toast from "react-hot-toast";
 import Swal from '../../../utils/swal';
@@ -19,6 +19,19 @@ import "./shared/InfoBanner.css";
 import "./Forecasting.css";
 import { authService } from "../../../services/authService.js";
 import { roundItems, formatItemsSold } from "../../../utils/formatItemsSold.js";
+import { toYmd, fromYmd } from "../../../utils/localDate.js";
+import { accuracyPercent, accuracyVerdict, accuracyOffByLine, ACCURACY_HELP_SENTENCES } from "../../../utils/accuracyText.js";
+import { shortDateLabel } from "../../dashboard/utils/dashboardPanels.js";
+import {
+  LineChart as RechartsLineChart,
+  Line,
+  XAxis,
+  YAxis,
+  CartesianGrid,
+  Tooltip,
+  ReferenceLine,
+  ResponsiveContainer,
+} from "recharts";
 
 const API_URL = import.meta.env.VITE_API_URL || "http://localhost:5000/api";
 
@@ -29,7 +42,7 @@ function formatPeso(value) {
 
 function formatDisplayDate(dateStr) {
   if (!dateStr) return "—";
-  const d = new Date(dateStr);
+  const d = /^\d{4}-\d{2}-\d{2}$/.test(String(dateStr)) ? fromYmd(dateStr) : new Date(dateStr);
   if (Number.isNaN(d.getTime())) return dateStr;
   return d.toLocaleDateString("en-US", { month: "long", day: "numeric", year: "numeric" });
 }
@@ -39,11 +52,6 @@ function formatDisplayDateTime(dateStr) {
   const d = new Date(dateStr);
   if (Number.isNaN(d.getTime())) return dateStr;
   return `${d.toLocaleDateString("en-US", { month: "long", day: "numeric", year: "numeric" })} • ${d.toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" })}`;
-}
-
-function shortDayLabel(dateStr) {
-  const d = new Date(dateStr);
-  return Number.isNaN(d.getTime()) ? dateStr : d.toLocaleDateString("en-US", { weekday: "short" });
 }
 
 // Shared by the live page view AND handleGenerateReport (which re-fetches
@@ -74,27 +82,7 @@ function buildPredictionSet(predictionRows, revenueMode) {
     };
   });
 
-  const byDate = new Map();
-  for (const r of predictionRows) {
-    const bucket = byDate.get(r.date) || { date: r.date, actual: 0, forecast: 0, hasActual: false };
-    bucket.forecast += revenueMode ? Number(r.forecastRevenue || 0) : Number(r.forecastQty || 0);
-    if (r.actualQty !== null) {
-      bucket.actual += revenueMode ? Number(r.actualRevenue || 0) : Number(r.actualQty || 0);
-      bucket.hasActual = true;
-    }
-    byDate.set(r.date, bucket);
-  }
-  const today = new Date().toISOString().slice(0, 10);
-  const points = Array.from(byDate.values())
-    .sort((a, b) => a.date.localeCompare(b.date))
-    .map((pt) => ({
-      label: shortDayLabel(pt.date),
-      actual: pt.hasActual ? pt.actual : 0,
-      forecast: pt.forecast,
-      future: pt.date > today,
-    }));
-
-  return { points, rows };
+  return { rows };
 }
 
 // ---------------------------------------------------------------------
@@ -106,103 +94,29 @@ const tooltips = {
       <strong style={{ color: '#FEB161', display: 'block', marginBottom: '6px' }}>
         Forecast Accuracy
       </strong>
-      This tells you how close your forecasts have been to what actually happened.
-      <br/><br/>
-      We check it by comparing the forecast against the simplest thing you
-      could do instead: just averaging the last 7 days. If the forecast is
-      closer to your real sales than that average, it is worth using.
-      <br/><br/>
-      <div style={{ margin: '8px 0' }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '4px' }}>
-          <span style={{ color: '#22c55e', fontWeight: 'bold' }}>●</span>
-          <span><strong>Better than a simple average</strong> — the forecast is adding real value.</span>
-        </div>
-        <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-          <span style={{ color: '#fbbf24', fontWeight: 'bold' }}>●</span>
-          <span><strong>Not yet better</strong> — upload more sales data and it should improve.</span>
-        </div>
-      </div>
-      <br/>
-      Accurate forecasts help you order ingredients closer to actual demand, reducing waste and stockouts.
-      <br/><br/>
-      <span style={{ color: '#94a3b8', fontSize: '12px' }}>
-        Accuracy = 100% − WMAPE, where WMAPE = total servings missed ÷ total
-        servings sold. Counting one total against another keeps a dish that
-        sells one or two a day from swamping the number.
-      </span>
+      {ACCURACY_HELP_SENTENCES.join(' ')}
     </div>
   ),
-  
-  demandPrediction: (
-    <div style={{ padding: '4px 0', fontSize: '13px', lineHeight: '1.6' }}>
-      <strong style={{ color: '#FEB161', display: 'block', marginBottom: '6px' }}>
-        Prediction
-      </strong>
-      This shows how many servings of each dish you're expected to sell.
-      <br/><br/>
-      <div style={{ margin: '8px 0' }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '4px' }}>
-          <span style={{ display: 'inline-block', width: '20px', height: '3px', background: '#22c55e', borderRadius: '2px' }}></span>
-          <span><strong>Green Line</strong> = What actually sold</span>
-        </div>
-        <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '4px' }}>
-          <span style={{ display: 'inline-block', width: '20px', height: '3px', background: '#60a5fa', borderRadius: '2px' }}></span>
-          <span><strong>Blue Line</strong> = What the system predicted</span>
-        </div>
-        <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-          <span style={{ display: 'inline-block', width: '20px', height: '3px', background: '#1e40af', borderRadius: '2px' }}></span>
-          <span><strong>Purple Line</strong> = What's predicted for the coming days</span>
-        </div>
-      </div>
-      <br/>
-      When blue and green stay close together, the system is reading your business accurately.
-      <br/><br/>
-      <span style={{ color: '#94a3b8', fontSize: '12px' }}>
-        ŷ_i = Σ(k=1 to K) f_k(x_i) — XGBoost prediction output
-      </span>
-    </div>
-  ),
-  
+
   salesPrediction: (
     <div style={{ padding: '4px 0', fontSize: '13px', lineHeight: '1.6' }}>
       <strong style={{ color: '#FEB161', display: 'block', marginBottom: '6px' }}>
-        Sales Prediction
+        Sales and Demand Prediction
       </strong>
-      This shows your expected income based on predicted servings sold, multiplied by each item's price.
+      <strong>Demand</strong> shows how many items of your products are expected to sell.
+      {' '}<strong>Sales</strong> shows what those items are worth (items × price).
       <br/><br/>
-      Use this for daily and weekly financial planning.
-      <br/><br/>
-      <span style={{ color: '#94a3b8', fontSize: '12px' }}>
-        Forecasted Revenue = ŷ_i × Unit Price
-      </span>
-    </div>
-  ),
-  
-  modelInsights: (
-    <div style={{ padding: '4px 0', fontSize: '13px', lineHeight: '1.6' }}>
-      <strong style={{ color: '#FEB161', display: 'block', marginBottom: '6px' }}>
-        Model Insights
-      </strong>
-      This shows when your forecast model was last trained and when the next forecast runs.
-      <br/><br/>
-      Forecasts refresh automatically on a schedule (daily and weekly), or you can generate one on demand.
-    </div>
-  ),
-  
-  accuracyOverTime: (
-    <div style={{ padding: '4px 0', fontSize: '13px', lineHeight: '1.6' }}>
-      <strong style={{ color: '#FEB161', display: 'block', marginBottom: '6px' }}>
-        Accuracy Over Time
-      </strong>
-      Plots the accuracy of each training, oldest first, next to what a
-      simple 7-day average scored on the same days.
-      <br/><br/>
-      Trainings from before the accuracy measure changed are left out rather
-      than drawn as zero, so the line may start later than your first training.
-      <br/><br/>
-      <span style={{ color: '#94a3b8', fontSize: '12px' }}>
-        Accuracy % = 100% − WMAPE
-      </span>
+      <div style={{ margin: '8px 0' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '4px' }}>
+          <span style={{ display: 'inline-block', width: '20px', height: '3px', background: '#0F9918', borderRadius: '2px' }}></span>
+          <span><strong>Green, solid</strong> = what actually sold</span>
+        </div>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+          <span style={{ display: 'inline-block', width: '20px', height: '3px', background: '#3354BA', borderRadius: '2px' }}></span>
+          <span><strong>Blue, dashed</strong> = the forecast</span>
+        </div>
+      </div>
+      Hover over the chart to see the numbers for a day. A gap means the store was closed.
     </div>
   ),
 };
@@ -211,186 +125,117 @@ const tooltips = {
 // Chart Components
 // ---------------------------------------------------------------------
 
-// Path through the non-null values; a null breaks the line (a gap), it is
-// never drawn as 0.
-function buildGappedPath(values, xOf, yOf) {
-  let path = "";
-  let penDown = false;
-  values.forEach((v, i) => {
-    if (v === null || v === undefined || Number.isNaN(Number(v))) {
-      penDown = false;
-      return;
-    }
-    path += `${penDown ? "L" : "M"}${xOf(i).toFixed(1)},${yOf(Number(v)).toFixed(1)} `;
-    penDown = true;
-  });
-  return path.trim();
+// "2026-10-18" -> "Sun, Oct 18, 2026" for chart hover boxes.
+function longDateLabel(ymd) {
+  const d = fromYmd(ymd);
+  return d && !Number.isNaN(d.getTime())
+    ? d.toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric", year: "numeric" })
+    : String(ymd);
 }
 
-function shortDate(dateStr) {
-  const d = new Date(`${dateStr}T00:00:00`);
-  return Number.isNaN(d.getTime()) ? dateStr : d.toLocaleDateString("en-US", { month: "short", day: "numeric" });
-}
-
-// K3: fewer than 3 trainings -> two bars (model vs 7-day average) for the
-// latest training; 3 or more -> a line per training, x = training time.
+// The accuracy line appears from 3 trainings on; with fewer, the card shows
+// just the number.
 const ACCURACY_TREND_MIN_TRAININGS = 3;
 
-function AccuracyChart({ history }) {
-  if (!history.length) {
-    return (
-      <EmptyState
-        title="No accuracy yet"
-        message="Accuracy appears here after the first training."
-      />
-    );
-  }
-
-  if (history.length < ACCURACY_TREND_MIN_TRAININGS) {
-    const latest = history[history.length - 1];
-    const bars = [
-      { label: "Forecast", value: latest.accuracy, className: "accuracy-bar-fill--model" },
-      { label: "7-day average", value: latest.baselineAccuracy, className: "accuracy-bar-fill--baseline" },
-    ];
-    return (
-      <div className="accuracy-bars">
-        {latest.trainedAtText && <p className="chart-block-subtitle">Training of {latest.trainedAtText}</p>}
-        {bars.map((bar) => (
-          <div className="accuracy-bar-row" key={bar.label}>
-            <span className="accuracy-bar-label">{bar.label}</span>
-            <div className="accuracy-bar-track">
-              {bar.value != null && (
-                <div className={`accuracy-bar-fill ${bar.className}`} style={{ width: `${Math.max(0, Math.min(100, bar.value))}%` }} />
-              )}
-            </div>
-            <span className="accuracy-bar-value">{bar.value != null ? `${Number(bar.value).toFixed(1)}%` : "—"}</span>
-          </div>
-        ))}
-        <p className="chart-block-subtitle">The trend line appears after 3 or more trainings.</p>
-      </div>
-    );
-  }
-
-  const width = 700;
-  const height = 180;
-  const padBottom = 20;
-  const plotH = height - padBottom;
-  const all = history.flatMap((h) => [h.accuracy, h.baselineAccuracy]).filter((v) => v != null);
-  const min = Math.max(0, Math.floor((Math.min(...all) - 10) / 10) * 10);
-  const max = 100;
-  const xOf = (i) => (history.length === 1 ? width / 2 : (i / (history.length - 1)) * width);
-  const yOf = (v) => plotH - ((v - min) / (max - min || 1)) * plotH;
-  const modelPath = buildGappedPath(history.map((h) => h.accuracy), xOf, yOf);
-  const baselinePath = buildGappedPath(history.map((h) => h.baselineAccuracy), xOf, yOf);
-
+function AccuracyPointTooltip({ active, payload }) {
+  if (!active || !payload || !payload.length) return null;
+  const point = payload[0].payload;
   return (
-    <Tippy
-      content={tooltips.accuracyOverTime}
-      placement="top"
-      animation="scale"
-      duration={200}
-      theme="dark"
-      arrow={true}
-      maxWidth={350}
-      interactive={true}
-    >
-      <div className="chart-wrapper">
-        <svg viewBox={`0 0 ${width} ${height}`} className="accuracy-chart" preserveAspectRatio="none">
-          <path d={baselinePath} className="accuracy-chart-baseline" fill="none" strokeDasharray="6 4" />
-          <path d={modelPath} className="accuracy-chart-line" fill="none" />
-          {history.map((h, i) => (
-            <text key={h.modelVersion || i} x={xOf(i)} y={height - 4} className="sales-chart-label" textAnchor="middle">
-              {/* "Oct 14, 2026, 4:56 AM" (Manila, from the backend) -> "Oct 14" */}
-              {h.trainedAtText ? h.trainedAtText.split(",")[0] : shortDate(h.date)}
-            </text>
-          ))}
-        </svg>
-      </div>
-    </Tippy>
+    <div className="chart-hover-box">
+      <p className="chart-hover-title">Training of {point.when}</p>
+      <p>Accuracy: {point.accuracy != null ? `${point.accuracy}%` : "—"}</p>
+    </div>
   );
 }
 
-// K4: actual = solid line; forecast = dashed line (includes today, so it
-// joins the actual side); closed dates = a gap with a small "Closed" label.
-function LineChart({ points, revenueMode, today }) {
-  const width = 700;
-  const height = 260;
-  const padBottom = 20;
-  const plotH = height - padBottom;
-  const actualOf = (p) => (revenueMode ? p.actualRevenue : p.actual);
-  const forecastOf = (p) => {
+// One line: accuracy after each training, oldest first (Recharts, with a
+// hover box per point). No comparison line.
+function AccuracyChart({ history }) {
+  if (history.length < ACCURACY_TREND_MIN_TRAININGS) return null;
+  const data = history.map((h, i) => ({
+    key: h.modelVersion || String(i),
+    // "Oct 14, 2026, 4:56 AM" (Manila, from the backend) -> "Oct 14"
+    label: h.trainedAtText ? h.trainedAtText.split(",")[0] : shortDateLabel(h.date),
+    when: h.trainedAtText || shortDateLabel(h.date),
+    accuracy: accuracyPercent(h.accuracy),
+  }));
+  return (
+    <div className="chart-wrapper">
+      <ResponsiveContainer width="100%" height={200}>
+        <RechartsLineChart data={data} margin={{ top: 8, right: 12, bottom: 0, left: -12 }}>
+          <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" />
+          <XAxis dataKey="label" stroke="#6b7280" tick={{ fontSize: 11 }} interval="preserveStartEnd" minTickGap={16} />
+          <YAxis domain={[0, 100]} stroke="#6b7280" tick={{ fontSize: 11 }} tickFormatter={(v) => `${v}%`} />
+          <Tooltip content={<AccuracyPointTooltip />} />
+          <Line type="monotone" dataKey="accuracy" name="Accuracy" stroke="#0F9918" strokeWidth={2.5} dot={{ r: 4 }} activeDot={{ r: 6 }} connectNulls={false} />
+        </RechartsLineChart>
+      </ResponsiveContainer>
+    </div>
+  );
+}
+
+const pesoText = (value) => `₱${Math.round(Number(value)).toLocaleString("en-PH")}`;
+
+function PredictionPointTooltip({ active, payload, revenueMode }) {
+  if (!active || !payload || !payload.length) return null;
+  const point = payload[0].payload;
+  const show = (v) => (v == null ? "—" : revenueMode ? pesoText(v) : formatItemsSold(v, { withUnit: true }));
+  return (
+    <div className="chart-hover-box">
+      <p className="chart-hover-title">{longDateLabel(point.date)}{point.isToday ? " (today)" : ""}</p>
+      {point.closed ? (
+        <p>Store closed</p>
+      ) : (
+        <>
+          <p style={{ color: "#0F9918" }}>Actual: {show(point.actual)}</p>
+          <p style={{ color: "#3354BA" }}>Forecast: {show(point.forecast)}</p>
+        </>
+      )}
+    </div>
+  );
+}
+
+// Actual = solid green, forecast = dashed blue (past and coming days in one
+// line, so it joins the actual line at today), a marker at today. Closed
+// days have no values: the lines break there (a gap), never a drop to 0.
+function PredictionChart({ series, revenueMode, today }) {
+  const data = series.map((p) => {
     const past = revenueMode ? p.forecastRevenue : p.forecast;
     const ahead = revenueMode ? p.futureRevenue : p.future;
-    return past ?? ahead ?? null;
-  };
-  const values = points.flatMap((p) => [actualOf(p), forecastOf(p)]).filter((v) => v != null);
-  const max = (values.length ? Math.max(...values) : 1) * 1.1 || 1;
-  const xOf = (i) => (points.length === 1 ? width / 2 : (i / (points.length - 1)) * width);
-  const yOf = (v) => plotH - (v / max) * plotH;
-
-  const actualPath = buildGappedPath(points.map(actualOf), xOf, yOf);
-  const forecastPath = buildGappedPath(points.map(forecastOf), xOf, yOf);
-  const labelEvery = Math.max(1, Math.ceil(points.length / 8));
-  const todayIndex = points.findIndex((p) => p.date === today);
-
+    return {
+      date: p.date,
+      actual: revenueMode ? p.actualRevenue : p.actual,
+      forecast: past ?? ahead ?? null,
+      closed: Boolean(p.closed),
+      isToday: p.date === today,
+    };
+  });
+  const hasToday = data.some((p) => p.isToday);
+  const yTick = (v) => (revenueMode
+    ? `₱${Number(v) >= 1000 ? `${Math.round(Number(v) / 1000)}k` : Math.round(Number(v))}`
+    : Math.round(Number(v)).toLocaleString("en-US"));
   return (
-    <Tippy
-      content={tooltips.demandPrediction}
-      placement="top"
-      animation="scale"
-      duration={200}
-      theme="dark"
-      arrow={true}
-      maxWidth={350}
-      interactive={true}
-    >
-      <div className="chart-wrapper">
-        <svg viewBox={`0 0 ${width} ${height}`} className="sales-chart" preserveAspectRatio="none">
-          {todayIndex >= 0 && (
-            <line x1={xOf(todayIndex)} x2={xOf(todayIndex)} y1={0} y2={plotH} className="sales-chart-today" />
+    <div className="chart-wrapper">
+      <ResponsiveContainer width="100%" height={280}>
+        <RechartsLineChart data={data} margin={{ top: 12, right: 12, bottom: 0, left: 0 }}>
+          <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" />
+          <XAxis
+            dataKey="date"
+            stroke="#6b7280"
+            tick={{ fontSize: 11 }}
+            tickFormatter={shortDateLabel}
+            interval="preserveStartEnd"
+            minTickGap={24}
+          />
+          <YAxis stroke="#6b7280" tick={{ fontSize: 11 }} tickFormatter={yTick} width={56} />
+          <Tooltip content={<PredictionPointTooltip revenueMode={revenueMode} />} />
+          {hasToday && (
+            <ReferenceLine x={today} stroke="#9ca3af" strokeDasharray="4 4" label={{ value: "Today", position: "top", fill: "#6b7280", fontSize: 11 }} />
           )}
-          <path d={actualPath} className="sales-chart-line-actual" fill="none" />
-          <path d={forecastPath} className="sales-chart-line-forecast" fill="none" strokeDasharray="8 6" />
-          {points.map((p, i) => (p.closed ? (
-            <text key={`closed-${p.date}`} x={xOf(i)} y={plotH - 4} className="sales-chart-closed" textAnchor="middle">
-              Closed
-            </text>
-          ) : null))}
-          {points.map((p, i) => (i % labelEvery === 0 || i === todayIndex ? (
-            <text key={p.date} x={xOf(i)} y={height - 4} className="sales-chart-label" textAnchor="middle">
-              {i === todayIndex ? "Today" : shortDate(p.date)}
-            </text>
-          ) : null))}
-        </svg>
-      </div>
-    </Tippy>
-  );
-}
-
-// K2: never an empty cell. Rows with no value show "—" plus why, and
-// "Training records" is hidden when it is not tracked.
-function TrainingInfoList({ info }) {
-  const rows = [
-    { label: "Model status", value: info.modelStatus, className: "value--success" },
-    { label: "Last trained", value: info.lastTrained },
-    info.trainingRecords != null ? { label: "Training records", value: info.trainingRecords } : null,
-    { label: "Active products", value: info.activeProducts },
-    { label: "Latest forecast", value: info.latestForecast },
-    { label: "Next training", value: info.nextTraining },
-    { label: "Next forecast", value: info.nextForecast, className: "value--success" },
-  ].filter(Boolean);
-  return (
-    <div className="training-info">
-      <p className="training-info-title">Training Information</p>
-      <p className="training-info-subtitle">Current model status</p>
-      <dl className="training-info-list">
-        {rows.map((row) => (
-          <div className="training-info-row" key={row.label}>
-            <dt>{row.label}</dt>
-            <dd className={row.className}>{row.value}</dd>
-          </div>
-        ))}
-      </dl>
+          <Line type="monotone" dataKey="actual" name="Actual" stroke="#0F9918" strokeWidth={2.5} dot={{ r: 3 }} activeDot={{ r: 6 }} connectNulls={false} />
+          <Line type="monotone" dataKey="forecast" name="Forecast" stroke="#3354BA" strokeWidth={2.5} strokeDasharray="8 6" dot={{ r: 3 }} activeDot={{ r: 6 }} connectNulls={false} />
+        </RechartsLineChart>
+      </ResponsiveContainer>
     </div>
   );
 }
@@ -400,11 +245,14 @@ function TrainingInfoList({ info }) {
 // ---------------------------------------------------------------------
 function Forecasting() {
   const [mode, setMode] = useState("Sales");
-  const [selectedRange, setSelectedRange] = useState([new Date(), new Date()]);
+  // The picker shows the range the backend actually used (set on load);
+  // rangeParams = null means "the default": last 30 days + next 7.
+  const [selectedRange, setSelectedRange] = useState([null, null]);
+  const [rangeParams, setRangeParams] = useState(null);
+  const [fetchKey, setFetchKey] = useState(0);
   const [isReportModalOpen, setIsReportModalOpen] = useState(false);
   const [isForecastAccuracyOpen, setIsForecastAccuracyOpen] = useState(false);
   const [isSalesPredictionOpen, setIsSalesPredictionOpen] = useState(false);
-  const [isModelInsightsOpen, setIsModelInsightsOpen] = useState(false);
   const [modalSalesPage, setModalSalesPage] = useState(1);
   const [salesPage, setSalesPage] = useState(1);
   const [productQuery, setProductQuery] = useState('');
@@ -415,29 +263,62 @@ function Forecasting() {
   const [loadError, setLoadError] = useState(null);
   const [isGeneratingForecast, setIsGeneratingForecast] = useState(false);
 
-  // Pulled out of the mount-only effect below so handleGenerateForecast can
-  // call it again after a manual forecast run completes, to refresh this
-  // page's tables/charts with the rows that run just wrote.
+  // Only the newest request may update the page: a slow answer for an
+  // older range must never overwrite a newer one.
+  const requestIdRef = useRef(0);
+
+  // Also called by handleGenerateForecast after a manual run, to refresh
+  // the page with the rows that run just wrote (same range).
   const fetchForecastingAnalytics = useCallback(async ({ silent = false } = {}) => {
+    requestIdRef.current += 1;
+    const requestId = requestIdRef.current;
     if (!silent) {
       setIsLoading(true);
       setLoadError(null);
     }
     try {
       const headers = await authService.getAuthHeaders();
-      const response = await axios.get(`${API_URL}/analytics/forecasting`, { headers });
-      setApiData(response.data?.data || null);
+      const response = await axios.get(`${API_URL}/analytics/forecasting`, {
+        headers,
+        params: rangeParams || undefined,
+      });
+      if (requestId !== requestIdRef.current) return;
+      const data = response.data?.data || null;
+      setApiData(data);
+      // New rows: back to page 1, or a page that no longer exists shows empty.
+      setSalesPage(1);
+      setModalSalesPage(1);
+      // Default range: show the dates the backend chose in the picker.
+      const range = data?.prediction?.range;
+      if (!rangeParams && range?.from && range?.to) {
+        setSelectedRange([fromYmd(range.from), fromYmd(range.to)]);
+      }
     } catch (err) {
+      if (requestId !== requestIdRef.current) return;
       console.error("Error fetching forecasting analytics:", err);
       if (!silent) setLoadError(err.response?.data?.error || err.message || "Failed to load forecasting data");
     } finally {
-      if (!silent) setIsLoading(false);
+      if (!silent && requestId === requestIdRef.current) setIsLoading(false);
     }
-  }, []);
+  }, [rangeParams]);
 
   useEffect(() => {
     fetchForecastingAnalytics();
-  }, [fetchForecastingAnalytics]);
+  }, [fetchForecastingAnalytics, fetchKey]);
+
+  // The DatePicker calls onChange once both ends are picked.
+  const handleRangeChange = (value) => {
+    setSelectedRange(value);
+    if (Array.isArray(value) && value[0] && value[1]) {
+      setRangeParams({ from: toYmd(value[0]), to: toYmd(value[1]) });
+    }
+  };
+
+  // Back to the default range (last 30 days + next 7).
+  const resetRange = () => {
+    setRangeParams(null);
+    setFetchKey((k) => k + 1);
+  };
 
   // Manual "Generate Forecast" trigger — same POST /api/ml/forecast that a
   // scheduled cron job (backend/jobs/forecastScheduler.js) also calls, just
@@ -495,37 +376,13 @@ function Forecasting() {
     [apiData]
   );
   const latestAccuracy = apiData?.accuracy?.value ?? null;
-  // errorRate is WMAPE now: "off by about N% of total sales".
-  const errorRate = apiData?.accuracy?.errorRate != null ? Number(apiData.accuracy.errorRate).toFixed(1) : null;
   const beatsBaseline = apiData?.accuracy?.beatsBaseline ?? null;
-  // Two states, not four. The old four came from the Lewis (1982) MAPE
-  // bands, which do not apply to WMAPE — "good" is now defined by beating
-  // the 7-day average, so there is nothing to grade on a curve.
+  // Amber when the forecast is known NOT to beat the weekly average.
   const accuracyCssSuffix = beatsBaseline === false ? "warning" : "success";
-
-  // The average number of servings missed per dish per day, so the owner
-  // has something physical to hold on to next to the percentage. Derived
-  // from real values only; null unless we have all three.
-  const platesPerDishPerDay = (() => {
-    const mae = apiData?.modelInsights?.trainingInfo?.mae;
-    return mae != null ? Number(mae).toFixed(1) : null;
-  })();
-
-  // K3 lines, built from real numbers only; a missing value drops its line.
-  const baselineAccuracy = apiData?.accuracy?.baselineValue ?? null;
-  const baselineLine = baselineAccuracy != null
-    ? `A simple 7-day average scored ${Number(baselineAccuracy).toFixed(1)}% on the same days.`
-    : "No 7-day average was recorded for this model.";
-  const maeLine = platesPerDishPerDay
-    ? `On average the forecast was off by about ${platesPerDishPerDay} ${platesPerDishPerDay === "1.0" ? "plate" : "plates"} per product per day.`
-    : null;
-  const standingLabel = beatsBaseline === true
-    ? "Beats the 7-day average"
-    : beatsBaseline === false
-      ? "Data Needs Attention — not yet better than the 7-day average"
-      : "No 7-day average comparison recorded";
-  const ACCURACY_CONTEXT_LINE =
-    "Accuracy is measured on the most recent part of the sales history. Unusual weeks, like store closures, lower this number.";
+  // Plain wording shared with the Dashboard card (utils/accuracyText.js).
+  const accuracyWhole = accuracyPercent(latestAccuracy);
+  const accuracyVerdictLine = accuracyVerdict(beatsBaseline);
+  const accuracyOffBy = accuracyOffByLine(latestAccuracy);
 
   const predictionRows = apiData?.prediction?.rows || [];
   const predictionSeries = apiData?.prediction?.series || [];
@@ -535,59 +392,73 @@ function Forecasting() {
   const hasForecastData = predictionRows.length > 0 || predictionSeries.some((p) => p.forecast != null || p.future != null);
 
   const trainingInfoData = apiData?.modelInsights?.trainingInfo;
-  const isTrained = trainingInfoData?.modelStatus === "Trained";
-  const trainingInfo = {
-    modelStatus: trainingInfoData?.modelStatus || "Not Trained",
-    lastTrained: trainingInfoData?.lastTrained
-      || (isTrained ? "— time not recorded for this model" : "— not trained yet"),
-    latestForecast: trainingInfoData?.latestForecastRunText
-      || (trainingInfoData?.latestForecastRun ? formatDisplayDateTime(trainingInfoData.latestForecastRun) : "— no forecast has run yet"),
-    // null = not tracked per training: the row is hidden, never blank.
-    trainingRecords: trainingInfoData?.trainingRecords ?? null,
-    activeProducts: trainingInfoData ? `${trainingInfoData.activeProducts} menu item${trainingInfoData.activeProducts === 1 ? "" : "s"}` : "— could not load",
-    nextTraining: trainingInfoData?.nextTraining || "Manual (click Start Training).",
-    nextForecast: trainingInfoData?.nextForecastRunText
+  const forecastUpdates = {
+    lastUpdated: trainingInfoData?.latestForecastRunText
+      || (trainingInfoData?.latestForecastRun ? formatDisplayDateTime(trainingInfoData.latestForecastRun) : (isLoading ? "Loading…" : "— no forecast has run yet")),
+    nextUpdate: trainingInfoData?.nextForecastRunText
       || (trainingInfoData?.nextForecastRun ? formatDisplayDateTime(trainingInfoData.nextForecastRun) : "Every day at 9:00 AM"),
+    productsForecast: trainingInfoData ? trainingInfoData.activeProducts : (isLoading ? "Loading…" : "— could not load"),
   };
 
   const availableTables = [
-    { id: "sales", label: "Sales Forecast Table" },
-    { id: "demand", label: "Demand Forecast Table" },
-    { id: "model", label: "Model Insights" },
+    { id: "sales", label: "Expected Sales (₱)" },
+    { id: "demand", label: "Expected Items Sold" },
   ];
 
+  // What is expected to sell, and what it is worth, for the dates picked.
   const handleGenerateReport = async ({ format, dateRange, selectedTableIds }) => {
-    // Re-fetch for the report's OWN chosen date range — the page's
-    // already-loaded data reflects whatever default range it mounted
-    // with, not necessarily what the owner picked in this modal.
-    const [from, to] = dateRange.map((d) => d.toISOString().slice(0, 10));
-    let reportPredictionRows;
+    // Re-fetch for the report's OWN dates (local calendar dates:
+    // toISOString() would shift them a day back in Manila).
+    const [from, to] = dateRange.map((d) => toYmd(d));
+    let reportRows;
+    let reportTotals;
     try {
       const headers = await authService.getAuthHeaders();
       const response = await axios.get(`${API_URL}/analytics/forecasting`, { headers, params: { from, to } });
-      reportPredictionRows = response.data?.data?.prediction?.rows || [];
+      reportRows = response.data?.data?.prediction?.rows || [];
+      reportTotals = response.data?.data?.prediction?.totals || null;
     } catch (err) {
       console.error("Error fetching report data:", err);
       toast.error("Failed to load data for the selected date range.");
       return;
     }
 
-    if (reportPredictionRows.length === 0) {
-      toast.error("No data is available for the selected date range.");
+    if (reportRows.length === 0) {
+      toast.error("There's no forecast for these dates yet. Forecasts cover the next 7 days.");
       return;
     }
 
-    const reportSales = buildPredictionSet(reportPredictionRows, true);
-    const reportDemand = buildPredictionSet(reportPredictionRows, false);
+    const wantSales = selectedTableIds.includes("sales");
+    const wantDemand = selectedTableIds.includes("demand");
 
-    const accuracyText = latestAccuracy !== null ? `${latestAccuracy.toFixed(1)}%` : "N/A";
-    const errorRateText = errorRate !== null ? `${errorRate}%` : "N/A";
+    // Add up raw forecasts first, round once (utils/formatItemsSold.js).
+    const openRows = reportRows.filter((r) => !r.closed);
+    const itemsByDate = new Map();
+    const itemsByProduct = new Map();
+    for (const r of openRows) {
+      const qty = Number(r.forecastQty) || 0;
+      itemsByDate.set(r.date, (itemsByDate.get(r.date) || 0) + qty);
+      itemsByProduct.set(r.product, (itemsByProduct.get(r.product) || 0) + qty);
+    }
+    const expectedItemsTotal = [...itemsByDate.values()].reduce((sum, q) => sum + q, 0);
+    const busiest = [...itemsByDate.entries()].sort((a, b) => b[1] - a[1])[0] || null;
+    const topProducts = [...itemsByProduct.entries()].sort((a, b) => b[1] - a[1]).slice(0, 3);
+    const summaryText = busiest
+      ? `The busiest day is expected to be ${longDateLabel(busiest[0])}, with about ${formatItemsSold(busiest[1], { withUnit: true })}. `
+        + `Top products: ${topProducts.map(([name, qty]) => `${name} (${formatItemsSold(qty)})`).join(", ")}.`
+      : "The store is marked closed on every day in these dates.";
+
     const metrics = [
-      { label: "Forecast Accuracy", value: accuracyText, caption: "current model accuracy" },
-      { label: "Error Rate (WMAPE)", value: errorRateText, caption: "share of total servings missed" },
-      { label: "Forecast Days", value: reportSales.points.length, caption: "tracked sales points" },
-      { label: "Demand Days", value: reportDemand.points.length, caption: "tracked demand points" },
+      { label: "Expected sales", value: reportTotals ? formatPeso(reportTotals.forecastRevenue) : "—", caption: "forecast, priced products" },
+      { label: "Expected items sold", value: formatItemsSold(expectedItemsTotal), caption: "all products" },
+      { label: "Forecast accuracy", value: accuracyWhole !== null ? `${accuracyWhole}%` : "—", caption: "latest training" },
+      { label: "Days covered", value: itemsByDate.size, caption: "open days with a forecast" },
     ];
+
+    // Same labels as the page table: "No price" / "No recipe", "Closed".
+    const salesRows = buildPredictionSet(reportRows, true).rows;
+    const demandRows = buildPredictionSet(reportRows, false).rows;
+    const itemsCell = (row) => (row.forecastQty === "Closed" ? "Closed" : formatItemsSold(row.forecastQty));
 
     try {
       if (format === "pdf") {
@@ -595,30 +466,60 @@ function Forecasting() {
           dateRange,
           business: null,
           metrics,
-          insightText: `The ${mode.toLowerCase()} forecast highlights the expected business movement for the selected period. Current model accuracy sits at ${accuracyText} with an estimated error rate of ${errorRateText}.`,
-          disclaimer: "Disclaimer — Forecast values are estimates based on available history and may change as new sales data is uploaded.",
+          summaryText,
+          salesTable: wantSales ? {
+            body: salesRows.map((row) => [row.date, row.product, itemsCell(row), row.forecastRevenue, row.estCost, row.estGrossProfit]),
+            totals: [
+              "Total", "", formatItemsSold(expectedItemsTotal),
+              reportTotals ? formatPeso(reportTotals.forecastRevenue) : "—",
+              reportTotals ? formatPeso(reportTotals.estCost) : "—",
+              reportTotals ? formatPeso(reportTotals.estGrossProfit) : "—",
+            ],
+          } : null,
+          demandTable: wantDemand ? {
+            body: demandRows.map((row) => [row.date, row.product, row.actualQty === "—" ? "—" : formatItemsSold(row.actualQty), itemsCell(row)]),
+          } : null,
+          disclaimer: "Forecasts are estimates based on your past sales. They can change as new sales are uploaded.",
         });
         doc.save("sales-demand-forecast-report.pdf");
       } else {
-        const sheetMap = {
-          sales: { sheetName: "Sales Forecast", rows: reportSales.rows.map((row) => ({ ...row })) },
-          demand: { sheetName: "Demand Forecast", rows: reportDemand.rows.map((row) => ({ ...row })) },
-          model: {
-            sheetName: "Model Insights",
+        // Numbers stay numbers in Excel; unknown values keep the page's labels.
+        const sheets = [];
+        if (wantSales) {
+          sheets.push({
+            sheetName: "Expected Sales",
             rows: [
+              ...reportRows.map((r) => ({
+                "Date": formatDisplayDate(r.date),
+                "Product": r.product,
+                "Expected items": r.closed ? "Closed" : roundItems(r.forecastQty),
+                "Expected sales (₱)": r.hasPrice === false ? "No price" : r.forecastRevenue,
+                "Est. cost (₱)": r.hasRecipe === false ? "No recipe" : r.estCost,
+                "Est. gross profit (₱)": r.estGrossProfit ?? "",
+              })),
               {
-                ...trainingInfo,
+                "Date": "Total",
+                "Product": "",
+                "Expected items": roundItems(expectedItemsTotal),
+                "Expected sales (₱)": reportTotals ? reportTotals.forecastRevenue : "",
+                "Est. cost (₱)": reportTotals ? reportTotals.estCost : "",
+                "Est. gross profit (₱)": reportTotals ? reportTotals.estGrossProfit : "",
               },
             ],
-          },
-        };
-
-        generateExcel(
-          Object.entries(sheetMap)
-            .filter(([id]) => selectedTableIds.includes(id))
-            .map(([, value]) => value),
-          "sales-demand-forecast-report.xlsx"
-        );
+          });
+        }
+        if (wantDemand) {
+          sheets.push({
+            sheetName: "Expected Items Sold",
+            rows: reportRows.map((r) => ({
+              "Date": formatDisplayDate(r.date),
+              "Product": r.product,
+              "Actual items (if known)": r.actualQty ?? "—",
+              "Expected items": r.closed ? "Closed" : roundItems(r.forecastQty),
+            })),
+          });
+        }
+        generateExcel(sheets, "sales-demand-forecast-report.xlsx");
       }
       toast.success("Report generated successfully!");
     } catch (err) {
@@ -636,24 +537,31 @@ function Forecasting() {
 
   const revenueMode = mode === "Sales";
 
-  // Shared by the panel and the full-view modal.
+  // Shared by the panel and the full-view modal: the number, one verdict
+  // line (none when no comparison was recorded), one plain explanation.
   const accuracyBody = (
-    <>
-      <div className="accuracy-headline">
-        <p className={`accuracy-headline-value metric-value--${accuracyCssSuffix}`}>
-          Forecast accuracy: {latestAccuracy?.toFixed(1)}%
-        </p>
-        <p className="accuracy-headline-sub">{baselineLine}</p>
-        {maeLine && <p className="accuracy-headline-sub">{maeLine}</p>}
-        <p className={`metric-caption metric-caption--${accuracyCssSuffix}`}>{standingLabel}</p>
-        <p className="accuracy-headline-note">{ACCURACY_CONTEXT_LINE}</p>
-      </div>
-    </>
+    <div className="accuracy-headline">
+      <p className={`accuracy-headline-value metric-value--${accuracyCssSuffix}`}>
+        Forecast accuracy: {accuracyWhole}%
+      </p>
+      {accuracyVerdictLine && (
+        <p className={`metric-caption metric-caption--${accuracyCssSuffix}`}>{accuracyVerdictLine}</p>
+      )}
+      {accuracyOffBy && <p className="accuracy-headline-sub">{accuracyOffBy}</p>}
+    </div>
   );
+
+  // 3+ trainings: one line, accuracy after each training.
+  const accuracyTrend = accuracyHistory.length >= ACCURACY_TREND_MIN_TRAININGS ? (
+    <div className="chart-block">
+      <p className="chart-block-title">Accuracy after each training</p>
+      <AccuracyChart history={accuracyHistory} />
+    </div>
+  ) : null;
 
   const predictionChart = hasForecastData || predictionSeries.length > 0 ? (
     <>
-      <LineChart points={predictionSeries} revenueMode={revenueMode} today={predictionToday} />
+      <PredictionChart series={predictionSeries} revenueMode={revenueMode} today={predictionToday} />
       <div className="chart-legend">
         <span className="legend-item">
           <span className="legend-swatch legend-swatch--actual" /> {revenueMode ? "Actual Sales" : "Actual Demand"} (solid)
@@ -661,7 +569,7 @@ function Forecasting() {
         <span className="legend-item">
           <span className="legend-swatch legend-swatch--forecast" /> {revenueMode ? "Forecasted Sales" : "Forecasted Demand"} (dashed)
         </span>
-        <span className="legend-item">"Closed" = store closed that day</span>
+        <span className="legend-item">A gap = store closed that day</span>
       </div>
     </>
   ) : null;
@@ -767,35 +675,15 @@ function Forecasting() {
                 <div className="accuracy-warning-banner">
                   <span className="accuracy-warning-icon">⚠️</span>
                   <div>
-                    <p className="accuracy-warning-title">
-                      The forecast is not yet better than a simple 7-day average.
-                    </p>
-                    <p className="accuracy-warning-body">
-                      Possible reasons: not much sales history yet, sales data not uploaded recently, or an unusual stretch (holiday, closure, weather) that no pattern could have predicted.
-                    </p>
-                    <p className="accuracy-warning-body">
-                      <strong>What to do:</strong> Keep uploading your daily sales, then retrain. More history is what closes this gap.
-                    </p>
+                    <p className="accuracy-warning-title">Use the forecast as a guide for now.</p>
+                    <p className="accuracy-warning-body">More days of sales history will make it better.</p>
                   </div>
                 </div>
               )}
             </>
           )}
 
-          <div className="chart-block">
-            <p className="chart-block-title">Accuracy by training</p>
-            <AccuracyChart history={accuracyHistory} />
-            {accuracyHistory.length >= ACCURACY_TREND_MIN_TRAININGS && (
-              <div className="chart-legend">
-                <span className="legend-item">
-                  <span className="legend-swatch legend-swatch--success" /> Forecast accuracy %
-                </span>
-                <span className="legend-item">
-                  <span className="legend-swatch legend-swatch--baseline" /> 7-day average (dashed)
-                </span>
-              </div>
-            )}
-          </div>
+          {accuracyTrend}
         </section>
 
         {/* Sales and Demand Prediction */}
@@ -829,7 +717,15 @@ function Forecasting() {
           </div>
 
           <div className="analytics-filter-row">
-            <DatePicker value={selectedRange} onChange={setSelectedRange} mode="range" />
+            <DatePicker value={selectedRange} onChange={handleRangeChange} mode="range" />
+            <button
+              type="button"
+              className="filter-pill"
+              onClick={resetRange}
+              title="Last 30 days and the next 7 days"
+            >
+              Reset to default
+            </button>
             <input
               className="filter-search"
               type="search"
@@ -923,47 +819,24 @@ function Forecasting() {
         </button>
 
         <section className="analytics-card">
-          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '16px' }}>
-            <h2 className="analytics-card-title" style={{ marginBottom: 0 }}>
-              Model Insights
-              <Tippy
-                content={tooltips.modelInsights}
-                placement="bottom"
-                animation="scale"
-                duration={200}
-                theme="dark"
-                arrow={true}
-                maxWidth={350}
-                interactive={true}
-              >
-                <span className="info-icon-wrapper">
-                  <FiInfo className="info-icon" />
-                </span>
-              </Tippy>
-            </h2>
-            <button
-              type="button"
-              className="btn-expand-panel"
-              onClick={() => setIsModelInsightsOpen(true)}
-              aria-label="Expand Model Insights"
-            >
-              <FiExternalLink size={16} />
-            </button>
-          </div>
-
-          <InfoBanner variant="info">
-            Forecasts refresh automatically on a schedule — no need to upload sales data
-            just to get a new forecast. You can also generate one on demand with the
-            Generate Forecast button.
-          </InfoBanner>
-
-          <InfoBanner variant="info">
-            Daily forecasts run every morning at 9:00 AM except Monday. On Monday, a full 7-day weekly forecast is
-            generated at 9:00 AM instead.
-          </InfoBanner>
-
-
-          <TrainingInfoList info={trainingInfo} />
+          <h2 className="analytics-card-title">Forecast Updates</h2>
+          <dl className="training-info-list">
+            <div className="training-info-row">
+              <dt>Last updated</dt>
+              <dd>{forecastUpdates.lastUpdated}</dd>
+            </div>
+            <div className="training-info-row">
+              <dt>Next update</dt>
+              <dd className="value--success">{forecastUpdates.nextUpdate}</dd>
+            </div>
+            <div className="training-info-row">
+              <dt>Products being forecast</dt>
+              <dd>{forecastUpdates.productsForecast}</dd>
+            </div>
+          </dl>
+          <p className="table-footnote">
+            The forecast refreshes automatically every morning. Use <strong>Generate Forecast</strong> if you need it now.
+          </p>
         </section>
       </div>
       {isReportModalOpen && (
@@ -991,10 +864,7 @@ function Forecasting() {
           </>
         )}
 
-        <div className="chart-block">
-          <p className="chart-block-title">Accuracy by training</p>
-          <AccuracyChart history={accuracyHistory} />
-        </div>
+        {accuracyTrend}
       </ExpandableModal>
 
       {/* Expand: Sales and Demand Prediction */}
@@ -1004,7 +874,15 @@ function Forecasting() {
         title="Sales and Demand Prediction — Full View"
       >
         <div className="analytics-filter-row">
-          <DatePicker value={selectedRange} onChange={setSelectedRange} mode="range" />
+          <DatePicker value={selectedRange} onChange={handleRangeChange} mode="range" />
+          <button
+            type="button"
+            className="filter-pill"
+            onClick={resetRange}
+            title="Last 30 days and the next 7 days"
+          >
+            Reset to default
+          </button>
           <input
             className="filter-search"
             type="search"
@@ -1077,26 +955,6 @@ function Forecasting() {
         {totalsFootnote && <p className="table-footnote">{totalsFootnote}</p>}
       </ExpandableModal>
 
-      {/* Expand: Model Insights */}
-      <ExpandableModal
-        isOpen={isModelInsightsOpen}
-        onClose={() => setIsModelInsightsOpen(false)}
-        title="Model Insights — Full View"
-      >
-        <InfoBanner variant="info">
-          Forecasts refresh automatically on a schedule — no need to upload sales data
-          just to get a new forecast. You can also generate one on demand with the
-          Generate Forecast button.
-        </InfoBanner>
-
-        <InfoBanner variant="info">
-          Daily forecasts run every morning at 9:00 AM except Monday. On Monday, a full 7-day weekly forecast is
-          generated at 9:00 AM instead.
-        </InfoBanner>
-
-
-        <TrainingInfoList info={trainingInfo} />
-      </ExpandableModal>
     </>
   );
 }

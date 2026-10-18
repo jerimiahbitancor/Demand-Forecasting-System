@@ -26,7 +26,7 @@ const {
 
 const { productMergeEnabled } = require('../utils/featureFlags');
 
-const MERGE_DISABLED_MESSAGE = 'Merging is turned off for now.';
+const MERGE_DISABLED_MESSAGE = 'Combining products is turned off for now. You can still preview what would change.';
 const actorOf = (req) => req.user?.name || req.user?.email || null;
 const toId = (value) => {
   const n = Number(value);
@@ -67,7 +67,7 @@ router.get('/:id/merge-preview', authenticate, async (req, res) => {
     });
     res.json({ success: true, data });
   } catch (error) {
-    sendError(res, error, 'Could not preview this merge');
+    sendError(res, error, 'Could not preview this combine');
   }
 });
 
@@ -104,7 +104,7 @@ router.post('/:id/merge', authenticate, async (req, res) => {
     );
     res.json({ success: true, data: out });
   } catch (error) {
-    sendError(res, error, 'The merge failed. Nothing was changed.');
+    sendError(res, error, 'Combining failed. Nothing was changed.');
   }
 });
 

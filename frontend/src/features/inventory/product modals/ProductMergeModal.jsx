@@ -17,7 +17,7 @@ const ProductMergeModal = ({
   source: initialSource, initialTargetId = null, onClose, onMerged,
   // PRODUCT_MERGE_ENABLED: off -> the preview still works (read-only), but
   // Confirm is disabled.
-  mergeEnabled = false, mergeDisabledMessage = 'Merging is turned off for now.',
+  mergeEnabled = false, mergeDisabledMessage = 'Combining products is turned off for now. You can still preview what would change.',
 }) => {
   const [source, setSource] = useState(initialSource);
   const [products, setProducts] = useState([]);
@@ -69,7 +69,7 @@ const ProductMergeModal = ({
       })
       .catch((error) => {
         if (!cancelled) {
-          setPreviewState({ key: previewKey, data: null, error: error.apiError?.message || 'Could not preview this merge.' });
+          setPreviewState({ key: previewKey, data: null, error: error.apiError?.message || 'Could not check what would change.' });
         }
       });
     return () => { cancelled = true; };
@@ -102,10 +102,10 @@ const ProductMergeModal = ({
         modifierKeyword: keyword || undefined,
       });
       const r = res.data?.data?.result || {};
-      toast.success(`Merged "${source.name}" into "${target.name}": ${r.days_moved ?? preview.daysMoved} day(s) of sales moved.`);
+      toast.success(`Combined "${source.name}" with "${target.name}": ${r.days_moved ?? preview.daysMoved} day(s) of sales moved.`);
       onMerged && onMerged(res.data?.data);
     } catch (error) {
-      toast.error(error.apiError?.message || 'The merge failed. Nothing was changed.');
+      toast.error(error.apiError?.message || 'Combining failed. Nothing was changed.');
       setMerging(false);
     }
   };
@@ -115,18 +115,21 @@ const ProductMergeModal = ({
   return (
     <InventoryModal className="modal-md product-merge-modal" onClose={close}>
       <div className="modal-header inventory-modal-header">
-        <h3 className="modal-title">Merge Product</h3>
-        <button className="modal-close-btn" onClick={close} aria-label="Close merge dialog">
+        <h3 className="modal-title">Combine with another product</h3>
+        <button className="modal-close-btn" onClick={close} aria-label="Close combine dialog">
           <FaTimes />
         </button>
       </div>
 
       <div className="modal-body inventory-modal-body">
         <p className="merge-intro">
-          Merge <strong>&quot;{source.name}&quot;</strong> into another product. Its sales history moves to the product you keep.
+          Use this when the same product was saved under two names (for example a typo
+          like &quot;Porksilog&quot; and &quot;Pork Silog&quot;). All past sales of <strong>&quot;{source.name}&quot;</strong> move
+          to the product you keep, and the other name is retired.
         </p>
 
         <label className="merge-label" htmlFor="merge-target-search">Product to keep</label>
+        <p className="merge-hint">Pick the one with the correct name. Usually it&apos;s the one with more sales history.</p>
         {target ? (
           <div className="merge-picked">
             <span><strong>{target.name}</strong></span>
@@ -161,7 +164,7 @@ const ProductMergeModal = ({
           </>
         )}
 
-        <label className="merge-label" htmlFor="merge-modifier">Modifier (optional)</label>
+        <label className="merge-label" htmlFor="merge-modifier">Is this a version without an item? (optional)</label>
         <select
           id="merge-modifier"
           className="merge-select"
@@ -169,17 +172,17 @@ const ProductMergeModal = ({
           onChange={(e) => setKeyword(e.target.value)}
           disabled={merging}
         >
-          <option value="">None — it is the same dish</option>
+          <option value="">No, it&apos;s the same product</option>
           {keywords.map((k) => <option key={k} value={k}>{k}</option>)}
         </select>
         <p className="merge-hint">
-          Use a modifier when this product is the kept one with something left out, like &quot;NO FRIES&quot;.
-          {keywords.length === 0 ? ' No modifiers are set up yet.' : ''}
+          Choose &quot;NO EGG&quot; if the old name was the same product served without egg.
+          {keywords.length === 0 ? ' No items are set up for this yet.' : ''}
         </p>
 
         {loadingPreview && <p className="merge-hint">Checking what will change...</p>}
         {previewError && <p className="merge-error">{previewError}</p>}
-        {!mergeEnabled && <p className="merge-error">{mergeDisabledMessage} You can still preview what a merge would do.</p>}
+        {!mergeEnabled && <p className="merge-error">{mergeDisabledMessage}</p>}
         {preview && !loadingPreview && (
           <div className="merge-preview">
             <h4>What will happen</h4>
@@ -198,7 +201,7 @@ const ProductMergeModal = ({
           disabled={!preview || loadingPreview || merging || !mergeEnabled}
           title={mergeEnabled ? undefined : mergeDisabledMessage}
         >
-          {merging ? 'Merging...' : <><FaCodeBranch /> Confirm merge</>}
+          {merging ? 'Combining…' : <><FaCodeBranch /> Confirm combine</>}
         </button>
       </div>
     </InventoryModal>
