@@ -76,6 +76,35 @@
   background: #fafafa;
 }
 
+/* "Which pack should I record?" — the two ways to set the purchase pack up. */
+.inventory-modal-content.inventory-form-modal .form-pack-guide {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+  margin-top: 0.4rem;
+  padding: 0.45rem 0.6rem;
+  border: 1px solid #e5e7eb;
+  border-left: 3px solid #3b82f6;
+  border-radius: 6px;
+  background: #f9fafb;
+}
+
+.inventory-modal-content.inventory-form-modal .form-pack-guide-title {
+  color: #374151;
+  font-size: 0.75rem;
+  font-weight: 600;
+}
+
+.inventory-modal-content.inventory-form-modal .form-pack-guide-line {
+  color: #6b7280;
+  font-size: 0.72rem;
+  line-height: 1.4;
+}
+
+.inventory-modal-content.inventory-form-modal .form-pack-guide-line strong {
+  color: #374151;
+}
+
 /* The cost per unit is worked out from the pack, so it is shown locked while
    the pack details are filled in. */
 .inventory-modal-content.inventory-form-modal .form-input-locked {

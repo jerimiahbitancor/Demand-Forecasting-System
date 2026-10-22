@@ -16,6 +16,7 @@ const {
 	unitFamily,
 	perUnitNoun,
 	formatPeso,
+	packScenarioGuide,
 } = await import('../src/utils/ingredientPurchase.js');
 
 const failures = [];
@@ -200,6 +201,36 @@ check(
 
 eq('one peso is written as 1.00', formatPeso(1), '₱1.00');
 eq('a big peso keeps its separators', formatPeso(1234.5), '₱1,234.50');
+
+// ---------------------------------------------------------------------------
+// The two ways to set the purchase pack up
+// ---------------------------------------------------------------------------
+eq('the guide has the two scenarios', packScenarioGuide.length, 2);
+check(
+	'the first scenario is buying the whole pack',
+	packScenarioGuide[0].title === 'You buy the whole pack',
+	packScenarioGuide[0].title
+);
+check(
+	'the second scenario is the small packs',
+	packScenarioGuide[1].title === 'You sell or use the small packs',
+	packScenarioGuide[1].title
+);
+check(
+	'the small pack example divides the bulk price by the number of packs',
+	packScenarioGuide[1].detail.includes('₱63 ÷ 6 packs'),
+	packScenarioGuide[1].detail
+);
+check(
+	'the small pack example keeps the cost per gram',
+	packScenarioGuide[1].detail.includes('Same ₱0.38/g'),
+	packScenarioGuide[1].detail
+);
+check(
+	'the small pack scenario says a recipe can say "1 pack"',
+	packScenarioGuide[1].detail.includes('"1 pack"'),
+	packScenarioGuide[1].detail
+);
 
 if (failures.length) {
 	console.log(`FAILED: ${failures.length} check(s): ${JSON.stringify(failures)}`);

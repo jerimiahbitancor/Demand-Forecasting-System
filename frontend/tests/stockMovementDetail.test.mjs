@@ -14,7 +14,7 @@ test('sale without a shortfall shows nothing extra', () => {
   assert.equal(detail, '');
 });
 
-test('sale with a shortfall shows the short amount only', () => {
+test('sale with a shortfall shows the short amount and how it is closed', () => {
   const detail = stockMovementDetail({
     transaction_type: 'sale',
     quantity: -2,
@@ -23,7 +23,7 @@ test('sale with a shortfall shows the short amount only', () => {
     notes: 'Exact requested: 2.5; rounded request: 2.5; applied: 2; shortfall: 0.5 Kilograms (kg)'
   }, 'Kilograms (kg)');
 
-  assert.equal(detail, 'Short 0.5 Kilograms (kg)');
+  assert.equal(detail, 'Short 0.5 Kilograms (kg) · a stock count clears it');
 });
 
 test('plain restock shows nothing extra', () => {

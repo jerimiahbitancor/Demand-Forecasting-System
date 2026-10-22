@@ -105,6 +105,15 @@ display: flex;
   white-space: nowrap;
 }
 
+/* The small line under a value: "a stock count clears it". */
+.inventory-history-modal .info-card-hint-inline {
+  display: block;
+  margin-top: 0.15rem;
+  font-size: 0.65rem;
+  color: #6b7280;
+  white-space: normal;
+}
+
 .inventory-history-modal .status-badge-inline {
   display: inline-block;
   padding: 0.15rem 0.6rem;
