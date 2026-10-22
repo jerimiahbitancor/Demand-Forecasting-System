@@ -195,6 +195,16 @@ export const canonicalUnitName = (unit) => {
   return meta ? meta.name : unit;
 };
 
+// The short form of a unit, used where the full name would be too long:
+//   "Grams (g)" -> "g", "Pieces (pcs)" -> "pcs", "Kilogram (kg)" -> "kg".
+export const unitShortLabel = (unit) => {
+  const text = String(unit || '').trim();
+  if (!text) return 'unit';
+  const inBrackets = /\(([^)]+)\)/.exec(text);
+  if (inBrackets && inBrackets[1].trim()) return inBrackets[1].trim();
+  return text;
+};
+
 // What the recipe-unit dropdown should offer: the active ingredient_units rows
 // and nothing else, grouped by kind and ordered small -> large. Aliases are
 // lookup keys, never separate choices. [{ label, units: [name, ...] }].

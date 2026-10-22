@@ -5,7 +5,7 @@ const { fetchAllRows } = require('../utils/fetchAllRows');
 const { addAlias } = require('./productAliasService');
 const { productNameKey } = require('../utils/productNameKey');
 const { PRODUCT_DB_STATUS_BY_DERIVED } = require('./productStatusConstants');
-const { isMissingColumnError } = require('../utils/recipeUnits');
+const { isMissingColumnError, recipeQuantityForStorage } = require('../utils/recipeUnits');
 const logger = require('../utils/logger');
 
 class MappingService {
@@ -483,7 +483,7 @@ class MappingService {
             const piRow = {
               product_id: product.id,
               ingredient_id: inventoryItem.id,
-              quantity_per_serving: String(ingredient.quantity ?? '').trim() || '1',
+              quantity_per_serving: recipeQuantityForStorage(String(ingredient.quantity ?? '').trim() || '1'),
               unit: (ingredient.unit && String(ingredient.unit).trim()) || inventoryItem.unit || 'kg'
             };
             let piResult = await supabaseAdmin.from('product_ingredients').insert(piRow);
@@ -640,7 +640,7 @@ class MappingService {
             const piRow = {
               product_id: id,
               ingredient_id: inventoryItem.id,
-              quantity_per_serving: String(ingredient.quantity ?? '').trim() || '1',
+              quantity_per_serving: recipeQuantityForStorage(String(ingredient.quantity ?? '').trim() || '1'),
               unit: (ingredient.unit && String(ingredient.unit).trim()) || inventoryItem.unit || 'kg'
             };
             let piResult = await supabaseAdmin.from('product_ingredients').insert(piRow);
