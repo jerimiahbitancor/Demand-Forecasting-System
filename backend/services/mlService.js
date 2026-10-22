@@ -26,6 +26,18 @@ const ML_TRAIN_RETRIES_429_HIBERNATE = (() => {
 const ML_TRAIN_RETRY_WAIT_MS = numEnv('ML_TRAIN_RETRY_WAIT_MS', 2000);
 const ML_TRAIN_COOLDOWN_MS = numEnv('ML_TRAIN_COOLDOWN_MS', 180000); // 3 minutes
 
+// Shared wake (ensureMlServiceAwake, used by forecast). One /health probe at a
+// time with a long timeout: a single request usually rides the whole ~60 s
+// Render cold start, while short repeated probes are what Render answers with
+// 429 hibernate-rate-limited.
+const ML_WAKE_PROBE_TIMEOUT_MS = numEnv('ML_WAKE_PROBE_TIMEOUT_MS', 70000);
+const ML_WAKE_RETRY_WAIT_MS = numEnv('ML_WAKE_RETRY_WAIT_MS', 10000);
+const ML_WAKE_TOTAL_MS = numEnv('ML_WAKE_TOTAL_MS', 120000);
+// Render sleeps after 15 minutes idle; a success within 10 minutes means awake.
+const ML_AWAKE_CACHE_MS = 10 * 60 * 1000;
+// /forecast: retries after a hibernate 429 (each one re-wakes first).
+const FORECAST_HIBERNATE_RETRIES = 2;
+
 class MlServiceError extends Error {
   constructor(message, status, details) {
     super(message);
@@ -36,14 +48,16 @@ class MlServiceError extends Error {
 }
 
 // Flask never answers 429; a 429/502/503 comes from the host in front of it
-// (Render's proxy / Cloudflare). Only /forecast is retried, once: its writes
+// (Render's proxy / Cloudflare). Only /forecast is retried: once for a plain
+// 429/502/503, up to twice (re-waking first) for a hibernate 429. Its writes
 // are upserts on (product_id, forecast_date), so a repeat is harmless.
-// /train is never retried (it uploads a new model file every run).
+// /train never goes through here (it uploads a new model file every run).
 const RETRYABLE_STATUSES = new Set([429, 502, 503]);
 const RETRY_DEFAULT_WAIT_MS = 8000;
 const RETRY_MAX_HONORED_WAIT_S = 20;
 const BODY_SNIPPET_CHARS = 300;
-const FORECAST_BUSY_MESSAGE = 'The forecast server is busy right now. Please try again in a minute.';
+const FORECAST_BUSY_MESSAGE = 'The forecast server is still starting up. Please try again in a minute.';
+const WAKE_TIMEOUT_MESSAGE = 'The forecast server is starting up. This takes about a minute. Please try again shortly.';
 
 // A connection error with one of these codes never established a connection,
 // so a training request could not have reached Flask. Anything else (a socket
@@ -187,21 +201,37 @@ async function callMlService(path, body, { retryOnBusy = false } = {}) {
   }
 
   let attempt = 0;
+  let busyRetries = 0;
+  let hibernateRetries = 0;
   for (;;) {
     attempt += 1;
     const response = await postOnce(path, body);
     const { text, data } = await readBody(response);
-    if (response.ok) return data;
+    if (response.ok) {
+      markMlServiceAwake();
+      return data;
+    }
 
     const headers = diagnosticHeaders(response);
     const snippet = String(text || '').slice(0, BODY_SNIPPET_CHARS);
-    const retryable = retryOnBusy && attempt === 1 && RETRYABLE_STATUSES.has(response.status);
+    const hibernate = isHibernate429(response);
+    // A hibernate 429 is Render refusing before Flask ran: wake, then retry.
+    const rewake = retryOnBusy && hibernate && hibernateRetries < FORECAST_HIBERNATE_RETRIES;
+    const retryable = retryOnBusy && !hibernate && busyRetries === 0 && RETRYABLE_STATUSES.has(response.status);
     const waitMs = retryable ? retryWaitMs(headers['retry-after']) : null;
     // One line per failed attempt; the details stay in the log, not the UI.
     console.error(`ml-service ${path} HTTP ${response.status} (attempt ${attempt})`
-      + `${retryable ? `, retrying in ${waitMs / 1000}s` : ''}: ${JSON.stringify({ headers, body: snippet })}`);
+      + `${retryable ? `, retrying in ${waitMs / 1000}s` : ''}`
+      + `${rewake ? ', hibernating: waking, then retrying' : ''}: ${JSON.stringify({ headers, body: snippet })}`);
 
+    if (rewake) {
+      hibernateRetries += 1;
+      lastAwakeAt = 0; // it is clearly not awake
+      await ensureMlServiceAwake(); // a wake timeout (503) passes through
+      continue;
+    }
     if (retryable) {
+      busyRetries += 1;
       await sleep(waitMs);
       continue;
     }
@@ -222,10 +252,76 @@ async function callMlService(path, body, { retryOnBusy = false } = {}) {
 async function checkHealth() {
   try {
     const response = await fetch(`${ML_SERVICE_URL}/health`, { method: 'GET' });
+    if (response.ok) markMlServiceAwake();
     return response.ok;
   } catch (error) {
     return false;
   }
+}
+
+// Last successful answer from the ML service (health, forecast or train).
+let lastAwakeAt = 0;
+let wakeInFlight = null;
+
+function markMlServiceAwake() {
+  lastAwakeAt = Date.now();
+}
+
+// One /health probe with its own long timeout. Any failure (network error,
+// timeout, 429, 502, 503, ...) is just "not awake yet".
+async function probeHealthOnce(timeoutMs) {
+  try {
+    const response = await fetch(`${ML_SERVICE_URL}/health`, {
+      method: 'GET',
+      signal: AbortSignal.timeout(timeoutMs),
+    });
+    return { ok: response.ok, status: response.status };
+  } catch (error) {
+    return { ok: false, status: null, error: (error && error.name) || 'error' };
+  }
+}
+
+async function wakeMlService() {
+  const start = Date.now();
+  // Bounded by probe count too, not only wall clock: tests (and any patched
+  // sleep) can make the clock stand still. Fast failures (an instant 429)
+  // give at most one probe per retry wait.
+  const maxProbes = Math.max(1, Math.ceil(ML_WAKE_TOTAL_MS / ML_WAKE_RETRY_WAIT_MS));
+  let probes = 0;
+  let last = null;
+  while (probes < maxProbes) {
+    const remaining = ML_WAKE_TOTAL_MS - (Date.now() - start);
+    if (remaining <= 0) break;
+    probes += 1;
+    last = await probeHealthOnce(Math.min(ML_WAKE_PROBE_TIMEOUT_MS, remaining));
+    if (last.ok) {
+      markMlServiceAwake();
+      console.log(`[mlService.wake] [${nowManila()}] outcome=awake probes=${probes} wake_ms=${Date.now() - start}`);
+      return { ok: true, probes, elapsedMs: Date.now() - start };
+    }
+    if (ML_WAKE_TOTAL_MS - (Date.now() - start) <= ML_WAKE_RETRY_WAIT_MS) break;
+    await sleep(ML_WAKE_RETRY_WAIT_MS);
+  }
+  const elapsedMs = Date.now() - start;
+  console.log(`[mlService.wake] [${nowManila()}] outcome=wakeup-timeout probes=${probes}/${maxProbes} wake_ms=${elapsedMs}`
+    + ` last=${last ? (last.status || last.error) : 'none'}`);
+  throw new MlServiceError(WAKE_TIMEOUT_MESSAGE, 503, {
+    wakeupTimedOut: true, capMs: ML_WAKE_TOTAL_MS, probes,
+  });
+}
+
+// Resolves once the ML service answers /health. Returns at once when it
+// answered anything within the last 10 minutes. Single flight: concurrent
+// callers (manual button, scheduler, boot catch-up) share one probe sequence.
+// Rejects with MlServiceError 503 { wakeupTimedOut: true } at the cap.
+function ensureMlServiceAwake() {
+  if (lastAwakeAt && Date.now() - lastAwakeAt < ML_AWAKE_CACHE_MS) {
+    return Promise.resolve({ ok: true, cached: true, probes: 0 });
+  }
+  if (!wakeInFlight) {
+    wakeInFlight = wakeMlService().finally(() => { wakeInFlight = null; });
+  }
+  return wakeInFlight;
 }
 
 async function waitForMlServiceReady(capMs, intervalMs) {
@@ -321,6 +417,7 @@ async function callTrainWithRetryAndTimeout() {
       const trainMs = Date.now() - trainStart;
 
       if (response.ok) {
+        markMlServiceAwake();
         console.log(`[mlService.train] [${nowManila()}] wake_ms=${wakeupMs} train_req_ms=${trainMs} outcome=success attempt=${attempt}/${maxAttempts}`);
         return data;
       }
@@ -461,6 +558,8 @@ const FORECAST_IN_FLIGHT_MESSAGE = 'A forecast is already running';
 // horizonDays if omitted (see app.py's /forecast).
 // Rejects with MlServiceError status 409, code 'FORECAST_IN_FLIGHT', when
 // another forecast is still running; nothing is sent to ml-service then.
+// Wakes the ML service first (inside the lock); a wake timeout rejects
+// with 503 { wakeupTimedOut: true } and /forecast is never POSTed.
 function forecast({ horizonDays = 1, runType } = {}) {
   if (forecastInFlight) {
     const error = new MlServiceError(FORECAST_IN_FLIGHT_MESSAGE, 409);
@@ -470,7 +569,9 @@ function forecast({ horizonDays = 1, runType } = {}) {
   forecastInFlight = true;
   let pending;
   try {
-    pending = callMlService('/forecast', { horizon_days: horizonDays, run_type: runType }, { retryOnBusy: true });
+    pending = ensureMlServiceAwake().then(() => callMlService(
+      '/forecast', { horizon_days: horizonDays, run_type: runType }, { retryOnBusy: true }
+    ));
   } catch (error) {
     forecastInFlight = false;
     return Promise.reject(error);
@@ -481,12 +582,15 @@ function forecast({ horizonDays = 1, runType } = {}) {
 }
 
 module.exports = {
-  train, forecast, checkHealth, isTrainingInFlight, isForecastInFlight,
-  MlServiceError, FORECAST_IN_FLIGHT_MESSAGE, FORECAST_BUSY_MESSAGE,
+  train, forecast, checkHealth, ensureMlServiceAwake, isTrainingInFlight, isForecastInFlight,
+  MlServiceError, FORECAST_IN_FLIGHT_MESSAGE, FORECAST_BUSY_MESSAGE, WAKE_TIMEOUT_MESSAGE,
   retryWaitMs,
   getTrainCooldownRemaining,
   // Tests only: replace the wait between attempts.
   _setSleepForTests(fn) { sleep = fn; },
+  // Tests only: set or forget the "answered recently" time.
+  _markAwakeForTests() { markMlServiceAwake(); },
+  _resetWakeStateForTests() { lastAwakeAt = 0; wakeInFlight = null; },
   _clearTrainCooldownForTests() { clearTrainCooldown(); },
   _setTrainCooldownForTests(ms) { setTrainCooldown(ms); },
 };

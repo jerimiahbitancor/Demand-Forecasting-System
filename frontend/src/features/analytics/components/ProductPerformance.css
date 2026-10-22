@@ -60,13 +60,16 @@
   min-width: 78px;
 }
 
-.bar--high { background-color: #e05555; }
-.bar--medium { background-color: var(--color-warning); }
-.bar--low { background-color: var(--color-success); }
+/* Demand = one neutral hue, light -> dark (red/amber are for stock problems
+   only, so a busy product never looks like an alarm). */
+.bar--high { background-color: #3730a3; }
+.bar--medium { background-color: #6366f1; }
+.bar--low { background-color: #c7d2fe; }
+.bar--none { background-color: #d1d5db; }
 
-.legend-swatch--low { background-color: var(--color-success); }
-.legend-swatch--medium { background-color: var(--color-warning); }
-.legend-swatch--high { background-color: #e05555; }
+.legend-swatch--low { background-color: #c7d2fe; }
+.legend-swatch--medium { background-color: #6366f1; }
+.legend-swatch--high { background-color: #3730a3; }
 .legend-swatch--above { background-color: var(--color-success); }
 .legend-swatch--below { background-color: #e05555; }
 
@@ -79,9 +82,10 @@
   font-weight: 600;
 }
 
-.pill--high { background-color: #fde2e2; color: #b42318; }
-.pill--medium { background-color: #fdf0d5; color: #9a6b0a; }
-.pill--low { background-color: #dcf5df; color: #0f7a16; }
+.pill--high { background-color: #3730a3; color: #ffffff; }
+.pill--medium { background-color: #c7d2fe; color: #312e81; }
+.pill--low { background-color: #eef2ff; color: #4338ca; }
+.pill--none { background-color: #f3f4f6; color: #4b5563; }
 
 .action-signal {
   color: var(--color-text-secondary);
@@ -328,3 +332,11 @@
 }
 /* "—" for a product with no ratio yet */
 .value--muted { color: var(--color-text-light); font-style: italic; }
+
+/* "High for this product (usually about 6 items/day)" under the level pill. */
+.demand-basis {
+  display: block;
+  margin-top: 4px;
+  font-size: 12px;
+  color: var(--color-text-secondary);
+}

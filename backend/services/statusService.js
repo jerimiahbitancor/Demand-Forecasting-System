@@ -201,7 +201,7 @@ function buildDefaultChecks(deps = {}) {
       if (memoryPct > t.memoryWarnPct) reasons.push(`memory ${rssMb} MB is ${memoryPct}% of ${limitMb} MB`);
       if (requests.p95Ms != null && requests.p95Ms > t.p95WarnMs) reasons.push(`slow requests: p95 ${requests.p95Ms} ms`);
       if (requests.errors5xx >= t.errors5xxWarn) reasons.push(`${requests.errors5xx} server error(s) (5xx) in the last 5 minutes`);
-      const sha = env.RAILWAY_GIT_COMMIT_SHA;
+      const sha = env.RAILWAY_GIT_COMMIT_SHA || env.RENDER_GIT_COMMIT; // Render sets RENDER_GIT_COMMIT
       return {
         status: reasons.length ? 'warn' : 'ok',
         reason: reasons.join('; ') || null,

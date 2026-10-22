@@ -307,34 +307,51 @@ test('boot catch-up: before 04:00 Manila -> nothing runs', async () => {
   assert.equal(fake.tables.notifications.length, 0);
 });
 
-test('boot catch-up: after 07:00 -> both slots once; a second boot runs nothing', async () => {
+test('boot catch-up: only the latest slot that applies (owner rule, Oct 17)', () => {
+  const expected = [[0, null], [3, null], [4, '0400'], [6, '0400'], [7, '0700'], [8, '0700'], [9, '0400'], [15, '0400'], [23, '0400']];
+  for (const [hour, slot] of expected) assert.equal(job.catchUpSlotFor(hour), slot, `hour ${hour}`);
+});
+
+test('boot catch-up: 07:30 -> 0700 only, once; a second boot runs nothing', async () => {
   seedWorld();
   setEmail(true);
   const restore = quiet();
   try {
-    assert.deepEqual(await job.runBootCatchUp({ now: SUNDAY_0730 }), ['0400', '0700']);
+    assert.deepEqual(await job.runBootCatchUp({ now: SUNDAY_0730 }), ['0700']);
     await _waitForEmails();
-    assert.deepEqual(await job.runBootCatchUp({ now: SUNDAY_0730 }), [], 'both slots have a run record today');
+    assert.deepEqual(await job.runBootCatchUp({ now: SUNDAY_0730 }), [], 'the slot has a run record today');
     await _waitForEmails();
   } finally {
     restore();
     setEmail(false);
   }
-  assert.deepEqual(fake.tables.notifications.map((n) => n.metadata.key).sort(),
-    ['upload_reminder:2026-10-10:0400', 'upload_reminder:2026-10-10:0700']);
-  assert.equal(brevoCalls.length, 2);
-  assert.deepEqual(runLogRows().map((r) => [r.d.slot, r.d.trigger]), [['0400', 'boot'], ['0700', 'boot']]);
+  assert.deepEqual(fake.tables.notifications.map((n) => n.metadata.key), ['upload_reminder:2026-10-10:0700']);
+  assert.equal(brevoCalls.length, 1);
+  assert.deepEqual(runLogRows().map((r) => [r.d.slot, r.d.trigger]), [['0700', 'boot']]);
+});
+
+test('boot catch-up: after 09:00 -> 0400 only, never 0700', async () => {
+  seedWorld();
+  const restore = quiet();
+  try {
+    // 2026-10-11 14:00 Manila
+    assert.deepEqual(await job.runBootCatchUp({ now: new Date('2026-10-11T06:00:00Z') }), ['0400']);
+  } finally {
+    restore();
+  }
+  assert.deepEqual(fake.tables.notifications.map((n) => n.metadata.key), ['upload_reminder:2026-10-10:0400']);
 });
 
 test('boot catch-up: a slot that already ran today (cron or external) is skipped; yesterday\'s run does not count', async () => {
   seedWorld();
   fake.tables.audit_logs.push(
-    { id: 1, action_type: 'upload_reminder_run', details: JSON.stringify({ slot: '0400', date: '2026-10-11', trigger: 'external', status: 'succeeded' }) },
-    { id: 2, action_type: 'upload_reminder_run', details: JSON.stringify({ slot: '0700', date: '2026-10-10', trigger: 'cron', status: 'succeeded' }) },
+    { id: 1, action_type: 'upload_reminder_run', details: JSON.stringify({ slot: '0700', date: '2026-10-11', trigger: 'external', status: 'succeeded' }) },
+    { id: 2, action_type: 'upload_reminder_run', details: JSON.stringify({ slot: '0400', date: '2026-10-10', trigger: 'cron', status: 'succeeded' }) },
   );
   const restore = quiet();
   try {
-    assert.deepEqual(await job.runBootCatchUp({ now: SUNDAY_0730 }), ['0700']);
+    assert.deepEqual(await job.runBootCatchUp({ now: SUNDAY_0730 }), [], '0700 already ran today');
+    assert.deepEqual(await job.runBootCatchUp({ now: new Date('2026-10-11T06:00:00Z') }), ['0400'], "yesterday's 0400 does not count");
   } finally {
     restore();
   }

@@ -79,37 +79,37 @@ model exists yet and it had to train one to produce a report at all).
 
 ## What's in the report
 
-Seven stages, each with a terminal table and one plot in the HTML,
-navigable from a sticky sidebar:
+Sections, in reading order (updated Oct 17 2026):
 
-1. **Data Load & Preprocessing** — pooled sales pull, validation,
-   cleaning; total daily quantity sold, all products.
-2. **Outlier Check** — per-product IQR summary; boxplot for the top 10
-   products by volume. Confirms nothing is actually removed as an
-   outlier in production today (`clean_sales_data()` only dedupes and
-   sorts) — this is a read of the real pipeline's behavior, not a
-   proposal to change it.
-3. **Chronological Train/Test Split** — the real 80/20 date-based split
-   from `model_service.chronological_split()`, shown for one
-   high-volume and one low-volume product.
-4. **Feature Engineering** — sample engineered rows for one product,
-   plus a chart of `rolling_7` against actual sales to visually confirm
-   the per-product `.transform()` grouping isn't leaking across product
-   boundaries.
-5. **Feature Importance** — bar chart with the same human-readable
-   labels as `FEATURE_LABELS` in
-   `backend/services/analyticsService.js`. **These two label sets are
-   kept in sync by hand** — there's no shared source across the
-   Python/JS boundary, so if one changes, update the other.
-6. **Evaluation Metrics** — aggregate MAE/RMSE/MAPE plus the full
-   per-product breakdown (worst-to-best MAPE), with a reference line at
-   10% (Lewis 1982's "highly accurate" threshold, cited in the paper).
-7. **Predictions** — actual vs. predicted over the test period for the
-   same two representative products. This is one-step evaluation
-   against real held-out data, not a simulated recursive multi-day
-   forecast — see the note in that section of the report for why that
-   distinction matters (it's the same reason production forecasts are
-   capped at 7 days).
+1. **Data Load & Preprocessing** — pooled sales pull, validation, cleaning.
+2. **Calendar Coverage** — open, closed and unconfirmed days.
+3. **Data Cleaning Output** — the result of the cleaning steps in DFS Data
+   Cleaning Notes v3.2 Part B: rows before/after zero fill and warm-up, and one
+   row per product (real sales days, zero-filled days, outliers, included or not).
+4. **Outlier Check / Outlier Review** — flagged days, report only; nothing is removed.
+5. **Feature Engineering** — sample engineered rows for one product.
+6. **Training Data Set** — the exact table the model learns from: a column
+   dictionary, the fit / validation / test parts, and 20 sample rows. The full
+   table (with product names and each row's part) is written to
+   `output/local/training_dataset.csv`.
+7. **Chronological Split** — fit, validation and test periods, cut by date.
+8. **Training Settings and Early Stopping** — the tuned settings, the tree count
+   early stopping chose, and the learning curve (error after each tree).
+9. **Feature Importance** — every feature's gain share, including both rolling
+   averages, plus the rolling-features-removed ablation.
+10. **Final Evaluation Metrics** — WMAPE (headline), MAE, RMSE for the model and
+    both benchmarks; skill scores; whole-store-per-day WMAPE; before vs after the
+    longest closure.
+11. **Baseline Comparison / Evaluation Metrics / Train vs Test** — per product
+    and per volume tier.
+12. **Forecast Horizon Breakdown / Predictions** — recursive backtest and
+    actual vs predicted.
+13. **Forecast Preview (Next 7 Days)** — what `/forecast` would produce now,
+    using the production `generate_forecast()`; read-only, nothing is written.
+    Per-product rows go to `output/local/forecast_preview.csv`.
+14. **Production Reality Check** — staleness, drift, previous model.
+
+The Two-Fold Time-Stability Check was removed on Oct 17 2026.
 
 ## Good source for paper figures
 

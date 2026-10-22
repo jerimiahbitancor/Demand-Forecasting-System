@@ -117,6 +117,10 @@
   box-shadow: 0 4px 20px -2px rgba(0, 0, 0, 0.05), 0 2px 10px -2px rgba(0, 0, 0, 0.03);
   border-top: 4px solid #a51c24;
   transition: transform 0.2s ease, box-shadow 0.2s ease;
+  /* Column, so each card's footnote (.metric-footnote, margin-top: auto)
+     sits on the bottom edge and the four cards line up. */
+  display: flex;
+  flex-direction: column;
 }
 
 .metric-card:hover {
@@ -134,6 +138,11 @@
 
 .metric-card.border-green {
   border-top-color: #22c55e;
+}
+
+/* Forecast Accuracy when the model does not beat the 7-day average. */
+.metric-card.border-amber {
+  border-top-color: #f59e0b;
 }
 
 .metric-card.border-red-dark {
@@ -183,6 +192,15 @@
 
 .metric-value.text-red {
   color: #ef4444;
+}
+
+.metric-value.text-amber {
+  color: #d97706;
+}
+
+/* "—" when there is no value (e.g. no sales uploaded for yesterday). */
+.metric-value.metric-value--empty {
+  color: #9ca3af;
 }
 
 .badge-success {
@@ -272,6 +290,81 @@
 
 .stock-breakdown-total .stock-breakdown-label {
   color: #6b7280;
+}
+
+.metric-subtext.metric-subtext--muted {
+  color: #9ca3af;
+}
+
+/* Small grey line pinned to the bottom of a KPI card. */
+.metric-footnote {
+  margin-top: auto;
+  padding-top: 10px;
+  font-size: 11px;
+  line-height: 1.4;
+  color: #9ca3af;
+}
+
+/* Stock Alert card (was inline styles). The colours stay inline because
+   they come from the counts. */
+.stock-headline {
+  gap: 8px;
+  align-items: baseline;
+}
+
+.stock-headline-label {
+  font-size: 13px;
+  font-weight: 500;
+  color: #4b5563;
+}
+
+.stock-bar {
+  display: flex;
+  gap: 2px;
+  height: 6px;
+  margin-top: 12px;
+  border-radius: 3px;
+  overflow: hidden;
+  background-color: #f3f4f6;
+}
+
+.stock-bar-segment {
+  flex-basis: 0;
+  min-width: 4px;
+}
+
+.stock-grid {
+  list-style: none;
+  margin: 12px 0 0;
+  padding: 0;
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 6px 12px;
+}
+
+.stock-grid-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: #4b5563;
+}
+
+.stock-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.stock-grid-count {
+  font-weight: 700;
+  color: #1f2937;
+}
+
+.stock-grid-item--zero,
+.stock-grid-item--zero .stock-grid-count {
+  color: #9ca3af;
 }
 
 /* Main Content Grid */

@@ -2,6 +2,9 @@
 const { supabaseAdmin } = require('../config/supabase');
 const { logAction } = require('../services/auditService');
 const analyticsService = require('../services/analyticsService');
+const { classifyStock } = require('../services/stockAlertService');
+const { queueStockRefresh } = require('../services/notificationService');
+const { parseRecipeQuantity, deriveUnitPrice, isMissingColumnError } = require('../utils/recipeUnits');
 const {
   parseRecipeQuantityDecimal,
   deriveUnitPrice,
@@ -262,14 +265,14 @@ const getInventoryItems = async (req, res) => {
     // Analytics > Ingredient Demand view uses, and derive status from it.
     const dailyNeeds = await analyticsService.getIngredientDailyNeeds();
 
-    const statusFor = (item) => {
-      if (item.is_archived) return 'Archived';
-      // Out of stock is always urgent, regardless of whether a forecast exists.
-      if ((Number(item.quantity) || 0) === 0) return 'Critical Stock';
-      const need = dailyNeeds.get(item.id) || 0;
-      const status = analyticsService.computeStockStatus(Number(item.quantity) || 0, need);
-      return status === 'No Forecast' ? 'No Forecast' : `${status} Stock`;
-    };
+    // One rule shared with the bell's stock alerts and the restock email
+    // (services/stockAlertService.js classifyStock): out of stock is always
+    // "Critical Stock" on this page, whether or not a forecast exists.
+    const statusFor = (item) => classifyStock({
+      quantity: item.quantity,
+      isArchived: item.is_archived,
+      need: dailyNeeds.get(item.id) || 0,
+    }).pageLabel;
 
     const totalItems = summaryData?.length || 0;
     const totalStockValue = (summaryData || []).reduce((sum, item) => {
@@ -401,6 +404,15 @@ const getInventoryItems = async (req, res) => {
     // paid off by a delivery (the delivery is stock on hand), so it is shown
     // next to the stock until a stock count clears it.
     const openShortfalls = await readOpenShortfalls(pageIds);
+    // Which forecast the statuses above are measured against, for the
+    // "As of Latest Forecast" note. Its own try/catch: a failure here must
+    // never stop the table from loading.
+    let forecastBasis = null;
+    try {
+      forecastBasis = await analyticsService.getForecastBasis();
+    } catch (basisError) {
+      console.warn('Could not load the forecast basis for Ingredient Management:', basisError.message);
+    }
 
     const data = (paginatedData || []).map((item) => ({
       ...item,
@@ -427,7 +439,8 @@ const getInventoryItems = async (req, res) => {
         normalStock: stockCounts.normalStock,
         criticalStock: stockCounts.criticalStock,
         unmappedIngredients
-      }
+      },
+      forecastBasis
     });
   } catch (error) {
     console.error('❌ Error fetching inventory:', error);
@@ -792,6 +805,11 @@ const updateInventoryItem = async (req, res) => {
       },
       message: 'Item updated successfully'
     });
+    // Stock, min_stock or unit may have changed: refresh the stock alerts.
+    // Not awaited and never throws (see queueStockRefresh).
+    queueStockRefresh('stock_edit');
+
+    res.json({ success: true, data, message: 'Item updated successfully' });
   } catch (error) {
     console.error('❌ Error updating item:', error);
     res.status(500).json({ success: false, error: error.message });
@@ -888,6 +906,9 @@ const archiveInventoryItem = async (req, res) => {
     );
 
     console.log('✅ Item archived successfully:', id);
+    // Archived ingredients have no alerts (the refresh retires them); this
+    // endpoint also un-archives. Not awaited, never throws.
+    queueStockRefresh('archive');
     res.json({ 
       success: true, 
       data, 
@@ -935,6 +956,9 @@ const restoreInventoryItem = async (req, res) => {
     );
 
     console.log('✅ Item unarchived successfully:', id);
+    console.log('✅ Item restored successfully:', id);
+    // A restored ingredient that is low alerts again. Not awaited, never throws.
+    queueStockRefresh('restore');
     res.json({
       success: true,
       data,

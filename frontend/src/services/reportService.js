@@ -9,6 +9,7 @@ import autoTable from 'jspdf-autotable';
 import * as XLSX from 'xlsx';
 import { getStoredBusinessLogo } from '../context/BusinessProfileContext';
 import { formatStockQty } from '../utils/formatStockQty.js';
+import { formatItemsSold } from '../utils/formatItemsSold.js';
 
 // ---------------------------------------------------------------------
 // Palette — pulled directly from the app's CSS variables so the PDF
@@ -24,6 +25,10 @@ const COLOR = {
   pillHighBg: [253, 226, 226], pillHighText: [180, 35, 24],   // pill--high
   pillMedBg: [253, 240, 213], pillMedText: [154, 107, 10],    // pill--medium
   pillLowBg: [220, 245, 223], pillLowText: [15, 122, 22],     // pill--low
+  // Demand level: one neutral hue, light -> dark (ProductPerformance.css pill--*).
+  demandHighBg: [55, 48, 163], demandHighText: [255, 255, 255],
+  demandMedBg: [199, 210, 254], demandMedText: [49, 46, 129],
+  demandLowBg: [238, 242, 255], demandLowText: [67, 56, 202],
 };
 
 const PAGE_MARGIN = 15; // mm
@@ -176,7 +181,8 @@ function drawMetricCards(doc, y, cards) {
     doc.text(card.label, x + cardWidth / 2, y + 6, { align: 'center' });
 
     doc.setTextColor(...(card.valueColor || COLOR.textPrimary));
-    doc.setFont('courier', 'bold');
+    // valueFont: a registered font for values courier cannot draw (₱).
+    doc.setFont(card.valueFont || 'courier', card.valueFont ? 'normal' : 'bold');
     doc.setFontSize(14);
     doc.text(String(card.value), x + cardWidth / 2, y + 14, { align: 'center' });
 
@@ -254,9 +260,25 @@ function generatedLabelNow() {
 // ---------------------------------------------------------------------
 // Report 1: Sales & Demand Forecast
 // ---------------------------------------------------------------------
-export async function buildSalesForecastPDF({ dateRange, business, metrics, insightText, disclaimer }) {
+// metrics: [{ label, value, caption }] (a value may contain ₱).
+// salesTable: { body: string[][], totals: string[] } or null (not selected)
+//   columns: Date | Product | Expected items | Expected sales | Est. cost | Est. gross profit
+// demandTable: { body: string[][] } or null (not selected)
+//   columns: Date | Product | Actual items | Expected items
+export async function buildSalesForecastPDF({
+  dateRange, business, metrics, summaryText, salesTable = null, demandTable = null, disclaimer,
+}) {
   const doc = new jsPDF({ unit: 'mm', format: 'a4' });
-  const logoDataUrl = await loadLogoBase64();
+  const [logoDataUrl, pesoFontBase64] = await Promise.all([loadLogoBase64(), loadPesoFontBase64()]);
+  // ₱ needs a font that has it; without the font file, print "PHP " instead.
+  const pesoFontReady = registerPesoFont(doc, pesoFontBase64);
+  const money = (value) => (pesoFontReady ? String(value) : String(value).split(PESO).join('PHP '));
+  const pesoCell = (data) => {
+    if (pesoFontReady && typeof data.cell.raw === 'string' && data.cell.raw.includes(PESO)) {
+      data.cell.styles.font = PESO_FONT;
+      data.cell.styles.fontStyle = 'normal';
+    }
+  };
 
   let y = drawHeader(doc, {
     reportTitle: 'Sales & Demand Forecast Report',
@@ -266,9 +288,45 @@ export async function buildSalesForecastPDF({ dateRange, business, metrics, insi
     logoDataUrl,
   });
 
-  y = drawMetricCards(doc, y, metrics);
-  y = drawTextBox(doc, y, insightText);
-  drawTextBox(doc, 260, disclaimer, { fontSize: 8, italic: false });
+  y = drawMetricCards(doc, y, metrics.map((card) => {
+    const value = money(card.value);
+    return { ...card, value, valueFont: pesoFontReady && value.includes(PESO) ? PESO_FONT : undefined };
+  }));
+  if (summaryText) y = drawTextBox(doc, y, summaryText);
+
+  if (salesTable) {
+    y = drawSectionTitle(doc, y, 'Expected sales');
+    y = drawTable(doc, y, {
+      head: ['Date', 'Product', 'Expected items', 'Expected sales', 'Est. cost', 'Est. gross profit'],
+      body: [...salesTable.body, salesTable.totals].map((row) => row.map(money)),
+      columnStyles: { 2: { halign: 'right' }, 3: { halign: 'right' }, 4: { halign: 'right' }, 5: { halign: 'right' } },
+      didParseCell: (data) => {
+        pesoCell(data);
+        // Totals row (last body row) in bold.
+        if (data.section === 'body' && data.row.index === salesTable.body.length) {
+          data.cell.styles.fontStyle = 'bold';
+          data.cell.styles.fillColor = COLOR.bgPrimary;
+        }
+      },
+    });
+  }
+
+  if (demandTable) {
+    y = drawSectionTitle(doc, y, 'Expected items sold');
+    y = drawTable(doc, y, {
+      head: ['Date', 'Product', 'Actual items (if known)', 'Expected items'],
+      body: demandTable.body,
+      columnStyles: { 2: { halign: 'right' }, 3: { halign: 'right' } },
+    });
+  }
+
+  // At the running y (never a fixed spot a long table could run into); a
+  // new page when there is no room left above the footer.
+  if (y > doc.internal.pageSize.getHeight() - 35) {
+    doc.addPage();
+    y = 20;
+  }
+  drawTextBox(doc, y, disclaimer, { fontSize: 8, italic: false });
 
   addFooterToAllPages(doc);
   return doc;
@@ -323,51 +381,48 @@ export async function buildProductPerformancePDF({
 
   y = boxY + boxHeight + 8;
 
-  // Ranked lists: Top performers (green) / Needs review (coral), side by side
-  y = drawSectionTitle(doc, y, 'Performance ratio \u2014 ranked');
-  const listTop = y;
-  doc.setFont('helvetica', 'bold');
-  doc.setFontSize(9);
-  doc.setTextColor(...COLOR.success);
-  doc.text('Top performers', PAGE_MARGIN, listTop);
-  doc.setTextColor(...COLOR.pillHighText);
-  doc.text('Needs review', PAGE_MARGIN + halfWidth + 6, listTop);
-
-  doc.setDrawColor(...COLOR.borderLight);
-  doc.line(PAGE_MARGIN, listTop + 2, PAGE_MARGIN + halfWidth, listTop + 2);
-  doc.line(PAGE_MARGIN + halfWidth + 6, listTop + 2, PAGE_MARGIN + CONTENT_WIDTH, listTop + 2);
-
-  doc.setFont('helvetica', 'normal');
-  doc.setTextColor(...COLOR.textPrimary);
-  doc.setFontSize(9);
-  topPerformers.forEach((row, i) => {
-    const rowY = listTop + 8 + i * 6;
-    doc.text(row.product, PAGE_MARGIN, rowY);
-    doc.text(row.ratio == null ? '—' : Number(row.ratio).toFixed(2), PAGE_MARGIN + halfWidth, rowY, { align: 'right' });
-  });
-  needsReview.forEach((row, i) => {
-    const rowY = listTop + 8 + i * 6;
-    doc.text(row.product, PAGE_MARGIN + halfWidth + 6, rowY);
-    doc.text(row.ratio == null ? '—' : Number(row.ratio).toFixed(2), PAGE_MARGIN + CONTENT_WIDTH, rowY, { align: 'right' });
-  });
-
-  y = listTop + 8 + Math.max(topPerformers.length, needsReview.length) * 6 + 6;
-
-  y = drawSectionTitle(doc, y, 'Demand classification \u2014 tomorrow');
+  // Ranked ratios with each product's action signal. A table (not free
+  // text) so long "What to do" lines wrap instead of running off the page.
+  y = drawSectionTitle(doc, y, 'Performance ratio — ranked');
+  const ratioBody = [
+    ...topPerformers.map((row) => ['Top performer', row.product, row.ratio == null ? '—' : Number(row.ratio).toFixed(2), row.actionSignal || '—']),
+    ...needsReview.map((row) => ['Needs review', row.product, row.ratio == null ? '—' : Number(row.ratio).toFixed(2), row.actionSignal || '—']),
+  ];
   y = drawTable(doc, y, {
-    head: ['No.', 'Product', 'Forecast Qty. (Tomorrow)', 'Demand Level', 'Action Signal'],
-    body: demandRows.map((r, i) => [i + 1, r.product, `${r.forecastQty} orders`, r.demandLevel, r.actionSignal]),
-    columnStyles: { 0: { cellWidth: 12 } },
+    head: ['', 'Product', 'Performance vs Average', 'What to do'],
+    body: ratioBody.length ? ratioBody : [['—', 'No products with a ratio in this range', '—', '—']],
+    columnStyles: { 0: { cellWidth: 26 }, 2: { cellWidth: 26, halign: 'right' } },
     didParseCell: (data) => {
-      if (data.section === 'body' && data.column.index === 3) {
-        const level = data.cell.raw;
-        if (level === 'High Demand') { data.cell.styles.fillColor = COLOR.pillHighBg; data.cell.styles.textColor = COLOR.pillHighText; }
-        else if (level === 'Medium Demand') { data.cell.styles.fillColor = COLOR.pillMedBg; data.cell.styles.textColor = COLOR.pillMedText; }
-        else if (level === 'Low Demand') { data.cell.styles.fillColor = COLOR.pillLowBg; data.cell.styles.textColor = COLOR.pillLowText; }
+      if (data.section === 'body' && data.column.index === 0) {
+        if (data.cell.raw === 'Top performer') data.cell.styles.textColor = COLOR.success;
+        else if (data.cell.raw === 'Needs review') data.cell.styles.textColor = COLOR.pillHighText;
       }
     },
   });
 
+  y = drawSectionTitle(doc, y, 'Demand classification');
+  y = drawTable(doc, y, {
+    head: ['No.', 'Date', 'Product', 'Forecast Qty.', 'Demand Level', 'Compared with its usual', 'What to do'],
+    // Forecast = an expected value (decimal); printed as whole items sold.
+    // "Compared with its usual" = the page's label under the level pill.
+    body: demandRows.map((r, i) => [i + 1, r.date, r.product, formatItemsSold(r.forecastQty, { withUnit: true }), r.demandLevel, r.demandBasis || '—', r.actionSignal]),
+    columnStyles: { 0: { cellWidth: 12 } },
+    didParseCell: (data) => {
+      if (data.section === 'body' && data.column.index === 4) {
+        const level = data.cell.raw;
+        if (level === 'High Demand') { data.cell.styles.fillColor = COLOR.demandHighBg; data.cell.styles.textColor = COLOR.demandHighText; }
+        else if (level === 'Medium Demand') { data.cell.styles.fillColor = COLOR.demandMedBg; data.cell.styles.textColor = COLOR.demandMedText; }
+        else if (level === 'Low Demand') { data.cell.styles.fillColor = COLOR.demandLowBg; data.cell.styles.textColor = COLOR.demandLowText; }
+      }
+    },
+  });
+
+  // Long tables can end near the bottom: start the disclaimer on a new page
+  // rather than drawing it into the footer.
+  if (y > doc.internal.pageSize.getHeight() - 35) {
+    doc.addPage();
+    y = 20;
+  }
   drawTextBox(doc, y, disclaimer, { fontSize: 8 });
   addFooterToAllPages(doc);
   return doc;
@@ -376,8 +431,10 @@ export async function buildProductPerformancePDF({
 // ---------------------------------------------------------------------
 // Report 3: Ingredient Demand
 // ---------------------------------------------------------------------
+// shoppingDateLabel: the day the shopping list is for ("Oct 18, 2026"), from
+// the API's own daily.date.
 export async function buildIngredientDemandPDF({
-  dateRange, business, metrics, insightText, shoppingListRows, highDemandRows, disclaimer,
+  dateRange, business, metrics, insightText, shoppingListRows, highDemandRows, disclaimer, shoppingDateLabel,
 }) {
   const doc = new jsPDF({ unit: 'mm', format: 'a4' });
   const logoDataUrl = await loadLogoBase64();
@@ -393,9 +450,9 @@ export async function buildIngredientDemandPDF({
   y = drawMetricCards(doc, y, metrics);
   y = drawTextBox(doc, y, insightText);
 
-  y = drawSectionTitle(doc, y, 'Shopping list \u2014 tomorrow');
+  y = drawSectionTitle(doc, y, `Shopping list \u2014 ${shoppingDateLabel || 'selected day'}`);
   y = drawTable(doc, y, {
-    head: ['No.', 'Ingredient', 'Link Dishes', 'Base Qty Needed', '+ Buffer', 'Total to Buy', 'Unit'],
+    head: ['No.', 'Ingredient', 'Used in', 'Base Qty Needed', '+ Buffer', 'Total to Buy', 'Unit'],
     body: shoppingListRows.map((r, i) => [
       i + 1, r.ingredient, r.linkedDishes, r.baseQty, `+ ${r.buffer}`, r.total, r.unit,
     ]),
@@ -478,7 +535,7 @@ export async function buildGroceryListPDF({
   doc.setTextColor(28, 38, 50);
   doc.setFont('helvetica', 'bold');
   doc.setFontSize(14);
-  doc.text('Grocery List', rightX, headY + 5, { align: 'right' });
+  doc.text(groceryMode === 'weekly' ? 'Grocery List (Weekly)' : 'Grocery List (Daily)', rightX, headY + 5, { align: 'right' });
   doc.setTextColor(108, 117, 125);
   doc.setFont('helvetica', 'normal');
   doc.setFontSize(7);

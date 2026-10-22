@@ -20,11 +20,12 @@ router.get('/forecasting', authenticate, async (req, res) => {
   }
 });
 
-// GET /api/analytics/product-performance?from=&to=
+// GET /api/analytics/product-performance?from=&to=&demandFrom=&demandTo=
+// from/to = both cards; demandFrom/demandTo = Demand Classification only.
 router.get('/product-performance', authenticate, async (req, res) => {
   try {
-    const { from, to } = req.query;
-    const data = await analyticsService.getProductPerformanceAnalytics({ from, to });
+    const { from, to, demandFrom, demandTo } = req.query;
+    const data = await analyticsService.getProductPerformanceAnalytics({ from, to, demandFrom, demandTo });
     res.json({ success: true, data });
   } catch (error) {
     console.error('Error building product performance analytics:', error);

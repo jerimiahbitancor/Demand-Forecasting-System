@@ -234,7 +234,9 @@ test('merge preview: counts and plain text, read-only', async () => {
   assert.equal(p.platesMoved, 5);
   assert.equal(p.recipe, 'kept_target');
   assert.equal(p.forecastsDeleted, 1);
-  assert.match(p.text, /2 day\(s\) of sales \(5 plates\) move to "Cheesy Spicy Hunggarian"/);
+  assert.match(p.text, /2 days of sales \(5 items sold\) will move to "Cheesy Spicy Hunggarian"/);
+  assert.match(p.text, /On 1 of those days both names had sales/);
+  assert.doesNotMatch(p.text, /plates|[Mm]erge "/);
   assert.match(p.text, /archived as "Cheesy Spicy Hungarian \(merged\)"/);
   assert.equal(fake.writes.length, writesBefore, 'the preview writes nothing');
 });
@@ -251,7 +253,7 @@ test('merge checks: same product, archived target, already merged, unknown modif
   };
   await fails({ sourceId: 316, targetId: 316 }, 400, /itself/);
   await fails({ sourceId: 434, targetId: 900 }, 409, /archived/);
-  await fails({ sourceId: 901, targetId: 316 }, 409, /already merged/);
+  await fails({ sourceId: 901, targetId: 316 }, 409, /already combined/);
   await fails({ sourceId: 450, targetId: 325, modifierKeyword: 'NO FRIES' }, 400, /not a modifier yet/);
   await fails({ sourceId: 434, targetId: 999 }, 404, /not found/);
   const ok = await getMergePreview(fake, { sourceId: 450, targetId: 325, modifierKeyword: ' no  rice ' });
@@ -350,13 +352,13 @@ test('G1f: PRODUCT_MERGE_ENABLED off (the default) -> POST merge is 403 MERGE_DI
   const restore = quiet();
   try {
     const settings = await call(server, 'GET', '/api/products/settings');
-    assert.deepEqual(settings.body.data, { mergeEnabled: false, mergeDisabledMessage: 'Merging is turned off for now.' });
+    assert.deepEqual(settings.body.data, { mergeEnabled: false, mergeDisabledMessage: 'Combining products is turned off for now. You can still preview what would change.' });
 
     const writesBefore = fake.writes.length;
     const blocked = await call(server, 'POST', '/api/products/434/merge', { targetId: 316 });
     assert.equal(blocked.status, 403);
     assert.equal(blocked.body.code, 'MERGE_DISABLED');
-    assert.equal(blocked.body.message, 'Merging is turned off for now.');
+    assert.equal(blocked.body.message, 'Combining products is turned off for now. You can still preview what would change.');
     assert.equal(rpcCalls.length, 0, 'merge_products never called');
     assert.equal(reconciled, 0);
     assert.equal(fake.writes.length, writesBefore, 'nothing written');

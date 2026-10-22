@@ -48,14 +48,14 @@ async function listModifierKeywords(client) {
 
 async function checkPair(client, sourceId, targetId, modifierKeyword) {
   if (!Number.isInteger(sourceId) || !Number.isInteger(targetId) || sourceId <= 0 || targetId <= 0) {
-    throw new MergeError('Choose two products to merge.');
+    throw new MergeError('Choose two products to combine.');
   }
-  if (sourceId === targetId) throw new MergeError('A product cannot be merged into itself.');
+  if (sourceId === targetId) throw new MergeError('A product cannot be combined with itself.');
   const [source, target] = await Promise.all([loadProduct(client, sourceId), loadProduct(client, targetId)]);
   if (!source) throw new MergeError(`Product ${sourceId} was not found.`, 404);
   if (!target) throw new MergeError(`Product ${targetId} was not found.`, 404);
-  if (isMergedAway(source)) throw new MergeError(`"${source.name}" was already merged.`, 409);
-  if (isArchivedProduct(target)) throw new MergeError(`"${target.name}" is archived. Choose another product to merge into.`, 409);
+  if (isMergedAway(source)) throw new MergeError(`"${source.name}" was already combined with another product.`, 409);
+  if (isArchivedProduct(target)) throw new MergeError(`"${target.name}" is archived. Choose another product to keep.`, 409);
 
   let keyword = null;
   if (modifierKeyword !== undefined && modifierKeyword !== null && String(modifierKeyword).trim() !== '') {
@@ -99,22 +99,25 @@ async function getMergePreview(client, { sourceId, targetId, modifierKeyword = n
   const platesMoved = rows.reduce((sum, r) => sum + (Number(r.quantity_sold) || 0), 0);
   const recipe = (targetRecipe.count || 0) > 0 ? 'kept_target' : ((sourceRecipe.count || 0) > 0 ? 'moved_source' : 'none');
 
+  // Owner-facing wording: "combine", "items sold" (never merge jargon or "plates").
+  const plural = (n, word) => `${n} ${word}${n === 1 ? '' : 's'}`;
   const recipeText = {
-    kept_target: `"${target.name}" keeps its own recipe; the recipe of "${source.name}" is removed.`,
-    moved_source: `"${target.name}" has no recipe, so it gets the recipe of "${source.name}".`,
-    none: 'Neither product has a recipe.',
+    kept_target: `"${target.name}" keeps its own recipe. The recipe of "${source.name}" is removed.`,
+    moved_source: `"${target.name}" has no recipe yet, so it takes the recipe of "${source.name}".`,
+    none: 'Neither product has a recipe yet.',
   }[recipe];
 
   const lines = [
-    `Merge "${source.name}" into "${target.name}".`,
-    `${daysMoved} day(s) of sales (${platesMoved} plates) move to "${target.name}". `
-      + `${daysAddedTogether} of those days already have sales for "${target.name}"; they are added together.`,
-    keyword ? `The moved plates are also counted as "${keyword}" for "${target.name}".` : null,
-    modifierRows ? `${modifierRows} modifier record(s) move too.` : null,
+    `${plural(daysMoved, 'day')} of sales (${platesMoved} items sold) will move to "${target.name}".`,
+    daysAddedTogether
+      ? `On ${daysAddedTogether} of those days both names had sales. Those numbers will be added together.`
+      : null,
+    keyword ? `These sales will count as "${target.name}" served ${keyword}.` : null,
+    modifierRows ? `${plural(modifierRows, 'record')} of versions without an item (like ${keyword || 'NO EGG'}) move too.` : null,
     recipeText,
-    `Forecasts for "${source.name}" are removed; the next forecast run rebuilds them for "${target.name}".`,
-    `"${source.name}" is archived as "${source.name} (merged)". Future sales files that say "${source.name}" will count for "${target.name}".`,
-    'This cannot be undone from the app.',
+    `The forecast for "${target.name}" will update at the next daily forecast.`,
+    `"${source.name}" will be retired (archived as "${source.name} (merged)"). Future sales files that say "${source.name}" will count as "${target.name}".`,
+    "This can't be undone.",
   ].filter(Boolean);
 
   return {
@@ -153,7 +156,7 @@ async function mergeProducts(client, { sourceId, targetId, modifierKeyword = nul
       throw new MergeError('Merging is not set up yet: run backend/migrations/011_product_aliases_and_merge.sql first.', 503);
     }
     // The function raises with a plain message on a failed check.
-    throw new MergeError(String(error.message || 'The merge failed. Nothing was changed.').replace(/^merge_products:\s*/, ''), 400);
+    throw new MergeError(String(error.message || 'Combining failed. Nothing was changed.').replace(/^merge_products:\s*/, ''), 400);
   }
   let statusRefresh = null;
   if (afterMerge) {

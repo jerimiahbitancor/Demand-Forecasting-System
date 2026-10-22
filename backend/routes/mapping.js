@@ -6,6 +6,7 @@ const authenticate = require('../middleware/auth');
 const mappingService = require('../services/mappingService');
 const uploadService = require('../services/uploadService');
 const { logAction } = require('../services/auditService');
+const { queueStockRefresh } = require('../services/notificationService');
 
 const actorOf = (req) => req.user?.name || req.user?.email || null;
 
@@ -320,6 +321,9 @@ router.post('/products', authenticate, async (req, res) => {
       actorOf(req)
     );
 
+    // A new recipe changes ingredient needs. Not awaited, never throws.
+    queueStockRefresh('recipe_change');
+
     res.status(201).json({
       success: true,
       data: product,
@@ -426,6 +430,9 @@ router.put('/products/:id', authenticate, async (req, res) => {
     console.log('Product updated successfully:', product);
     console.log('===== END UPDATE =====');
     
+    // The recipe may have changed. Not awaited, never throws.
+    queueStockRefresh('recipe_change');
+
     res.json({
       success: true,
       data: product,

@@ -4,6 +4,9 @@
 // (cron-job.org) start the 4:00 / 7:00 AM upload reminder run. A Render
 // free instance sleeps after ~15 min idle, so the in-process cron alone
 // misses those times; this call wakes the server and runs the slot.
+// POST /api/jobs/forecast — the same for the 9:00 AM forecast
+// (jobs/forecastScheduler.js runTriggeredForecast: skips when forecast_runs
+// already has a run since 9:00 AM today, wakes the ML service first).
 //
 // - No JWT: the caller is a cron service, not the owner. Auth is the
 //   X-Job-Secret header, compared with JOB_TRIGGER_SECRET in constant time.
@@ -39,6 +42,7 @@ function createJobsRouter({
   env = process.env,
   schedulersEnabled = () => require('../utils/featureFlags').schedulersEnabled(),
   runUploadReminders = (slot) => require('../jobs/uploadReminderJob').runUploadReminders(slot, { trigger: 'external' }),
+  runForecast = () => require('../jobs/forecastScheduler').runTriggeredForecast({ trigger: 'external' }),
   rateLimitMax = RATE_MAX,
 } = {}) {
   const router = express.Router();
@@ -51,12 +55,14 @@ function createJobsRouter({
     message: { success: false, error: 'Too many requests, please try again later.' },
   });
 
-  router.post('/upload-reminders', limiter, (req, res) => {
+  // 404 when the secret is unset, 401 when it does not match, 409 when
+  // the timed jobs are off. Same for every job endpoint.
+  const guard = (job) => (req, res, next) => {
     const expected = String(env.JOB_TRIGGER_SECRET || '').trim();
     if (!expected) return res.status(404).json({ success: false, error: 'Not found' });
 
     if (!secretMatches(req.get('X-Job-Secret'), expected)) {
-      logger.warn('job_trigger_unauthorized', { job: 'uploadReminder', ip: req.ip });
+      logger.warn('job_trigger_unauthorized', { job, ip: req.ip });
       return res.status(401).json({ success: false, error: 'Unauthorized' });
     }
 
@@ -66,7 +72,10 @@ function createJobsRouter({
         error: 'Timed jobs are off on this server (SCHEDULERS_ENABLED=false)',
       });
     }
+    return next();
+  };
 
+  router.post('/upload-reminders', limiter, guard('uploadReminder'), (req, res) => {
     const slot = String(req.query.slot || '');
     if (!SLOTS.includes(slot)) {
       return res.status(400).json({ success: false, error: 'slot must be 0400 or 0700' });
@@ -79,6 +88,13 @@ function createJobsRouter({
       .then(() => runUploadReminders(slot))
       .catch((error) => logger.error('job_trigger_run_failed', { job: 'uploadReminder', slot, err: error }));
     return undefined;
+  });
+
+  router.post('/forecast', limiter, guard('forecast'), (req, res) => {
+    res.status(202).json({ success: true, accepted: true, job: 'forecast' });
+    Promise.resolve()
+      .then(() => runForecast())
+      .catch((error) => logger.error('job_trigger_run_failed', { job: 'forecast', err: error }));
   });
 
   return router;

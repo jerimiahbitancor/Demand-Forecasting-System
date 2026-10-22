@@ -2,7 +2,7 @@
 import { useState, useEffect } from "react";
 import axios from "axios";
 import toast from "react-hot-toast";
-import { FiInfo, FiDownload, FiExternalLink, FiShoppingCart } from "react-icons/fi";
+import { FiInfo, FiDownload, FiExternalLink, FiShoppingCart, FiChevronLeft, FiChevronRight } from "react-icons/fi";
 import GenerateReportModal from "../../components/Reports/GenerateReportModal.jsx";
 import { buildIngredientDemandPDF, buildGroceryListPDF, generateExcel } from "./../../../services/reportService.js";
 import { logAuditEvent, formatAuditDateRange } from "../../../services/auditClient.js";
@@ -17,6 +17,8 @@ import EmptyState from "./shared/EmptyState.jsx";
 import { formatStockQty } from "../../../utils/formatStockQty.js";
 import { useNavigate } from "react-router-dom";
 import { authService } from "../../../services/authService.js";
+import { toYmd, fromYmd, mondayOf } from "../../../utils/localDate.js";
+import { manilaToday, addDays, shortDateLabel } from "../../dashboard/utils/dashboardPanels.js";
 import "./shared/InfoBanner.css";
 import "./IngredientDemand.css";
 
@@ -124,6 +126,8 @@ const GROCERY_CATEGORIES = [
   "Baking & Dry Goods",
   "Packaging & Supplies",
 ];
+const GROCERY_OTHER = "Other";
+const GROCERY_GROUPS = [...GROCERY_CATEGORIES, GROCERY_OTHER];
 
 // ---------------------------------------------------------------------
 // Tooltips
@@ -164,7 +168,7 @@ const tooltips = {
       <strong style={{ color: '#FEB161', display: 'block', marginBottom: '6px' }}>
         Daily Ingredient Shopping List
       </strong>
-      This is your shopping list for tomorrow, based on predicted sales and your recipe amounts.
+      This is your shopping list for the day shown, based on predicted sales and your recipe amounts.
       <br/><br/>
       A safety buffer has already been added to cover unexpected orders or staff meals.
       <br/><br/>
@@ -217,7 +221,7 @@ const tooltips = {
       <strong style={{ color: '#FEB161', display: 'block', marginBottom: '6px' }}>
         Daily Ingredient Demand
       </strong>
-      This shows what the system estimates you'll need to buy based on tomorrow's predicted sales.
+      This shows what the system estimates you'll need to buy based on the predicted sales for the day shown.
       <br/><br/>
       <div style={{ margin: '8px 0' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '4px' }}>
@@ -250,7 +254,7 @@ const tooltips = {
       <strong style={{ color: '#FEB161', display: 'block', marginBottom: '6px' }}>
         Grocery List
       </strong>
-      This is your ready-to-buy ingredient list based on tomorrow's forecast (Daily)
+      This is your ready-to-buy ingredient list based on the forecast for the day shown (Daily)
       or the full week's forecast (Weekly).
       <br/><br/>
       Quantities shown are what the system estimates you need to purchase after
@@ -270,7 +274,12 @@ const tooltips = {
 // Main Component
 // ---------------------------------------------------------------------
 function IngredientDemand() {
-  const [selectedRange, setSelectedRange] = useState([new Date(), new Date()]);
+  // Two separate controls: the daily table is one day ("YYYY-MM-DD"), the
+  // weekly heatmap is a fixed Mon–Sun week (its Monday). query = null on
+  // first load: the backend picks (today, or the next open forecast day when
+  // today is closed: daily.shiftedFromClosedDay) and the controls show what
+  // it used. After a pick, both dates are sent.
+  const [query, setQuery] = useState(null);
   const [isReportModalOpen, setIsReportModalOpen] = useState(false);
   const [weeklyPage, setWeeklyPage] = useState(1);
   const [dailyPage, setDailyPage] = useState(1);
@@ -290,6 +299,8 @@ function IngredientDemand() {
   const navigate = useNavigate();
   const goToProductManagement = () => navigate("/inventory-management?tab=product");
 
+  // Refetch on either control. `cancelled` drops the answer of a request
+  // that a newer pick replaced, so a slow old response never wins.
   useEffect(() => {
     let cancelled = false;
 
@@ -298,8 +309,17 @@ function IngredientDemand() {
       setLoadError(null);
       try {
         const headers = await authService.getAuthHeaders();
-        const response = await axios.get(`${API_URL}/analytics/ingredient-demand`, { headers });
-        if (!cancelled) setApiData(response.data?.data || null);
+        const response = await axios.get(`${API_URL}/analytics/ingredient-demand`, {
+          headers,
+          params: query || undefined,
+        });
+        if (!cancelled) {
+          setApiData(response.data?.data || null);
+          setWeeklyPage(1);
+          setDailyPage(1);
+          setModalWeeklyPage(1);
+          setModalDailyPage(1);
+        }
       } catch (err) {
         console.error("Error fetching ingredient demand analytics:", err);
         if (!cancelled) setLoadError(err.response?.data?.error || err.message || "Failed to load ingredient demand data");
@@ -312,7 +332,26 @@ function IngredientDemand() {
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [query]);
+
+  // The dates on screen: the last pick, else the dates the backend used.
+  const shownDaily = query?.date || apiData?.daily?.date || null;
+  const shownWeekStart = query?.weekStart || apiData?.weekly?.weekStart || null;
+  const shiftWeek = (weeks) => {
+    if (!shownWeekStart) return;
+    setQuery({ date: shownDaily || manilaToday(), weekStart: addDays(shownWeekStart, weeks * 7) });
+  };
+  const handleDailyDateChange = (date) => {
+    const ymd = toYmd(date);
+    setQuery({ date: ymd, weekStart: shownWeekStart || mondayOf(ymd) });
+  };
+  // While the default is in use: "Closed today. Showing Monday, Oct 19."
+  // when today's rows are all closed-day rows, "No forecast for today yet.
+  // Showing …" when today has none (backend daily.shiftReason).
+  const shiftReason = !query ? apiData?.daily?.shiftReason : null;
+  const closedTodayNote = shiftReason && apiData?.daily?.date
+    ? `${shiftReason === "closed" ? "Closed today." : "No forecast for today yet."} Showing ${fromYmd(apiData.daily.date).toLocaleDateString("en-US", { weekday: "long", month: "short", day: "numeric" })}.`
+    : null;
 
   // --- Derive the same shapes the JSX below already expects. ---
   const demandGrid = buildDemandGrid(apiData?.weekly?.rows);
@@ -320,7 +359,17 @@ function IngredientDemand() {
     row.levels ? apiLevelToCssSuffix(row.levels[dayIndex]) : dayIndex === row.highDay ? "high" : "normal";
 
   const dailyIngredients = buildDailyIngredients(apiData?.daily?.rows);
-  const groceryPreview = buildGroceryList(apiData?.groceryList?.all);
+  // ONE list for the preview card, the KPI cards, the full view and the
+  // download: the selected mode's own (daily = the picked day, weekly = the
+  // heatmap's week).
+  const groceryApi = groceryMode === "weekly" ? apiData?.groceryListWeekly : apiData?.groceryList;
+  const groceryPreview = buildGroceryList(groceryApi?.all);
+  // The full view and the PDF group by category. An ingredient whose
+  // category is not one of the groups goes under "Other" instead of
+  // silently dropping out (the KPI cards count it).
+  const groceryGrouped = groceryPreview.map((item) => (
+    GROCERY_CATEGORIES.includes(item.category) ? item : { ...item, category: GROCERY_OTHER }
+  ));
   const safetyBufferPercentage = apiData?.safetyBufferPercentage ?? 15;
 
   // K6: say WHY a section is empty. No forecast rows -> wait for the 9:00 AM
@@ -353,8 +402,29 @@ function IngredientDemand() {
 
   const dailyDateLabel = formatLongDate(apiData?.daily?.date);
   const weeklyRangeLabel = apiData?.weekly
-    ? `${apiData.weekly.weekStart} – ${apiData.weekly.weekEnd}`
+    ? `${shortDateLabel(apiData.weekly.weekStart)} – ${shortDateLabel(apiData.weekly.weekEnd)}`
     : "—";
+  // Grocery label from the API's own dates (never the browser clock):
+  // "For Oct 18" / "For the week of Oct 12 – 18".
+  const groceryDateLabel = (() => {
+    if (groceryMode === "daily") {
+      return apiData?.daily?.date ? `For ${shortDateLabel(apiData.daily.date)}` : "—";
+    }
+    const ws = apiData?.groceryListWeekly?.weekStart;
+    const we = apiData?.groceryListWeekly?.weekEnd;
+    if (!ws || !we) return "—";
+    const end = ws.slice(0, 7) === we.slice(0, 7) ? String(Number(we.slice(8, 10))) : shortDateLabel(we);
+    return `For the week of ${shortDateLabel(ws)} – ${end}`;
+  })();
+  const groceryFileDate = groceryMode === "daily" ? apiData?.daily?.date : apiData?.groceryListWeekly?.weekStart;
+
+  // Week stepper label: the API's own week once it has answered for this
+  // Monday, otherwise the picked week.
+  const weekLabel = !shownWeekStart
+    ? "—"
+    : apiData?.weekly?.weekStart === shownWeekStart
+      ? weeklyRangeLabel
+      : `${shortDateLabel(shownWeekStart)} – ${shortDateLabel(addDays(shownWeekStart, 6))}`;
 
   // Two independent searches: the weekly heatmap grid is keyed on
   // `ingredient`, the daily table on `name`. Each has its own query so typing
@@ -389,9 +459,10 @@ function IngredientDemand() {
   );
 
   const handleDownloadGroceryList = async () => {
-    const itemsToDownload = groceryPreview;
+    // Exactly the list on screen (same mode, same items, same groups).
+    const itemsToDownload = groceryGrouped;
     if (itemsToDownload.length === 0) {
-      toast.error("No data is available for the selected date range.");
+      toast.error(groceryMode === "weekly" ? "Nothing to buy for this week." : "Nothing to buy for this day.");
       return;
     }
 
@@ -423,10 +494,7 @@ function IngredientDemand() {
       // Keep the PDF usable even if the profile fetch fails
     }
 
-    const dateLabel =
-      groceryMode === "daily"
-        ? `Today · ${dailyDateLabel}`
-        : `Week of ${apiData?.weekly?.weekStart || "—"} – ${apiData?.weekly?.weekEnd || "—"}`;
+    const dateLabel = groceryDateLabel;
 
     try {
       const doc = await buildGroceryListPDF({
@@ -434,10 +502,10 @@ function IngredientDemand() {
         business: biz,
         groceryMode,
         itemsToDownload,
-        GROCERY_CATEGORIES,
+        GROCERY_CATEGORIES: GROCERY_GROUPS,
       });
 
-      const filename = `grocery-list-chefduo-${groceryMode}.pdf`;
+      const filename = `grocery-list-chefduo-${groceryMode}${groceryFileDate ? `-${groceryFileDate}` : ""}.pdf`;
       doc.save(filename);
       toast.success("Report generated successfully!");
     } catch (err) {
@@ -461,8 +529,9 @@ function IngredientDemand() {
     // the backend (it's always exactly one week + one day) — map the
     // modal's range onto that: weekStart from the range start, the daily
     // snapshot from the range end.
-    const [from, to] = dateRange.map((d) => d.toISOString().slice(0, 10));
-    let reportDemandGrid, reportDailyIngredients, reportBufferPct;
+    // Local calendar dates: toISOString() would shift them a day back in Manila.
+    const [from, to] = dateRange.map((d) => toYmd(d));
+    let reportDemandGrid, reportDailyIngredients, reportBufferPct, reportDailyDate;
     try {
       const headers = await authService.getAuthHeaders();
       const response = await axios.get(`${API_URL}/analytics/ingredient-demand`, {
@@ -473,6 +542,7 @@ function IngredientDemand() {
       reportDemandGrid = buildDemandGrid(data?.weekly?.rows);
       reportDailyIngredients = buildDailyIngredients(data?.daily?.rows);
       reportBufferPct = data?.safetyBufferPercentage ?? 15;
+      reportDailyDate = data?.daily?.date || to;
     } catch (err) {
       console.error("Error fetching report data:", err);
       toast.error("Failed to load data for the selected date range.");
@@ -526,6 +596,7 @@ function IngredientDemand() {
               affected: row.ingredient,
             })),
           disclaimer: "Disclaimer — Ingredient estimates are based on forecasted demand and should still be checked against actual stock before purchasing.",
+          shoppingDateLabel: fromYmd(reportDailyDate).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" }),
         });
         doc.save("ingredient-demand-report.pdf");
       } else {
@@ -603,7 +674,15 @@ function IngredientDemand() {
           </div>
 
           <div className="analytics-filter-row">
-            <DatePicker value={selectedRange} onChange={setSelectedRange} mode="range" />
+            <div className="week-stepper" role="group" aria-label="Choose the week">
+              <button type="button" className="filter-pill" onClick={() => shiftWeek(-1)} aria-label="Previous week" disabled={!shownWeekStart}>
+                <FiChevronLeft size={14} />
+              </button>
+              <span className="filter-pill week-stepper-label" aria-live="polite">{weekLabel}</span>
+              <button type="button" className="filter-pill" onClick={() => shiftWeek(1)} aria-label="Next week" disabled={!shownWeekStart}>
+                <FiChevronRight size={14} />
+              </button>
+            </div>
             <input
                 className="filter-search"
                 type="search"
@@ -614,8 +693,9 @@ function IngredientDemand() {
               />
           </div>
 
+          {closedTodayNote && <p className="section-note value--muted">{closedTodayNote}</p>}
           <p className="section-note">
-            Ingredient demand — this week. Color shows demand level relative to each
+            Ingredient demand for the week of {weekLabel}. Color shows demand level relative to each
             ingredient's typical amount. Darker = more than usual.
           </p>
 
@@ -686,7 +766,7 @@ function IngredientDemand() {
           </div>
 
           <div className="analytics-filter-row">
-            <DatePicker value={selectedRange} onChange={setSelectedRange} mode="range" />
+            <DatePicker value={fromYmd(shownDaily || manilaToday())} onChange={handleDailyDateChange} mode="single" />
             <input
               className="filter-search"
               type="search"
@@ -697,8 +777,9 @@ function IngredientDemand() {
             />
           </div>
 
+          {closedTodayNote && <p className="section-note value--muted">{closedTodayNote}</p>}
           <p className="section-note">
-            Ingredient demand — today. This shows what the system estimates you'll need based on predicted sales and your current stock.
+            Ingredient demand for {dailyDateLabel}. This shows what the system estimates you'll need based on predicted sales and your current stock.
             <a href="/inventory-management" style={{color:'var(--color-red-primary)', fontWeight:600}}> View Inventory Management</a>
           </p>
 
@@ -768,7 +849,7 @@ function IngredientDemand() {
             <button type="button" className={`grocery-toggle-btn ${groceryMode === 'daily' ? 'active' : ''}`} onClick={() => setGroceryMode('daily')}>Daily</button>
           </div>
           <p className="grocery-date-label">
-            {groceryMode === 'daily' ? `For today: ${dailyDateLabel}` : `This Week: ${weeklyRangeLabel}`}
+            {groceryDateLabel}
           </p>
           <InfoBanner variant="info">
             Order quantities are based on forecasted demand (plus a {safetyBufferPercentage}% safety buffer) minus current stock.{" "}
@@ -778,9 +859,10 @@ function IngredientDemand() {
             <div className="grocery-kpi-card"><p className="grocery-kpi-label">Est. Total Cost</p><p className="grocery-kpi-value">₱{groceryPreview.reduce((sum, i) => sum + (i.estCost || 0), 0).toLocaleString()}</p></div>
             <div className="grocery-kpi-card"><p className="grocery-kpi-label">Total Items to Buy</p><p className="grocery-kpi-value">{groceryPreview.length}</p></div>
           </div>
-          {loaded && groceryPreview.length === 0 && (dailyIngredients.length > 0
-            ? <EmptyState title="Nothing to buy" message="Nothing to buy: stock covers the forecast." />
-            : dailyEmptyState)}
+          {loaded && groceryPreview.length === 0 && (
+            (groceryMode === "weekly" ? demandGrid.length > 0 : dailyIngredients.length > 0)
+              ? <EmptyState title="Nothing to buy" message="Nothing to buy: stock covers the forecast." />
+              : (groceryMode === "weekly" ? weeklyEmptyState : dailyEmptyState))}
           <ul className="grocery-preview-list">
             {groceryPreview.slice(0, 5).map((item) => (
               <li key={item.name} className="grocery-preview-row">
@@ -838,12 +920,13 @@ function IngredientDemand() {
           <button type="button" className={`grocery-toggle-btn ${groceryMode === 'weekly' ? 'active' : ''}`} onClick={() => setGroceryMode('weekly')}>Weekly</button>
           <button type="button" className={`grocery-toggle-btn ${groceryMode === 'daily' ? 'active' : ''}`} onClick={() => setGroceryMode('daily')}>Daily</button>
         </div>
+        <p className="grocery-date-label">{groceryDateLabel}</p>
         <div className="grocery-kpi-row">
           <div className="grocery-kpi-card"><p className="grocery-kpi-label">Est. Total Cost</p><p className="grocery-kpi-value">₱{groceryPreview.reduce((sum, item) => sum + (item.estCost || 0), 0).toLocaleString()}</p></div>
           <div className="grocery-kpi-card"><p className="grocery-kpi-label">Total Items to Buy</p><p className="grocery-kpi-value">{groceryPreview.length}</p></div>
         </div>
-        {GROCERY_CATEGORIES.map((category) => {
-          const items = groceryPreview.filter((item) => item.category === category);
+        {GROCERY_GROUPS.map((category) => {
+          const items = groceryGrouped.filter((item) => item.category === category);
           if (items.length === 0) return null;
           return (
             <div className="grocery-category" key={category}>

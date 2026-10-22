@@ -15,7 +15,7 @@ pooled history at once, with `product_id` as a feature. Reasoning:
 - Several of ChefDuo's 61 SKUs are low-volume. A model trained only on
   one sparse product's own history has very little to learn from. A
   global model lets every product benefit from what the model learns
-  about calendar effects (weekends, paydays, holidays) across the
+  about calendar effects (weekdays, weekends, paydays) across the
   *entire* pooled dataset, while `product_id` still lets it tell
   products apart.
 - `product_id` is passed as a pandas `category` dtype with XGBoost's
@@ -53,7 +53,8 @@ ml-service/
 │   ├── business_logic.py           Demand classification, ingredient demand, COGS
 │   └── supabase_writer.py          Every INSERT/UPSERT this service makes — writes only
 ├── utils/
-│   └── holidays.py                 PH holiday calendar for is_holiday (needs yearly upkeep)
+│   ├── paydays.py                  Payday rule for is_payday (15th and 30th; Sat -> Fri, Sun -> Mon)
+│   └── holidays.py                 PH holiday calendar — NOT a model feature since Oct 17 2026; report context only
 └── models/                         LOCAL SCRATCH ONLY, gitignored — see model_storage.py
 ```
 
@@ -144,8 +145,9 @@ Before your first `/train` call:
    `(product_id, forecast_date)` — `supabase_writer.write_forecast`
    upserts on this pair; without the constraint, a re-run creates
    duplicate rows instead of overwriting.
-3. Verify the PH holiday list in `utils/holidays.py` against the
-   actual 2026 Presidential Proclamation once published.
+3. (Optional) The PH holiday list in `utils/holidays.py` is no longer a
+   model feature (removed Oct 17 2026); only the training report reads
+   it, to label flagged days. Keep it current if you rely on that label.
 
 ## Endpoints
 
