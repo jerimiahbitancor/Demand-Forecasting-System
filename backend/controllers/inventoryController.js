@@ -1050,6 +1050,10 @@ const restockInventoryItem = async (req, res) => {
       actorOf(req)
     );
 
+    // New stock may clear a low-stock alert: refresh the bell, same as
+    // edit/archive/restore do. Not awaited and never throws.
+    queueStockRefresh('restock');
+
     console.log('✅ Item restocked successfully:', { id, newQuantity: finalQuantity.toString() });
     res.json({
       success: true,

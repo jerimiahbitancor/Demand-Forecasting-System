@@ -65,6 +65,27 @@ const UploadSummaryReport = ({ report, onClose }) => {
         </Section>
       )}
 
+      {summary.followUpErrors.length > 0 && (
+        <Section title="Stock was not updated" count={summary.followUpErrors.length} tone="error">
+          <ul className="upload-report__list">
+            {summary.followUpErrors.map((m) => <li key={m}>{m}</li>)}
+          </ul>
+          <p className="upload-report__note">The sales were saved. Check the backend logs, fix the cause, then adjust the stock.</p>
+        </Section>
+      )}
+
+      {summary.stockNotDeducted.length > 0 && (
+        <Section title="Ingredients not deducted" count={summary.stockNotDeducted.length} tone="warning">
+          <ul className="upload-report__list">
+            {summary.stockNotDeducted.map((s) => <li key={`${s.ingredientId}-${s.reason}`}>{s.message}</li>)}
+          </ul>
+          <p className="upload-report__note">
+            Editing an ingredient&apos;s quantity counts as a stock count, so sales from days that ended before
+            that edit are not deducted again. Use Restock to add deliveries instead.
+          </p>
+        </Section>
+      )}
+
       {summary.shortfalls.length > 0 && (
         <Section title="Stock shortfalls" count={summary.shortfalls.length} tone="warning">
           <ul className="upload-report__list">

@@ -16,7 +16,37 @@ const { createFakeSupabase, installFake } = require('./helpers/fakeSupabase');
 
 process.env.LOG_LEVEL = 'error';
 
-const fake = createFakeSupabase({}, { defaults: { notifications: { read: false } } });
+const Decimal = require('decimal.js');
+const { mock } = require('node:test');
+
+// Mirrors public.restock_ingredient_stock (migration 015): everything that
+// was received is added to the stock; a 'restock' row is written.
+function fakeRestock({ p_ingredient_id: id, p_quantity: qty, p_updated_by, p_reason, p_notes }, tables) {
+  const received = new Decimal(String(qty)).toDecimalPlaces(6);
+  if (!received.gt(0)) return { data: null, error: { message: 'Restock quantity must be greater than zero' } };
+  const row = (tables.ingredients || []).find((i) => i.id === id);
+  if (!row) return { data: null, error: { message: `Ingredient ${id} does not exist` } };
+  const previous = new Decimal(String(row.quantity || 0));
+  const next = previous.plus(received);
+  row.quantity = next.toString();
+  tables.inventory_transactions = tables.inventory_transactions || [];
+  tables.inventory_transactions.push({
+    id: tables.inventory_transactions.length + 1, ingredient_id: id, transaction_type: 'restock',
+    quantity: received.toString(), previous_quantity: previous.toString(), new_quantity: next.toString(),
+    received_quantity: received.toString(), shortfall_settled_quantity: '0', unit: row.unit,
+    reason: p_reason || 'Restock', notes: p_notes || null, created_by: p_updated_by || null,
+  });
+  return {
+    data: [{ previous_quantity: previous.toString(), new_quantity: next.toString(), received_quantity: received.toString(),
+      shortfall_settled_quantity: '0', added_quantity: received.toString(), unit: row.unit }],
+    error: null,
+  };
+}
+
+const fake = createFakeSupabase({}, {
+  defaults: { notifications: { read: false } },
+  rpc: { restock_ingredient_stock: fakeRestock },
+});
 installFake(fake);
 
 const brevoCalls = [];
@@ -540,6 +570,11 @@ test('yesterday marked closed (or not an operating day) -> no "not uploaded" lin
 });
 
 test('a restock (Ingredient Management) refreshes the alerts: the alert is retired, no email', async () => {
+  // queueStockRefresh() reads the real clock; the seeded forecasts are for
+  // Oct 17-18 2026, so pin "now" to that morning or the test only passes on
+  // those dates.
+  mock.timers.enable({ apis: ['Date'], now: NOW });
+  try {
   seedWorld();
   setEmail(true);
   await refresh(NOW);
@@ -565,6 +600,9 @@ test('a restock (Ingredient Management) refreshes the alerts: the alert is retir
   const rice = stockAlerts().filter((n) => n.metadata.ingredient_id === 1);
   assert.ok(rice.length > 0 && rice.every((n) => n.read), 'Rice recovered: its alert is retired');
   assert.equal(brevoCalls.length, 1, 'an improvement never sends an email');
+  } finally {
+    mock.timers.reset();
+  }
 });
 
 test('queueStockRefresh never throws, even if reading the switches throws', () => {
@@ -653,6 +691,11 @@ async function callController(fn, req) {
 }
 
 test('archive retires the ingredient\'s bell alert; restoring a still-low ingredient alerts again (no email)', async () => {
+  // queueStockRefresh() reads the real clock; the seeded forecasts are for
+  // Oct 17-18 2026, so pin "now" to that morning or the test only passes on
+  // those dates.
+  mock.timers.enable({ apis: ['Date'], now: NOW });
+  try {
   seedWorld();
   setEmail(true);
   await refresh(NOW);
@@ -672,4 +715,7 @@ test('archive retires the ingredient\'s bell alert; restoring a still-low ingred
   assert.equal(fake.tables.ingredients.find((i) => i.id === 1).is_archived, false);
   assert.deepEqual(unreadRice().map((n) => n.metadata.key), ['critical_1'], 'restored and still Critical -> alerts again');
   assert.equal(brevoCalls.length, 1, 'Rice was already in today\'s email: not NEW, so no second email');
+  } finally {
+    mock.timers.reset();
+  }
 });

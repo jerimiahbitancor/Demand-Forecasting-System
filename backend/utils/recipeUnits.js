@@ -770,7 +770,8 @@ function toBuyQuantity(need, stock, unit) {
   const raw = Math.max(0, (Number(need) || 0) - (Number(stock) || 0));
   if (!isCountUnit(unit)) return raw;
   return Math.max(0, Math.ceil(raw - 1e-9));
-=========
+}
+
 // Load the per-ingredient house measures. Best effort: the table is new, so a
 // missing one must not break the boot.
 async function loadIngredientUnitConversionsFromDb(client) {
@@ -789,7 +790,6 @@ async function loadIngredientUnitConversionsFromDb(client) {
     console.error('Failed to load ingredient unit conversions:', err.message);
     return false;
   }
->>>>>>>>> Temporary merge branch 2
 }
 
 module.exports = {

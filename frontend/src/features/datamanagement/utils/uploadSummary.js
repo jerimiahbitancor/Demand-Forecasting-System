@@ -8,6 +8,10 @@
 const KEYS = [
   'modifierProducts', 'sizeProducts', 'newProducts', 'unmatchedNames',
   'aliasMatches', 'possibleDuplicates', 'shortfalls',
+  // Ingredients whose stock was NOT deducted, and why (stock edited after
+  // the sale day, recipe unit could not be converted), plus errors in the
+  // follow-up processing. Without these, a skipped deduction was silent.
+  'stockNotDeducted', 'followUpErrors',
 ];
 
 const lower = (s) => String(s || '').trim().replace(/\s+/g, ' ').toLowerCase();
@@ -31,6 +35,8 @@ export function mergeUploadSummaries(summaries = []) {
   const aliases = new Map();
   const duplicates = new Map();
   const shortfalls = new Map();
+  const notDeducted = new Map();
+  const followUpErrors = new Set();
 
   for (const s of summaries) {
     if (!s) continue;
@@ -56,6 +62,14 @@ export function mergeUploadSummaries(summaries = []) {
       entry.message = sf.message || entry.message;
       shortfalls.set(sf.ingredientId, entry);
     }
+    for (const nd of s.stockNotDeducted || []) {
+      const key = `${nd.ingredientId}|${nd.reason}`;
+      const entry = notDeducted.get(key) || { ...nd, days: [] };
+      entry.days = [...new Set([...entry.days, ...(nd.days || [])])].sort();
+      entry.message = nd.message || entry.message;
+      notDeducted.set(key, entry);
+    }
+    for (const message of s.followUpErrors || []) followUpErrors.add(message);
   }
 
   const byName = (a, b) => String(a.name || a.ingredient || a.alias || a).localeCompare(String(b.name || b.ingredient || b.alias || b));
@@ -67,6 +81,8 @@ export function mergeUploadSummaries(summaries = []) {
     aliasMatches: [...aliases.values()].sort(byName),
     possibleDuplicates: [...duplicates.values()],
     shortfalls: [...shortfalls.values()].sort(byName),
+    stockNotDeducted: [...notDeducted.values()].sort(byName),
+    followUpErrors: [...followUpErrors],
   };
 }
 

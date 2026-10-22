@@ -440,6 +440,13 @@ test('C1/C2: a stock count after the day ended skips that day; a restock is not 
     result.warnings.some((w) => /not deducted for 1 ingredient\(s\).*Rice/.test(w)),
     JSON.stringify(result.warnings)
   );
+  // The upload screen only shows uploadSummary, so the skip must be there too.
+  const skipped = result.uploadSummary.stockNotDeducted;
+  assert.equal(skipped.length, 1, JSON.stringify(skipped));
+  assert.equal(skipped[0].ingredientId, RICE);
+  assert.equal(skipped[0].reason, 'counted_after');
+  assert.deepEqual(skipped[0].days, ['2026-10-10']);
+  assert.match(skipped[0].message, /Rice: sales on 2026-10-10 were not deducted/);
 });
 
 test('C1/U7: an ingredient created after the day ended is NOT a stock count', async () => {
@@ -575,4 +582,5 @@ test('H1: upload reports an unconvertible recipe and leaves its stock untouched'
   assert.equal(sales(RICE).length, 0);
   assert.equal(result.unconvertibleIngredients[0].ingredientId, RICE);
   assert.match(result.warnings.join(' '), /Could not convert the recipe unit for Rice/);
+  assert.ok(result.uploadSummary.stockNotDeducted.some((n) => n.ingredientId === RICE && n.reason === 'unit_conversion'));
 });

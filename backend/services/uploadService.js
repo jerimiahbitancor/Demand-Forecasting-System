@@ -595,6 +595,12 @@ class UploadService {
       productsDetected += createdProductNames.length;
       let shortfallSummary = [];
       let unconvertibleSummary = [];
+      // Why an ingredient was NOT deducted (timing rule / unit problem), and
+      // any error in the follow-up processing. These used to exist only as
+      // plain-text `warnings`, which the upload screen never shows, so a
+      // skipped deduction looked exactly like a broken one.
+      let stockNotDeductedSummary = [];
+      const followUpErrors = [];
 
       // POS modifiers ("... NO EGG") — see utils/salesModifiers.js.
       const modifierRules = await this.getModifierRules();
@@ -659,7 +665,12 @@ class UploadService {
       const { dailySalesRows, modifierRows } = aggregated;
       // The upload summary for this file, from what is already in memory
       // (no extra queries). Built at return time so it includes shortfalls.
-      const summaryNow = () => buildUploadSummary({
+      const summaryNow = () => ({
+        ...buildUploadSummaryBase(),
+        stockNotDeducted: stockNotDeductedSummary,
+        followUpErrors,
+      });
+      const buildUploadSummaryBase = () => buildUploadSummary({
         products: products || [],
         dailySalesRows,
         modifierRows,
@@ -1019,7 +1030,14 @@ class UploadService {
               else skippedDays.push(saleDate);
             }
             entry.skippedDates = skippedDays;
-            if (skippedDays.length > 0) skippedForCount.push({ name: info.name || `ingredient #${ingredientId}`, days: skippedDays });
+            if (skippedDays.length > 0) {
+              skippedForCount.push({
+                ingredientId,
+                name: info.name || `ingredient #${ingredientId}`,
+                days: skippedDays,
+                lastCountAt: lastCountAt ? lastCountAt.toISOString() : null,
+              });
+            }
             if (!exact.gt(0)) continue;
 
             // THE ONE rounding, at the very end (U4): mass/volume half-up to
@@ -1123,6 +1141,26 @@ class UploadService {
             );
           }
           shortfallSummary = shortfalls;
+          stockNotDeductedSummary = [
+            ...skippedForCount.map((s) => ({
+              ingredientId: s.ingredientId,
+              ingredient: s.name,
+              reason: 'counted_after',
+              days: s.days,
+              lastCountAt: s.lastCountAt,
+              message: `${s.name}: sales on ${s.days.join(', ')} were not deducted because the stock `
+                + `was edited (treated as a stock count) on ${s.lastCountAt || 'a later date'}, `
+                + 'after those days ended.',
+            })),
+            ...unconvertibleSummary.map((u) => ({
+              ingredientId: u.ingredientId,
+              ingredient: u.name,
+              reason: 'unit_conversion',
+              days: [],
+              lastCountAt: null,
+              message: `${u.name}: not deducted — ${(u.warnings || [])[0]?.reason || 'the recipe unit could not be converted'}.`,
+            })),
+          ];
           if (shortfalls.length > 0) {
             await this.notifyStockShortfalls(shortfalls, uploadId);
           }
@@ -1130,6 +1168,7 @@ class UploadService {
       } catch (postInsertError) {
         console.error('Sales data was saved, but follow-up processing (category backfill / stock deduction / status reconciliation) failed:', postInsertError);
         warnings.push(`Sales data was saved, but some follow-up processing did not complete: ${postInsertError.message}`);
+        followUpErrors.push(`Stock deduction or status update did not complete: ${postInsertError.message}`);
       }
 
       return {
