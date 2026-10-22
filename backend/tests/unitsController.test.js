@@ -82,7 +82,7 @@ require.cache[configPath] = { id: configPath, filename: configPath, loaded: true
 require.cache[auditPath] = { id: auditPath, filename: auditPath, loaded: true, exports: { logAction: async () => {} } };
 
 const { createUnit, updateUnit, deleteUnit } = require('../controllers/unitsController');
-const { normalizeRecipeQuantityToUnit } = require('../utils/recipeUnits');
+const { normalizeRecipeQuantityToUnit, UnitConversionError } = require('../utils/recipeUnits');
 
 function call(handler, req) {
   return new Promise((resolve) => {
@@ -138,9 +138,9 @@ const units = tables.ingredient_units;
   check('piece unit keeps grams per piece', r.status === 201 && wedge.is_piece === true && wedge.piece_weight_grams === 25, JSON.stringify(wedge));
 
   console.log('create: usable by the recipe math right away (metadata refreshed)');
-  check('2 Sack -> 100 kg', normalizeRecipeQuantityToUnit(2, 'Sack', 'Kilograms (kg)') === 100);
-  check('alias "sacks" also converts', normalizeRecipeQuantityToUnit(1, 'sacks', 'g') === 50000);
-  check('5 Scoop -> 300 mL', normalizeRecipeQuantityToUnit(5, 'Scoop', 'mL') === 300);
+  check('2 Sack -> 100 kg', normalizeRecipeQuantityToUnit(2, 'Sack', 'Kilograms (kg)').eq('100'));
+  check('alias "sacks" also converts', normalizeRecipeQuantityToUnit(1, 'sacks', 'g').eq('50000'));
+  check('5 Scoop -> 300 mL', normalizeRecipeQuantityToUnit(5, 'Scoop', 'mL').eq('300'));
 
   console.log('delete: a unit in use is locked');
   r = await remove('u-kg');
@@ -167,7 +167,13 @@ const units = tables.ingredient_units;
   r = await remove(scoopId);
   check('unused unit is deleted (200)', r.status === 200, JSON.stringify(r));
   check('row is gone', !units.some((u) => u.name === 'Scoop'));
-  check('and its conversion is gone too (metadata refreshed): 5 Scoop passes through', normalizeRecipeQuantityToUnit(5, 'Scoop', 'mL') === 5);
+  let unknownScoopThrows = false;
+  try {
+    normalizeRecipeQuantityToUnit(5, 'Scoop', 'mL');
+  } catch (error) {
+    unknownScoopThrows = error instanceof UnitConversionError;
+  }
+  check('and its conversion is gone too (metadata refreshed): 5 Scoop is unconvertible', unknownScoopThrows);
 
   console.log('rename: ingredients.unit only, recipe lines untouched');
   const recipeBefore = JSON.stringify(tables.product_ingredients);
@@ -177,8 +183,8 @@ const units = tables.ingredient_units;
   check('product_ingredients.unit is NOT touched', JSON.stringify(tables.product_ingredients) === recipeBefore);
   const kilos = units.find((u) => u.id === 'u-kg');
   check('old name is kept as an alias', kilos.name === 'Kilos' && kilos.aliases.includes('Kilograms (kg)'), JSON.stringify(kilos));
-  check('saved recipe lines still convert with the OLD name', normalizeRecipeQuantityToUnit(2, 'Kilograms (kg)', 'g') === 2000);
-  check('the new name converts', normalizeRecipeQuantityToUnit(2, 'Kilos', 'g') === 2000);
+  check('saved recipe lines still convert with the OLD name', normalizeRecipeQuantityToUnit(2, 'Kilograms (kg)', 'g').eq('2000'));
+  check('the new name converts', normalizeRecipeQuantityToUnit(2, 'Kilos', 'g').eq('2000'));
 
   r = await rename('u-g', 'Kilos');
   check('rename onto another unit\'s name is refused (409)', r.status === 409, JSON.stringify(r));

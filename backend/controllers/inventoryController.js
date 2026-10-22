@@ -5,23 +5,101 @@ const analyticsService = require('../services/analyticsService');
 const { classifyStock } = require('../services/stockAlertService');
 const { queueStockRefresh } = require('../services/notificationService');
 const { parseRecipeQuantity, deriveUnitPrice, isMissingColumnError } = require('../utils/recipeUnits');
+const {
+  parseRecipeQuantityDecimal,
+  deriveUnitPrice,
+  isMissingColumnError,
+  inventoryUnitMetadata,
+  Decimal,
+  UnitConversionError,
+} = require('../utils/recipeUnits');
 
 const actorOf = (req) => req.user?.name || req.user?.email || null;
+
+// A stock amount as text, without trailing zeros: 30.000000 -> "30",
+// 0.500000 -> "0.5". The value itself is never rounded, only its text form
+// is cleaned up, so "30.000000" never reaches the owner.
+const formatStockAmount = (value) => {
+  const n = value instanceof Decimal ? value : new Decimal(String(value ?? 0));
+  if (!n.isFinite()) return '0';
+  return n.toDecimalPlaces(6, Decimal.ROUND_HALF_UP).toString();
+};
+
+// The sales shortfalls of one ingredient that are still waiting to be
+// covered, oldest first. A restock must never be spent on them: the stock
+// that was received is stock on hand. They are hidden from the stock
+// function for the duration of the restock and put back unchanged
+// afterwards, so the unmet demand stays on record.
+const readPendingShortfalls = async (ingredientId) => {
+  try {
+    const { data, error } = await supabaseAdmin
+      .from('inventory_shortfall_balances')
+      .select('sale_transaction_id, remaining_quantity')
+      .eq('ingredient_id', ingredientId)
+      .gt('remaining_quantity', 0)
+      .order('created_at', { ascending: true })
+      .order('sale_transaction_id', { ascending: true });
+    if (error) return [];
+    return (data || []).map((row) => ({
+      sale_transaction_id: row.sale_transaction_id,
+      remaining_quantity: String(row.remaining_quantity),
+    }));
+  } catch (error) {
+    // The shortfall ledger is optional: a database without it still gets a
+    // working restock.
+    console.warn('Could not read the pending shortfalls:', error.message);
+    return [];
+  }
+};
+
+const writeShortfallRemaining = async (rows) => {
+  for (const row of rows) {
+    const { error } = await supabaseAdmin
+      .from('inventory_shortfall_balances')
+      .update({ remaining_quantity: row.remaining_quantity })
+      .eq('sale_transaction_id', row.sale_transaction_id);
+    if (error) throw error;
+  }
+};
+
+// The movement row the stock function just wrote gets its note here, so the
+// numbers in the stock history never carry the raw decimals of the database
+// ("30.000000") whichever version of the stock function is installed.
+const writeRestockNote = async (ingredientId, received, { quantity, newQuantity, note }) => {
+  const { data: rows, error } = await supabaseAdmin
+    .from('inventory_transactions')
+    .select('id')
+    .eq('ingredient_id', ingredientId)
+    .eq('transaction_type', 'restock')
+    .eq('received_quantity', received.toString())
+    .order('created_at', { ascending: false })
+    .limit(1);
+  if (error || !rows || rows.length === 0) return;
+  const values = { notes: note };
+  if (quantity) values.quantity = quantity;
+  if (newQuantity) values.new_quantity = newQuantity;
+  await supabaseAdmin
+    .from('inventory_transactions')
+    .update(values)
+    .eq('id', rows[0].id);
+};
 
 // Purchase pack ("150 g per sachet for ₱200") -> { pack_qty, pack_unit, pack_price }.
 // Anything missing or invalid is stored as NULL so the ingredient simply has
 // no pack recorded and keeps its manually typed unit cost.
-const readPackFields = (body = {}) => {
+const readPackFields = (body = {}, stockUnit = '') => {
   const rawQty = body.pack_qty;
   const rawPrice = body.pack_price;
-  const qty = rawQty === '' || rawQty === null || rawQty === undefined ? NaN : parseRecipeQuantity(rawQty);
-  const price = rawPrice === '' || rawPrice === null || rawPrice === undefined ? NaN : Number(rawPrice);
-  const unitRaw = body.pack_unit ? String(body.pack_unit).trim() : '';
-  const validQty = Number.isFinite(qty) && qty > 0;
+  const qty = rawQty === '' || rawQty === null || rawQty === undefined ? null : parseRecipeQuantityDecimal(rawQty);
+  const price = rawPrice === '' || rawPrice === null || rawPrice === undefined ? null : parseRecipeQuantityDecimal(rawPrice);
+  const unitRaw = body.pack_unit ? String(body.pack_unit).trim() : String(stockUnit || '').trim();
+  const validQty = qty?.isFinite() && qty.gt(0);
   return {
-    pack_qty: validQty ? qty : null,
+    pack_qty: validQty ? qty.toDecimalPlaces(6, Decimal.ROUND_HALF_UP).toString() : null,
     pack_unit: validQty && unitRaw ? unitRaw : null,
-    pack_price: Number.isFinite(price) && price > 0 ? price : null,
+    pack_price: price?.isFinite() && price.gt(0)
+      ? price.toDecimalPlaces(6, Decimal.ROUND_HALF_UP).toString()
+      : null,
   };
 };
 
@@ -40,7 +118,7 @@ const resolveUnitPrice = ({ pack, stockUnit, gramsPerCup, ingredientName, fallba
       gramsPerCup,
       ingredientName,
     });
-    if (derived != null) return derived;
+    if (derived != null) return derived.toString();
   }
   return fallbackPrice;
 };
@@ -53,6 +131,19 @@ const stripPackColumns = (row) => {
   delete copy.pack_price;
   return copy;
 };
+
+const stripCanonicalUnitColumns = (row) => {
+  const copy = { ...row };
+  delete copy.base_unit;
+  delete copy.unit_family;
+  delete copy.stock_scale;
+  delete copy.allow_fractional;
+  delete copy.pack_size;
+  delete copy.density_g_per_ml;
+  return copy;
+};
+
+const stripCanonicalColumns = (row) => stripPackColumns(stripCanonicalUnitColumns(row));
 
 // Helper function to get user ID - SIMPLIFIED
 // Use req.user.id directly since it already contains the numeric user ID
@@ -349,7 +440,8 @@ const createInventoryItem = async (req, res) => {
 
     console.log('📝 Creating inventory item:', { name, category, quantity, price });
 
-    const pack = readPackFields(req.body);
+    const stockUnit = unit || 'pcs';
+    const pack = readPackFields(req.body, stockUnit);
 
     if (!name || !category || quantity === undefined || (price === undefined && !(pack.pack_qty && pack.pack_price && pack.pack_unit))) {
       return res.status(400).json({
@@ -358,8 +450,8 @@ const createInventoryItem = async (req, res) => {
       });
     }
 
-    const parsedQuantity = parseRecipeQuantity(quantity);
-    if (!Number.isFinite(parsedQuantity) || parsedQuantity < 0) {
+    const parsedQuantity = parseRecipeQuantityDecimal(quantity);
+    if (!parsedQuantity?.isFinite() || parsedQuantity.lt(0)) {
       return res.status(400).json({
         success: false,
         error: 'Quantity must be a valid number greater than or equal to 0'
@@ -370,34 +462,46 @@ const createInventoryItem = async (req, res) => {
     const userId = getUserIdFromAuth(req);
     console.log('👤 User ID:', userId);
 
-    const parsedMinStock = parseRecipeQuantity(min_stock);
-    const parsedGramsPerCup = parseFloat(req.body.grams_per_cup);
-    const gramsPerCup = Number.isFinite(parsedGramsPerCup) && parsedGramsPerCup > 0 ? parsedGramsPerCup : null;
-    const stockUnit = unit || 'pcs';
+    const parsedMinStock = parseRecipeQuantityDecimal(min_stock);
+    const parsedGramsPerCup = parseRecipeQuantityDecimal(req.body.grams_per_cup);
+    const gramsPerCup = parsedGramsPerCup?.gt(0) ? parsedGramsPerCup.toString() : null;
+    let canonicalFields;
+    try {
+      canonicalFields = inventoryUnitMetadata({
+        unit: stockUnit,
+        name: name.trim(),
+        gramsPerCup,
+        packQty: pack.pack_qty,
+        packUnit: pack.pack_unit,
+      });
+    } catch (error) {
+      if (!(error instanceof UnitConversionError)) throw error;
+      return res.status(400).json({ success: false, error: error.message });
+    }
     const insertData = {
       name: name.trim(),
       category: category.trim(),
       unit: stockUnit,
-      quantity: parsedQuantity,
+      quantity: parsedQuantity.toDecimalPlaces(6, Decimal.ROUND_HALF_UP).toString(),
       price: resolveUnitPrice({
         pack,
         stockUnit,
         gramsPerCup,
         ingredientName: name.trim(),
-        fallbackPrice: parseFloat(price),
+        fallbackPrice: price,
       }),
-      min_stock: Number.isFinite(parsedMinStock) ? (parsedMinStock || 0) : 0,
+      min_stock: parsedMinStock?.isFinite()
+        ? parsedMinStock.toDecimalPlaces(6, Decimal.ROUND_HALF_UP).toString()
+        : '0',
       pack_qty: pack.pack_qty,
       pack_unit: pack.pack_unit,
       pack_price: pack.pack_price,
+      ...canonicalFields,
       created_by: userId,
       updated_by: userId
     };
 
-    if (req.body.grams_per_cup !== undefined && req.body.grams_per_cup !== null) {
-      const g = parseFloat(req.body.grams_per_cup);
-      insertData.grams_per_cup = Number.isFinite(g) && g > 0 ? g : null;
-    }
+    insertData.grams_per_cup = gramsPerCup;
 
     console.log('📦 Insert data:', insertData);
 
@@ -407,11 +511,18 @@ const createInventoryItem = async (req, res) => {
       .select()
       .single();
 
-    // Migration 012 not applied yet (pack columns missing): save without them.
+    // Older databases may not have the package and canonical-unit columns yet.
     if (insertResult.error && isMissingColumnError(insertResult.error)) {
       insertResult = await supabaseAdmin
         .from('ingredients')
-        .insert([stripPackColumns(insertData)])
+        .insert([stripCanonicalUnitColumns(insertData)])
+        .select()
+        .single();
+    }
+    if (insertResult.error && isMissingColumnError(insertResult.error)) {
+      insertResult = await supabaseAdmin
+        .from('ingredients')
+        .insert([stripCanonicalColumns(insertData)])
         .select()
         .single();
     }
@@ -428,9 +539,9 @@ const createInventoryItem = async (req, res) => {
       .insert([{
         ingredient_id: data.id,
         transaction_type: 'restock',
-        quantity: parsedQuantity,
-        previous_quantity: 0,
-        new_quantity: parsedQuantity,
+        quantity: parsedQuantity.toDecimalPlaces(6, Decimal.ROUND_HALF_UP).toString(),
+        previous_quantity: '0',
+        new_quantity: parsedQuantity.toDecimalPlaces(6, Decimal.ROUND_HALF_UP).toString(),
         reason: 'Initial stock',
         notes: 'Item created',
         created_by: userId
@@ -489,17 +600,31 @@ const updateInventoryItem = async (req, res) => {
     if (category !== undefined && category !== null) updateData.category = category.trim();
     if (unit !== undefined && unit !== null) updateData.unit = unit;
     if (quantity !== undefined && quantity !== null) {
-      const parsedQty = parseRecipeQuantity(quantity);
-      if (Number.isFinite(parsedQty) && parsedQty >= 0) updateData.quantity = parsedQty;
+      const parsedQty = parseRecipeQuantityDecimal(quantity);
+      if (!parsedQty?.isFinite() || parsedQty.lt(0)) {
+        return res.status(400).json({ success: false, error: 'Quantity must be a valid number greater than or equal to 0' });
+      }
+      updateData.quantity = parsedQty.toDecimalPlaces(6, Decimal.ROUND_HALF_UP).toString();
     }
-    if (price !== undefined && price !== null) updateData.price = parseFloat(price);
+    if (price !== undefined && price !== null) {
+      const parsedPrice = parseRecipeQuantityDecimal(price);
+      if (!parsedPrice?.isFinite() || parsedPrice.lt(0)) {
+        return res.status(400).json({ success: false, error: 'Price must be a valid number greater than or equal to 0' });
+      }
+      updateData.price = parsedPrice.toDecimalPlaces(6, Decimal.ROUND_HALF_UP).toString();
+    }
     if (min_stock !== undefined && min_stock !== null) {
-      const parsedMin = parseRecipeQuantity(min_stock);
-      updateData.min_stock = Number.isFinite(parsedMin) ? (parsedMin || 0) : 0;
+      const parsedMin = parseRecipeQuantityDecimal(min_stock);
+      if (!parsedMin?.isFinite() || parsedMin.lt(0)) {
+        return res.status(400).json({ success: false, error: 'Minimum stock must be a valid number greater than or equal to 0' });
+      }
+      updateData.min_stock = parsedMin.toDecimalPlaces(6, Decimal.ROUND_HALF_UP).toString();
     }
     if (req.body.grams_per_cup !== undefined) {
-      const g = parseFloat(req.body.grams_per_cup);
-      updateData.grams_per_cup = Number.isFinite(g) && g > 0 ? g : null;
+      const g = parseRecipeQuantityDecimal(req.body.grams_per_cup);
+      updateData.grams_per_cup = g?.gt(0)
+        ? g.toDecimalPlaces(6, Decimal.ROUND_HALF_UP).toString()
+        : null;
     }
 
     // The pack is only touched when the client actually sent it, so older
@@ -507,7 +632,8 @@ const updateInventoryItem = async (req, res) => {
     const packSent = req.body.pack_qty !== undefined
       || req.body.pack_unit !== undefined
       || req.body.pack_price !== undefined;
-    const pack = readPackFields(req.body);
+    const nextStockUnit = updateData.unit !== undefined ? updateData.unit : currentItem.unit;
+    const pack = readPackFields(req.body, nextStockUnit);
     if (packSent) {
       updateData.pack_qty = pack.pack_qty;
       updateData.pack_unit = pack.pack_unit;
@@ -517,13 +643,25 @@ const updateInventoryItem = async (req, res) => {
     // Re-derive the unit cost from the pack when one is set (see
     // resolveUnitPrice); otherwise keep the price from the request.
     const effective = {
-      unit: updateData.unit !== undefined ? updateData.unit : currentItem.unit,
+      unit: nextStockUnit,
       name: updateData.name !== undefined ? updateData.name : currentItem.name,
       gramsPerCup: updateData.grams_per_cup !== undefined ? updateData.grams_per_cup : currentItem.grams_per_cup,
       pack_qty: packSent ? updateData.pack_qty : currentItem.pack_qty,
       pack_unit: packSent ? updateData.pack_unit : currentItem.pack_unit,
       pack_price: packSent ? updateData.pack_price : currentItem.pack_price,
     };
+    try {
+      Object.assign(updateData, inventoryUnitMetadata({
+        unit: effective.unit,
+        name: effective.name,
+        gramsPerCup: effective.gramsPerCup,
+        packQty: effective.pack_qty,
+        packUnit: effective.pack_unit,
+      }));
+    } catch (error) {
+      if (!(error instanceof UnitConversionError)) throw error;
+      return res.status(400).json({ success: false, error: error.message });
+    }
     const resolvedPrice = resolveUnitPrice({
       pack: { pack_qty: effective.pack_qty, pack_unit: effective.pack_unit, pack_price: effective.pack_price },
       stockUnit: effective.unit,
@@ -543,11 +681,19 @@ const updateInventoryItem = async (req, res) => {
       .select()
       .single();
 
-    // Migration 012 not applied yet (pack columns missing): save the rest.
-    if (updateResult.error && isMissingColumnError(updateResult.error) && packSent) {
+    // Older databases may not have the package and canonical-unit columns yet.
+    if (updateResult.error && isMissingColumnError(updateResult.error)) {
       updateResult = await supabaseAdmin
         .from('ingredients')
-        .update(stripPackColumns(updateData))
+        .update(stripCanonicalUnitColumns(updateData))
+        .eq('id', id)
+        .select()
+        .single();
+    }
+    if (updateResult.error && isMissingColumnError(updateResult.error)) {
+      updateResult = await supabaseAdmin
+        .from('ingredients')
+        .update(stripCanonicalColumns(updateData))
         .eq('id', id)
         .select()
         .single();
@@ -565,17 +711,18 @@ const updateInventoryItem = async (req, res) => {
     // as the ingredient's last stock count, so a rejected or unchanged
     // value must not leave a row behind (it used to: e.g. quantity null or
     // -5 was not saved, yet an adjustment was logged).
-    const previousQuantity = Number(currentItem.quantity) || 0;
+    const previousQuantity = new Decimal(String(currentItem.quantity || '0'));
     const quantityWritten = Object.prototype.hasOwnProperty.call(updateData, 'quantity');
-    if (quantityWritten && updateData.quantity !== previousQuantity) {
+    const nextQuantity = quantityWritten ? new Decimal(updateData.quantity) : previousQuantity;
+    if (quantityWritten && !nextQuantity.eq(previousQuantity)) {
       await supabaseAdmin
         .from('inventory_transactions')
         .insert([{
           ingredient_id: id,
           transaction_type: 'adjustment',
-          quantity: updateData.quantity - previousQuantity,
-          previous_quantity: previousQuantity,
-          new_quantity: updateData.quantity,
+          quantity: nextQuantity.minus(previousQuantity).toString(),
+          previous_quantity: previousQuantity.toString(),
+          new_quantity: nextQuantity.toString(),
           reason: 'Stock adjustment',
           notes: 'Updated via edit',
           created_by: userId
@@ -754,17 +901,9 @@ const restoreInventoryItem = async (req, res) => {
 const restockInventoryItem = async (req, res) => {
   try {
     const { id } = req.params;
-    const { quantity, reason, notes } = req.body;
+    const { quantity, pack_count: rawPackCount, reason, notes } = req.body;
 
-    console.log('📦 Restocking inventory item:', { id, quantity });
-
-    const restockQuantity = parseRecipeQuantity(quantity);
-    if (!Number.isFinite(restockQuantity) || restockQuantity <= 0) {
-      return res.status(400).json({
-        success: false,
-        error: 'Valid quantity is required'
-      });
-    }
+    console.log('📦 Restocking inventory item:', { id, quantity, pack_count: rawPackCount });
 
     const { data: currentItem, error: fetchError } = await supabaseAdmin
       .from('ingredients')
@@ -776,49 +915,148 @@ const restockInventoryItem = async (req, res) => {
       return res.status(404).json({ success: false, error: 'Item not found' });
     }
 
+    const packCount = rawPackCount === undefined || rawPackCount === null || rawPackCount === ''
+      ? null
+      : parseRecipeQuantityDecimal(rawPackCount);
+    let restockQuantity;
+    if (packCount !== null) {
+      if (!packCount?.isFinite() || packCount.lte(0)) {
+        return res.status(400).json({ success: false, error: 'Pack count must be greater than zero' });
+      }
+      let packSize = currentItem.pack_size;
+      if (packSize == null && currentItem.pack_qty != null && currentItem.pack_unit) {
+        try {
+          packSize = inventoryUnitMetadata({
+            unit: currentItem.unit,
+            name: currentItem.name,
+            gramsPerCup: currentItem.grams_per_cup,
+            packQty: currentItem.pack_qty,
+            packUnit: currentItem.pack_unit,
+          }).pack_size;
+        } catch (error) {
+          if (!(error instanceof UnitConversionError)) throw error;
+          return res.status(400).json({ success: false, error: error.message });
+        }
+      }
+      const packSizeDecimal = packSize == null ? null : new Decimal(String(packSize));
+      if (!packSizeDecimal?.isFinite() || packSizeDecimal.lte(0)) {
+        return res.status(400).json({
+          success: false,
+          error: 'This ingredient does not have a valid pack size. Update its pack details before restocking by pack.',
+        });
+      }
+      restockQuantity = packCount.mul(packSizeDecimal);
+    } else {
+      restockQuantity = parseRecipeQuantityDecimal(quantity);
+      if (!restockQuantity?.isFinite() || restockQuantity.lte(0)) {
+        return res.status(400).json({ success: false, error: 'Valid quantity is required' });
+      }
+    }
+    restockQuantity = restockQuantity.toDecimalPlaces(6, Decimal.ROUND_HALF_UP);
+
     const userId = getUserIdFromAuth(req);
     console.log('👤 User ID:', userId);
     
-    const newQuantity = currentItem.quantity + restockQuantity;
+    const packNote = packCount === null
+      ? null
+      : `Received ${formatStockAmount(packCount)} pack${packCount.eq(1) ? '' : 's'}`
+        + ` (${formatStockAmount(restockQuantity)} ${currentItem.unit || currentItem.base_unit || 'units'})`;
+    const restockNotes = [
+      notes || null,
+      packNote,
+    ].filter(Boolean).join(' · ') || null;
 
-    const { data, error } = await supabaseAdmin
-      .from('ingredients')
-      .update({
-        quantity: newQuantity,
-        updated_by: userId
-      })
-      .eq('id', id)
-      .select()
-      .single();
+    // The incoming stock is stock on hand, so the pending sales shortfalls of
+    // earlier uploads are hidden from the stock function while it runs and
+    // put back unchanged afterwards.
+    const pendingShortfalls = await readPendingShortfalls(Number(id));
+    let restockResult = null;
+    let restockError = null;
+    try {
+      try {
+        await writeShortfallRemaining(
+          pendingShortfalls.map((row) => ({ ...row, remaining_quantity: '0' }))
+        );
+      } catch (hideError) {
+        // The delivery has to reach the stock balance either way, so the
+        // correction further down takes over.
+        console.warn('Could not hide the pending shortfalls:', hideError.message);
+      }
+      const rpc = await supabaseAdmin.rpc('restock_ingredient_stock', {
+        p_ingredient_id: Number(id),
+        p_quantity: restockQuantity.toString(),
+        p_updated_by: userId,
+        p_reason: reason || 'Restock',
+        p_notes: restockNotes,
+      });
+      restockResult = rpc.data;
+      restockError = rpc.error;
+    } finally {
+      try {
+        await writeShortfallRemaining(pendingShortfalls);
+      } catch (restoreError) {
+        console.error('Could not restore the pending shortfalls:', restoreError.message);
+      }
+    }
 
-    if (error) throw error;
+    if (restockError) throw restockError;
+    const restockRow = Array.isArray(restockResult) ? restockResult[0] : restockResult;
+    if (!restockRow) {
+      throw new Error(`Restock result was empty for ingredient ${id}`);
+    }
+    const newQuantity = new Decimal(String(restockRow.new_quantity));
+    const receivedQuantity = new Decimal(String(restockRow.received_quantity));
+    const addedQuantity = new Decimal(String(restockRow.added_quantity));
+    const unitLabel = currentItem.unit || currentItem.base_unit || 'units';
 
-    await supabaseAdmin
-      .from('inventory_transactions')
-      .insert([{
-        ingredient_id: id,
-        transaction_type: 'restock',
-        quantity: restockQuantity,
-        previous_quantity: currentItem.quantity,
-        new_quantity: newQuantity,
-        reason: reason || 'Restock',
-        notes: notes || null,
-        created_by: userId
-      }]);
+    // The stock that was received has to land in the stock balance. A
+    // database that still runs the older version of the stock function pays
+    // earlier sales shortfalls with the incoming stock first, so the
+    // delivery never reaches the balance; the withheld part is put back
+    // here, so adding stock always moves the stock.
+    const withheld = receivedQuantity.minus(addedQuantity);
+    const finalQuantity = withheld.gt(0) ? newQuantity.plus(withheld) : newQuantity;
+    if (withheld.gt(0)) {
+      const { error: updateError } = await supabaseAdmin
+        .from('ingredients')
+        .update({ quantity: finalQuantity.toString(), updated_by: userId })
+        .eq('id', id);
+      if (updateError) throw updateError;
+    }
+
+    const data = { ...currentItem, quantity: finalQuantity.toString() };
+
+    // The movement row is finished here, so the numbers in the stock history
+    // never carry the raw decimals of the database ("30.000000").
+    await writeRestockNote(
+      Number(id),
+      receivedQuantity,
+      {
+        quantity: receivedQuantity.toString(),
+        newQuantity: finalQuantity.toString(),
+        note: [
+          notes || null,
+          packNote,
+          packNote
+            ? `Stock is now ${formatStockAmount(finalQuantity)} ${unitLabel}.`
+            : `Received ${formatStockAmount(receivedQuantity)} ${unitLabel}; `
+              + `stock is now ${formatStockAmount(finalQuantity)} ${unitLabel}.`,
+        ].filter(Boolean).join(' · '),
+      }
+    );
 
     await logAction(
       'item_restocked',
-      `Restocked ingredient "${currentItem.name}" by ${restockQuantity} ${currentItem.unit || ''}`,
+      `Restocked ingredient "${currentItem.name}" by ${formatStockAmount(receivedQuantity)} ${unitLabel}`,
       actorOf(req)
     );
 
-    console.log('✅ Item restocked successfully:', { id, newQuantity });
-    // A delivery can clear alerts. Not awaited and never throws.
-    queueStockRefresh('restock');
+    console.log('✅ Item restocked successfully:', { id, newQuantity: finalQuantity.toString() });
     res.json({
       success: true,
       data,
-      message: `Added ${quantity} units to ${currentItem.name}`
+      message: `Added ${formatStockAmount(receivedQuantity)} ${unitLabel} to ${currentItem.name}. `
+        + `Stock is now ${formatStockAmount(finalQuantity)} ${unitLabel}.`
     });
   } catch (error) {
     console.error('Error restocking item:', error);
@@ -859,6 +1097,64 @@ const getItemTransactions = async (req, res) => {
   }
 };
 
+// The recipes one ingredient is used in: the dishes that use it and how much
+// of it one serving of that dish takes.
+//
+// Read only on purpose. The portion belongs to the dish, not to the
+// ingredient, so it is edited in the Menu Builder. The ingredient window
+// only shows where the portions already are, so nobody types a portion into
+// the purchase pack fields.
+const getIngredientRecipes = async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    let { data: lines, error } = await supabaseAdmin
+      .from('product_ingredients')
+      .select('product_id, quantity_per_serving, unit')
+      .eq('ingredient_id', id);
+
+    // product_ingredients.unit arrived with migration 008. A database that
+    // has not run it yet still answers without the column.
+    if (error && isMissingColumnError(error)) {
+      const fallback = await supabaseAdmin
+        .from('product_ingredients')
+        .select('product_id, quantity_per_serving')
+        .eq('ingredient_id', id);
+      if (fallback.error) throw fallback.error;
+      lines = fallback.data;
+    } else if (error) {
+      throw error;
+    }
+
+    if (!lines || lines.length === 0) {
+      return res.json({ success: true, data: [] });
+    }
+
+    const productIds = [...new Set(lines.map((line) => line.product_id).filter((value) => value != null))];
+    let names = new Map();
+    if (productIds.length > 0) {
+      const { data: products, error: productError } = await supabaseAdmin
+        .from('products')
+        .select('id, name')
+        .in('id', productIds);
+      if (productError) throw productError;
+      names = new Map((products || []).map((product) => [product.id, product.name]));
+    }
+
+    const data = lines.map((line) => ({
+      product_id: line.product_id,
+      product_name: names.get(line.product_id) || 'Unknown product',
+      quantity_per_serving: line.quantity_per_serving,
+      unit: line.unit || null,
+    }));
+
+    res.json({ success: true, data });
+  } catch (error) {
+    console.error('Error fetching ingredient recipes:', error);
+    res.status(500).json({ success: false, error: error.message });
+  }
+};
+
 module.exports = {
   getInventoryItems,
   getInventoryItem,
@@ -868,5 +1164,6 @@ module.exports = {
   archiveInventoryItem,
   restoreInventoryItem,
   restockInventoryItem,
-  getItemTransactions
+  getItemTransactions,
+  getIngredientRecipes
 };

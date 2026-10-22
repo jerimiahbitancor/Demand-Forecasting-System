@@ -291,6 +291,7 @@ router.post(
             productsDetected: salesProcessingResult.productsDetected || 0,
             productsUpdated: salesProcessingResult.productsUpdated || 0,
             warnings: salesProcessingResult.warnings || [],
+            unconvertibleIngredients: salesProcessingResult.unconvertibleIngredients || [],
             // Owner's flowchart page 2, "Output (upload summary)".
             uploadSummary: salesProcessingResult.uploadSummary || null
           };

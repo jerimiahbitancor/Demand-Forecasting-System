@@ -12,7 +12,16 @@
 // the pure logic so it can be tested without a database:
 //   splitModifiers()        name -> { baseName, modifiers, modifierOnly }
 //   aggregateSalesRecords() file rows -> daily_sales + daily_sales_modifiers rows
-//   computeStockDeductions() how much of each ingredient one upload used
+//   computeStockDeductionsByDate() how much of each ingredient one upload used
+//
+// QUANTITY PRECISION (hardening task): every quantity is a decimal.js
+// Decimal. Postgres numerics arrive as strings and are parsed into Decimal,
+// never through Number(); arithmetic is exact until the single final
+// rounding in roundQuantity().
+
+const Decimal = require('decimal.js');
+
+Decimal.set({ precision: 40, rounding: Decimal.ROUND_HALF_UP });
 
 // Characters allowed between a dish name and a trailing modifier, and
 // between two modifiers: spaces, commas, dashes, slashes, colons.
@@ -121,6 +130,7 @@ function splitModifiers(name, keywords) {
   };
 }
 
+// Plates are whole numbers: "3.5 sold" means 4 plates sold.
 function toWholeNumber(value) {
   const parsed = parseFloat(value);
   return Number.isFinite(parsed) ? Math.round(parsed) : 0;
@@ -232,16 +242,31 @@ function aggregateSalesRecords(records, { productIdByName, keywords = [], upload
  *   10 plain + 3 NO EGG + 2 NO RICE = 15 plates -> egg 12, rice 13.
  *
  * perServingFor(recipeRow) returns the per-plate amount in the ingredient's
- * own unit (uploadService passes the recipe-unit conversion).
+ * CANONICAL base unit, as a Decimal (uploadService passes the
+ * unitService.resolve() result). Returning a number is still accepted for
+ * compatibility with older callers, but a Decimal is exact.
  *
  * deductingProductIds: the products that deduct. Since v3 that is every
  * product in the file that is not archived (New and Discontinued dishes used
  * real ingredients too); a product without a recipe simply adds nothing.
  * `activeProductIds` is the old name, still accepted.
  *
- * Returns Map<ingredient_id, Map<sale_date 'YYYY-MM-DD', amount>> — per day,
- * because each day is checked against the ingredient's last stock count
- * (shouldDeduct) before anything is taken from stock.
+ * Returns Map<ingredient_id, {
+ *   exact: Decimal,            // the exact total over every day
+ *   byDate: Map<sale_date, Decimal>,  // the exact amount per day
+ *   skippedDates: string[],    // days the timing rule skipped
+ *   unitWarnings: object[],    // units that could not be resolved
+ * }>
+ *
+ * A recipe whose unit cannot be resolved (no density, no pack size, an
+ * unknown unit) makes the WHOLE ingredient unconvertible: the total would
+ * otherwise be silently short. Such an ingredient is removed from the map
+ * and reported in the returned `unconvertible` list, so the caller can warn
+ * the owner instead of deducting a wrong amount.
+ *
+ * The exact total is NOT rounded here: the rounding happens ONCE, at the end,
+ * in roundQuantity() (see the hardening task, U4). The per-date values are
+ * kept so the "not deducted for <days>" note can still be written.
  */
 function computeStockDeductionsByDate({
   dailySalesRows = [],
@@ -253,12 +278,15 @@ function computeStockDeductionsByDate({
   perServingFor,
 }) {
   const deducting = deductingProductIds || activeProductIds;
-  const platesWithoutIngredient = new Map(); // product|date|ingredient -> plates
+  const platesWithoutIngredient = new Map(); // product|date|ingredient -> Decimal
   for (const modifier of modifierRows) {
     const ingredientId = ingredientIdByKeyword.get(normalizeKeyword(modifier.keyword));
     if (ingredientId === undefined || ingredientId === null) continue;
     const key = `${modifier.product_id}|${modifier.sale_date}|${ingredientId}`;
-    platesWithoutIngredient.set(key, (platesWithoutIngredient.get(key) || 0) + Number(modifier.quantity || 0));
+    platesWithoutIngredient.set(
+      key,
+      (platesWithoutIngredient.get(key) || new Decimal(0)).plus(new Decimal(modifier.quantity || 0))
+    );
   }
 
   const recipesByProduct = new Map();
@@ -267,33 +295,138 @@ function computeStockDeductionsByDate({
     recipesByProduct.get(recipe.product_id).push(recipe);
   }
 
+  // ingredient_id -> { exact, byDate, skippedDates, unitWarnings, unconvertible }
   const byIngredient = new Map();
+  const entryFor = (ingredientId) => {
+    if (!byIngredient.has(ingredientId)) {
+      byIngredient.set(ingredientId, {
+        exact: new Decimal(0),
+        byDate: new Map(),
+        skippedDates: [],
+        unitWarnings: [],
+        unconvertible: false,
+      });
+    }
+    return byIngredient.get(ingredientId);
+  };
+
+  // A recipe is resolved once, not once per sale date.
+  const resolvedCache = new Map();
+  const resolveRecipe = (recipe) => {
+    if (resolvedCache.has(recipe)) return resolvedCache.get(recipe);
+    let result;
+    try {
+      const perServing = perServingFor(recipe);
+      if (perServing instanceof Decimal) {
+        result = { baseAmount: perServing };
+      } else if (perServing && perServing.baseAmount instanceof Decimal) {
+        // A unitService.resolve() result: { baseAmount, baseUnit }.
+        result = { baseAmount: perServing.baseAmount, baseUnit: perServing.baseUnit };
+      } else if (perServing == null) {
+        result = { baseAmount: null };
+      } else {
+        result = { baseAmount: new Decimal(perServing) };
+      }
+    } catch (error) {
+      result = {
+        baseAmount: null,
+        error,
+        code: error && error.code ? error.code : 'UNIT_CONVERSION_FAILED',
+        reason: error && error.message ? error.message : String(error),
+      };
+    }
+    resolvedCache.set(recipe, result);
+    return result;
+  };
+
   for (const sale of dailySalesRows) {
     if (!deducting.has(sale.product_id)) continue;
     const day = String(sale.sale_date).slice(0, 10);
     for (const recipe of recipesByProduct.get(sale.product_id) || []) {
-      const without = platesWithoutIngredient.get(`${sale.product_id}|${sale.sale_date}|${recipe.ingredient_id}`) || 0;
-      const plates = Math.max(0, Number(sale.quantity_sold) - without);
-      const amount = Number(perServingFor(recipe)) * plates;
-      if (!Number.isFinite(amount) || amount <= 0) continue;
-      if (!byIngredient.has(recipe.ingredient_id)) byIngredient.set(recipe.ingredient_id, new Map());
-      const byDay = byIngredient.get(recipe.ingredient_id);
-      byDay.set(day, (byDay.get(day) || 0) + amount);
+      const without = platesWithoutIngredient.get(`${sale.product_id}|${sale.sale_date}|${recipe.ingredient_id}`) || new Decimal(0);
+      const plates = new Decimal(sale.quantity_sold || 0).minus(without);
+      if (!plates.gt(0)) continue;
+
+      const resolved = resolveRecipe(recipe);
+      if (resolved.error) {
+        const entry = entryFor(recipe.ingredient_id);
+        entry.unconvertible = true;
+        entry.unitWarnings.push({
+          ingredient_id: recipe.ingredient_id,
+          product_id: recipe.product_id,
+          recipe_id: recipe.id != null ? recipe.id : null,
+          from_unit: recipe.unit || null,
+          code: resolved.code,
+          reason: resolved.reason,
+        });
+        continue;
+      }
+
+      const perServingDecimal = resolved.baseAmount;
+      if (perServingDecimal == null) continue;
+      if (!perServingDecimal.isFinite() || perServingDecimal.lte(0)) continue;
+
+      const entry = entryFor(recipe.ingredient_id);
+      const amount = perServingDecimal.mul(plates);
+
+      entry.exact = entry.exact.plus(amount);
+      entry.byDate.set(day, (entry.byDate.get(day) || new Decimal(0)).plus(amount));
     }
   }
+
+  // An ingredient with ONE unresolvable recipe must not be deducted from a
+  // total that is missing part of its usage: take it out of the map and
+  // report it instead.
+  const unconvertible = [];
+  for (const [ingredientId, entry] of byIngredient) {
+    if (!entry.unconvertible) continue;
+    entry.exact = new Decimal(0);
+    entry.byDate.clear();
+    unconvertible.push({
+      ingredient_id: ingredientId,
+      warnings: entry.unitWarnings,
+    });
+  }
+
+  byIngredient.unconvertible = unconvertible;
   return byIngredient;
 }
 
 // Same as computeStockDeductionsByDate, summed over the days:
-// Map<ingredient_id, amount>.
+// Map<ingredient_id, Decimal>.
 function computeStockDeductions(args) {
   const totals = new Map();
-  for (const [ingredientId, byDay] of computeStockDeductionsByDate(args)) {
-    let sum = 0;
-    for (const amount of byDay.values()) sum += amount;
-    totals.set(ingredientId, sum);
+  for (const [ingredientId, entry] of computeStockDeductionsByDate(args)) {
+    if (entry.unconvertible) continue;
+    totals.set(ingredientId, entry.exact);
   }
   return totals;
+}
+
+// ---------------------------------------------------------------------------
+// Rounding — the ONE place a quantity is rounded (U4).
+//
+//   mass / volume  -> half-up to stock_scale (default 3)
+//   count, allow_fractional = false -> CEIL to a whole piece (egg, pack)
+//   count, allow_fractional = true  -> half-up to stock_scale
+//
+// Returns a Decimal. A rounded amount of 0 means "do not deduct at all".
+// ---------------------------------------------------------------------------
+function roundQuantity(exact, ingredient = {}) {
+  const value = exact instanceof Decimal ? exact : new Decimal(exact == null ? 0 : exact);
+  if (!value.isFinite() || value.lte(0)) return new Decimal(0);
+
+  const family = String(ingredient.unit_family || '').trim().toLowerCase();
+  const allowFractional = ingredient.allow_fractional === false ? false : true;
+  const scale = Number.isInteger(ingredient.stock_scale) && ingredient.stock_scale >= 0
+    ? ingredient.stock_scale
+    : 3;
+
+  if (family === 'count' && allowFractional === false) {
+    // A discrete unit cannot be split: 1.5 eggs means 2 eggs.
+    return value.toDecimalPlaces(0, Decimal.ROUND_CEIL);
+  }
+  return value.toDecimalPlaces(scale, Decimal.ROUND_HALF_UP);
 }
 
 // ---------------------------------------------------------------------------
@@ -320,12 +453,21 @@ function businessDayEnd(saleDate) {
   return new Date(`${iso}T03:00:00${MANILA_OFFSET}`);
 }
 
-// The ingredient's last stock count: the newest of its latest 'adjustment'
-// (an Edit of the stock) and its created_at (creating it with a quantity is a
-// count). A 'restock' is a delivery, not a count, so it is never passed here.
-function lastStockCountAt({ createdAt = null, latestAdjustmentAt = null } = {}) {
-  const times = [toTime(createdAt), toTime(latestAdjustmentAt)].filter((t) => t !== null);
-  return times.length ? new Date(Math.max(...times)) : null;
+/**
+ * The ingredient's last stock count: the newest 'adjustment' row
+ * (transaction_type = 'adjustment') in inventory_transactions.
+ *
+ * 'restock' is a delivery, not a count, so it is never counted here.
+ *
+ * ingredients.created_at is NOT part of the maximum any more (U7): a row that
+ * was created with a quantity is not a count — the adjustment row written at
+ * the same moment already is one — and mixing the two made the result depend
+ * on when the ingredient row happened to be inserted. With no adjustment row
+ * there is no known count, and shouldDeduct() then deducts.
+ */
+function lastStockCountAt({ latestAdjustmentAt = null } = {}) {
+  const countTime = toTime(latestAdjustmentAt);
+  return countTime === null ? null : new Date(countTime);
 }
 
 // Deduct a day's plates only if that day ENDED after the last stock count.
@@ -345,31 +487,47 @@ function unitLabel(unit) {
 }
 
 // Up to 3 decimals for display, trailing zeros dropped: 9.07, 0, 1.234.
-// The database keeps the full value.
+// The database keeps the full value. No float is involved: the Decimal is
+// formatted, never converted to a number.
 function formatAmount(value) {
-  const n = Number(value) || 0;
-  return String(Number(n.toFixed(3)));
+  const n = value instanceof Decimal ? value : new Decimal(value == null ? 0 : value);
+  if (!n.isFinite()) return '0';
+  return n.toDecimalPlaces(3, Decimal.ROUND_HALF_UP).toString();
 }
 
 /**
  * The shortfall when a deduction is bigger than the stock it found.
  * Returns null when there was enough. Stock itself still floors at 0
  * (deduct_ingredient_stock does that).
+ *
+ * `requested` and `inStock` are Decimals (or numeric strings): both are
+ * reported, so the owner sees how much was asked for and how much was there.
+ *
+ * `shortfall` stays a number because it is part of the existing notification
+ * and summary payload. `shortfallExact` carries the unrounded decimal as a
+ * string, so no precision is lost for callers that care.
  */
-function describeShortfall({ ingredientName, unit, requested, inStock }) {
-  const requestedN = Number(requested) || 0;
-  const stockN = Math.max(0, Number(inStock) || 0);
-  const shortfall = requestedN - stockN;
-  if (!(shortfall > 0)) return null;
+function describeShortfall({ ingredientName, unit, requested, required = requested, inStock }) {
+  const requestedN = requested instanceof Decimal ? requested : new Decimal(requested == null ? 0 : requested);
+  const requiredN = required instanceof Decimal ? required : new Decimal(required == null ? requestedN : required);
+  const stockN = inStock instanceof Decimal ? inStock : new Decimal(inStock == null ? 0 : inStock);
+  const stock = stockN.isFinite() && stockN.gt(0) ? stockN : new Decimal(0);
+  const shortfall = requiredN.minus(stock);
+  if (!shortfall.gt(0)) return null;
   const u = unitLabel(unit);
   const amount = (n) => (u ? `${formatAmount(n)} ${u}` : formatAmount(n));
   const name = ingredientName || 'This ingredient';
+  const roundedText = requiredN.eq(requestedN) ? '' : ` (rounded to ${amount(requiredN)})`;
+  const message = stock.isZero()
+    ? `${name}: ${amount(requestedN)} requested${roundedText}, but no stock was available. None of this usage could be deducted; record the usage and restock.`
+    : `${name}: ${amount(requestedN)} requested${roundedText}, ${amount(stock)} available; ${amount(shortfall)} could not be deducted.`;
   return {
-    shortfall,
-    notes: `Requested ${amount(requestedN)}, only ${amount(stockN)} in stock. Shortfall ${amount(shortfall)}.`,
+    shortfall: shortfall.toNumber(),
+    shortfallExact: shortfall.toString(),
+    notes: `Requested ${amount(requestedN)}${roundedText}, only ${amount(stock)} in stock. Shortfall ${amount(shortfall)}.`,
     // Not "Low stock": that reads like the separate low/out-of-stock alert.
     title: `Stock shortfall: ${name}`,
-    message: `${name}: ${amount(requestedN)} used but ${amount(stockN)} in stock. Please monitor it.`,
+    message,
   };
 }
 
@@ -385,4 +543,6 @@ module.exports = {
   unitLabel,
   formatAmount,
   describeShortfall,
+  roundQuantity,
+  Decimal,
 };

@@ -107,6 +107,12 @@ function buildUploadSummary({
     ingredientId: s.ingredientId,
     ingredient: s.name || `ingredient #${s.ingredientId}`,
     shortfall: s.shortfall,
+    shortfallExact: s.shortfallExact || String(s.shortfall),
+    requestedExact: s.requestedExact || null,
+    requestedQuantity: s.requiredQuantity || null,
+    availableQuantity: s.availableQuantity || null,
+    appliedQuantity: s.applied || null,
+    unit: s.unit || null,
     message: s.message,
   }));
 

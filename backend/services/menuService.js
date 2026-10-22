@@ -1,7 +1,7 @@
 // services/menuService.js
 const { supabase, isConfigured, supabaseAdmin } = require('../config/supabase');
 const { PRODUCT_STATUS_NOTES, PRODUCT_DB_STATUS_BY_DERIVED } = require('./productStatusConstants');
-const { isMissingColumnError } = require('../utils/recipeUnits');
+const { isMissingColumnError, recipeQuantityForStorage } = require('../utils/recipeUnits');
 
 class MenuService {
   constructor() {
@@ -568,7 +568,7 @@ isValidUserId(userId) {
         .insert({
           product_id: data.product_id,
           ingredient_id: data.ingredient_id,
-          quantity_per_serving: String(data.quantity_per_serving ?? '').trim() || '1',
+          quantity_per_serving: recipeQuantityForStorage(String(data.quantity_per_serving ?? '').trim() || '1'),
           unit: (data.unit && String(data.unit).trim()) || null
         });
 
@@ -577,7 +577,7 @@ isValidUserId(userId) {
           .insert({
             product_id: data.product_id,
             ingredient_id: data.ingredient_id,
-            quantity_per_serving: String(data.quantity_per_serving ?? '').trim() || '1'
+            quantity_per_serving: recipeQuantityForStorage(String(data.quantity_per_serving ?? '').trim() || '1')
           });
       }
 

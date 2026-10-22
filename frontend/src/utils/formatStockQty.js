@@ -1,6 +1,7 @@
-// Display rule for stock and ingredient amounts (DFS Formulas v3.2):
-// the database keeps the full value; the screen shows 3 decimals.
-//   4.0999999999 kg -> "4.100"     0.706999999 L -> "0.707"
+// Display rule for stock and ingredient amounts:
+// the database keeps the full value; the screen shows up to 3 decimals and
+// hides insignificant trailing zeros.
+//   4.0999999999 kg -> "4.1"     0.706999999 L -> "0.707"
 // Count units (pcs, sachets, packs...) -> a whole number when whole,
 // otherwise up to 3 decimals without trailing zeros: 36 pcs -> "36",
 // 0.5 pcs -> "0.5".
@@ -42,7 +43,19 @@ export function formatStockQty(value, unit) {
     // Up to 3 decimals, trailing zeros dropped: 36 -> "36", 0.5 -> "0.5".
     return String(Number(n.toFixed(3)));
   }
-  return n.toFixed(3);
+  return n.toFixed(3).replace(/(?:\.0+|(\.\d*?[1-9])0+)$/, '$1');
+}
+
+// The transaction notes are plain text written by the database. Every amount
+// in them is cleaned up the same way the numbers are, so the stock history
+// never shows the raw decimals of the database:
+//   "Received 150.000000 Grams (g)" -> "Received 150 Grams (g)"
+//   "applied: 0.500000" -> "applied: 0.5"
+export function cleanStockNoteText(text) {
+  if (text === null || text === undefined) return '';
+  return String(text)
+    .replace(/(\d+)\.(\d*?[1-9])0+(?!\d)/g, '$1.$2')
+    .replace(/(\d+)\.0+(?!\d)/g, '$1');
 }
 
 export default formatStockQty;

@@ -23,7 +23,7 @@ import {
 import axios from 'axios';
 import toast from 'react-hot-toast';
 import { useAuth } from "../../../context/AuthContext";
-import { parseRecipeQuantity, deriveUnitPrice } from "../../../utils/recipeUnits";
+import { parseRecipeQuantity, deriveUnitPrice, setUnitMetadata } from "../../../utils/recipeUnits";
 import { formatStockQty } from "../../../utils/formatStockQty.js";
 import Tippy from '@tippyjs/react';
 import 'tippy.js/dist/tippy.css';
@@ -86,6 +86,10 @@ const IngredientManagement = () => {
   const [selectedIds, setSelectedIds] = useState([]);
   const [isBulkArchiveOpen, setIsBulkArchiveOpen] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
+  // Inline stock count in the table (the row that is being edited right now).
+  const [editingStockId, setEditingStockId] = useState(null);
+  const [editingStockValue, setEditingStockValue] = useState('');
+  const [savingStock, setSavingStock] = useState(false);
 
   // Refs for preventing multiple requests
   const isInitialMount = useRef(true);
@@ -111,6 +115,7 @@ const IngredientManagement = () => {
 
   const [restockData, setRestockData] = useState({
     quantity: '',
+    mode: 'stock',
     reason: '',
     notes: ''
   });
@@ -360,7 +365,14 @@ const IngredientManagement = () => {
   const fetchUnits = useCallback(async () => {
     try {
       const response = await apiClient.get('/units');
-      if (response.data.success) setUnits(response.data.data || []);
+      if (response.data.success) {
+        const rows = response.data.data || [];
+        setUnits(rows);
+        // The unit rows carry the family (mass / volume / count) and the piece
+        // weights. The forms use them to tell a kilo from a piece, so they
+        // have to be known here too.
+        setUnitMetadata(rows);
+      }
     } catch (error) {
       console.error('Error fetching units:', error);
     }
@@ -402,7 +414,11 @@ const IngredientManagement = () => {
   // The unit cost is always what one stock unit costs. When a purchase pack is
   // filled in ("150 g for ₱200") it is derived from the pack, so what the
   // owner typed as a cost can never drift from the pack.
-  const buildItemPayload = () => {
+  // The stock is NOT part of an edit: the Current Stock field in the edit
+  // window is locked, and sending a stale number would overwrite a movement
+  // that happened while the window was open. The stock is set in the Current
+  // Stock column of the list or with Add Stock.
+  const buildItemPayload = ({ includeQuantity = true } = {}) => {
     const derived = deriveUnitPrice({
       packQty: formData.pack_qty,
       packUnit: formData.pack_unit,
@@ -411,9 +427,8 @@ const IngredientManagement = () => {
       gramsPerCup: formData.grams_per_cup,
       ingredientName: formData.name
     });
-    return {
+    const payload = {
       ...formData,
-      quantity: parseRecipeQuantity(formData.quantity),
       price: derived != null ? derived : parseFloat(formData.price),
       market_price: parseFloat(formData.market_price) || 0,
       min_stock: parseRecipeQuantity(formData.min_stock) || 0,
@@ -422,6 +437,9 @@ const IngredientManagement = () => {
       pack_unit: formData.pack_unit || null,
       pack_price: formData.pack_price ? parseFloat(formData.pack_price) : null
     };
+    if (includeQuantity) payload.quantity = parseRecipeQuantity(formData.quantity);
+    else delete payload.quantity;
+    return payload;
   };
 
   const handleAddItem = async () => {
@@ -450,13 +468,19 @@ const IngredientManagement = () => {
     
     setIsSubmitting(true);
     try {
-      const response = await apiClient.put(`/inventory/items/${selectedItem.id}`, buildItemPayload());
+      const response = await apiClient.put(`/inventory/items/${selectedItem.id}`, buildItemPayload({ includeQuantity: false }));
 
       if (response.data.success) {
+        // The stock is not touched by an edit, but the row and the detail
+        // panel have to show the saved item right away.
+        const updatedItem = response.data?.data;
+        if (updatedItem) {
+          setSelectedItem((current) => (current ? { ...current, ...updatedItem } : current));
+        }
         toast.success('Item updated successfully!');
         resetForm();
         setIsEditModalOpen(false);
-        setTimeout(() => fetchInventory(), 500);
+        await fetchInventory();
       }
     } catch (error) {
       toast.error(error.response?.data?.error || 'Failed to update item');
@@ -482,25 +506,40 @@ const IngredientManagement = () => {
   };
 
   const handleRestock = async () => {
-    const restockQty = parseRecipeQuantity(restockData.quantity);
-    if (!Number.isFinite(restockQty) || restockQty <= 0) {
-      toast.error('Please enter a valid quantity');
+    const enteredQuantity = parseRecipeQuantity(restockData.quantity);
+    if (!Number.isFinite(enteredQuantity) || enteredQuantity <= 0) {
+      toast.error(restockData.mode === 'packs'
+        ? 'Please enter a valid number of packs'
+        : 'Please enter a valid quantity');
       return;
     }
 
     setIsSubmitting(true);
     try {
-      const response = await apiClient.post(`/inventory/items/${selectedItem.id}/restock`, {
-        quantity: restockQty,
+      const restockPayload = {
         reason: restockData.reason,
         notes: restockData.notes
-      });
+      };
+      if (restockData.mode === 'packs') {
+        restockPayload.pack_count = String(restockData.quantity).trim();
+      } else {
+        restockPayload.quantity = String(restockData.quantity).trim();
+      }
+      const response = await apiClient.post(`/inventory/items/${selectedItem.id}/restock`, restockPayload);
 
       if (response.data.success) {
-        toast.success('Item restocked successfully!');
-        setRestockData({ quantity: '', reason: '', notes: '' });
+        toast.success(response.data.message || 'Item restocked successfully!');
+        // The stock balance moved, so the modal and the row have to show the
+        // new amount instead of the one they were opened with.
+        const updatedQuantity = response.data?.data?.quantity;
+        if (updatedQuantity !== undefined && updatedQuantity !== null) {
+          setSelectedItem((current) => (
+            current ? { ...current, quantity: updatedQuantity } : current
+          ));
+        }
+        setRestockData({ quantity: '', mode: 'stock', reason: '', notes: '' });
         setIsRestockModalOpen(false);
-        setTimeout(() => fetchInventory(), 500);
+        await fetchInventory();
       }
     } catch (error) {
       toast.error(error.response?.data?.error || 'Failed to restock item');
@@ -600,6 +639,49 @@ const IngredientManagement = () => {
   };
 
   // ============ FORM HANDLERS ============
+  // Inline stock count in the table: click the Current Stock cell, type the
+  // counted amount and press Enter (or Save). Only the quantity is sent, so
+  // the pack, the price and the minimum stock stay as they are.
+  const startStockEdit = (item) => {
+    setEditingStockId(item.id);
+    setEditingStockValue(item.quantity === null || item.quantity === undefined ? '' : String(item.quantity));
+  };
+
+  const cancelStockEdit = () => {
+    setEditingStockId(null);
+    setEditingStockValue('');
+  };
+
+  const saveStockEdit = async (item) => {
+    const amount = parseRecipeQuantity(editingStockValue);
+    if (!Number.isFinite(amount) || amount < 0) {
+      toast.error('Enter a valid stock amount');
+      return;
+    }
+    setSavingStock(true);
+    try {
+      const response = await apiClient.put(`/inventory/items/${item.id}`, { quantity: amount });
+      if (response.data.success) {
+        const savedQuantity = response.data?.data?.quantity;
+        const newQuantity = savedQuantity === null || savedQuantity === undefined
+          ? amount
+          : Number(savedQuantity);
+        setInventoryItems((items) => items.map((row) => (
+          row.id === item.id ? { ...row, quantity: newQuantity } : row
+        )));
+        setSelectedItem((current) => (
+          current && current.id === item.id ? { ...current, quantity: newQuantity } : current
+        ));
+        toast.success(`${item.name} stock set to ${formatStockQty(newQuantity, item.unit)} ${item.unit || 'pcs'}.`);
+        cancelStockEdit();
+      }
+    } catch (error) {
+      toast.error(error.response?.data?.error || 'Failed to update the stock');
+    } finally {
+      setSavingStock(false);
+    }
+  };
+
   const validateForm = () => {
     const errors = {};
     if (!formData.name || formData.name.trim() === '') {
@@ -677,7 +759,7 @@ const IngredientManagement = () => {
 
   const openRestockModal = (item) => {
     setSelectedItem(item);
-    setRestockData({ quantity: '', reason: '', notes: '' });
+    setRestockData({ quantity: '', mode: 'stock', reason: '', notes: '' });
     setIsRestockModalOpen(true);
   };
 
@@ -1110,7 +1192,6 @@ const IngredientManagement = () => {
                   <th className="sortable" onClick={() => handleSort('name')}>
                     Item Name {sortField === 'name' && (sortDirection === 'asc' ? <FaSortAmountUp /> : <FaSortAmountDown />)}
                   </th>
-                  <th>Unit</th>
                   <th className="sortable" onClick={() => handleSort('category')}>
                     Category {sortField === 'category' && (sortDirection === 'asc' ? <FaSortAmountUp /> : <FaSortAmountDown />)}
                   </th>
@@ -1150,7 +1231,6 @@ const IngredientManagement = () => {
                       <td data-label="Item Name" className="inventory-item-name-cell">
                         <span className="inventory-item-name">{item.name || 'Unnamed'}</span>
                       </td>
-                      <td data-label="Unit">{item.unit || 'pcs'}</td>
                       <td data-label="Category"><span className="category-badge">{item.category || 'Uncategorized'}</span></td>
                       <td data-label="Current Stock" className={
                         status.className === 'status-critical' ? 'inventory-critical-stock' : 
@@ -1158,7 +1238,60 @@ const IngredientManagement = () => {
                         status.className === 'status-excess' ? 'inventory-excess-stock' : 
                         status.className === 'status-normal' ? 'inventory-normal-stock' : ''
                       }>
-                        {formatStockQty(item.quantity ?? 0, item.unit)}
+                        {editingStockId === item.id ? (
+                          <div className="inventory-inline-stock">
+                            <input
+                              type="text"
+                              inputMode="decimal"
+                              className="form-input"
+                              value={editingStockValue}
+                              autoFocus
+                              onChange={(event) => setEditingStockValue(event.target.value)}
+                              onKeyDown={(event) => {
+                                if (event.key === 'Enter') {
+                                  event.preventDefault();
+                                  saveStockEdit(item);
+                                } else if (event.key === 'Escape') {
+                                  event.preventDefault();
+                                  cancelStockEdit();
+                                }
+                              }}
+                              aria-label={`Set the stock of ${item.name || 'this item'}`}
+                            />
+                            {/* The buttons sit UNDER the input: side by side they
+                                were narrower than the column and spilled into the
+                                next one. */}
+                            <div className="inventory-inline-stock-actions">
+                              <button
+                                type="button"
+                                className="inventory-inline-stock-btn save"
+                                onClick={() => saveStockEdit(item)}
+                                disabled={savingStock}
+                                title="Save the stock"
+                              >
+                                Save
+                              </button>
+                              <button
+                                type="button"
+                                className="inventory-inline-stock-btn cancel"
+                                onClick={cancelStockEdit}
+                                disabled={savingStock}
+                                title="Cancel"
+                              >
+                                Cancel
+                              </button>
+                            </div>
+                          </div>
+                        ) : (
+                          <button
+                            type="button"
+                            className="inventory-stock-value"
+                            onClick={() => startStockEdit(item)}
+                            title="Click to set the current stock"
+                          >
+                            {formatStockQty(item.quantity ?? 0, item.unit)} {item.unit || 'pcs'}
+                          </button>
+                        )}
                       </td>
                       <td data-label="Unit Cost">{formatCurrency(item.price)}</td>
                       <td data-label="Pack / Count">
@@ -1307,12 +1440,15 @@ const IngredientManagement = () => {
         }}
       />
       <EditIngredientModal
+        key={selectedItem?.id}
         isOpen={isEditModalOpen}
         isSubmitting={isSubmitting}
         formData={formData}
         formErrors={formErrors}
         categories={categories}
         units={units}
+        itemId={selectedItem?.id}
+        apiClient={apiClient}
         onChange={setFormData}
         onSubmit={handleUpdateItem}
         onClose={() => {
@@ -1323,7 +1459,7 @@ const IngredientManagement = () => {
       {isDeleteModalOpen && <InventoryConfirmationModal type="delete" item={selectedItem} isSubmitting={isSubmitting} onConfirm={handleDeleteItem} onClose={() => setIsDeleteModalOpen(false)} />}
       {isArchiveModalOpen && <ArchiveModal item={selectedItem} isSubmitting={isSubmitting} onConfirm={handleArchiveItem} onClose={() => setIsArchiveModalOpen(false)} />}
       {isRestoreModalOpen && <InventoryConfirmationModal type="restore" item={selectedItem} isSubmitting={isSubmitting} onConfirm={handleRestoreItem} onClose={() => setIsRestoreModalOpen(false)} />}
-      {isRestockModalOpen && <RestockModal item={selectedItem} data={restockData} isSubmitting={isSubmitting} onChange={setRestockData} onSubmit={handleRestock} onClose={() => { setIsRestockModalOpen(false); setRestockData({ quantity: '', reason: '', notes: '' }); }} />}
+      {isRestockModalOpen && <RestockModal item={selectedItem} data={restockData} isSubmitting={isSubmitting} onChange={setRestockData} onSubmit={handleRestock} onClose={() => { setIsRestockModalOpen(false); setRestockData({ quantity: '', mode: 'stock', reason: '', notes: '' }); }} />}
       {isHistoryModalOpen && <HistoryModal key={selectedItem?.id} item={selectedItem} apiClient={apiClient} onClose={() => setIsHistoryModalOpen(false)} />}
 
       {/* Bulk Archive Modal */}
@@ -1575,7 +1711,7 @@ const IngredientManagement = () => {
                 </div>
 
                 <div className="form-group">
-                  <label className="form-label">Quantity <span className="required-star">*</span></label>
+                  <label className="form-label">Current Stock <span className="required-star">*</span></label>
                   <input
                     type="number"
                     className={`form-input ${formErrors.quantity ? 'error' : ''}`}
@@ -1707,103 +1843,6 @@ const IngredientManagement = () => {
                 disabled={isSubmitting}
               >
                 {isSubmitting ? 'Deleting...' : <><FaTrash /> Delete Item</>}
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* Restock Modal */}
-      {isRestockModalOpen && (
-        <div className="modal-overlay" onClick={() => {
-          if (!isSubmitting) {
-            setIsRestockModalOpen(false);
-            setRestockData({ quantity: '', reason: '', notes: '' });
-          }
-        }}>
-          <div className="modal-content modal-md" onClick={(e) => e.stopPropagation()}>
-            <div className="modal-header">
-              <h3 className="modal-title">Add Stock: {selectedItem?.name}</h3>
-              <button className="modal-close-btn" onClick={() => {
-                if (!isSubmitting) {
-                  setIsRestockModalOpen(false);
-                  setRestockData({ quantity: '', reason: '', notes: '' });
-                }
-              }}>
-                <FaTimes />
-              </button>
-            </div>
-
-            <div className="modal-body">
-              <div className="restock-info">
-                <div className="current-stock">
-                  <p><strong>Current Stock:</strong> {formatStockQty(selectedItem?.quantity ?? 0, selectedItem?.unit)} {selectedItem?.unit || 'pcs'}</p>
-                  <p><strong>Minimum Level:</strong> {formatStockQty(selectedItem?.min_stock ?? 0, selectedItem?.unit)} {selectedItem?.unit || 'pcs'}</p>
-                </div>
-                
-                <div className="form-group">
-                  <label className="form-label">
-                    Quantity to Add <span className="required-star">*</span>
-                  </label>
-                  <input
-                    type="number"
-                    className="form-input"
-                    value={restockData.quantity}
-                    onChange={(e) => setRestockData({...restockData, quantity: e.target.value})}
-                    placeholder="Enter quantity"
-                    min="0.01"
-                    step="0.01"
-                  />
-                </div>
-
-                <div className="form-group">
-                  <label className="form-label">Reason</label>
-                  <select
-                    className="form-input"
-                    value={restockData.reason}
-                    onChange={(e) => setRestockData({...restockData, reason: e.target.value})}
-                  >
-                    <option value="">Select reason...</option>
-                    <option value="purchase_order">Purchase Order</option>
-                    <option value="production">Production</option>
-                    <option value="return">Return</option>
-                    <option value="adjustment">Stock Adjustment</option>
-                    <option value="other">Other</option>
-                  </select>
-                </div>
-
-                <div className="form-group">
-                  <label className="form-label">Notes</label>
-                  <textarea
-                    className="form-input"
-                    value={restockData.notes}
-                    onChange={(e) => setRestockData({...restockData, notes: e.target.value})}
-                    placeholder="Additional notes"
-                    rows={3}
-                  />
-                </div>
-              </div>
-            </div>
-
-            <div className="modal-footer">
-              <button 
-                className="btn-secondary" 
-                onClick={() => {
-                  if (!isSubmitting) {
-                    setIsRestockModalOpen(false);
-                    setRestockData({ quantity: '', reason: '', notes: '' });
-                  }
-                }}
-                disabled={isSubmitting}
-              >
-                Cancel
-              </button>
-              <button 
-                className="btn-primary" 
-                onClick={handleRestock}
-                disabled={isSubmitting}
-              >
-                {isSubmitting ? 'Processing...' : <><FaShoppingCart /> Add Stock</>}
               </button>
             </div>
           </div>
@@ -1979,12 +2018,8 @@ const IngredientManagement = () => {
                       <p>{selectedItem.category || 'N/A'}</p>
                     </div>
                     <div className="detail-item">
-                      <label>Unit</label>
-                      <p>{selectedItem.unit || 'pcs'}</p>
-                    </div>
-                    <div className="detail-item">
-                      <label>Quantity</label>
-                      <p>{formatStockQty(selectedItem.quantity ?? 0, selectedItem.unit)}</p>
+                      <label>Current Stock</label>
+                      <p>{formatStockQty(selectedItem.quantity ?? 0, selectedItem.unit)} {selectedItem.unit || 'pcs'}</p>
                     </div>
                     <div className="detail-item">
                       <label>Unit Cost</label>
