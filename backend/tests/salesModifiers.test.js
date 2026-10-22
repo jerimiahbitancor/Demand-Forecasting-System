@@ -153,9 +153,12 @@ const deductions = computeStockDeductions({
   ingredientIdByKeyword,
   perServingFor: (r) => r.per,
 });
-check('egg 12 (15 plates - 3 NO EGG)', deductions.get(EGG) === 12, String(deductions.get(EGG)));
-check('rice 13 (15 plates - 2 NO RICE)', deductions.get(RICE) === 13, String(deductions.get(RICE)));
-check('pork unaffected: 15 x 50 = 750', deductions.get(PORK) === 750, String(deductions.get(PORK)));
+// The amounts are Decimals (exact, never a binary float), so they are read
+// as numbers here for the comparison.
+const amountOf = (map, ingredientId) => Number(map.get(ingredientId));
+check('egg 12 (15 plates - 3 NO EGG)', amountOf(deductions, EGG) === 12, String(deductions.get(EGG)));
+check('rice 13 (15 plates - 2 NO RICE)', amountOf(deductions, RICE) === 13, String(deductions.get(RICE)));
+check('pork unaffected: 15 x 50 = 750', amountOf(deductions, PORK) === 750, String(deductions.get(PORK)));
 
 const porkchop = computeStockDeductions({
   dailySalesRows: [{ product_id: 944, sale_date: day, quantity_sold: 6 }],
@@ -166,7 +169,7 @@ const porkchop = computeStockDeductions({
   perServingFor: (r) => r.per,
 });
 check('product without egg in its recipe: NO EGG changes nothing (rice 6, no egg)',
-  porkchop.get(RICE) === 6 && !porkchop.has(EGG), JSON.stringify([...porkchop]));
+  amountOf(porkchop, RICE) === 6 && !porkchop.has(EGG), JSON.stringify([...porkchop]));
 
 const tooMany = computeStockDeductions({
   dailySalesRows: [{ product_id: 1040, sale_date: day, quantity_sold: 2 }],
@@ -188,7 +191,7 @@ const unmapped = computeStockDeductions({
   dailySalesRows: agg.dailySalesRows, modifierRows: agg.modifierRows, recipeRows: recipes,
   activeProductIds: new Set([1040]), ingredientIdByKeyword: new Map(), perServingFor: (r) => r.per,
 });
-check('a keyword with no rule removes nothing (egg 15, rice 15)', unmapped.get(EGG) === 15 && unmapped.get(RICE) === 15);
+check('a keyword with no rule removes nothing (egg 15, rice 15)', amountOf(unmapped, EGG) === 15 && amountOf(unmapped, RICE) === 15);
 
 // ---------------------------------------------------------------
 console.log('\n-- uploadService uses the base name');

@@ -29,7 +29,7 @@ check('IngredientDemand no longer borrows units from daily rows', !page.includes
 check('null ratio prints a dash, not a crash', source.includes("row.ratio == null ? '—'"));
 
 // What the grocery PDF prints for typical rows.
-check('4.0999999999 kg prints 4.100', formatStockQty(4.0999999999, 'kg') === '4.100');
+check('4.0999999999 kg prints 4.1', formatStockQty(4.0999999999, 'kg') === '4.1');
 check('12 pcs prints 12', formatStockQty(12, 'pcs') === '12');
 check('missing toBuy prints a dash', formatStockQty(null, 'kg') === '—');
 

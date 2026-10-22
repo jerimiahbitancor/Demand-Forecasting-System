@@ -6,7 +6,11 @@ import "tippy.js/animations/scale.css";
 import InventoryModal from "../InventoryModal";
 import "./HistoryModal.css";
 import { formatStockQty } from "../../../../utils/formatStockQty.js";
+import { stockSourceLabel } from "../../../../utils/stockSourceLabel.js";
+import { stockMovementDetail } from "../../../../utils/stockMovementDetail.js";
 import { buildPageItems, ELLIPSIS } from "../../../../utils/pagination";
+
+const PAGE_SIZE = 10;
 
 const HistoryModal = ({ item, apiClient, onClose }) => {
   const [transactions, setTransactions] = useState([]);
@@ -23,7 +27,7 @@ const HistoryModal = ({ item, apiClient, onClose }) => {
       setLoading(true);
       try {
         const response = await apiClient.get(`/inventory/items/${itemId}/transactions`, {
-          params: { page: currentPage, limit: 10 },
+          params: { page: currentPage, limit: PAGE_SIZE },
         });
         if (active) {
           setTransactions(response.data.data || []);
@@ -145,6 +149,7 @@ const HistoryModal = ({ item, apiClient, onClose }) => {
                 <div className="transaction-types-tooltip">
                   <div><strong>Sale (auto)</strong> - Automatic deduction triggered by a sales data upload.</div>
                   <div><strong>Restock</strong> - Manual stock addition by the owner.</div>
+                  <div><strong>Adjustment</strong> - A manual stock count that sets the balance to the counted amount.</div>
                   <div><strong>Return</strong> - Returned or recovered stock.</div>
                 </div>
               )}
@@ -170,7 +175,9 @@ const HistoryModal = ({ item, apiClient, onClose }) => {
             <span className="legend-item">
               <span className="legend-dot restock"></span> Restock
             </span>
-          
+            <span className="legend-item">
+              <span className="legend-dot adjustment"></span> Adjustment
+            </span>
             <span className="legend-item">
               <span className="legend-dot return"></span> Return
             </span>
@@ -214,9 +221,10 @@ const HistoryModal = ({ item, apiClient, onClose }) => {
                     const transactionDate = transaction.created_at ? new Date(transaction.created_at) : null;
                     const quantityChange = Number(transaction.quantity) || 0;
                     const transactionType = transaction.transaction_type || 'adjustment';
+                    const detail = stockMovementDetail(transaction, item.unit);
                     return (
                     <tr key={transaction.id}>
-                      <td>{index + 1}</td>
+                      <td>{(currentPage - 1) * PAGE_SIZE + index + 1}</td>
                       <td>
                         {transactionDate ? transactionDate.toLocaleDateString() : 'N/A'} <br />
                         <span className="time-text">{transactionDate ? transactionDate.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : ''}</span>
@@ -228,9 +236,12 @@ const HistoryModal = ({ item, apiClient, onClose }) => {
                       </td>
                       <td className={quantityChange >= 0 ? 'positive-change' : 'negative-change'}>
                         {quantityChange >= 0 ? '+' : ''}{formatStockQty(quantityChange, item.unit)}
+                        {detail && (
+                          <div className="history-transaction-notes">{detail}</div>
+                        )}
                       </td>
                       <td>{formatStockQty(transaction.new_quantity ?? 0, item.unit)} {item.unit || 'pcs'}</td>
-                      <td>{transaction.reason || transaction.notes || 'Inventory update'}</td>
+                      <td>{stockSourceLabel(transaction)}</td>
                     </tr>
                     );
                   })}

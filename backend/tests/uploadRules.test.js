@@ -290,10 +290,12 @@ test('A5: a stock edit logs an adjustment only when the quantity was really writ
 
   fake.reset(seedIngredient());
   res = await editIngredient({ quantity: 12 });
-  assert.equal(fake.tables.ingredients[0].quantity, 12);
+  // The stock is stored as a decimal string, so it can be written to a
+  // Postgres numeric without ever passing through a binary float.
+  assert.equal(fake.tables.ingredients[0].quantity, '12');
   const rows = adjustments();
   assert.equal(rows.length, 1);
-  assert.equal(rows[0].quantity, 2);
-  assert.equal(rows[0].previous_quantity, 10);
-  assert.equal(rows[0].new_quantity, 12);
+  assert.equal(rows[0].quantity, '2');
+  assert.equal(rows[0].previous_quantity, '10');
+  assert.equal(rows[0].new_quantity, '12');
 });
