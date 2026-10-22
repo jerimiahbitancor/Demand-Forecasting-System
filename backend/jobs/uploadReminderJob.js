@@ -18,8 +18,11 @@
 //             cron-job.org. A Render free instance sleeps after ~15 min
 //             idle and node-cron never runs a missed job, so the cron alone
 //             misses 4:00 / 7:00. The call also wakes the server.
-//   boot      runBootCatchUp(): on startup, a slot whose time has passed
-//             today and has no run record yet runs once.
+//   boot      runBootCatchUp(): on startup, the LATEST slot that applies
+//             now (owner's rule, Oct 17 2026) runs once if it has no run
+//             record today: 04:00-07:00 -> 0400; 07:00-09:00 -> 0700;
+//             after 09:00 -> 0400 (the 0700 text says "before the forecast
+//             at 9:00 AM", so it never goes out after 9:00).
 // All three are safe to overlap: the DB dedupe (alreadySent by
 // metadata.key) means one notification and one email per reminder, and a
 // run already in flight for a slot is shared instead of started twice.
@@ -41,8 +44,8 @@ dayjs.extend(utc);
 dayjs.extend(timezone);
 
 const JOBS = [
-  { name: 'uploadReminder', slot: '0400', cron: '0 4 * * *', timezone: PH_TZ, hour: 4 },
-  { name: 'uploadReminder', slot: '0700', cron: '0 7 * * *', timezone: PH_TZ, hour: 7 },
+  { name: 'uploadReminder', slot: '0400', cron: '0 4 * * *', timezone: PH_TZ },
+  { name: 'uploadReminder', slot: '0700', cron: '0 7 * * *', timezone: PH_TZ },
 ];
 const SLOTS = JOBS.map((j) => j.slot);
 const TRIGGERS = ['cron', 'external', 'boot'];
@@ -239,12 +242,19 @@ async function getLastRunsFromLog(client = supabaseAdmin) {
   return out;
 }
 
+// The one slot a boot catch-up may run at this Manila hour, or null.
+function catchUpSlotFor(hour) {
+  if (hour < 4) return null;
+  if (hour < 7) return '0400';
+  if (hour < 9) return '0700';
+  return '0400';
+}
+
 /**
- * On startup: each slot whose time (04:00 / 07:00 Manila) has passed today
- * and has no run record for today (a failed run does not count) runs once,
- * in order. Same dedupe as every other run. If the run log cannot be read,
- * the slots run anyway — the dedupe still prevents a second notification.
- * Returns the slots it ran.
+ * On startup: the latest applicable slot (catchUpSlotFor) runs once if it
+ * has no run record for today (a failed run does not count). Same dedupe
+ * as every other run. If the run log cannot be read, the slot runs anyway —
+ * the dedupe still prevents a second notification. Returns the slots run.
  */
 async function runBootCatchUp({
   client = supabaseAdmin, notify = createNotification, now = new Date(),
@@ -252,7 +262,8 @@ async function runBootCatchUp({
 } = {}) {
   const manila = dayjs(now).tz(PH_TZ);
   const today = manila.format('YYYY-MM-DD');
-  const due = JOBS.filter((j) => manila.hour() >= j.hour).map((j) => j.slot);
+  const slot = catchUpSlotFor(manila.hour());
+  const due = slot ? [slot] : [];
   if (due.length === 0) return [];
 
   let doneToday = new Set();
@@ -299,6 +310,7 @@ module.exports = {
   registerUploadReminderJobs,
   runUploadReminders,
   runBootCatchUp,
+  catchUpSlotFor,
   getUploadReminderStatus,
   getLastRunsFromLog,
   hostInfo,

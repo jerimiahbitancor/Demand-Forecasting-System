@@ -2276,3 +2276,66 @@
 .market-import-spin {
   animation: spin 1s linear infinite;
 }
+
+/* ============ "AS OF LATEST FORECAST" NOTE ============
+   First item of the legend row on Ingredient Management. Styled only through
+   its own classes: .inventory-legend-container is also defined in
+   ProductManagement.css (global CSS collision), so nothing here relies on it. */
+.forecast-basis-note {
+  display: inline-flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-right: auto;
+  font-size: 13px;
+  line-height: 1.4;
+}
+
+.forecast-basis-clock {
+  color: #7a0010;
+  font-size: 13px;
+  flex-shrink: 0;
+}
+
+.forecast-basis-label {
+  font-weight: 600;
+  color: #1f2937;
+}
+
+.forecast-basis-missing {
+  font-weight: 600;
+  color: #b45309;
+}
+
+.forecast-basis-info {
+  display: inline-flex;
+  align-items: center;
+  color: #9ca3af;
+  font-size: 13px;
+  cursor: help;
+  border-radius: 50%;
+}
+
+.forecast-basis-info:hover,
+.forecast-basis-info:focus-visible {
+  color: #6b7280;
+}
+
+.forecast-basis-info:focus-visible {
+  outline: 2px solid #7a0010;
+  outline-offset: 2px;
+}
+
+.forecast-basis-tip {
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+@media (max-width: 768px) {
+  .forecast-basis-note {
+    flex-basis: 100%;
+    justify-content: center;
+    margin-right: 0;
+    text-align: center;
+  }
+}

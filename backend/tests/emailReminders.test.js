@@ -118,8 +118,10 @@ test('kind not in EMAIL_REMINDER_KINDS -> no email (upload success, training, fo
   }
   assert.equal(brevoCalls.length, 0);
   assert.equal(fake.tables.notifications.length, 5);
+  // Per-ingredient 'low_stock' alerts stay in the bell (Oct 17 2026): only
+  // the daily restock_summary emails, see tests/restockEmail.test.js.
   assert.deepEqual([...notificationService.EMAIL_REMINDER_KINDS].sort(),
-    ['low_stock', 'restock_summary', 'stock_shortfall', 'unconfirmed_days', 'upload_reminder']);
+    ['restock_summary', 'stock_shortfall', 'unconfirmed_days', 'upload_reminder']);
 });
 
 test('missing or invalid business email -> skipped, notification still created', async () => {
@@ -184,10 +186,10 @@ test('two users, same key -> ONE email', async () => {
 test('no key -> kind + title + Manila date; shortfalls grouped per ingredient per day', async () => {
   seed();
   setEnv({ ...CONFIGURED, EMAIL_REMINDERS_ENABLED: 'true' });
-  const summary = { userId: 7, title: 'Restock reminder: 2 ingredients need attention', message: 'm', metadata: { kind: 'restock_summary' } };
+  const summary = { userId: 7, title: '3 day(s) still need your answer', message: 'm', metadata: { kind: 'unconfirmed_days' } };
   await create(summary);
   await create({ ...summary, userId: 8 });
-  assert.equal(brevoCalls.length, 1, 'same summary, same day -> one email');
+  assert.equal(brevoCalls.length, 1, 'same keyless reminder, same day -> one email');
 
   const shortfall = (uploadId) => ({
     userId: 7, title: 'Stock shortfall: Rice', message: 'Rice: 9.07 kg used but 0 kg in stock. Please monitor it.',

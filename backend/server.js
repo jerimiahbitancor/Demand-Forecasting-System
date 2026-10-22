@@ -215,14 +215,21 @@ if (schedulersEnabled()) {
   // after boot, then every 6 hours. New low-stock ingredients get alerts and
   // recovered ingredients get their alerts retired automatically.
   const LOW_STOCK_REFRESH_MS = 6 * 60 * 60 * 1000;
-  setTimeout(() => refreshLowStockNotifications().catch(() => {}), 15000);
-  setInterval(() => refreshLowStockNotifications().catch(() => {}), LOW_STOCK_REFRESH_MS);
+  // Also runs after every forecast and upload (queueStockRefresh); this
+  // timer is the fallback.
+  setTimeout(() => refreshLowStockNotifications({ trigger: 'boot' }).catch(() => {}), 15000);
+  setInterval(() => refreshLowStockNotifications({ trigger: 'timer' }).catch(() => {}), LOW_STOCK_REFRESH_MS);
 
   // Real scheduled forecast refresh (daily 9:00 AM except Monday, weekly
   // Monday 9:00 AM — Monday runs the weekly forecast only — both Asia/Manila) — see jobs/forecastScheduler.js for why this calls
   // mlService.forecast() directly instead of training auto-triggering it.
-  const { registerForecastJobs } = require('./jobs/forecastScheduler');
+  const { registerForecastJobs, runForecastBootCatchUp } = require('./jobs/forecastScheduler');
   registerForecastJobs();
+  // Boot catch-up: after 9:00 AM Manila, if forecast_runs has no run since
+  // 9:00 today, run today's forecast once (see jobs/forecastScheduler.js).
+  setTimeout(() => {
+    runForecastBootCatchUp().catch((err) => logger.error('forecast_catchup_failed', { err }));
+  }, 25000);
 
   // Daily automated DA "Daily Price Index" import (default 4:00 PM Asia/Manila;
   // see jobs/dailyPriceImportJob.js). Writes matched prices for current

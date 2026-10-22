@@ -31,8 +31,8 @@ silently by default could accidentally become the model driving real
 forecasts. See ml-service/reports/README.md.
 
 Every OTHER model this script trains for diagnostics — the rolling-
-features-removed ablation, and both two-fold time-stability runs — is
-always trained with persist=False and is never uploaded anywhere,
+features-removed ablation and the learning-curve fit in the Training
+Settings section — is always trained with persist=False and is never uploaded anywhere,
 regardless of whether --train was passed. Only the single model
 acquired by _acquire_report_model() (shared by every section that needs
 "the current model") can ever be a freshly-trained, uploaded model, and
@@ -77,7 +77,8 @@ REPORTS_DIR = os.path.dirname(os.path.abspath(__file__))
 if REPORTS_DIR not in sys.path:
     sys.path.insert(0, REPORTS_DIR)
 
-from config import MIN_TRAINING_OBSERVATIONS, supabase  # noqa: E402
+from config import MIN_TRAINING_OBSERVATIONS, OFF_MENU_GAP_OPEN_DAYS, supabase  # noqa: E402
+OFF_MENU_GAP_OPEN_DAYS_TEXT = str(OFF_MENU_GAP_OPEN_DAYS)
 from services.data_loader import (  # noqa: E402
     get_active_products, get_confirmed_open_dates, get_daily_sales,
     get_forecast_runs_history, get_model_metrics_history,
@@ -98,7 +99,14 @@ from services.business_logic import estimate_cogs  # noqa: E402
 from services.model_service import (  # noqa: E402
     filter_training_eligible, chronological_split, train_global_model,
     evaluate_predictions, evaluate_per_product,
+    three_way_split, fit_with_early_stopping, TUNED_PARAMS, MAX_TREES,
+    EARLY_STOPPING_ROUNDS,
 )
+from services.forecast_service import generate_forecast, ModelNotReadyError  # noqa: E402
+from services.business_logic import classify_demand  # noqa: E402
+# Holidays are no longer a model feature (removed Oct 17 2026). The calendar
+# is still read here, only to label flagged days in the outlier review.
+from utils.holidays import is_holiday  # noqa: E402
 from services.model_storage import (  # noqa: E402
     load_latest_model, load_previous_model, load_model_metadata,
 )
@@ -120,7 +128,6 @@ FEATURE_LABELS = {
     "month": "Month",
     "day": "Day of Month",
     "is_weekend": "Weekend",
-    "is_holiday": "Holiday",
     "is_payday": "Payday",
     "lag_1": "Sales on the Last Open Day",
     "same_dow_last_open": "Sales on the Same Weekday, Last Time Open",
@@ -139,11 +146,16 @@ LOW_VOLUME_REP_FLOOR = 50       # total_quantity floor for a genuine low-volume 
 
 REDUCED_FEATURE_COLUMNS = [c for c in FEATURE_COLUMNS if c not in ("rolling_7", "rolling_14")]
 
+# Reading order of the HTML report (Oct 17 2026): the data first (load,
+# calendar, cleaning, outliers), then the exact data set the model sees,
+# then how it was trained, what it relies on, how accurate it is, and
+# finally what it would forecast now. The Two-Fold check was removed.
 FINAL_SECTION_ORDER = [
-    "preprocessing", "calendar_coverage", "outliers", "outlier_review",
-    "split", "features", "baseline",
-    "importance", "importance_ablation", "metrics", "train_test_metrics",
-    "horizon", "predictions", "stability", "production_reality",
+    "preprocessing", "calendar_coverage", "cleaning", "outliers", "outlier_review",
+    "features", "dataset", "split", "training",
+    "importance", "importance_ablation",
+    "final_metrics", "baseline", "metrics", "train_test_metrics",
+    "horizon", "predictions", "forecast_preview", "production_reality",
 ]
 
 pd.set_option("display.width", 140)
@@ -285,6 +297,7 @@ class SavedModel:
         self.product_categories = [int(c) for c in metadata["product_categories"]]
         self.trained_product_ids = sorted(int(p) for p in metadata["trained_product_ids"])
         self.feature_importances_ = model.feature_importances_
+        self.metadata = metadata
 
     def predict(self, X: pd.DataFrame):
         X = X.copy()
@@ -812,7 +825,7 @@ def flag_outlier_rows(sales_df: pd.DataFrame) -> pd.DataFrame:
     calendar = [calendar_features(_as_date(d)) for d in flagged["sale_date"]]
     flagged["weekday"] = [WEEKDAY_NAMES[c["dow"]] for c in calendar]
     flagged["is_payday"] = [int(c["is_payday"]) for c in calendar]
-    flagged["is_holiday"] = [int(c["is_holiday"]) for c in calendar]
+    flagged["is_holiday"] = [is_holiday(_as_date(d)) for d in flagged["sale_date"]]
     # Ranked by how many times the product's usual (median) day it is.
     flagged["times_median"] = flagged["quantity_sold"] / flagged["median"].clip(lower=1)
     return flagged.sort_values(["times_median", "quantity_sold"], ascending=False).reset_index(drop=True)
@@ -1060,57 +1073,52 @@ def write_local_owner_files(outlier_flagged: pd.DataFrame, open_dates, eligible_
 # Stage 3: Chronological Train/Test Split
 # ---------------------------------------------------------------------
 def stage_3_split(eligible_df: pd.DataFrame, high_id: int, low_id: int):
-    print("[3/13] Chronological train/test split...")
+    print("[3/13] Chronological fit / validation / test split...")
 
-    train_df, test_df = chronological_split(eligible_df)
-    split_date = test_df["sale_date"].min() if not test_df.empty else None
+    fit_df, val_df, test_df, train_df = three_way_split(eligible_df)
+
+    def summary(name, df):
+        return {"part": name, "rows": len(df), "open_days": int(df["sale_date"].nunique()),
+                "from": df["sale_date"].min().date() if len(df) else None,
+                "to": df["sale_date"].max().date() if len(df) else None}
+    parts_df = pd.DataFrame([summary("fit", fit_df), summary("validation", val_df), summary("test", test_df)])
+    print_table("3. Chronological split — parts", parts_df)
 
     rows = []
     for role, pid in [("high-volume", high_id), ("low-volume", low_id)]:
-        prod_train = train_df[train_df["product_id"] == pid]
-        prod_test = test_df[test_df["product_id"] == pid]
         rows.append({
-            "role": role,
-            "product_id": pid,
-            "train_rows": len(prod_train),
-            "test_rows": len(prod_test),
-            "train_ends": prod_train["sale_date"].max().date() if len(prod_train) else None,
-            "test_starts": prod_test["sale_date"].min().date() if len(prod_test) else None,
+            "role": role, "product_id": pid,
+            "fit_rows": int((fit_df["product_id"] == pid).sum()),
+            "validation_rows": int((val_df["product_id"] == pid).sum()),
+            "test_rows": int((test_df["product_id"] == pid).sum()),
         })
     split_table = pd.DataFrame(rows)
-    print_table("3. Chronological Train/Test Split", split_table)
-    print(f"  Global 80/20 split date (start of test set, all products): {split_date}")
+    print_table("3. Chronological split — two sample products", split_table)
 
-    fig, ax = plt.subplots(figsize=(9, 3))
-    labels = []
-    for i, (role, pid) in enumerate([("high-volume", high_id), ("low-volume", low_id)]):
-        prod_train = train_df[train_df["product_id"] == pid]
-        prod_test = test_df[test_df["product_id"] == pid]
-        if len(prod_train):
-            ax.plot([prod_train["sale_date"].min(), prod_train["sale_date"].max()], [i, i],
-                     color="#2563eb", linewidth=10, solid_capstyle="butt",
-                     label="Train" if i == 0 else None)
-        if len(prod_test):
-            ax.plot([prod_test["sale_date"].min(), prod_test["sale_date"].max()], [i, i],
-                     color="#f59e0b", linewidth=10, solid_capstyle="butt",
-                     label="Test" if i == 0 else None)
-        labels.append(f"Product {pid} ({role})")
-    ax.set_yticks([0, 1])
-    ax.set_yticklabels(labels)
-    ax.set_ylim(-0.5, 1.5)
-    ax.set_title("Train (blue) vs. Test (amber) Date Ranges")
-    ax.legend(loc="upper left")
+    fig, ax = plt.subplots(figsize=(9, 2.2))
+    for df, color, label in [(fit_df, "#2563eb", "Fit"), (val_df, "#7c3aed", "Validation"), (test_df, "#f59e0b", "Test")]:
+        if len(df):
+            ax.plot([df["sale_date"].min(), df["sale_date"].max()], [0, 0], color=color,
+                    linewidth=14, solid_capstyle="butt", label=label)
+    ax.set_yticks([])
+    ax.set_title("Fit (blue), validation (purple) and test (amber) periods")
+    ax.legend(loc="upper left", ncol=3)
+    fig.autofmt_xdate()
 
     body = f"""
-    <p>Split via <code>model_service.chronological_split()</code>, reused as-is: one
-    80/20 index cutoff across the whole pooled, feature-engineered, eligibility-filtered
-    dataset sorted by date — never a per-product cutoff, and never shuffled. The global
-    test period starts <strong>{split_date}</strong>. The table shows how that single
-    global cutoff lands in very different row counts for a high- vs. low-volume product,
-    since low-volume products simply have fewer rows on either side of the same date.</p>
-    {img_tag(fig, "Train vs test date ranges for two products")}
+    <p>Split via <code>model_service.three_way_split()</code>: the data is cut by
+    <strong>date</strong>, never shuffled and never per product, so every product's test period
+    starts on the same day and no date is on two sides of a cut. The last 20% of dates are the
+    <strong>test</strong> period (scored once, never used to choose anything). The last 20% of the
+    remaining dates are the <strong>validation</strong> period, used only by early stopping to pick
+    the number of trees. The rest is the <strong>fit</strong> period. The final model is trained on
+    fit + validation.</p>
+    {df_to_html_table(parts_df)}
+    {img_tag(fig, "Fit, validation and test periods")}
+    <p>The same date cut gives very different row counts for a busy and a slow product:</p>
+    {df_to_html_table(split_table)}
     """
-    add_section("split", "3. Chronological Train/Test Split", body)
+    add_section("split", "Chronological Split (Fit / Validation / Test)", body)
     print("[3/13] Done.")
     return train_df, test_df
 
@@ -1122,8 +1130,8 @@ def stage_4_features(eligible_df: pd.DataFrame, sample_product_id: int):
     print("[4/13] Feature engineering...")
 
     display_cols = [
-        "sale_date", "quantity_sold", "dow", "month", "is_weekend",
-        "is_holiday", "is_payday", "lag_1", "same_dow_last_open",
+        "sale_date", "quantity_sold", "dow", "month", "day", "is_weekend",
+        "is_payday", "lag_1", "same_dow_last_open",
         "days_since_last_open", "rolling_7", "rolling_14",
     ]
     sample = (
@@ -1288,8 +1296,17 @@ def stage_5_and_6(eligible_df: pd.DataFrame, force_train: bool):
         "trained on are scored, so archived or newly added products cannot shift "
         "one product's predictions onto another."
     )
+    fi_table = fi_df.copy()
+    fi_table["share_%"] = (fi_table["importance"] / fi_table["importance"].sum() * 100).round(1)
+    fi_table["importance"] = fi_table["importance"].round(4)
     body = f"""
     <p>Feature importance from {source_note}.</p>
+    <p>Importance is XGBoost's <em>gain</em>: how much, on average, the splits on a feature
+    reduced the training error. It shows what the model leans on, not whether a feature is
+    "true" in the business; two features that carry the same information (for example
+    <code>dow</code> and <code>is_weekend</code>, or the two rolling averages) share or split
+    the credit between them.</p>
+    {df_to_html_table(fi_table)}
     <p>Labels here match <code>FEATURE_LABELS</code> in
     <code>backend/services/analyticsService.js</code> (the Analytics &gt; Model
     Insights panel) — <strong>the two lists are kept in sync by hand</strong>; there
@@ -1297,7 +1314,7 @@ def stage_5_and_6(eligible_df: pd.DataFrame, force_train: bool):
     changes.</p>
     {img_tag(fig, "Feature importance bar chart")}
     """
-    add_section("importance", "5. Feature Importance", body)
+    add_section("importance", "Feature Importance", body)
     print("[6/13] Done.")
 
     # --- Evaluation Metrics ---
@@ -1369,15 +1386,17 @@ def stage_5_and_6(eligible_df: pd.DataFrame, force_train: bool):
     )
     print_table("6. Evaluation Metrics — grouped by volume tier", tier_group_df)
 
-    plot_df = per_product_df.dropna(subset=["mape"])
+    plot_df = per_product_df.dropna(subset=["wmape"]).sort_values("wmape")
+    overall_wmape = wmape(y_test.values, predictions)
     fig2, ax2 = plt.subplots(figsize=(10, 5))
-    ax2.bar(plot_df["product_id"].astype(str), plot_df["mape"], color="#2563eb")
-    ax2.axhline(10, color="crimson", linestyle="--", linewidth=1,
-                label="10% — Lewis (1982) 'highly accurate' threshold")
-    ax2.set_title("MAPE per Product")
+    ax2.bar(plot_df["product_id"].astype(str), plot_df["wmape"], color="#2563eb")
+    if overall_wmape is not None:
+        ax2.axhline(overall_wmape, color="#0f172a", linestyle="--", linewidth=1,
+                    label=f"All products together: {overall_wmape:.1f}%")
+        ax2.legend()
+    ax2.set_title("WMAPE per Product (test period)")
     ax2.set_xlabel("Product ID")
-    ax2.set_ylabel("MAPE (%)")
-    ax2.legend()
+    ax2.set_ylabel("WMAPE (%)")
     plt.setp(ax2.get_xticklabels(), rotation=90, fontsize=7)
 
     mape_display = f"{aggregate_metrics['mape']:.1f}%" if aggregate_metrics["mape"] is not None else "N/A"
@@ -1386,10 +1405,10 @@ def stage_5_and_6(eligible_df: pd.DataFrame, force_train: bool):
     MAPE={mape_display}. Full per-product breakdown (sorted worst-to-best MAPE) is in
     the terminal output — an aggregate number alone can hide a bad low-volume product
     behind a good high-volume one, which is exactly why this breakdown exists.</p>
-    <p>The red line marks the 10% "highly accurate" threshold from Lewis (1982),
-    referenced in the paper's Forecast Accuracy discussion — products with bars below
-    the line clear it; products above it don't yet.</p>
-    {img_tag(fig2, "MAPE per product, with 10% reference line")}
+    <p>The chart shows WMAPE per product, lowest first, with the dashed line at the WMAPE of
+    all products together. Slow-selling products sit on the right: a product selling 1 to 3
+    items a day swings by chance, so its percentage error is high whatever the model does.</p>
+    {img_tag(fig2, "WMAPE per product, with the overall WMAPE as a reference line")}
     <h3>Per-Product Metrics — Full Breakdown</h3>
     <p>Adds WMAPE (volume-weighted — a low-volume product's error counts proportionally less),
     sMAPE (bounded 0-200%, softer on near-zero actuals), and MASE (scaled against this product's
@@ -1449,7 +1468,7 @@ def stage_feature_importance_ablation(eligible_df: pd.DataFrame, feature_importa
     ax.set_title("Feature Importance — With vs. Without Rolling Features")
     ax.legend()
 
-    calendar_features_ids = ["dow", "is_weekend", "is_holiday", "is_payday", "month", "day"]
+    calendar_features_ids = ["dow", "is_weekend", "is_payday", "month", "day"]
     orig_calendar_sum = sum(feature_importance.get(c, 0.0) for c in calendar_features_ids)
     ablation_calendar_sum = sum(ablation_importance.get(c, 0.0) for c in calendar_features_ids)
     if ablation_calendar_sum > orig_calendar_sum * 1.2:
@@ -1730,81 +1749,434 @@ def stage_7_predictions(test_df: pd.DataFrame, predictions, high_id: int, low_id
 
 
 # ---------------------------------------------------------------------
-# NEW Section: Two-Fold Time-Stability Check
+# NEW (Oct 17 2026): Data Cleaning Output
 # ---------------------------------------------------------------------
-def expanding_window_split(df: pd.DataFrame, train_end_fraction: float, test_end_fraction: float):
+def stage_data_cleaning(all_sales_df: pd.DataFrame, features_df: pd.DataFrame,
+                        eligible_df: pd.DataFrame, excluded: list,
+                        outlier_flagged: pd.DataFrame, open_dates) -> None:
     """
-    Report-specific evaluation-window helper — deliberately NOT added to
-    services/model_service.chronological_split(), since production only
-    ever needs the one 80/20 cutoff.
-
-    df must already be sorted by sale_date (same convention
-    chronological_split() relies on — this function does its own sort
-    too, so it's safe to call with an unsorted frame). Returns
-    (train_df, test_df) where train_df = df[:train_end_idx] and
-    test_df = df[train_end_idx:test_end_idx].
+    The result of the data-cleaning steps in DFS Data Cleaning Notes v3.2,
+    Part B, read from the same frames /train builds — nothing recomputed
+    differently. One row per product: how many real sales days it has, how
+    many open days were zero-filled, and whether it goes into training.
     """
-    df = df.sort_values("sale_date").reset_index(drop=True)
-    train_end_idx = int(len(df) * train_end_fraction)
-    test_end_idx = int(len(df) * test_end_fraction)
-    return df.iloc[:train_end_idx], df.iloc[train_end_idx:test_end_idx]
-
-
-def stage_two_fold_stability(eligible_df: pd.DataFrame, train_df: pd.DataFrame, test_df: pd.DataFrame):
-    print("[12/13] Two-fold time-stability check...")
-
-    fold1_train, fold1_test = expanding_window_split(eligible_df, 0.60, 0.80)
-    fold2_train, fold2_test = train_df, test_df  # today's existing default 80/20 split, reused
+    print("[Cleaning] Data cleaning output...")
+    eligible_ids = set(int(p) for p in eligible_df["product_id"].unique())
+    excluded_ids = {int(e["product_id"]): e for e in excluded}
+    outlier_days = (outlier_flagged.groupby("product_id").size().to_dict()
+                    if not outlier_flagged.empty else {})
 
     rows = []
-    for label, f_train, f_test in [
-        ("Fold 1 (train 0-60%, test 60-80%)", fold1_train, fold1_test),
-        ("Fold 2 (train 0-80%, test 80-100% — today's default split)", fold2_train, fold2_test),
-    ]:
-        if len(f_train) < 200 or f_test.empty:
-            rows.append({
-                "fold": label, "train_rows": len(f_train), "test_rows": len(f_test),
-                "mae": None, "rmse": None, "mape": None, "wmape": None,
-                "note": "skipped — fewer than 200 pooled training rows, or an empty test window",
-            })
-            continue
-
-        # persist=False — a fold model is diagnostic-only and must never
-        # be uploaded to Supabase Storage. train_global_model() still
-        # does its own internal 80/20 split of f_train to actually FIT
-        # the model (the same methodology production always uses); we
-        # discard its internally-computed metrics and evaluate the
-        # returned model ourselves against THIS fold's own designated
-        # test window (f_test) instead, so both folds are compared on
-        # equal, externally-defined test windows.
-        fold_model, _fold_internal_metrics, _fold_version = train_global_model(f_train, persist=False)
-        fold_predictions = fold_model.predict(f_test[FEATURE_COLUMNS])
-        agg = evaluate_predictions(f_test["quantity_sold"].values, fold_predictions)
-        fold_wmape = wmape(f_test["quantity_sold"].values, fold_predictions)
+    for pid, grp in features_df.groupby("product_id", observed=True):
+        pid = int(pid)
+        real = grp[grp["is_real"]]
         rows.append({
-            "fold": label, "train_rows": len(f_train), "test_rows": len(f_test),
-            "mae": agg["mae"], "rmse": agg["rmse"], "mape": agg["mape"], "wmape": fold_wmape,
-            "note": "",
+            "product_id": pid,
+            "real_sales_days": len(real),
+            "zero_filled_days": int((~grp["is_real"]).sum()),
+            "rows_after_warmup": len(grp),
+            "avg_items_sold_real_days": round(float(real["quantity_sold"].mean()), 2) if len(real) else None,
+            "outlier_days_flagged": int(outlier_days.get(pid, 0)),
+            "volume_tier": _VOLUME_TIERS_CACHE.get(pid, "Unknown"),
+            "included_in_training": "Yes" if pid in eligible_ids else "No",
+            "reason_if_excluded": (
+                f"only {excluded_ids[pid]['usable_observations']} real usable days "
+                f"(needs {excluded_ids[pid]['required']})" if pid in excluded_ids else ""
+            ),
         })
+    product_df = pd.DataFrame(rows).sort_values("real_sales_days", ascending=False)
+    print_table("Data Cleaning — product summary", product_df)
 
-    fold_df = pd.DataFrame(rows)
-    print_table("12. Two-Fold Time-Stability Check", fold_df)
+    n_real = int(features_df["is_real"].sum())
+    n_filled = int((~features_df["is_real"]).sum())
+    summary_df = pd.DataFrame([
+        {"step": "Raw sales rows loaded (active products, net items sold)", "value": len(all_sales_df)},
+        {"step": "Products with sales history", "value": int(all_sales_df["product_id"].nunique())},
+        {"step": "Confirmed open days used as the calendar", "value": len(open_dates)},
+        {"step": "Rows after zero fill (open days only, before warm-up)",
+         "value": n_real + n_filled + int(all_sales_df["product_id"].nunique()) * WARMUP_OBSERVATIONS},
+        {"step": f"Rows after dropping each product's first {WARMUP_OBSERVATIONS} warm-up days", "value": len(features_df)},
+        {"step": "   of which real sales rows", "value": n_real},
+        {"step": "   of which zero-filled open days", "value": n_filled},
+        {"step": "Products included in training", "value": len(eligible_ids)},
+        {"step": "Products left out (too few real sales days)", "value": len(excluded_ids)},
+        {"step": "Rows the model sees (fit + validation + test)", "value": len(eligible_df)},
+        {"step": "Outlier days flagged for review (none removed)", "value": len(outlier_flagged)},
+    ])
+    print_table("Data Cleaning — step summary", summary_df)
 
     body = f"""
-    <p><strong>Directional check only, not a variance estimate</strong> — two folds is a
-    directional check only, not a variance estimate; approximately 12 months of total history
-    doesn't support more folds without unacceptably shrinking each fold's training window.</p>
-    <p>Fold 1 trains on the first 60% of pooled rows and tests on the next 20% (60-80%). Fold 2 is
-    today's existing default split (train 0-80%, test 80-100%) — both test windows are 20% of
-    pooled rows by construction, which matters for comparing them fairly. <code>train_rows</code>
-    is shown directly next to each fold's metrics on purpose — it's what lets you tell "this fold
-    genuinely performed worse" apart from "this fold just had less training data to work with."
-    Both fold models are trained with <code>persist=False</code> and are never uploaded to
-    Supabase Storage.</p>
-    {df_to_html_table(fold_df)}
+    <p>The output of the cleaning steps the training run performs before feature engineering
+    (DFS Data Cleaning Notes v3.2, Part B). Closed and unconfirmed days are never turned into
+    sales days. A confirmed open day on which a product sold nothing becomes a <strong>0</strong>
+    (zero fill), except before the product's first sale or during a run of
+    {OFF_MENU_GAP_OPEN_DAYS_TEXT} open days without a sale (treated as off the menu). The first
+    {WARMUP_OBSERVATIONS} days of every product are dropped because the 14-day average needs
+    14 earlier days. Outliers are listed for review only; no row is removed.</p>
+    <p>The "rows after zero fill" count is approximate (it adds back the warm-up days per product);
+    every other count is exact.</p>
+    {df_to_html_table(summary_df)}
+    <h3>Per product</h3>
+    <p>Product names are in <code>output/local/menu_list.csv</code> and
+    <code>output/local/zero_fill_detail.csv</code> (git-ignored, client data). The full row-level
+    data set the model trains on is described in the "Training Data Set" section.</p>
+    {df_to_html_table(product_df)}
     """
-    add_section("stability", "12. Two-Fold Time-Stability Check", body)
-    print("[12/13] Done.")
+    add_section("cleaning", "Data Cleaning Output", body)
+    print("[Cleaning] Done.")
+
+
+# ---------------------------------------------------------------------
+# NEW (Oct 17 2026): Training Data Set — the exact rows the model uses
+# ---------------------------------------------------------------------
+FEATURE_DICTIONARY = [
+    ("product_id", "Product identity", "Which product the row is about (category)"),
+    ("dow", "Calendar", "Day of the week, 0 = Monday ... 6 = Sunday"),
+    ("month", "Calendar", "Month, 1 to 12"),
+    ("day", "Calendar", "Day of the month, 1 to 31"),
+    ("is_weekend", "Calendar", "1 on Saturday or Sunday, else 0"),
+    ("is_payday", "Pay cycle", "1 on a payday: the 15th and the 30th (last day of February); "
+                               "a Saturday payday moves to Friday, a Sunday payday to Monday"),
+    ("lag_1", "Recent demand", "Items sold on the last open day"),
+    ("same_dow_last_open", "Recent demand", "Items sold on the same weekday, the last time the store was open"),
+    ("days_since_last_open", "Store operations", "Calendar days since the store was last open (1 = normal, more after a closure)"),
+    ("rolling_7", "Recent demand", "Average items sold over the last 7 open days"),
+    ("rolling_14", "Recent demand", "Average items sold over the last 14 open days"),
+    ("quantity_sold", "Target", "Net items sold that day (items sold minus refunds; 0 if zero-filled)"),
+]
+
+
+def stage_training_dataset(eligible_df: pd.DataFrame, sample_product_id: int) -> None:
+    print("[Dataset] Training data set...")
+    fit_df, val_df, test_df, _train_df = three_way_split(eligible_df)
+    part = pd.Series("fit", index=eligible_df.index)
+    part[eligible_df.index.isin(val_df.index)] = "validation"
+    part[eligible_df.index.isin(test_df.index)] = "test"
+
+    dictionary_df = pd.DataFrame(
+        [{"column": c, "group": g, "meaning": m} for c, g, m in FEATURE_DICTIONARY]
+    )
+    dictionary_df = dictionary_df[dictionary_df["column"].isin(list(FEATURE_COLUMNS) + ["quantity_sold"])]
+
+    def part_row(name, df):
+        return {
+            "part": name, "rows": len(df), "products": int(df["product_id"].nunique()),
+            "first_date": df["sale_date"].min().date() if len(df) else None,
+            "last_date": df["sale_date"].max().date() if len(df) else None,
+            "open_days": int(df["sale_date"].nunique()),
+            "zero_filled_rows": int((~df["is_real"].astype(bool)).sum()),
+            "items_sold": float(df["quantity_sold"].sum()),
+        }
+    parts_df = pd.DataFrame([part_row("fit (learns the trees)", fit_df),
+                             part_row("validation (picks the tree count)", val_df),
+                             part_row("test (scored once)", test_df)])
+    print_table("Training Data Set — parts", parts_df)
+
+    sample_cols = ["sale_date", "product_id", *[c for c in FEATURE_COLUMNS if c != "product_id"], "quantity_sold", "is_real"]
+    sample = eligible_df[eligible_df["product_id"] == sample_product_id].sort_values("sale_date").head(20)[sample_cols].copy()
+    sample["sale_date"] = sample["sale_date"].dt.date
+    sample["is_real"] = sample["is_real"].map({True: "real", False: "filled"})
+
+    # The full data set, with product names, for the owner (git-ignored).
+    os.makedirs(LOCAL_OUTPUT_DIR, exist_ok=True)
+    names = {}
+    try:
+        names = {int(r["id"]): r["name"] for r in _fetch_all_rows(
+            lambda: supabase.table("products").select("id, name").order("id"))}
+    except Exception as exc:  # report-only: names are a convenience
+        print(f"  (could not read product names: {exc})")
+    export = eligible_df[sample_cols].copy()
+    export.insert(2, "product_name", export["product_id"].astype(int).map(names).fillna(""))
+    export.insert(3, "part", part.loc[export.index])
+    export["sale_date"] = export["sale_date"].dt.date
+    export["is_real"] = export["is_real"].map({True: "real", False: "filled"})
+    export = export.sort_values(["sale_date", "product_id"])
+    dataset_path = os.path.join(LOCAL_OUTPUT_DIR, "training_dataset.csv")
+    export.to_csv(dataset_path, index=False)
+    print(f"  Wrote {len(export)} rows to {os.path.abspath(dataset_path)}")
+
+    body = f"""
+    <p>This is the exact table the model learns from: one row per product per confirmed open
+    day, after cleaning and zero fill, with the {len(FEATURE_COLUMNS)} input columns and the
+    target. The full table, with product names and the part each row belongs to, is written to
+    <code>output/local/training_dataset.csv</code> ({len(export):,} rows; git-ignored because it
+    is client data).</p>
+    <h3>Columns</h3>
+    {df_to_html_table(dictionary_df)}
+    <h3>How the rows are split (by date, never shuffled)</h3>
+    <p>Every row of one date is in the same part. The validation period is used only to decide
+    how many trees to grow; the test period is used only to score the final model.</p>
+    {df_to_html_table(parts_df)}
+    <h3>First 20 rows of one product (product {sample_product_id})</h3>
+    {df_to_html_table(sample)}
+    """
+    add_section("dataset", "Training Data Set", body)
+    print("[Dataset] Done.")
+
+
+# ---------------------------------------------------------------------
+# NEW (Oct 17 2026): Training Settings and Early Stopping
+# ---------------------------------------------------------------------
+def stage_training_settings(model, eligible_df: pd.DataFrame, trained_now: bool, metrics) -> None:
+    print("[Training] Settings and early stopping...")
+    metadata = metrics["metadata"] if trained_now else getattr(model, "metadata", {})
+    recorded = (metadata or {}).get("training")
+
+    # The learning curve is recomputed with the production function on the
+    # same fit/validation split. Nothing is saved; this is the same
+    # deterministic fit /train runs in its step 1.
+    fit_df, val_df, _test_df, _train_df = three_way_split(eligible_df)
+    _es_model, n_trees, curve = fit_with_early_stopping(fit_df, val_df, list(FEATURE_COLUMNS))
+    k_fit = len(fit_df) / max(fit_df["quantity_sold"].sum(), 1) * 100
+    k_val = len(val_df) / max(val_df["quantity_sold"].sum(), 1) * 100
+    fit_wmape = [v * k_fit for v in curve["fit_mae"]]
+    val_wmape = [v * k_val for v in curve["val_mae"]]
+
+    settings = [{"setting": "Number of trees (chosen by early stopping)",
+                 "value": recorded["n_estimators"] if recorded else n_trees}]
+    settings += [{"setting": k, "value": v} for k, v in TUNED_PARAMS.items()]
+    settings += [
+        {"setting": "Maximum trees tried", "value": MAX_TREES},
+        {"setting": "Stop after this many trees without improvement", "value": EARLY_STOPPING_ROUNDS},
+        {"setting": "Error watched during early stopping", "value": "MAE on the validation period"},
+        {"setting": "Training objective", "value": "squared error (reg:squarederror)"},
+    ]
+    settings_df = pd.DataFrame(settings)
+    settings_df["value"] = settings_df["value"].astype(str)
+    print_table("Training — settings", settings_df)
+
+    if recorded:
+        periods_df = pd.DataFrame([
+            {"part": "fit", "from": recorded["fit_period"][0], "to": recorded["fit_period"][1], "rows": recorded["fit_rows"]},
+            {"part": "validation", "from": recorded["validation_period"][0], "to": recorded["validation_period"][1], "rows": recorded["validation_rows"]},
+            {"part": "test", "from": recorded["test_period"][0], "to": recorded["test_period"][1], "rows": recorded["test_rows"]},
+        ])
+        recorded_note = "as recorded in the model's own <code>_meta.json</code>"
+    else:
+        periods_df = pd.DataFrame([
+            {"part": "fit", "from": fit_df["sale_date"].min().date(), "to": fit_df["sale_date"].max().date(), "rows": len(fit_df)},
+            {"part": "validation", "from": val_df["sale_date"].min().date(), "to": val_df["sale_date"].max().date(), "rows": len(val_df)},
+        ])
+        recorded_note = ("recomputed here; this saved model predates the Oct 17 2026 training "
+                         "changes and has no training record. Retrain to get one")
+
+    fig, ax = plt.subplots(figsize=(9, 4))
+    trees = np.arange(1, len(fit_wmape) + 1)
+    ax.plot(trees, fit_wmape, color="#94a3b8", linewidth=1.5, label="Fit period (training error)")
+    ax.plot(trees, val_wmape, color="#2563eb", linewidth=2, label="Validation period")
+    ax.axvline(n_trees, color="#0f172a", linestyle="--", linewidth=1)
+    ax.annotate(f"best: {n_trees} trees\nvalidation WMAPE {val_wmape[n_trees - 1]:.1f}%",
+                xy=(n_trees, val_wmape[n_trees - 1]), xytext=(10, 20), textcoords="offset points", fontsize=9)
+    lo = max(0, min(min(fit_wmape[5:] or fit_wmape), min(val_wmape)) - 5)
+    hi = max(val_wmape[min(5, len(val_wmape) - 1)], max(val_wmape[n_trees - 1:])) + 5
+    ax.set_ylim(lo, hi)
+    ax.set_xlabel("Number of trees")
+    ax.set_ylabel("WMAPE (%)")
+    ax.set_title("Learning curve: error after each tree (early stopping)")
+    ax.legend()
+
+    body = f"""
+    <p>XGBoost builds trees one after another; each new tree corrects part of the error the
+    earlier trees left (the prediction is the starting value plus the learning rate times the
+    <em>sum</em> of all tree outputs). Training error keeps falling as trees are added, but after
+    a point the extra trees only memorise noise and the error on unseen dates stops improving.
+    Early stopping watches the validation period and keeps the number of trees where its error
+    was lowest. The final model is then trained with that many trees on the fit and validation
+    periods together, and scored once on the test period.</p>
+    <p>The learning curve below starts at a high error for the first trees (the cut-off top of
+    the chart) and flattens as trees are added. Settings and periods are {recorded_note}.</p>
+    {img_tag(fig, "Learning curve with early stopping")}
+    <h3>Settings</h3>
+    {df_to_html_table(settings_df)}
+    <h3>Periods</h3>
+    {df_to_html_table(periods_df)}
+    """
+    add_section("training", "Training Settings and Early Stopping", body)
+    print("[Training] Done.")
+
+
+# ---------------------------------------------------------------------
+# NEW (Oct 17 2026): Final Evaluation Metrics
+# ---------------------------------------------------------------------
+def _longest_closure(open_dates, start, end, min_days: int = 7):
+    """Longest run of consecutive calendar days with no confirmed open day,
+    between start and end (dates). Returns (first_closed_day, last_closed_day) or None."""
+    open_set = set(open_dates)
+    best, run_start, d = None, None, start
+    while d <= end:
+        if d not in open_set:
+            run_start = run_start or d
+        else:
+            if run_start and (d - run_start).days >= min_days and (best is None or (d - run_start) > (best[1] - best[0] + timedelta(days=1))):
+                best = (run_start, d - timedelta(days=1))
+            run_start = None
+        d += timedelta(days=1)
+    return best
+
+
+def stage_final_metrics(model, test_df: pd.DataFrame, open_dates) -> None:
+    print("[Final metrics] Final evaluation metrics...")
+    y = test_df["quantity_sold"].values
+    methods = {
+        "XGBoost model": np.clip(model.predict(test_df[FEATURE_COLUMNS]), 0, None),
+        "7-day average (benchmark)": test_df["rolling_7"].values,
+        "Same weekday, last time open (benchmark)": test_df["same_dow_last_open"].values,
+    }
+
+    rows = []
+    for name, pred in methods.items():
+        agg = evaluate_predictions(y, pred)
+        rows.append({"method": name, "WMAPE_%": wmape(y, pred), "MAE_items": agg["mae"],
+                     "RMSE_items": agg["rmse"]})
+    headline_df = pd.DataFrame(rows).round(2)
+    model_w = headline_df.loc[0, "WMAPE_%"]
+    avg7_w = headline_df.loc[1, "WMAPE_%"]
+    dow_w = headline_df.loc[2, "WMAPE_%"]
+    skill_avg7 = (1 - model_w / avg7_w) * 100 if avg7_w else None
+    skill_dow = (1 - model_w / dow_w) * 100 if dow_w else None
+    skill_df = pd.DataFrame([
+        {"compared_with": "7-day average", "skill_score_%": skill_avg7,
+         "reading": "better than the benchmark" if skill_avg7 and skill_avg7 > 0 else "not better than the benchmark"},
+        {"compared_with": "Same weekday, last time open", "skill_score_%": skill_dow,
+         "reading": "better than the benchmark" if skill_dow and skill_dow > 0 else "not better than the benchmark"},
+    ]).round(2)
+    print_table("Final metrics — headline (test period)", headline_df)
+    print_table("Final metrics — skill scores", skill_df)
+
+    # Store total per day: errors of single products partly cancel when added up,
+    # which is the level the owner buys ingredients at.
+    totals = test_df[["sale_date", "quantity_sold"]].copy()
+    for name, pred in methods.items():
+        totals[name] = pred
+    totals = totals.groupby("sale_date").sum(numeric_only=True)
+    store_df = pd.DataFrame([{"method": name, "store_total_WMAPE_%": wmape(totals["quantity_sold"].values, totals[name].values)}
+                             for name in methods]).round(2)
+    print_table("Final metrics — whole store per day", store_df)
+
+    # Before vs after the longest closure inside (or just before) the test period.
+    test_start, test_end = test_df["sale_date"].min().date(), test_df["sale_date"].max().date()
+    closure = _longest_closure(open_dates, test_start - timedelta(days=30), test_end)
+    closure_html = "<p>No closure of 7 or more days was found in or just before the test period.</p>"
+    if closure:
+        dates = test_df["sale_date"].dt.date
+        before, after = test_df[dates < closure[0]], test_df[dates > closure[1]]
+        prepost = []
+        for name, pred in methods.items():
+            pred_s = pd.Series(pred, index=test_df.index)
+            prepost.append({
+                "method": name,
+                "before_closure_WMAPE_%": wmape(before["quantity_sold"].values, pred_s.loc[before.index].values) if len(before) else None,
+                "after_reopening_WMAPE_%": wmape(after["quantity_sold"].values, pred_s.loc[after.index].values) if len(after) else None,
+            })
+        prepost_df = pd.DataFrame(prepost).round(2)
+        print_table(f"Final metrics — before vs after the closure {closure[0]} to {closure[1]}", prepost_df)
+        closure_html = f"""
+        <p>The store was closed from <strong>{closure[0]}</strong> to <strong>{closure[1]}</strong>.
+        Sales after a long closure often come back at a different level, and a tree model keeps
+        forecasting the old level until its 7- and 14-day averages catch up, so accuracy is
+        reported on each side. Rows before the closure: {len(before):,}; after: {len(after):,}.</p>
+        {df_to_html_table(prepost_df)}
+        """
+
+    accuracy = 100 - model_w if model_w is not None else None
+    body = f"""
+    <p><strong>Headline metric: WMAPE</strong> (weighted mean absolute percentage error), on the
+    test period only. It is all items missed divided by all items sold: a WMAPE of
+    {model_w:.1f}% means the forecast missed about {model_w:.0f} items for every 100 sold. The
+    dashboard shows this as accuracy = 100 &minus; WMAPE = <strong>{accuracy:.1f}%</strong>.
+    MAE (average items missed per product per day) and RMSE (like MAE but large misses count more)
+    are reported next to it. MAPE is kept only in the per-product table for reference, because
+    one day with very low sales can make it explode.</p>
+    <h3>Model vs the two benchmarks (test period)</h3>
+    {df_to_html_table(headline_df)}
+    <h3>Skill score</h3>
+    <p>Skill score = (1 &minus; model WMAPE &divide; benchmark WMAPE) &times; 100. Above 0 means the
+    model makes fewer errors than the benchmark; below 0 means the simple rule was better.</p>
+    {df_to_html_table(skill_df)}
+    <h3>Whole store per day</h3>
+    <p>The same forecasts added up over all products for each day. The owner buys ingredients for
+    the whole menu, where over- and under-forecasts of single products partly cancel.</p>
+    {df_to_html_table(store_df)}
+    <h3>Before and after the closure</h3>
+    {closure_html}
+    <p>Accuracy by volume tier and per product is in the Evaluation Metrics section below.</p>
+    """
+    add_section("final_metrics", "Final Evaluation Metrics", body)
+    print("[Final metrics] Done.")
+
+
+# ---------------------------------------------------------------------
+# NEW (Oct 17 2026): Forecast Preview — what /forecast would produce now
+# ---------------------------------------------------------------------
+def stage_forecast_preview(model, model_version: str, known_categories: list,
+                           eligible_df: pd.DataFrame, open_dates) -> None:
+    """
+    Calls the production forecast function (forecast_service.generate_forecast)
+    for every product the model was trained on: a 7-day recursive forecast
+    starting today, exactly what the Monday weekly run computes. Read-only:
+    nothing is written to the forecasts table.
+    """
+    print("[Forecast preview] 7-day forecast from today (read-only)...")
+    operating_days = get_operating_days()
+    product_ids = sorted(int(p) for p in eligible_df["product_id"].unique())
+    history = {int(pid): grp["quantity_sold"] for pid, grp in eligible_df[eligible_df["is_real"]].groupby("product_id", observed=True)}
+
+    rows, skipped = [], []
+    for pid in product_ids:
+        try:
+            result = generate_forecast(pid, model, model_version, known_categories, horizon_days=7,
+                                       start_offset=0, operating_days=operating_days, open_dates=open_dates)
+        except ModelNotReadyError as exc:
+            skipped.append({"product_id": pid, "reason": str(exc)})
+            continue
+        for r in result:
+            tier = ""
+            if not r["model_version"].endswith("_closed") and pid in history and len(history[pid]):
+                tier = classify_demand(r["predicted_quantity"], history[pid])["demand_tier"]
+            rows.append({"product_id": pid, "forecast_date": r["forecast_date"],
+                         "predicted_items": r["predicted_quantity"], "demand_tier": tier,
+                         "closed_by_schedule": r["model_version"].endswith("_closed")})
+    forecast_df = pd.DataFrame(rows)
+    if forecast_df.empty:
+        add_section("forecast_preview", "Forecast Preview",
+                    "<p>No product could be forecast (not enough recent open days).</p>")
+        return
+
+    wide = forecast_df.pivot(index="product_id", columns="forecast_date", values="predicted_items").reset_index()
+    wide.columns = [str(c) for c in wide.columns]
+    day_totals = forecast_df.groupby("forecast_date").agg(
+        total_items=("predicted_items", "sum"),
+        closed_by_schedule=("closed_by_schedule", "all"),
+    ).reset_index()
+    day_totals["total_items"] = day_totals["total_items"].round(1)
+    tiers = forecast_df[forecast_df["demand_tier"] != ""].groupby(["forecast_date", "demand_tier"]).size().unstack(fill_value=0).reset_index()
+    print_table("Forecast preview — total items per day", day_totals)
+
+    os.makedirs(LOCAL_OUTPUT_DIR, exist_ok=True)
+    forecast_df.to_csv(os.path.join(LOCAL_OUTPUT_DIR, "forecast_preview.csv"), index=False)
+
+    last_open = max(open_dates) if open_dates else None
+    first_day = forecast_df["forecast_date"].min()
+    body = f"""
+    <p>What the system would forecast if the weekly run happened now, using the production
+    function <code>forecast_service.generate_forecast()</code> with the model above
+    (<code>{model_version}</code>). Nothing is written to the database. Day 1 uses real sales for
+    its inputs; from day 2 on, each day's prediction is fed back in as the next day's
+    "last open day" (recursive forecasting), so errors can build up over the week. Days outside
+    the owner's operating schedule are set to 0 by rule, not predicted.</p>
+    <p>Forecast starts {first_day}. Last confirmed open day in the data: {last_open}.
+    If those are far apart, the inputs are stale: upload the missing days first.
+    Per-product rows with product names are in <code>output/local/forecast_preview.csv</code>.</p>
+    <h3>Total items per day (all products)</h3>
+    {df_to_html_table(day_totals)}
+    <h3>Products per demand tier (P40 / P80 of each product's own history)</h3>
+    {df_to_html_table(tiers) if not tiers.empty else "<p>No tiers (every day closed by schedule).</p>"}
+    <h3>Items per product per day</h3>
+    {df_to_html_table(wide)}
+    {"<h3>Not forecast</h3>" + df_to_html_table(pd.DataFrame(skipped)) if skipped else ""}
+    """
+    add_section("forecast_preview", "Forecast Preview (Next 7 Days)", body)
+    print("[Forecast preview] Done.")
 
 
 # ---------------------------------------------------------------------
@@ -2134,18 +2506,15 @@ def main():
     print("ChefDuo ML Training Pipeline — Diagnostic Report")
     print("=" * 78)
     print()
-    print("!! NUMBERS IN THIS RUN ARE NOT COMPARABLE WITH ANY EARLIER REPORT !!")
-    print("   Two things changed on Oct 1 2026, and both change WHICH ROWS get")
-    print("   scored, not just how well the model does on them:")
-    print("     1. Features: lag_7 was replaced by same_dow_last_open, and")
-    print("        days_since_last_open was added (11 features -> 12).")
-    print("     2. Zero-fill: a confirmed-open day with no sales row for a")
-    print("        product now counts as a real 0 instead of being absent, so")
-    print("        the test set contains many rows that simply did not exist")
-    print("        before.")
-    print("   A WMAPE or MAE from this run therefore cannot be held up against")
-    print("   the old 27.4% figure (or the 37.5%/61.6% synthetic-data ones).")
-    print("   Only compare runs from Oct 1 2026 onward with each other.")
+    print("!! NUMBERS IN THIS RUN ARE NOT COMPARABLE WITH REPORTS BEFORE OCT 17 2026 !!")
+    print("   Changed on Oct 17 2026:")
+    print("     1. Features: is_holiday removed (12 -> 11); is_payday uses the new")
+    print("        rule (15th and 30th / last day of Feb; Sat -> Fri, Sun -> Mon).")
+    print("     2. Training: tuned settings, a validation period and early stopping;")
+    print("        the split is by date, so the test period can start a day earlier")
+    print("        or later than before.")
+    print("   A saved model trained before Oct 17 has the old feature list and is")
+    print("   refused here: run with --train (or retrain from the dashboard) first.")
     print()
 
     started = time.perf_counter()
@@ -2179,8 +2548,9 @@ def main():
     # taken before the saved-model filter below narrows eligible_df.
     eligible_ids = set(int(p) for p in eligible_df["product_id"].unique())
     write_local_owner_files(outlier_flagged, open_dates, eligible_ids, coverage_text)
+    stage_data_cleaning(all_sales_df, features_df, eligible_df, excluded, outlier_flagged, open_dates)
 
-    model, model_version, _metrics, trained_now, feature_importance = _acquire_report_model(
+    model, model_version, report_metrics, trained_now, feature_importance = _acquire_report_model(
         eligible_df, args.train
     )
     if not trained_now:
@@ -2202,10 +2572,13 @@ def main():
 
     train_df, test_df = stage_3_split(eligible_df, high_id, low_id)
     stage_4_features(eligible_df, high_id)
+    stage_training_dataset(eligible_df, high_id)
+    stage_training_settings(model, eligible_df, trained_now, report_metrics)
 
     # The model's OWN product list, never today's (see SavedModel).
     known_categories = model.product_categories
 
+    stage_final_metrics(model, test_df, open_dates)
     stage_baseline_comparison(model, test_df)
     test_df_s6, predictions_s6 = stage_5_and_6(eligible_df, force_train=args.train)
     stage_feature_importance_ablation(eligible_df, feature_importance)
@@ -2215,7 +2588,7 @@ def main():
         test_df["sale_date"].min(), test_df["sale_date"].max(),
     )
     stage_7_predictions(test_df_s6, predictions_s6, high_id, low_id)
-    stage_two_fold_stability(eligible_df, train_df, test_df)
+    stage_forecast_preview(model, model_version, known_categories, eligible_df, open_dates)
     stage_production_reality_check(model, model_version, train_df, test_df)
 
     # Enforce the documented final section order regardless of the

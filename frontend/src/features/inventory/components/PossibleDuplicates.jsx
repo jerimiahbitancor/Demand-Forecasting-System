@@ -44,8 +44,8 @@ const PossibleDuplicates = ({ refreshKey = 0, onReview }) => {
       {open && (
         <>
           <p className="possible-duplicates__intro">
-            These products have names that look alike. If two of them are really the same dish, merge them.
-            Keep the one with the longer sales history. Nothing changes until you confirm.
+            These products have names that look alike. If two of them are really the same product, combine them.
+            Keep the one with the correct name (usually the one with more sales history). Nothing changes until you confirm.
           </p>
           <ul className="possible-duplicates__list">
             {pairs.map((pair) => (
@@ -59,7 +59,7 @@ const PossibleDuplicates = ({ refreshKey = 0, onReview }) => {
                   className="btn-secondary possible-duplicates__btn"
                   onClick={() => onReview && onReview({ source: pair.b, target: pair.a })}
                 >
-                  <FaCodeBranch /> Review merge
+                  <FaCodeBranch /> Review and combine
                 </button>
               </li>
             ))}

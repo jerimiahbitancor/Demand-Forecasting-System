@@ -143,7 +143,7 @@ const ProductManagement = () => {
   const [mergeRequest, setMergeRequest] = useState(null);
   const [duplicatesKey, setDuplicatesKey] = useState(0);
   const [mergeEnabled, setMergeEnabled] = useState(false);
-  const [mergeDisabledMessage, setMergeDisabledMessage] = useState('Merging is turned off for now.');
+  const [mergeDisabledMessage, setMergeDisabledMessage] = useState('Combining products is turned off for now. You can still preview what would change.');
   const [isProductDetailsModalOpen, setIsProductDetailsModalOpen] = useState(false);
   const [isLowMarginModalOpen, setIsLowMarginModalOpen] = useState(false);
   const [editingId, setEditingId] = useState(null);
@@ -1966,12 +1966,12 @@ const ProductManagement = () => {
                             <>
                               {/* The span carries the tooltip: browsers show no
                                   title on a disabled button. */}
-                              <span title={mergeEnabled ? 'Merge into...' : mergeDisabledMessage}>
+                              <span title={mergeEnabled ? 'Combine with another product' : mergeDisabledMessage}>
                                 <button
                                   className="product-action-btn merge"
                                   onClick={() => setMergeRequest({ source: { id: item.id, name: item.name }, targetId: null })}
                                   disabled={!mergeEnabled}
-                                  aria-label={mergeEnabled ? `Merge ${item.name} into another product` : mergeDisabledMessage}
+                                  aria-label={mergeEnabled ? `Combine ${item.name} with another product` : mergeDisabledMessage}
                                 >
                                   <FaCodeBranch size={14} />
                                 </button>

@@ -163,7 +163,7 @@ check("a matching model actually reaches prediction and succeeds",
 
 # ---------------------------------------------------------------
 # 4. Column ORDER matters, not just membership
-#    Same 12 names, two swapped. XGBoost reads by position, so this is
+#    Same 11 names, two swapped. XGBoost reads by position, so this is
 #    just as wrong as a missing column — and far easier to miss.
 # ---------------------------------------------------------------
 reordered = list(FEATURE_COLUMNS)
@@ -176,7 +176,7 @@ install_stubs({
     "train_end_date": "2026-09-29",
 }, model)
 resp = client.post("/forecast", json={"horizon_days": 1}, headers=HEADERS)
-check("the same 12 columns in a DIFFERENT ORDER are still refused",
+check("the same 11 columns in a DIFFERENT ORDER are still refused",
       resp.status_code == 409, f"got {resp.status_code}")
 check("no predict() on a reordered model", model.predict_calls == 0)
 

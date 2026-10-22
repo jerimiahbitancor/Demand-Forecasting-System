@@ -62,7 +62,7 @@ Start command: `npm start` (that is, `node server.js`).
 | `ML_SERVICE_URL` | yes | The ML service URL, e.g. `https://demand-forecasting-system-1-6ozx.onrender.com`. |
 | `ML_SERVICE_SHARED_SECRET` | yes | Same value as in the `ml` service. |
 | `BREVO_API_KEY`, `BREVO_SENDER_EMAIL`, `BREVO_SENDER_NAME` | yes | All email: OTP, password reset and reminder emails (`services/emailService.js`, 10 s timeout). `BREVO_SENDER_NAME` defaults to `ChefDuo`. **A Gmail sender address sent through Brevo can land in Spam** (Gmail's own DMARC rules); verifying a sender domain in Brevo fixes that. |
-| `EMAIL_REMINDERS_ENABLED` | **set to `true` on the production host** | Also emails reminder notifications (upload reminders, unanswered days, stock shortfalls, low / out of stock, restock summary) to `business_profile.business_email`. Default `false`. One email per reminder (de-duplicated for 24 h), never one per user; an email failure never blocks the notification. Status messages (upload done, training, forecasts, prices) are never emailed. |
+| `EMAIL_REMINDERS_ENABLED` | **set to `true` on the production host** | Also emails reminder notifications (upload reminders, unanswered days, stock shortfalls, and ONE daily restock email with the ingredient list) to `business_profile.business_email`. Per-ingredient stock alerts stay in the bell and are never emailed. Default `false`. One email per reminder, never one per user; an email failure never blocks the notification. Status messages (upload done, training, forecasts, prices) are never emailed. |
 | `FRONTEND_URL` | recommended | The deployed frontend, e.g. `https://<your-app>.vercel.app`. The "Open ChefDuo" button in reminder emails links here. If unset, the first non-localhost entry of `ALLOWED_ORIGINS` is used. |
 | `CLAMAV_HOST`, `CLAMAV_PORT`, `CLAMAV_TIMEOUT` | no | Upload virus-scan settings. |
 | `LOG_LEVEL` | no | `debug` / `info` / `warn` / `error`. Default `info` in production. |
@@ -92,13 +92,13 @@ A reminder run can start three ways. All three are safe together: the database d
 
 1. **cron**: node-cron inside the API. Works only while the server is awake.
 2. **external**: `POST /api/jobs/upload-reminders?slot=0400` (or `0700`) with the header `X-Job-Secret: <JOB_TRIGGER_SECRET>`. No login. Answers `202` at once and runs in the background. `401` = wrong or missing secret, `404` = `JOB_TRIGGER_SECRET` unset, `409` = `SCHEDULERS_ENABLED` off, `400` = bad slot. At most 10 calls per 15 min per IP.
-3. **boot**: about 20 s after the server starts, each slot whose time has already passed today (Manila) and has no run record today runs once. A server woken at 7:30 AM therefore runs 4:00 and then 7:00.
+3. **boot**: about 20 s after the server starts, the **latest slot that applies** runs once if it has no run record today (Manila): 04:00-07:00 → 4:00; 07:00-09:00 → 7:00 only; after 09:00 → 4:00 only. The 7:00 reminder never goes out after 9:00 (its text says "before the forecast at 9:00 AM").
 
 Every run writes one `audit_logs` row, `action_type = 'upload_reminder_run'`, with `details` as JSON: slot, Manila date, trigger, host, status, planned keys, sent, duplicates, and the email outcome per reminder (`sent`, `disabled`, `duplicate`, `not_configured`, `no_business_email`, `failed`). Filter by it in Settings > Audit Trail. `/admin/health` shows the newest row per slot.
 
 #### cron-job.org setup (free)
 
-Create an account at cron-job.org. In account settings set the time zone to **Asia/Manila**. Then create these four jobs:
+Create an account at cron-job.org. In account settings set the time zone to **Asia/Manila**. Then create these seven jobs:
 
 | Job | URL | When (Asia/Manila) | Method | Header |
 |---|---|---|---|---|
@@ -106,10 +106,25 @@ Create an account at cron-job.org. In account settings set the time zone to **As
 | Upload reminder 4:00 | `https://demand-forecasting-system-wami.onrender.com/api/jobs/upload-reminders?slot=0400` | every day 04:00 | **POST** | `X-Job-Secret` = the `JOB_TRIGGER_SECRET` value |
 | Wake-up before 7:00 (**recommended**) | `https://demand-forecasting-system-wami.onrender.com/health` | every day 06:55 | GET | none |
 | Upload reminder 7:00 | `https://demand-forecasting-system-wami.onrender.com/api/jobs/upload-reminders?slot=0700` | every day 07:00 | **POST** | `X-Job-Secret` = the `JOB_TRIGGER_SECRET` value |
+| Wake-up API before 9:00 (**recommended**) | `https://demand-forecasting-system-wami.onrender.com/health` | every day 08:55 | GET | none |
+| Wake-up ML before 9:00 (**recommended**) | `https://demand-forecasting-system-1-6ozx.onrender.com/health` | every day 08:55 | GET | none |
+| Forecast 9:00 | `https://demand-forecasting-system-wami.onrender.com/api/jobs/forecast` | every day 09:00 | **POST** | `X-Job-Secret` = the `JOB_TRIGGER_SECRET` value |
 
 For each POST job: open the **Advanced** tab, set Request method to `POST`, add the header under *Headers*, leave the request body empty, and turn on *Notify me when the job fails*. Schedule: *Custom*, every day, hour and minute as above.
 
 Why the wake-ups: a cold start can take longer than cron-job.org waits for an answer. With the wake-up at 03:55 / 06:55 the POST reaches a warm server and gets its `202` in under a second. If a POST still times out, the server it woke runs the slot anyway through the boot catch-up.
+
+### The 9:00 AM forecast
+
+Same idea as the reminders. A forecast run starts from the in-process cron, from `POST /api/jobs/forecast` (same secret and answers as above; Monday runs the weekly 7-day forecast, other days the daily one), or from a boot catch-up after 9:00 AM. **`forecast_runs` is the record:** the external and boot runs skip when it already has a run at or after 9:00 AM today (Manila); an earlier manual run does not count. They also skip when no model is trained. Before the call they wake the ML service (`/health`). A cold-start failure (HTTP 429/502/503/504 from Render, or the network giving up) is retried **once** after 30 s; any other failure is not retried. Each external/boot attempt writes an `audit_logs` row `forecast_trigger_run`; once one has **failed** today, the boot catch-up stops trying that day (so a broken ML service does not mean one failure notification per wake-up). The cron-job.org call and a manual Generate Forecast still work.
+
+After every successful forecast (scheduled, external, boot or manual), every sales upload, every restock, ingredient edit (stock, minimum, unit), ingredient archive/restore, recipe create/edit and safety-buffer change, the stock alerts are refreshed.
+
+### Stock alerts and the restock email
+
+The bell's stock alerts use the **same status as Ingredient Management** (`services/stockAlertService.js`): out of stock (quantity 0), Critical (stock < 50% of today's forecast need incl. safety buffer), Low (< 100%), and, for ingredients with no forecast need, quantity <= `min_stock`. One bell alert per ingredient, plus one restock summary with the whole list.
+
+The restock email goes out **at most once per Manila day** (database key `restock_summary:<YYYY-MM-DD>`, so restarts do not resend it), plus a second one only if a **new** ingredient becomes out of stock or Critical that day. **The first one waits until today's 9:00 AM forecast has run** (a `forecast_runs` row at or after 9:00 today); before that only the bell is updated. If yesterday was an operating day with no upload and no closed mark, the email says "Stock does not yet include <Ddd DD-MM> sales. Upload them to update this list." "To buy" is rounded up to whole units for count units (pcs, sachets…), in the email and the Grocery List. It lists up to 15 ingredients (Out of stock, Critical, Low; then highest est. cost first), with "…and N more in the grocery list." after that. The button opens the Ingredient Demand page (`FRONTEND_URL` + `/ingredient-demand`). A failed send is not counted, so the next refresh tries again. The refresh runs after each of the changes listed above, and every 6 hours as a fallback; only where `SCHEDULERS_ENABLED` is on. Overlapping requests are merged into one extra run. A change that improves stock retires its bell alert and never sends an email.
 
 Checking it works: after 4:00 AM, the bell has "Upload yesterday's sales" (if yesterday is not uploaded or marked closed), the Render log has `[uploadReminder] 0400 run done (external)`, and Audit Trail has an `upload_reminder_run` row. No reminder is planned when yesterday is already answered, is not an operating day, or no model has been trained yet; the run row then shows `planned: []`.
 

@@ -9,6 +9,11 @@
 // Severity: stale data and data-quality = "danger" (red). Low accuracy,
 // retraining due and missing recipes = "warn" (amber). Nothing to show ->
 // renders nothing.
+//
+// Oct 17 2026: one compact panel with a row per notice, instead of a stack
+// of full-width banners (two banners took ~330px above the KPI cards). No
+// dismiss button: every notice is a live condition and goes away by itself
+// once it is fixed.
 import { useState } from "react";
 import axios from "axios";
 import toast from "react-hot-toast";
@@ -16,18 +21,30 @@ import { useNavigate } from "react-router-dom";
 import { FaArrowRight, FaDatabase, FaRedo, FaUpload, FaClipboardList } from "react-icons/fa";
 import { RiErrorWarningLine } from "react-icons/ri";
 import Swal from "../../../utils/swal";
-import { StateBanner } from "./DashboardStateKit.jsx";
+import { lowAccuracyNotice } from "../../../utils/accuracyText.js";
 import "./DashboardNotices.css";
 
 const API_URL = import.meta.env.VITE_API_URL || "http://localhost:5000/api";
 const getAuthToken = () => sessionStorage.getItem("access_token") || localStorage.getItem("token");
 
-const pct = (value) => (typeof value === "number" ? value.toFixed(1) : null);
 const plural = (n, word) => `${n} ${word}${n === 1 ? "" : "s"}`;
+
+// "2026-09-28" -> "Sep 28, 2026". Built from its parts: new Date("YYYY-MM-DD")
+// is read as UTC midnight and can show the day before in some time zones.
+const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+const formatDateParts = (iso) => {
+  const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(String(iso || ""));
+  if (!m) return null;
+  return `${MONTHS[Number(m[2]) - 1]} ${Number(m[3])}, ${m[1]}`;
+};
+
+// Rows shown before "Show N more".
+const VISIBLE_NOTICES = 3;
 
 const DashboardNotices = ({ attention, mapping, onRefreshState }) => {
   const navigate = useNavigate();
   const [isRetraining, setIsRetraining] = useState(false);
+  const [showAll, setShowAll] = useState(false);
 
   // Retraining is only offered on the "retraining due" card. It is the one
   // place a trained model can still be retrained from (the Analytics page
@@ -64,16 +81,20 @@ const DashboardNotices = ({ attention, mapping, onRefreshState }) => {
   const notices = [];
 
   if (attention?.isStale) {
-    const days = attention.staleDays != null ? plural(attention.staleDays, "day") : "some days";
+    // staleDays counts OPERATING days with no upload (backend
+    // utils/staleDays.js), not calendar days, so the old "N days behind
+    // today" overstated the gap.
+    const days = attention.staleDays != null ? plural(attention.staleDays, "operating day") : "Some operating days";
+    const since = formatDateParts(attention.lastConfirmedDate);
     notices.push({
       key: "stale",
       tone: "danger",
-      icon: <FaUpload size={18} />,
+      icon: <FaUpload />,
       title: "Sales data is behind",
       text:
-        `Your most recent confirmed sales data is ${days} behind today` +
-        (attention.lastConfirmedDate ? ` (as of ${attention.lastConfirmedDate})` : "") +
-        ". Upload recent sales data to keep your forecasts accurate.",
+        `${days} without uploaded sales` +
+        (since ? ` since ${since}` : "") +
+        ". Forecasts are running on older data.",
       actionLabel: "Upload sales data",
       onAction: () => navigate("/data-management"),
     });
@@ -83,28 +104,23 @@ const DashboardNotices = ({ attention, mapping, onRefreshState }) => {
     notices.push({
       key: "data-quality",
       tone: "danger",
-      icon: <FaDatabase size={18} />,
+      icon: <FaDatabase />,
       title: "Problem in an uploaded file",
-      text: `An issue was found in your uploaded sales data: ${attention.dataQualityIssue}. Review your upload history for details.`,
-      actionLabel: "Go to Data Management",
+      text: `Issue found: ${attention.dataQualityIssue}. Check your upload history for details.`,
+      actionLabel: "Review uploads",
       onAction: () => navigate("/data-management"),
     });
   }
 
   if (attention?.isLowAccuracy) {
-    const accuracy = pct(attention.accuracy);
-    const baseline = pct(attention.baselineAccuracy);
+    // isLowAccuracy = the forecast does not beat the weekly average.
+    // Wording lives in utils/accuracyText.js.
     notices.push({
       key: "accuracy",
       tone: "warn",
-      icon: <RiErrorWarningLine size={18} />,
+      icon: <RiErrorWarningLine />,
       title: "Forecast accuracy",
-      text:
-        accuracy && baseline
-          ? `Forecast accuracy is ${accuracy}%. A simple 7-day average scored ${baseline}% on the same days. ` +
-            "Use the forecast as a planning guide, not an exact number."
-          : "The forecast is not yet better than a simple 7-day average. " +
-            "Use the forecast as a planning guide, not an exact number.",
+      text: lowAccuracyNotice(attention.accuracy),
       actionLabel: "View details",
       onAction: () => navigate("/forecasting"),
     });
@@ -115,9 +131,9 @@ const DashboardNotices = ({ attention, mapping, onRefreshState }) => {
     notices.push({
       key: "retraining",
       tone: "warn",
-      icon: <FaRedo size={18} />,
+      icon: <FaRedo />,
       title: "Retraining due",
-      text: `The forecasting model was last trained ${days} ago. Retrain it on your current sales data to keep forecasts up to date.`,
+      text: `Last trained ${days} ago. Retrain on your current sales data to keep forecasts up to date.`,
       actionLabel: isRetraining ? "Retraining…" : "Retrain model",
       onAction: handleRetrain,
       disabled: isRetraining,
@@ -128,9 +144,9 @@ const DashboardNotices = ({ attention, mapping, onRefreshState }) => {
     notices.push({
       key: "unmapped",
       tone: "warn",
-      icon: <FaClipboardList size={18} />,
+      icon: <FaClipboardList />,
       title: "Recipes missing",
-      text: `${mapping.unmappedCount} of ${mapping.activeCount} active products have no recipe yet, so the ingredient list is partial.`,
+      text: `${mapping.unmappedCount} of ${mapping.activeCount} active products have no recipe, so ingredient needs and stock alerts are incomplete.`,
       actionLabel: "Add recipes",
       // ?tab=product opens the Product Management tab directly.
       onAction: () => navigate("/inventory-management?tab=product"),
@@ -139,29 +155,46 @@ const DashboardNotices = ({ attention, mapping, onRefreshState }) => {
 
   if (notices.length === 0) return null;
 
+  const hiddenCount = Math.max(0, notices.length - VISIBLE_NOTICES);
+  const shown = showAll ? notices : notices.slice(0, VISIBLE_NOTICES);
+
   return (
-    <div className="sk-root dash-notices" role="region" aria-label="Things that need your attention">
-      {notices.map((n) => (
-        <StateBanner
-          key={n.key}
-          tone={n.tone}
-          icon={n.icon}
-          title={n.title}
-          text={n.text}
-          actions={
+    <section className="dn-panel" aria-label="Things that need your attention">
+      <header className="dn-header">
+        <h2 className="dn-heading">Needs your attention</h2>
+        <span className="dn-count" aria-hidden="true">· {notices.length}</span>
+      </header>
+      <ul className="dn-list">
+        {shown.map((n) => (
+          <li key={n.key} className="dn-row">
+            <span className={`dn-icon dn-icon--${n.tone}`} aria-hidden="true">{n.icon}</span>
+            <div className="dn-body">
+              <p className="dn-title">{n.title}</p>
+              <p className="dn-text">{n.text}</p>
+            </div>
             <button
               type="button"
-              className="sk-btn sk-btn--secondary"
+              className="dn-action"
               onClick={n.onAction}
               disabled={n.disabled}
             >
               {n.actionLabel}
-              <FaArrowRight size={13} />
+              <FaArrowRight size={11} aria-hidden="true" />
             </button>
-          }
-        />
-      ))}
-    </div>
+          </li>
+        ))}
+      </ul>
+      {hiddenCount > 0 && (
+        <button
+          type="button"
+          className="dn-more"
+          aria-expanded={showAll}
+          onClick={() => setShowAll((v) => !v)}
+        >
+          {showAll ? "Show less" : `Show ${hiddenCount} more`}
+        </button>
+      )}
+    </section>
   );
 };
 

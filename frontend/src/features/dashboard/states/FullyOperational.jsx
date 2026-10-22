@@ -1,11 +1,13 @@
 // states/FullyOperational.jsx
 import { useState, useEffect, useRef } from "react";
 import { useNavigate } from "react-router-dom";
-import { FaArrowUp, FaArrowDown, FaInfoCircle, FaCalendarAlt } from "react-icons/fa";
+import { FaArrowUp, FaArrowDown, FaInfoCircle } from "react-icons/fa";
 import Tippy from "@tippyjs/react";
 import "tippy.js/dist/tippy.css";
 import "tippy.js/animations/scale.css";
 import {
+  AreaChart,
+  Area,
   LineChart,
   Line,
   BarChart,
@@ -18,17 +20,35 @@ import {
   ResponsiveContainer,
   ComposedChart
 } from 'recharts';
-import Swal from '../../../utils/swal';
-import axios from 'axios';
+import apiClient from '../../../services/apiClient';
 import Navbar from "../../components/Navbar/Navbar";
 import DashboardNotices from "../components/DashboardNotices.jsx";
 import { formatStockQty } from "../../../utils/formatStockQty.js";
+import { formatItemsSold } from "../../../utils/formatItemsSold.js";
 import {
   chartRange, toChartRows, pickBestSellers, pickIngredients, statusBadgeClass, shortDateLabel,
 } from "../utils/dashboardPanels.js";
+import { DASHBOARD_TIMEOUT_MS } from "../utils/dashboardTimeout.js";
+import { accuracyPercent, accuracyVerdict, accuracyOffByLine, ACCURACY_HELP_SENTENCES } from "../../../utils/accuracyText.js";
 import "../pages/Dashboard.css";
 
-const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:5000/api';
+// Chart hover box. Module scope so recharts gets the same component every
+// render (a component declared inside the render is rebuilt each time).
+const CustomTooltip = ({ active, payload, label }) => {
+  if (active && payload && payload.length) {
+    return (
+      <div className="custom-tooltip">
+        <p className="tooltip-label">{label}</p>
+        {payload.map((entry, index) => (
+          // Items sold, as a whole number: forecasts are expected values
+          // (decimals); the chart itself still plots the raw values.
+          <p key={index} style={{ color: entry.color }}>{entry.name}: {formatItemsSold(entry.value)}</p>
+        ))}
+      </div>
+    );
+  }
+  return null;
+};
 
 // Neutral "not available yet" look for panels with no real data source.
 const NOT_AVAILABLE_STYLE = {
@@ -46,23 +66,52 @@ const NOT_AVAILABLE_STYLE = {
 };
 const NOT_AVAILABLE_TEXT_STYLE = { color: '#6b7280', fontSize: 13, margin: '8px 0', lineHeight: 1.5 };
 
+// Stock Alert card: same colours as the Ingredient Management legend.
+const STOCK_STATUSES = [
+  { key: 'Critical', label: 'Critical', color: '#dc2626' },
+  { key: 'Low', label: 'Low', color: '#f59e0b' },
+  { key: 'Normal', label: 'Normal', color: '#16a34a' },
+  { key: 'Excess', label: 'Excess', color: '#3b82f6' },
+];
+const STOCK_NO_DATA_COLOR = '#9ca3af';
+
+// Headline colour = the WORST status present, not a count threshold (the old
+// 10/5/1 thresholds showed 7 Critical ingredients in yellow).
+const stockHeadlineColor = (counts) => {
+  if (!counts) return STOCK_NO_DATA_COLOR;
+  if (counts.Critical > 0) return '#dc2626';
+  if (counts.Low > 0) return '#f59e0b';
+  return '#16a34a';
+};
+
+// "2026-10-16" -> "Oct 16", from its parts: new Date("YYYY-MM-DD") is read
+// as UTC midnight and can land on the day before.
+const shortMonthDay = (iso) => {
+  const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(String(iso || ''));
+  if (!m) return null;
+  return new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]))
+    .toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+};
+
 // initialState = the /upload/dashboard-state payload. Since Oct 14 2026 a
 // trained model always lands here; its attention/mapping blocks become
 // notice cards above the KPIs (components/DashboardNotices.jsx).
 const FullyOperational = ({ initialState, onRefreshState }) => {
-  const [selectedChart, setSelectedChart] = useState("line");
+  const [selectedChart, setSelectedChart] = useState("area");
   const [selectedPeriod, setSelectedPeriod] = useState("week");
-  const [loading, setLoading] = useState(true);
-  const [showCalendar, setShowCalendar] = useState(false);
-  const [selectedDate, setSelectedDate] = useState(new Date());
+  // KPI row only: 'loading' | 'ready' | 'failed'. The page itself renders
+  // straight away; the Dashboard splash is the only full-page loading screen.
+  const [summaryStatus, setSummaryStatus] = useState('loading');
   // null = not loaded (or failed to load): the KPI cards show "—", never
   // an invented 0.
   const [dashboardData, setDashboardData] = useState({
     predictedSales: null,
     actualSales: null,
+    actualSalesDate: null,
     forecastAccuracy: null,
-    forecastAccuracyTier: null,
+    accuracyBeatsBaseline: null,
     stockAlert: null,
+    stockCounts: null,
     predictedSalesYesterday: null,
     salesTrend: null,
     accuracyTrend: 0,
@@ -98,22 +147,6 @@ const FullyOperational = ({ initialState, onRefreshState }) => {
     },
   });
 
-  const getAuthToken = () => sessionStorage.getItem('access_token') || localStorage.getItem('token');
-
-  const apiClient = axios.create({
-    baseURL: API_URL,
-    headers: { 'Content-Type': 'application/json' }
-  });
-
-  apiClient.interceptors.request.use(
-    (config) => {
-      const token = getAuthToken();
-      if (token) config.headers.Authorization = `Bearer ${token}`;
-      return config;
-    },
-    (error) => Promise.reject(error)
-  );
-
   // Get day of week for dynamic message
   const getDayOfWeek = (date) => {
     const days = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
@@ -131,86 +164,72 @@ const FullyOperational = ({ initialState, onRefreshState }) => {
 
  const fetchDashboardData = async () => {
   try {
-    setLoading(true);
-    Swal.fire({
-      title: 'Loading Dashboard',
-      text: 'Please wait while we fetch your data...',
-      allowOutsideClick: false,
-      showConfirmButton: false,
-      didOpen: () => Swal.showLoading()
-    });
+    setSummaryStatus('loading');
 
     // GET /api/forecast/summary feeds the KPI row (analyticsService.js
     // getForecastSummary). The three panels load separately (loadPanels).
-    const summaryResponse = await apiClient.get('/forecast/summary');
-    Swal.close();
+    const summaryResponse = await apiClient.get('/forecast/summary', { timeout: DASHBOARD_TIMEOUT_MS });
 
     if (summaryResponse.data.success) {
       const summary = summaryResponse.data.data;
       const predictedSales = Math.round(summary.predictedSalesToday || 0);
-      const actualSales = Math.round(summary.actualSalesYesterday || 0);
-      const accuracyValue = summary.forecastAccuracy?.value;
-      // One decimal, same as the accuracy notice card (64.6%).
-      const forecastAccuracy = accuracyValue != null ? Math.round(accuracyValue * 10) / 10 : null;
+      // null = nothing uploaded for yesterday: the card shows "—", never ₱0.
+      const actualSales = summary.actualSalesYesterday != null ? Math.round(summary.actualSalesYesterday) : null;
+      // Raw value; shown as a whole number (utils/accuracyText.js), same
+      // wording as Analytics > Forecasting.
+      const forecastAccuracy = summary.forecastAccuracy?.value ?? null;
       const predictedSalesYesterday = summary.predictedSalesYesterday != null
         ? Math.round(summary.predictedSalesYesterday)
         : null;
-      const forecastAccuracyTier = summary.forecastAccuracy?.tier || null;
-      const stockAlerts = summary.stockAlerts || { Critical: 0, Low: 0, Normal: 0, Excess: 0 };
-      // Headline total = all tracked ingredients, so it always equals the sum
-      // of the Critical/Low/Normal/Excess breakdown shown in the card.
-      const stockAlert = (stockAlerts.Critical || 0) + (stockAlerts.Low || 0)
-        + (stockAlerts.Normal || 0) + (stockAlerts.Excess || 0);
-
-      const stockBreakdown = [
-        { count: stockAlerts.Critical || 0, label: 'Critical', color: '#ef4444' },
-        { count: stockAlerts.Low || 0, label: 'Low', color: '#eab308' },
-        { count: stockAlerts.Normal || 0, label: 'Normal', color: '#22c55e' },
-        { count: stockAlerts.Excess || 0, label: 'Excess', color: '#3b82f6' }
-      ];
+      const accuracyBeatsBaseline = summary.forecastAccuracy?.beatsBaseline ?? null;
+      // Local name on purpose: the component also has a render-scope
+      // `stockCounts` declared further down the render. Referencing
+      // that one from here threw "Cannot access before initialization".
+      const rawStock = summary.stockAlerts || {};
+      const summaryStockCounts = {
+        Critical: Number(rawStock.Critical) || 0,
+        Low: Number(rawStock.Low) || 0,
+        Normal: Number(rawStock.Normal) || 0,
+        Excess: Number(rawStock.Excess) || 0,
+      };
+      // Headline = ingredients that need restocking (Critical + Low).
+      const stockAlert = summaryStockCounts.Critical + summaryStockCounts.Low;
 
       setDashboardData({
         predictedSales,
         actualSales,
+        actualSalesDate: summary.yesterday || null,
         forecastAccuracy,
-        forecastAccuracyTier,
+        accuracyBeatsBaseline,
         stockAlert,
+        stockCounts: summaryStockCounts,
         predictedSalesYesterday,
         // Today's forecast vs yesterday's actual sales (labelled on the badge).
         salesTrend: actualSales ? Math.round((predictedSales - actualSales) / actualSales * 100) : null,
         accuracyTrend: 0,
-        stockBreakdown
       });
+    } else {
+      throw new Error('Forecast summary was not successful');
     }
+    setSummaryStatus('ready');
   } catch (error) {
-    Swal.close();
     console.error('Error fetching dashboard data:', error);
-    Swal.fire({
-      icon: 'error',
-      title: 'Failed to load dashboard',
-      text: 'Could not load forecast summary. Please try again later.',
-      confirmButtonColor: '#7A0101'
-    });
+    // Shown inline above the KPI row (no popup on every failed load).
+    setSummaryStatus('failed');
 
     // Failed to load: show "—" everywhere, never zeros that look like data.
     setDashboardData({
       predictedSales: null,
       actualSales: null,
+      actualSalesDate: null,
       forecastAccuracy: null,
-      forecastAccuracyTier: null,
+      accuracyBeatsBaseline: null,
       stockAlert: null,
+      stockCounts: null,
       predictedSalesYesterday: null,
       salesTrend: null,
       accuracyTrend: 0,
-      stockBreakdown: [
-        { count: null, label: 'Critical', color: '#ef4444' },
-        { count: null, label: 'Low', color: '#eab308' },
-        { count: null, label: 'Normal', color: '#22c55e' },
-        { count: null, label: 'Excess', color: '#3b82f6' }
-      ]
     });
-  } finally {
-    setLoading(false);
   }
 };
 
@@ -218,9 +237,12 @@ const FullyOperational = ({ initialState, onRefreshState }) => {
   // setState happens after the requests settle.
   const loadPanels = async (period, includeSidePanels) => {
     const requests = [
-      apiClient.get('/analytics/forecasting', { params: chartRange(period) }),
+      apiClient.get('/analytics/forecasting', { params: chartRange(period), timeout: DASHBOARD_TIMEOUT_MS }),
       ...(includeSidePanels
-        ? [apiClient.get('/analytics/product-performance'), apiClient.get('/analytics/ingredient-demand')]
+        ? [
+          apiClient.get('/analytics/product-performance', { timeout: DASHBOARD_TIMEOUT_MS }),
+          apiClient.get('/analytics/ingredient-demand', { timeout: DASHBOARD_TIMEOUT_MS }),
+        ]
         : []),
     ];
     const [chartRes, perfRes, demandRes] = await Promise.allSettled(requests);
@@ -259,9 +281,6 @@ const FullyOperational = ({ initialState, onRefreshState }) => {
       return;
     }
     loadPanels(selectedPeriod, false);
-    // Runs on a period change only; loadPanels is rebuilt every render and
-    // listing it would reload the chart on every render.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedPeriod]);
 
   const handleChartChange = (e) => setSelectedChart(e.target.value);
@@ -271,36 +290,11 @@ const FullyOperational = ({ initialState, onRefreshState }) => {
     style: 'currency', currency: 'PHP', minimumFractionDigits: 0, maximumFractionDigits: 0
   }).format(amount);
 
-  const CustomTooltip = ({ active, payload, label }) => {
-    if (active && payload && payload.length) {
-      return (
-        <div className="custom-tooltip">
-          <p className="tooltip-label">{label}</p>
-          {payload.map((entry, index) => (
-            <p key={index} style={{ color: entry.color }}>{entry.name}: {entry.value}</p>
-          ))}
-        </div>
-      );
-    }
-    return null;
-  };
-
   const getRatioClass = (ratio) => {
     const num = parseFloat(ratio);
     if (num >= 1.5) return 'ratio-high';
     if (num >= 1.0) return 'ratio-medium';
     return 'ratio-low';
-  };
-
-  // Get color based on stock alert number (count of Critical + Low
-  // ingredients from the real /api/forecast/summary stockAlerts breakdown
-  // — a small integer, not the 0-100-ish scale these thresholds were
-  // originally tuned for back when the value itself was fabricated).
-  const getStockAlertColor = (value) => {
-    if (value >= 10) return '#ef4444'; // Red — many ingredients need attention
-    if (value >= 5) return '#eab308'; // Yellow
-    if (value >= 1) return '#22c55e'; // Green
-    return '#3b82f6'; // Blue — none
   };
 
   // Tooltips
@@ -326,42 +320,25 @@ const FullyOperational = ({ initialState, onRefreshState }) => {
         </span>
       </div>
     ),
+    // Same plain sentences as Analytics > Forecasting (utils/accuracyText.js).
     accuracy: (
       <div style={{ padding: "4px 0", fontSize: "13px", lineHeight: "1.6" }}>
-        This tells you how reliable today's quantity forecasts are.<br /><br />
-        <div style={{ margin: "8px 0" }}>
-          <div style={{ display: "flex", alignItems: "center", gap: "8px", marginBottom: "4px" }}>
-            <span style={{ color: "#22c55e", fontWeight: "bold" }}>●</span>
-            <span><strong>Above 90%</strong> → Excellent. You can rely on these numbers.</span>
-          </div>
-          <div style={{ display: "flex", alignItems: "center", gap: "8px", marginBottom: "4px" }}>
-            <span style={{ color: "#60a5fa", fontWeight: "bold" }}>●</span>
-            <span><strong>80-90%</strong> → Good. Still useful for planning.</span>
-          </div>
-          <div style={{ display: "flex", alignItems: "center", gap: "8px", marginBottom: "4px" }}>
-            <span style={{ color: "#fbbf24", fontWeight: "bold" }}>●</span>
-            <span><strong>70-80%</strong> → Fair. Use with caution.</span>
-          </div>
-          <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
-            <span style={{ color: "#ef4444", fontWeight: "bold" }}>●</span>
-            <span><strong>Below 70%</strong> → Low. Consider uploading more data.</span>
-          </div>
-        </div>
-        <br />
-        <span style={{ color: "#60a5fa", cursor: "pointer", display: "block", textAlign: "center", paddingTop: "8px", borderTop: "1px solid rgba(255,255,255,0.1)" }}>
-          Click to view detailed accuracy report →
-        </span>
+        {ACCURACY_HELP_SENTENCES.join(' ')}
       </div>
     ),
+    // Matches the backend rule (analyticsService computeStockStatus): stock
+    // vs TODAY's forecasted need, recipe ingredients only.
     stock: (
       <div style={{ padding: "4px 0", fontSize: "13px", lineHeight: "1.6" }}>
-        These are the top ingredients you should prepare or buy for tomorrow.<br /><br />
-        This is based on your predicted menu sales and your recipe portions.<br /><br />
-        <strong style={{ color: "#fbbf24" }}>Pro Tip:</strong><br />
-        Double-check your actual fridge/freezer stock before buying.<br /><br />
-        <span style={{ color: "#60a5fa", cursor: "pointer", display: "block", textAlign: "center", paddingTop: "8px", borderTop: "1px solid rgba(255,255,255,0.1)" }}>
-          Click to view full ingredient demand breakdown →
-        </span>
+        Compares each ingredient's current stock with today's forecasted need,
+        worked out from the forecast and your recipes.<br /><br />
+        <div style={{ margin: "8px 0" }}>
+          <div><strong style={{ color: "#f87171" }}>Critical</strong>: less than half of the need</div>
+          <div><strong style={{ color: "#fbbf24" }}>Low</strong>: less than the need</div>
+          <div><strong style={{ color: "#4ade80" }}>Normal</strong>: 1 to 2 times the need</div>
+          <div><strong style={{ color: "#60a5fa" }}>Excess</strong>: more than 2 times the need</div>
+        </div>
+        Only ingredients used in a product recipe are counted.
       </div>
     ),
     chart: (
@@ -370,15 +347,15 @@ const FullyOperational = ({ initialState, onRefreshState }) => {
         <div style={{ margin: "8px 0" }}>
           <div style={{ display: "flex", alignItems: "center", gap: "8px", marginBottom: "4px" }}>
             <span style={{ display: "inline-block", width: "20px", height: "3px", background: "#22c55e", borderRadius: "2px" }}></span>
-            <span><strong>Green Line</strong> = What actually sold (past data)</span>
+            <span><strong>Green</strong> = What actually sold (past data)</span>
           </div>
           <div style={{ display: "flex", alignItems: "center", gap: "8px", marginBottom: "4px" }}>
             <span style={{ display: "inline-block", width: "20px", height: "3px", background: "#60a5fa", borderRadius: "2px" }}></span>
-            <span><strong>Blue Line</strong> = What the system predicted</span>
+            <span><strong>Light blue</strong> = What the system predicted</span>
           </div>
           <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
             <span style={{ display: "inline-block", width: "20px", height: "3px", background: "#1e40af", borderRadius: "2px" }}></span>
-            <span><strong>Purple Line</strong> = What the system predicts for the coming days</span>
+            <span><strong>Dark blue</strong> = What the system predicts for the coming days</span>
           </div>
         </div>
       </div>
@@ -413,101 +390,13 @@ const FullyOperational = ({ initialState, onRefreshState }) => {
     ),
   };
 
-  // Simple Calendar component
-  const CalendarPopup = ({ onClose, onSelect }) => {
-    const [viewDate, setViewDate] = useState(new Date());
-    
-    const daysInMonth = new Date(viewDate.getFullYear(), viewDate.getMonth() + 1, 0).getDate();
-    const firstDayOfMonth = new Date(viewDate.getFullYear(), viewDate.getMonth(), 1).getDay();
-    
-    const handleDateClick = (day) => {
-      const newDate = new Date(viewDate.getFullYear(), viewDate.getMonth(), day);
-      onSelect(newDate);
-      onClose();
-    };
-
-    const changeMonth = (delta) => {
-      setViewDate(new Date(viewDate.getFullYear(), viewDate.getMonth() + delta, 1));
-    };
-
-    return (
-      <div style={{
-        position: 'absolute',
-        top: '100%',
-        right: 0,
-        marginTop: '8px',
-        background: 'white',
-        borderRadius: '12px',
-        boxShadow: '0 10px 40px rgba(0,0,0,0.2)',
-        padding: '16px',
-        zIndex: 1000,
-        minWidth: '280px'
-      }}>
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '12px' }}>
-          <button onClick={() => changeMonth(-1)} style={{ background: 'none', border: 'none', cursor: 'pointer', fontSize: '18px' }}>‹</button>
-          <span style={{ fontWeight: 'bold' }}>
-            {viewDate.toLocaleDateString('en-US', { month: 'long', year: 'numeric' })}
-          </span>
-          <button onClick={() => changeMonth(1)} style={{ background: 'none', border: 'none', cursor: 'pointer', fontSize: '18px' }}>›</button>
-        </div>
-        
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(7, 1fr)', gap: '4px', textAlign: 'center' }}>
-          {['Su', 'Mo', 'Tu', 'We', 'Th', 'Fr', 'Sa'].map(day => (
-            <div key={day} style={{ fontSize: '11px', color: '#6b7280', fontWeight: 'bold' }}>{day}</div>
-          ))}
-          {Array.from({ length: firstDayOfMonth }, (_, i) => (
-            <div key={`empty-${i}`} />
-          ))}
-          {Array.from({ length: daysInMonth }, (_, i) => {
-            const day = i + 1;
-            const isToday = day === new Date().getDate() && 
-                           viewDate.getMonth() === new Date().getMonth() && 
-                           viewDate.getFullYear() === new Date().getFullYear();
-            return (
-              <button
-                key={day}
-                onClick={() => handleDateClick(day)}
-                style={{
-                  padding: '6px',
-                  background: isToday ? '#3b82f6' : 'transparent',
-                  color: isToday ? 'white' : '#1f2937',
-                  border: 'none',
-                  borderRadius: '4px',
-                  cursor: 'pointer',
-                  fontSize: '13px',
-                  fontWeight: isToday ? 'bold' : 'normal'
-                }}
-                onMouseEnter={(e) => {
-                  if (!isToday) e.target.style.background = '#f3f4f6';
-                }}
-                onMouseLeave={(e) => {
-                  if (!isToday) e.target.style.background = 'transparent';
-                }}
-              >
-                {day}
-              </button>
-            );
-          })}
-        </div>
-      </div>
-    );
-  };
-
-  if (loading) {
-    return (
-      <div className="dashboard-container">
-        <Navbar />
-        <main className="dashboard-main">
-          <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '400px' }}>
-            <div>Loading dashboard...</div>
-          </div>
-        </main>
-      </div>
-    );
-  }
-
   const comparisonMessage = getComparisonMessage();
-  const stockColor = getStockAlertColor(dashboardData.stockAlert);
+  const stockCounts = dashboardData.stockCounts;
+  const stockColor = stockHeadlineColor(stockCounts);
+  const stockTotal = stockCounts ? STOCK_STATUSES.reduce((sum, st) => sum + stockCounts[st.key], 0) : null;
+  // Amber only when the model is known NOT to beat the 7-day average;
+  // unknown (no baseline) stays green, as before.
+  const accuracyTone = dashboardData.accuracyBeatsBaseline === false ? 'amber' : 'green';
 
   return (
     <div className="dashboard-container">
@@ -519,40 +408,9 @@ const FullyOperational = ({ initialState, onRefreshState }) => {
           <h1 className="dashboard-title">Dashboard</h1>
           <div style={{ display: 'flex', alignItems: 'center', gap: '12px', position: 'relative' }}>
             <div className="date-info">
-                 <button
-              onClick={() => setShowCalendar(!showCalendar)}
-              style={{
-                background: 'none',
-                border: '1px solid #e5e7eb',
-                borderRadius: '8px',
-                padding: '6px 10px',
-                cursor: 'pointer',
-                color: '#6b7280',
-                display: 'flex',
-                alignItems: 'center',
-                gap: '6px',
-                fontSize: '14px'
-              }}
-              onMouseEnter={(e) => e.target.style.background = '#f3f4f6'}
-              onMouseLeave={(e) => e.target.style.background = 'none'}
-            >
-              <FaCalendarAlt />
-              <span></span>
-            </button>
-            {showCalendar && (
-              <CalendarPopup
-                onClose={() => setShowCalendar(false)}
-                onSelect={(date) => {
-                  setSelectedDate(date);
-                  console.log('Selected date:', date);
-                }}
-              />
-            )}
-              <span>{new Date().toLocaleTimeString()}</span>
-              <span className="date-separator">{new Date().toLocaleDateString('en-US', { weekday: 'long' })}</span>
+              <span>{new Date().toLocaleDateString('en-US', { weekday: 'long' })}</span>
               <span className="date-separator">{new Date().toLocaleDateString()}</span>
             </div>
-           
           </div>
         </div>
 
@@ -563,6 +421,23 @@ const FullyOperational = ({ initialState, onRefreshState }) => {
           mapping={initialState?.mapping}
           onRefreshState={onRefreshState}
         />
+
+        {/* KPI row status: inline, never a popup. */}
+        {summaryStatus === 'loading' && (
+          <p style={NOT_AVAILABLE_TEXT_STYLE} role="status">Loading today's numbers…</p>
+        )}
+        {summaryStatus === 'failed' && (
+          <p style={{ ...NOT_AVAILABLE_TEXT_STYLE, color: '#b91c1c' }} role="alert">
+            Today's numbers could not be loaded right now.{' '}
+            <button
+              type="button"
+              onClick={fetchDashboardData}
+              style={{ background: 'none', border: 'none', padding: 0, color: '#1d4ed8', textDecoration: 'underline', cursor: 'pointer', font: 'inherit' }}
+            >
+              Try again
+            </button>
+          </p>
+        )}
 
         {/* Key Metrics Row */}
         <div className="metrics-grid">
@@ -599,17 +474,30 @@ const FullyOperational = ({ initialState, onRefreshState }) => {
               </Tippy>
             </div>
             <div className="metric-value-group">
-              <span className="metric-value">{dashboardData.actualSales != null ? formatCurrency(dashboardData.actualSales) : '—'}</span>
+              <span className={`metric-value${dashboardData.actualSales == null ? ' metric-value--empty' : ''}`}>
+                {dashboardData.actualSales != null ? formatCurrency(dashboardData.actualSales) : '—'}
+              </span>
             </div>
-            <p className="metric-subtext">
-              {dashboardData.actualSales != null && dashboardData.predictedSalesYesterday
-                ? `${Math.round((dashboardData.actualSales / dashboardData.predictedSalesYesterday) * 100)}% of yesterday's forecast`
-                : "Yesterday's recorded sales"}
-            </p>
+            {summaryStatus !== 'ready' ? (
+              <p className="metric-subtext metric-subtext--muted">
+                {summaryStatus === 'loading' ? 'Loading…' : 'Not available right now'}
+              </p>
+            ) : dashboardData.actualSales == null ? (
+              // Nothing uploaded for yesterday: say so instead of showing ₱0.
+              <p className="metric-subtext metric-subtext--muted">
+                No sales uploaded for {shortMonthDay(dashboardData.actualSalesDate) || 'yesterday'}
+              </p>
+            ) : (
+              <p className="metric-subtext">
+                {dashboardData.predictedSalesYesterday
+                  ? `${Math.round((dashboardData.actualSales / dashboardData.predictedSalesYesterday) * 100)}% of yesterday's forecast`
+                  : "Yesterday's recorded sales"}
+              </p>
+            )}
           </div>
 
           {/* 3. Forecast Accuracy */}
-          <div className="metric-card border-green">
+          <div className={`metric-card border-${accuracyTone}`}>
             <div className="card-header">
               <h3 className="card-title">Forecast Accuracy</h3>
               <Tippy content={tooltips.accuracy} placement="top" animation="scale" duration={200} theme="dark" arrow={true} delay={[100, 0]} maxWidth={380} interactive={true} trigger="mouseenter focus click">
@@ -617,15 +505,22 @@ const FullyOperational = ({ initialState, onRefreshState }) => {
               </Tippy>
             </div>
             <div className="metric-value-group">
-              <span className="metric-value text-green">
-                {dashboardData.forecastAccuracy != null ? `${dashboardData.forecastAccuracy.toFixed(1)}%` : '—'}
+              <span className={`metric-value text-${accuracyTone}`}>
+                {dashboardData.forecastAccuracy != null ? `${accuracyPercent(dashboardData.forecastAccuracy)}%` : '—'}
               </span>
             </div>
             <p className="metric-subtext small">
-              {dashboardData.forecastAccuracy != null
-                ? `${dashboardData.forecastAccuracyTier || ''} — based on the latest trained model`
-                : 'No trained model yet'}
+              {summaryStatus === 'loading'
+                ? 'Loading…'
+                : summaryStatus === 'failed'
+                  ? 'Not available right now'
+                  : dashboardData.forecastAccuracy != null
+                    ? (accuracyVerdict(dashboardData.accuracyBeatsBaseline) || 'Latest trained model')
+                    : 'No trained model yet'}
             </p>
+            {summaryStatus === 'ready' && dashboardData.forecastAccuracy != null && (
+              <p className="metric-footnote">{accuracyOffByLine(dashboardData.forecastAccuracy)}</p>
+            )}
           </div>
 
           {/* 4. Stock Alert */}
@@ -637,22 +532,57 @@ const FullyOperational = ({ initialState, onRefreshState }) => {
               </Tippy>
             </div>
 
-            {/* Stock status breakdown — the Total sits beside the categories. */}
-            <div className="stock-breakdown">
-              {dashboardData.stockBreakdown && dashboardData.stockBreakdown.map((item, index) => (
-                <div key={index} className="stock-breakdown-item">
-                  <span className="stock-breakdown-count" style={{ color: item.color }}>{item.count ?? '—'}</span>
-                  <span className="stock-breakdown-label">{item.label}</span>
-                </div>
-              ))}
-              <div className="stock-breakdown-item stock-breakdown-total">
-                <span className="stock-breakdown-count">{dashboardData.stockAlert ?? '—'}</span>
-                <span className="stock-breakdown-label">Total</span>
-              </div>
+            <div className="metric-value-group stock-headline">
+              <span className="metric-value" style={{ color: stockColor }}>{dashboardData.stockAlert ?? '—'}</span>
+              {dashboardData.stockAlert != null && (
+                <span className="stock-headline-label">
+                  {dashboardData.stockAlert === 1 ? 'ingredient needs restocking' : 'ingredients need restocking'}
+                </span>
+              )}
             </div>
 
-            <p className="metric-subtext small" style={{ marginTop: '12px' }}>
-              {dashboardData.stockAlert != null ? 'Ingredients compared with the latest forecast' : 'No stock data yet'}
+            {stockTotal > 0 && (
+              <div
+                className="stock-bar"
+                role="img"
+                aria-label={STOCK_STATUSES.map((st) => `${stockCounts[st.key]} ${st.label}`).join(', ')}
+              >
+                {STOCK_STATUSES.filter((st) => stockCounts[st.key] > 0).map((st) => (
+                  <span
+                    key={st.key}
+                    className="stock-bar-segment"
+                    style={{ flexGrow: stockCounts[st.key], backgroundColor: st.color }}
+                  />
+                ))}
+              </div>
+            )}
+
+            {stockCounts && (
+              <ul className="stock-grid">
+                {STOCK_STATUSES.map((st) => (
+                  <li key={st.key} className={`stock-grid-item${stockCounts[st.key] === 0 ? ' stock-grid-item--zero' : ''}`}>
+                    <span
+                      className="stock-dot"
+                      aria-hidden="true"
+                      style={{ backgroundColor: st.color, opacity: stockCounts[st.key] === 0 ? 0.4 : 1 }}
+                    />
+                    <span className="stock-grid-count">{stockCounts[st.key]}</span>
+                    <span>{st.label}</span>
+                  </li>
+                ))}
+              </ul>
+            )}
+
+            <p className="metric-footnote">
+              {summaryStatus === 'loading'
+                ? 'Loading…'
+                : summaryStatus === 'failed'
+                  ? 'Not available right now'
+                  : stockCounts == null
+                ? 'No stock data yet'
+                : stockTotal > 0
+                  ? `Of ${stockTotal} ingredients used in recipes, vs today's forecast`
+                  : 'No recipe ingredients to compare yet'}
             </p>
           </div>
         </div>
@@ -675,6 +605,7 @@ const FullyOperational = ({ initialState, onRefreshState }) => {
               </div>
               <div className="chart-controls">
                 <select className="chart-select" value={selectedChart} onChange={handleChartChange}>
+                  <option value="area">Area Chart</option>
                   <option value="line">Line Chart</option>
                   <option value="bar">Bar Chart</option>
                   <option value="composed">Composed</option>
@@ -697,11 +628,24 @@ const FullyOperational = ({ initialState, onRefreshState }) => {
                 </div>
               ) : (
               <ResponsiveContainer width="100%" height={350}>
-                {selectedChart === 'line' ? (
+                {selectedChart === 'area' ? (
+                  // Light fills so overlapping areas stay readable; nulls stay
+                  // gaps so closed days are not drawn as zero.
+                  <AreaChart data={panels.chart.rows}>
+                    <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" />
+                    <XAxis dataKey="day" stroke="#6b7280" />
+                    <YAxis stroke="#6b7280" label={{ value: 'Items sold', angle: -90, position: 'insideLeft', fill: '#6b7280' }} />
+                    <Tooltip content={<CustomTooltip />} />
+                    <Legend />
+                    <Area type="monotone" dataKey="actual" stroke="#22c55e" strokeWidth={2} fill="#22c55e" fillOpacity={0.2} dot={{ r: 3 }} activeDot={{ r: 6 }} name="Actual Sales" connectNulls={false} />
+                    <Area type="monotone" dataKey="forecast" stroke="#60a5fa" strokeWidth={2} fill="#60a5fa" fillOpacity={0.15} dot={{ r: 3 }} activeDot={{ r: 6 }} name="Forecasted Sales" connectNulls={false} />
+                    <Area type="monotone" dataKey="future" stroke="#1e40af" strokeWidth={2} strokeDasharray="5 5" fill="#1e40af" fillOpacity={0.2} dot={{ r: 3 }} activeDot={{ r: 6 }} name="Future Forecast" connectNulls={false} />
+                  </AreaChart>
+                ) : selectedChart === 'line' ? (
                   <LineChart data={panels.chart.rows}>
                     <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" />
                     <XAxis dataKey="day" stroke="#6b7280" />
-                    <YAxis stroke="#6b7280" label={{ value: 'Plates', angle: -90, position: 'insideLeft', fill: '#6b7280' }} />
+                    <YAxis stroke="#6b7280" label={{ value: 'Items sold', angle: -90, position: 'insideLeft', fill: '#6b7280' }} />
                     <Tooltip content={<CustomTooltip />} />
                     <Legend />
                     <Line type="monotone" dataKey="actual" stroke="#22c55e" strokeWidth={2} dot={{ r: 4 }} activeDot={{ r: 6 }} name="Actual Sales" connectNulls={false} />
@@ -712,7 +656,7 @@ const FullyOperational = ({ initialState, onRefreshState }) => {
                   <BarChart data={panels.chart.rows}>
                     <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" />
                     <XAxis dataKey="day" stroke="#6b7280" />
-                    <YAxis stroke="#6b7280" label={{ value: 'Plates', angle: -90, position: 'insideLeft', fill: '#6b7280' }} />
+                    <YAxis stroke="#6b7280" label={{ value: 'Items sold', angle: -90, position: 'insideLeft', fill: '#6b7280' }} />
                     <Tooltip content={<CustomTooltip />} />
                     <Legend />
                     <Bar dataKey="actual" fill="#22c55e" name="Actual Sales" />
@@ -723,7 +667,7 @@ const FullyOperational = ({ initialState, onRefreshState }) => {
                   <ComposedChart data={panels.chart.rows}>
                     <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" />
                     <XAxis dataKey="day" stroke="#6b7280" />
-                    <YAxis stroke="#6b7280" label={{ value: 'Plates', angle: -90, position: 'insideLeft', fill: '#6b7280' }} />
+                    <YAxis stroke="#6b7280" label={{ value: 'Items sold', angle: -90, position: 'insideLeft', fill: '#6b7280' }} />
                     <Tooltip content={<CustomTooltip />} />
                     <Legend />
                     <Bar dataKey="actual" fill="#22c55e" name="Actual Sales" />
