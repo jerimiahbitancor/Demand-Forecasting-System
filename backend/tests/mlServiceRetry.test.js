@@ -9,6 +9,11 @@
 // POST ONLY for the hibernate marker (HTTP 429 + x-render-routing:
 // hibernate-rate-limited). Everything else — other statuses, timeouts,
 // network errors — is never retried, and ambiguous failures set a cooldown.
+//
+// forecast() wakes the ML service first (ensureMlServiceAwake: one /health
+// probe at a time, single flight, skipped when it answered in the last 10
+// minutes). Tests that are not about waking start "recently awake", so
+// their fetch queues hold only /forecast answers.
 
 const test = require('node:test');
 const assert = require('node:assert/strict');
@@ -63,6 +68,7 @@ function queue(...responses) {
 
 const healthCalls = () => calls.filter((u) => u.endsWith('/health'));
 const trainCalls = () => calls.filter((u) => u.endsWith('/train'));
+const forecastCalls = () => calls.filter((u) => u.endsWith('/forecast'));
 
 // Keep the expected console output out of the test run.
 const realError = console.error;
@@ -77,6 +83,8 @@ test.beforeEach(() => {
   waits.length = 0;
   logged.length = 0;
   mlService._clearTrainCooldownForTests();
+  mlService._resetWakeStateForTests();
+  mlService._markAwakeForTests();
 });
 
 const RENDER_429 = '<html><body>Too Many Requests — rate limited by the edge</body></html>';
@@ -146,6 +154,98 @@ test('a Flask JSON error keeps its own message (no retry on 422)', async () => {
     return true;
   });
   assert.equal(calls.length, 1);
+});
+
+// ---------------------------------------------------------------------------
+// forecast — waking a sleeping ML service (ensureMlServiceAwake)
+// ---------------------------------------------------------------------------
+
+test('forecast: sleeping service (/health 429 hibernate twice, then 200) -> resolves, /forecast POSTed once', async () => {
+  mlService._resetWakeStateForTests();
+  queue(
+    fakeResponse(429, 'Too Many Requests\n', HIBERNATE_429),
+    fakeResponse(429, 'Too Many Requests\n', HIBERNATE_429),
+    fakeResponse(200, { ok: true }),
+    fakeResponse(200, { results: [{ status: 'forecasted' }] })
+  );
+  const result = await mlService.forecast({ horizonDays: 7 });
+  assert.equal(result.results.length, 1);
+  assert.equal(healthCalls().length, 3);
+  assert.equal(forecastCalls().length, 1);
+  assert.deepEqual(waits, [10000, 10000]); // ML_WAKE_RETRY_WAIT_MS after each failed probe
+  assert.ok(logged.some((l) => /\[mlService\.wake\].*outcome=awake probes=3/.test(l)));
+  assert.equal(mlService.isForecastInFlight(), false);
+});
+
+test('ensureMlServiceAwake: two calls at once share ONE probe sequence', async () => {
+  mlService._resetWakeStateForTests();
+  queue(fakeResponse(503, 'asleep'), fakeResponse(200, { ok: true }));
+  const [a, b] = await Promise.all([mlService.ensureMlServiceAwake(), mlService.ensureMlServiceAwake()]);
+  assert.equal(a, b, 'both callers get the same result');
+  assert.equal(a.ok, true);
+  assert.equal(healthCalls().length, 2); // 1 failed + 1 ok, not 4
+});
+
+test('forecast: answered within 10 minutes -> the second forecast makes no /health call', async () => {
+  mlService._resetWakeStateForTests();
+  queue(
+    fakeResponse(200, { ok: true }),
+    fakeResponse(200, { results: [] }),
+    fakeResponse(200, { results: [] })
+  );
+  await mlService.forecast({});
+  assert.equal(healthCalls().length, 1);
+  await mlService.forecast({});
+  assert.equal(healthCalls().length, 1, 'no new /health probe');
+  assert.equal(forecastCalls().length, 2);
+});
+
+test('forecast: /forecast 429 hibernate once, then 200 -> re-wakes in between, resolves', async () => {
+  mlService._resetWakeStateForTests();
+  queue(
+    fakeResponse(200, { ok: true }),
+    fakeResponse(429, 'Too Many Requests\n', HIBERNATE_429),
+    fakeResponse(200, { ok: true }),
+    fakeResponse(200, { results: [{ status: 'forecasted' }] })
+  );
+  const result = await mlService.forecast({ horizonDays: 1 });
+  assert.equal(result.results.length, 1);
+  assert.deepEqual(calls.map((u) => u.slice(u.lastIndexOf('/'))), ['/health', '/forecast', '/health', '/forecast']);
+  assert.equal(mlService.isForecastInFlight(), false);
+});
+
+test('forecast: /forecast 429 hibernate every time -> 2 retries, then the busy message', async () => {
+  queue(
+    fakeResponse(429, 'Too Many Requests\n', HIBERNATE_429),
+    fakeResponse(200, { ok: true }),
+    fakeResponse(429, 'Too Many Requests\n', HIBERNATE_429),
+    fakeResponse(200, { ok: true }),
+    fakeResponse(429, 'Too Many Requests\n', HIBERNATE_429)
+  );
+  await assert.rejects(mlService.forecast({}), (error) => {
+    assert.equal(error.status, 429);
+    assert.equal(error.message, mlService.FORECAST_BUSY_MESSAGE);
+    assert.equal(error.details.attempts, 3);
+    assert.equal(error.details.headers['x-render-routing'], 'hibernate-rate-limited');
+    return true;
+  });
+  assert.equal(forecastCalls().length, 3); // 1 initial + 2 retries
+  assert.equal(healthCalls().length, 2); // one re-wake before each retry
+  assert.equal(mlService.isForecastInFlight(), false);
+});
+
+test('forecast: wake cap reached -> 503 wakeupTimedOut, /forecast never POSTed, lock released', async () => {
+  mlService._resetWakeStateForTests();
+  queue(...Array.from({ length: 50 }, () => fakeResponse(429, 'Too Many Requests\n', HIBERNATE_429)));
+  await assert.rejects(mlService.forecast({}), (error) => {
+    assert.equal(error.status, 503);
+    assert.equal(error.details.wakeupTimedOut, true);
+    assert.equal(error.message, mlService.WAKE_TIMEOUT_MESSAGE);
+    return true;
+  });
+  assert.equal(healthCalls().length, 12); // cap 120 s / retry wait 10 s
+  assert.equal(forecastCalls().length, 0);
+  assert.equal(mlService.isForecastInFlight(), false);
 });
 
 // ---------------------------------------------------------------------------

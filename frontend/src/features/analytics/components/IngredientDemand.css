@@ -415,3 +415,16 @@
     -webkit-overflow-scrolling: touch;
     margin-bottom: 8px;
   }
+/* Weekly heatmap: previous / next week arrows around the week label. */
+.week-stepper {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.week-stepper .filter-pill {
+  cursor: pointer;
+}
+.week-stepper .week-stepper-label {
+  cursor: default;
+  white-space: nowrap;
+}

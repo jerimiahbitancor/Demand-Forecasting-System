@@ -17,6 +17,7 @@
 // _stock_status_row currently hardcodes 0.5/1.0/2.0), which is a larger
 // change than this pass. That card's Save button stays a stub for now.
 const { supabaseAdmin } = require('../config/supabase');
+const { queueStockRefresh } = require('../services/notificationService');
 
 function toApiShape(row) {
   if (!row) {
@@ -104,6 +105,10 @@ class ForecastConfigController {
       }
 
       if (result.error) throw result.error;
+
+      // The safety buffer changes every ingredient need. Not awaited,
+      // never throws (see queueStockRefresh).
+      queueStockRefresh('safety_buffer');
 
       res.json({
         success: true,

@@ -56,6 +56,10 @@ const IngredientManagement = () => {
   const [selectedCategory, setSelectedCategory] = useState("All");
   const [statusFilter, setStatusFilter] = useState("All");
   const [selectedDate, setSelectedDate] = useState("");
+  // Which forecast the stock statuses are measured against (GET
+  // /inventory/items -> forecastBasis; analyticsService.getForecastBasis).
+  // null = no forecast has run yet, or it could not be loaded.
+  const [forecastBasis, setForecastBasis] = useState(null);
   const [summaryStats, setSummaryStats] = useState({
     totalStockValue: 0,
     totalItems: 0,
@@ -314,6 +318,7 @@ const IngredientManagement = () => {
         const summary = response.data.summary || {};
         const data = response.data.data || [];
         setInventoryItems(data);
+        setForecastBasis(response.data.forecastBasis || null);
         setTotalItems(summary.totalItems ?? response.data.total ?? 0);
 
         const totalStockValue = summary.totalStockValue ?? 0;
@@ -991,6 +996,51 @@ const IngredientManagement = () => {
 
       {/* Stock Legend */}
       <div className="inventory-legend-container">
+        {/* Every status is measured against a forecast, so name which one.
+            margin-right: auto keeps the legend items on the right. Styled
+            only through forecast-basis-* (inventory-legend-container is
+            also defined in ProductManagement.css). */}
+        {forecastBasis?.runAtLabel && (
+          <div className="forecast-basis-note">
+            <FaClock className="forecast-basis-clock" aria-hidden="true" />
+            <span className="forecast-basis-label">
+              As of Latest Forecast ({forecastBasis.runAtLabel})
+            </span>
+            {forecastBasis.hasForecastForDate === false && (
+              <span className="forecast-basis-missing">· No forecast for today</span>
+            )}
+            <Tippy
+              content={
+                <div className="forecast-basis-tip">
+                  Each status compares the ingredient's current stock with what today's forecast
+                  needs{forecastBasis.forecastDateLabel ? ` (${forecastBasis.forecastDateLabel})` : ''}.
+                  {' '}Statuses update when a new forecast is generated, and right away when you
+                  restock or edit an ingredient's stock.
+                  {forecastBasis.hasForecastForDate === false && (
+                    <>
+                      {' '}The latest forecast has no figures for today (for example, a closed day),
+                      so ingredients show No Forecast until the next run.
+                    </>
+                  )}
+                </div>
+              }
+              placement="bottom"
+              animation="scale"
+              duration={200}
+              theme="dark"
+              arrow={true}
+              maxWidth={320}
+            >
+              <span
+                className="forecast-basis-info"
+                tabIndex={0}
+                aria-label="How the stock statuses are measured"
+              >
+                <FaInfoCircle />
+              </span>
+            </Tippy>
+          </div>
+        )}
         {stockLegend.map((legend, index) => (
           <div key={index} className="inventory-legend-item">
             <span className="legend-dot" style={{ backgroundColor: legend.color }}></span>

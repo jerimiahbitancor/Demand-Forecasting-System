@@ -1,5 +1,12 @@
 """
-Philippine public holiday calendar for the is_holiday feature.
+Philippine public holiday calendar.
+
+NOT A MODEL FEATURE ANY MORE (Oct 17 2026, owner decision): is_holiday was
+removed from FEATURE_COLUMNS because ChefDuo was closed on many holidays and
+the data held too few open holiday days to learn from. It is to be
+reconsidered once there are about three years of sales data. Today only
+reports/generate_training_report.py reads this list, to label flagged days
+in the outlier review. The notes below are kept for when it comes back.
 
 IMPORTANT — read before deploying:
 The Philippines announces "additional special non-working days" via

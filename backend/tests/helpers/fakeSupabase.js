@@ -34,6 +34,9 @@ function createFakeSupabase(seed = {}, options = {}) {
   // row silently write nothing (like ON CONFLICT DO NOTHING returning null).
   const rejectInsert = (table, row) => (options.rejectInsert ? options.rejectInsert(table, row) : false);
   const rpcHandlers = options.rpc || {};
+  // options.defaults: column defaults per table, applied on insert like
+  // Postgres would (e.g. { notifications: { read: false } }).
+  const defaultsFor = (table) => (options.defaults && options.defaults[table]) || {};
 
   const rowsOf = (table) => {
     if (table === 'product_sales_summary') {
@@ -129,7 +132,7 @@ function createFakeSupabase(seed = {}, options = {}) {
               continue;
             }
           }
-          const row = assignId(table, { ...raw });
+          const row = assignId(table, { ...defaultsFor(table), ...raw });
           all.push(row);
           written.push(row);
         }

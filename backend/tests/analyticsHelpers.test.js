@@ -142,6 +142,65 @@ test('K5: ratio = own rolling_7 ÷ store average rolling_7 of ACTIVE products', 
   assert.equal(ratioByProduct.has(9), false);
 });
 
+// ------------------------------------------------- sales-based ratio (Oct 18)
+test('sales ratio: avg items per open day ÷ store average of active products', () => {
+  // 2 open days. A: 30 sold -> 15/day; B: 10 sold -> 5/day; store avg 10.
+  const { ratioByProduct, storeAverageDaily } = svc.computeSalesPerformanceRatios([
+    { product_id: 1, sale_date: '2026-10-12', quantity_sold: 20 },
+    { product_id: 1, sale_date: '2026-10-13', quantity_sold: 10 },
+    { product_id: 2, sale_date: '2026-10-12', quantity_sold: 4 },
+    { product_id: 2, sale_date: '2026-10-13', quantity_sold: 6 },
+    { product_id: 9, sale_date: '2026-10-13', quantity_sold: 500 }, // not active: ignored
+  ], new Set([1, 2]), 2);
+  assert.equal(storeAverageDaily, 10);
+  assert.equal(ratioByProduct.get(1), 1.5);
+  assert.equal(ratioByProduct.get(2), 0.5);
+  assert.equal(ratioByProduct.has(9), false);
+});
+
+test('sales ratio: an ACTIVE product with zero sales is 0.00 and counts in the store average', () => {
+  // 1 open day, 3 active products: 12, 4, 0 sold -> store avg 16 / 3.
+  const { ratioByProduct, storeAverageDaily } = svc.computeSalesPerformanceRatios([
+    { product_id: 1, sale_date: '2026-10-12', quantity_sold: 12 },
+    { product_id: 2, sale_date: '2026-10-12', quantity_sold: 4 },
+    { product_id: 3, sale_date: '2026-10-12', quantity_sold: 0 }, // a 0 row (refunds)
+    { product_id: 9, sale_date: '2026-10-12', quantity_sold: 50 }, // not active: no ratio, not averaged
+  ], new Set([1, 2, 3]), 1);
+  assert.equal(storeAverageDaily, 16 / 3);
+  assert.equal(ratioByProduct.get(1), 12 / (16 / 3));
+  assert.equal(ratioByProduct.get(2), 4 / (16 / 3));
+  assert.equal(ratioByProduct.get(3), 0);
+  assert.equal(ratioByProduct.has(9), false);
+});
+
+test('sales ratio: an active product with NO sales rows at all is also 0.00', () => {
+  const { ratioByProduct, storeAverageDaily } = svc.computeSalesPerformanceRatios([
+    { product_id: 1, sale_date: '2026-10-12', quantity_sold: 10 },
+  ], new Set([1, 4]), 1);
+  assert.equal(storeAverageDaily, 5);
+  assert.equal(ratioByProduct.get(1), 2);
+  assert.equal(ratioByProduct.get(4), 0);
+});
+
+test('sales ratio: empty range -> no ratios, no store average', () => {
+  const none = svc.computeSalesPerformanceRatios([], new Set([1, 2]), 0);
+  assert.equal(none.ratioByProduct.size, 0);
+  assert.equal(none.storeAverageDaily, null);
+  // Open days but nothing sold by an active product: also empty.
+  const idle = svc.computeSalesPerformanceRatios([{ product_id: 9, sale_date: '2026-10-12', quantity_sold: 3 }], new Set([1]), 1);
+  assert.equal(idle.ratioByProduct.size, 0);
+  assert.equal(idle.storeAverageDaily, null);
+});
+
+test('sales ratio: a single product is exactly the average (1.00)', () => {
+  const { ratioByProduct, storeAverageDaily } = svc.computeSalesPerformanceRatios([
+    { product_id: 5, sale_date: '2026-10-12', quantity_sold: 7 },
+    { product_id: 5, sale_date: '2026-10-14', quantity_sold: 3 },
+  ], new Set([5]), 3);
+  assert.equal(storeAverageDaily, 10 / 3);
+  assert.equal(ratioByProduct.get(5), 1);
+});
+
 test('K5: range with no forecasts -> newest forecast date <= max(rangeTo, today) is used', async () => {
   fake.reset({
     forecasts: [
@@ -269,4 +328,226 @@ test('A3: predictedSalesYesterday = yesterday forecasts × price, null without r
   assert.equal((await svc.getForecastSummary()).predictedSalesYesterday, 600);
   fake.reset({ products: [{ id: 1, name: 'Porksilog', price: 120, status: 'active' }] });
   assert.equal((await svc.getForecastSummary()).predictedSalesYesterday, null);
+});
+
+test('B1: actualSalesYesterday = null with no rows, 0 for a real zero day, peso sum otherwise; yesterday returned', async () => {
+  const yesterday = dayjs().tz('Asia/Manila').subtract(1, 'day').format('YYYY-MM-DD');
+  const products = [
+    { id: 1, name: 'Porksilog', price: 120, status: 'active' },
+    { id: 2, name: 'Tapsilog', price: 130, status: 'active' },
+  ];
+
+  // Nothing uploaded for yesterday -> null (the card shows "—", not ₱0).
+  fake.reset({ products });
+  let summary = await svc.getForecastSummary();
+  assert.equal(summary.actualSalesYesterday, null);
+  assert.equal(summary.yesterday, yesterday);
+
+  // Rows exist but nothing sold -> a real 0.
+  fake.reset({
+    products,
+    daily_sales: [
+      { product_id: 1, sale_date: yesterday, quantity_sold: 0 },
+      { product_id: 2, sale_date: yesterday, quantity_sold: 0 },
+    ],
+  });
+  assert.equal((await svc.getForecastSummary()).actualSalesYesterday, 0);
+
+  // 3 x 120 + 2 x 130 = 620. A row from another day is ignored.
+  fake.reset({
+    products,
+    daily_sales: [
+      { product_id: 1, sale_date: yesterday, quantity_sold: 3 },
+      { product_id: 2, sale_date: yesterday, quantity_sold: 2 },
+      { product_id: 1, sale_date: '2020-01-01', quantity_sold: 99 },
+    ],
+  });
+  summary = await svc.getForecastSummary();
+  assert.equal(summary.actualSalesYesterday, 620);
+});
+
+test('C: getForecastBasis -> null without a run; newest run wins, labelled in Manila time', async () => {
+  fake.reset({});
+  assert.equal(await svc.getForecastBasis('2026-10-17'), null);
+
+  fake.reset({
+    forecast_runs: [
+      { id: 1, run_at: '2026-10-16T01:00:30.000Z', run_type: 'daily' },
+      { id: 2, run_at: '2026-10-17T07:31:00.000Z', run_type: 'weekly' }, // 3:31 PM Manila
+    ],
+    forecasts: [{ id: 5, product_id: 1, forecast_date: '2026-10-17', predicted_quantity: 4.37 }],
+  });
+  assert.deepEqual(await svc.getForecastBasis('2026-10-17'), {
+    runAt: '2026-10-17T07:31:00.000Z',
+    runAtLabel: 'October 17, 2026 • 03:31 PM',
+    runType: 'weekly',
+    forecastDate: '2026-10-17',
+    forecastDateLabel: 'Oct 17, 2026',
+    hasForecastForDate: true,
+  });
+});
+
+test('C: getForecastBasis -> hasForecastForDate false when the date has no forecast rows (e.g. a closed day)', async () => {
+  fake.reset({
+    forecast_runs: [{ id: 2, run_at: '2026-10-17T07:31:00.000Z', run_type: 'daily' }],
+    forecasts: [{ id: 5, product_id: 1, forecast_date: '2026-10-17', predicted_quantity: 4 }],
+  });
+  const basis = await svc.getForecastBasis('2026-10-18');
+  assert.equal(basis.hasForecastForDate, false);
+  assert.equal(basis.forecastDateLabel, 'Oct 18, 2026');
+  assert.equal(basis.runAtLabel, 'October 17, 2026 • 03:31 PM');
+});
+
+// ------------------------------------------- closed day -> next open day (Oct 18)
+// "today" is the real Manila date (the services read the clock), so the seeds
+// are built around it.
+const manilaDay = (offsetDays = 0) => {
+  const today = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Manila' }).format(new Date());
+  const [y, m, d] = today.split('-').map(Number);
+  return new Date(Date.UTC(y, m - 1, d + offsetDays)).toISOString().slice(0, 10);
+};
+const TODAY = manilaDay(0);
+const TOMORROW = manilaDay(1);
+const NEXT_WEEK = manilaDay(7);
+const closedRow = (pid, date) => ({ id: `${pid}-${date}`, product_id: pid, forecast_date: date, predicted_quantity: 0, model_version: 'model_v20261013_205641_closed' });
+const openRow = (pid, date, qty) => ({ id: `${pid}-${date}`, product_id: pid, forecast_date: date, predicted_quantity: qty, model_version: 'model_v20261013_205641' });
+const activeProducts = [1, 2, 3, 4, 5].map((id) => ({ id, name: `P${id}`, price: 100, status: 'active' }));
+
+// Every product's own usual range: p40 = 3, p80 = 7 (as ml-service writes it).
+const classifications = activeProducts.map((p) => ({ id: p.id, product_id: p.id, classification_date: TODAY, demand_tier: 'Low', basis: 'p40=3.0, p80=7.0' }));
+
+function seedClosedToday({ todayOpen = false, todayEmpty = false } = {}) {
+  fake.reset({
+    products: activeProducts,
+    product_classifications: classifications,
+    forecasts: [
+      ...(todayEmpty ? [] : activeProducts.map((p) => (todayOpen ? openRow(p.id, TODAY, p.id) : closedRow(p.id, TODAY)))),
+      ...activeProducts.map((p) => openRow(p.id, TOMORROW, p.id * 2)),
+      ...activeProducts.map((p) => openRow(p.id, NEXT_WEEK, p.id)),
+    ],
+  });
+}
+
+test('nextOpenForecastDate: today closed + tomorrow open -> tomorrow; today open -> today', async () => {
+  seedClosedToday();
+  assert.equal(await svc.nextOpenForecastDate(TODAY), TOMORROW);
+  seedClosedToday({ todayOpen: true });
+  assert.equal(await svc.nextOpenForecastDate(TODAY), TODAY);
+});
+
+test('nextOpenForecastDate: no forecasts (or only closed ones) -> null', async () => {
+  fake.reset({ forecasts: [] });
+  assert.equal(await svc.nextOpenForecastDate(TODAY), null);
+  fake.reset({ forecasts: [closedRow(1, TODAY), closedRow(2, TOMORROW)] });
+  assert.equal(await svc.nextOpenForecastDate(TODAY), null);
+});
+
+test('Product Performance default: closed today -> Demand Classification shows the next open day', async () => {
+  seedClosedToday();
+  const pp = await svc.getProductPerformanceAnalytics({});
+  assert.equal(pp.demandRange.date, TOMORROW);
+  assert.equal(pp.demandRange.shiftedFromClosedDay, true);
+  assert.equal(pp.demandRange.shiftReason, 'closed');
+  assert.equal(pp.demandClassification.length, 5);
+  assert.ok(pp.demandClassification.every((r) => r.date === TOMORROW));
+  // Busiest first; each product vs its OWN range (p40 3, p80 7).
+  assert.deepEqual(pp.demandClassification.map((r) => r.forecastQty), [10, 8, 6, 4, 2]);
+  assert.deepEqual(pp.demandClassification.map((r) => r.demandLevel), ['High Demand', 'High Demand', 'Medium Demand', 'Medium Demand', 'Low Demand']);
+  assert.equal(pp.demandClassification[0].demandBasis, 'High for this product (normal range 3–7 items/day)');
+});
+
+test('Product Performance default: NO forecast for today yet -> next open day, reason no_forecast (not "closed")', async () => {
+  seedClosedToday({ todayEmpty: true });
+  const pp = await svc.getProductPerformanceAnalytics({});
+  assert.equal(pp.demandRange.date, TOMORROW);
+  assert.equal(pp.demandRange.shiftReason, 'no_forecast');
+  assert.equal(pp.demandRange.shiftedFromClosedDay, false);
+});
+
+test('Product Performance default: open today -> no shift', async () => {
+  seedClosedToday({ todayOpen: true });
+  const pp = await svc.getProductPerformanceAnalytics({});
+  assert.equal(pp.demandRange.date, TODAY);
+  assert.equal(pp.demandRange.shiftedFromClosedDay, false);
+  assert.equal(pp.demandRange.shiftReason, null);
+  assert.equal(pp.demandClassification.length, 5);
+});
+
+test('Product Performance: explicit dates never shift (a closed day stays, listed in closedDates)', async () => {
+  seedClosedToday();
+  for (const params of [{ demandFrom: TODAY, demandTo: TODAY }, { from: TODAY, to: TODAY }]) {
+    const pp = await svc.getProductPerformanceAnalytics(params);
+    assert.equal(pp.demandRange.date, TODAY);
+    assert.equal(pp.demandRange.shiftedFromClosedDay, false);
+    assert.equal(pp.demandClassification.length, 0);
+    assert.deepEqual(pp.demandRange.closedDates, [TODAY]);
+  }
+});
+
+test('Ingredient Demand default: closed today -> next open day and its week; open today -> no shift', async () => {
+  seedClosedToday();
+  const closed = await svc.getIngredientDemandAnalytics({});
+  assert.equal(closed.daily.date, TOMORROW);
+  assert.equal(closed.daily.shiftedFromClosedDay, true);
+  assert.equal(closed.daily.shiftReason, 'closed');
+  assert.ok(closed.weekly.days.includes(TOMORROW), 'the heatmap is the next open day\'s week');
+
+  seedClosedToday({ todayOpen: true });
+  const open = await svc.getIngredientDemandAnalytics({});
+  assert.equal(open.daily.date, TODAY);
+  assert.equal(open.daily.shiftedFromClosedDay, false);
+  assert.ok(open.weekly.days.includes(TODAY));
+});
+
+test('Ingredient Demand: explicit date or week never shifts', async () => {
+  seedClosedToday();
+  const byDate = await svc.getIngredientDemandAnalytics({ date: TODAY });
+  assert.equal(byDate.daily.date, TODAY);
+  assert.equal(byDate.daily.shiftedFromClosedDay, false);
+  const byWeek = await svc.getIngredientDemandAnalytics({ weekStart: TODAY });
+  assert.equal(byWeek.daily.date, TODAY);
+  assert.equal(byWeek.daily.shiftedFromClosedDay, false);
+});
+
+test('Ingredient Demand default: NO forecast for today yet -> next open day, reason no_forecast', async () => {
+  seedClosedToday({ todayEmpty: true });
+  const d = await svc.getIngredientDemandAnalytics({});
+  assert.equal(d.daily.date, TOMORROW);
+  assert.equal(d.daily.shiftReason, 'no_forecast');
+  assert.equal(d.daily.shiftedFromClosedDay, false);
+});
+
+test('forecastDayState: open / closed (all rows _closed) / none', async () => {
+  seedClosedToday();
+  assert.equal(await svc.forecastDayState(TODAY), 'closed');
+  assert.equal(await svc.forecastDayState(TOMORROW), 'open');
+  assert.equal(await svc.forecastDayState(manilaDay(30)), 'none');
+  // One open row among closed ones -> open.
+  fake.reset({ forecasts: [closedRow(1, TODAY), openRow(2, TODAY, 3)] });
+  assert.equal(await svc.forecastDayState(TODAY), 'open');
+});
+
+// ------------------------------------------------ per-product demand tier
+test('parseClassificationBasis reads what ml-service writes', () => {
+  assert.deepEqual(svc.parseClassificationBasis('p40=4.2, p80=9.8'), { p40: 4.2, p80: 9.8 });
+  assert.deepEqual(svc.parseClassificationBasis('p40=0.0, p80=0.0'), { p40: 0, p80: 0 });
+  assert.equal(svc.parseClassificationBasis(null), null);
+  assert.equal(svc.parseClassificationBasis('something else'), null);
+});
+
+test('productDemandTier: each DATE uses its own forecast vs the product\'s own p40/p80', () => {
+  const cls = { demand_tier: 'Low', basis: 'p40=4.0, p80=8.0' }; // stored tier is for day 1 only
+  assert.equal(svc.productDemandTier(9, cls).tier, 'High');   // > p80
+  assert.equal(svc.productDemandTier(8, cls).tier, 'Medium'); // = p80 is not above it
+  assert.equal(svc.productDemandTier(4, cls).tier, 'Medium'); // >= p40
+  assert.equal(svc.productDemandTier(3.9, cls).tier, 'Low');
+  assert.equal(svc.productDemandTier(9, cls).basisText, 'High for this product (normal range 4–8 items/day)');
+});
+
+test('productDemandTier: no thresholds -> stored tier; no classification -> not enough data', () => {
+  assert.deepEqual(svc.productDemandTier(5, { demand_tier: 'Medium', basis: null }), { tier: 'Medium', basisText: 'Medium for this product' });
+  assert.deepEqual(svc.productDemandTier(5, undefined), { tier: null, basisText: 'No usual sales range for this product yet' });
+  // Thresholds rounded to whole items: 45.6 / 57.3 -> 46–57.
+  assert.equal(svc.productDemandTier(30, { demand_tier: 'Low', basis: 'p40=45.6, p80=57.3' }).basisText, 'Low for this product (normal range 46–57 items/day)');
+  assert.equal(svc.productDemandTier(2, { demand_tier: 'Low', basis: 'p40=0.6, p80=1.4' }).basisText, 'High for this product (normal range 1 item/day)');
 });

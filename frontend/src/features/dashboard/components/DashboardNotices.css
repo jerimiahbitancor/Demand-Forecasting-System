@@ -1,21 +1,150 @@
 /* components/DashboardNotices.css
-   The notice stack reuses the state-kit banner look. `.sk-root` is kept on
-   the wrapper only for its color variables; its full-page frame (min-height,
-   background, fixed attachment) is switched off here. */
-.sk-root.dash-notices {
-  min-height: 0;
-  background: none;
-  background-attachment: initial;
+   One quiet panel, a row per notice (Oct 17 2026). Replaces the stack of
+   state-kit banners that used to sit here. Classes are prefixed `dn-` so
+   nothing collides with the global dashboard or state-kit styles.
+   Deliberately plain: no side accent stripe, no gradients, no pills, no
+   icon tiles. Colour lives only in the small icon. */
+
+.dn-panel {
+  background: #ffffff;
+  border: 1px solid #ece7df;
+  border-radius: 12px;
+  margin: 0 0 24px;
+  overflow: hidden;
+}
+
+.dn-header {
   display: flex;
-  flex-direction: column;
-  gap: 12px;
-  margin: 0 0 20px;
+  align-items: center;
+  gap: 6px;
+  min-height: 40px;
+  padding: 0 16px;
+  border-bottom: 1px solid #ece7df;
 }
 
-.sk-root.dash-notices .sk-banner {
-  padding: 16px 20px;
+.dn-heading {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 600;
+  color: #374151;
 }
 
-.sk-root.dash-notices .sk-banner-foot {
-  margin-top: 12px;
+.dn-count {
+  font-size: 13px;
+  color: #9ca3af;
+}
+
+.dn-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.dn-row {
+  display: grid;
+  grid-template-columns: 20px 1fr auto;
+  align-items: center;
+  column-gap: 12px;
+  padding: 12px 16px;
+}
+
+.dn-row + .dn-row {
+  border-top: 1px solid #ece7df;
+}
+
+.dn-icon {
+  display: inline-flex;
+  font-size: 15px;
+  line-height: 1;
+}
+
+.dn-icon--danger {
+  color: #b91c1c;
+}
+
+.dn-icon--warn {
+  color: #b45309;
+}
+
+.dn-body {
+  min-width: 0;
+}
+
+.dn-title {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 600;
+  color: #1f2937;
+}
+
+.dn-text {
+  margin: 2px 0 0;
+  font-size: 13px;
+  line-height: 1.45;
+  color: #6b7280;
+}
+
+.dn-action {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  border: 1px solid #d9d2c7;
+  border-radius: 8px;
+  background: #ffffff;
+  color: #7a0010;
+  font-size: 13px;
+  font-weight: 600;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.dn-action:hover:not(:disabled) {
+  background: #fbf7f2;
+}
+
+.dn-action:focus-visible,
+.dn-more:focus-visible {
+  outline: 2px solid #7a0010;
+  outline-offset: 2px;
+}
+
+.dn-action:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
+.dn-more {
+  display: block;
+  width: 100%;
+  padding: 10px 16px;
+  border: 0;
+  border-top: 1px solid #ece7df;
+  background: #ffffff;
+  color: #374151;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.dn-more:hover {
+  background: #fbf7f2;
+}
+
+/* Phones: the button moves under the text, in the text column. */
+@media (max-width: 640px) {
+  .dn-row {
+    grid-template-columns: 20px 1fr;
+    align-items: start;
+    row-gap: 10px;
+  }
+
+  .dn-icon {
+    margin-top: 2px;
+  }
+
+  .dn-action {
+    grid-column: 2;
+    justify-self: start;
+  }
 }
