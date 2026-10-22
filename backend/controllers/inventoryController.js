@@ -4,7 +4,6 @@ const { logAction } = require('../services/auditService');
 const analyticsService = require('../services/analyticsService');
 const { classifyStock } = require('../services/stockAlertService');
 const { queueStockRefresh } = require('../services/notificationService');
-const { parseRecipeQuantity, deriveUnitPrice, isMissingColumnError } = require('../utils/recipeUnits');
 const {
   parseRecipeQuantityDecimal,
   deriveUnitPrice,
@@ -1050,6 +1049,10 @@ const restockInventoryItem = async (req, res) => {
       `Restocked ingredient "${currentItem.name}" by ${formatStockAmount(receivedQuantity)} ${unitLabel}`,
       actorOf(req)
     );
+
+    // New stock may clear a low-stock alert: refresh the bell, same as
+    // edit/archive/restore do. Not awaited and never throws.
+    queueStockRefresh('restock');
 
     console.log('✅ Item restocked successfully:', { id, newQuantity: finalQuantity.toString() });
     res.json({

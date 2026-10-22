@@ -48,6 +48,16 @@ check('shortfalls grouped per ingredient: total and file count',
   same(merged.shortfalls, [{ ingredientId: 101, ingredient: 'Egg', shortfall: 7, files: 2, message: 'Egg: 5 pcs used but 0 pcs in stock. Please monitor it.' }]),
   JSON.stringify(merged.shortfalls));
 check('hasSummaryContent: true with content', hasSummaryContent(merged));
+{
+  const merged = mergeUploadSummaries([
+    { stockNotDeducted: [{ ingredientId: 1, ingredient: 'Rice', reason: 'counted_after', days: ['2026-10-10'], message: 'a' }], followUpErrors: ['boom'] },
+    { stockNotDeducted: [{ ingredientId: 1, ingredient: 'Rice', reason: 'counted_after', days: ['2026-10-09'], message: 'b' }], followUpErrors: ['boom'] },
+  ]);
+  check('not-deducted ingredients merge per ingredient and reason, days combined',
+    merged.stockNotDeducted.length === 1 && same(merged.stockNotDeducted[0].days, ['2026-10-09', '2026-10-10']));
+  check('follow-up errors are de-duplicated', same(merged.followUpErrors, ['boom']));
+  check('a not-deducted ingredient alone is content worth showing', hasSummaryContent(merged));
+}
 check('hasSummaryContent: false for an empty summary', !hasSummaryContent(emptySummary()) && !hasSummaryContent(null));
 check('merging nothing gives the empty shape', same(mergeUploadSummaries([]), emptySummary()));
 

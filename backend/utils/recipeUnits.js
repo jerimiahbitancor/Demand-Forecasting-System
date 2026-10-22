@@ -772,6 +772,26 @@ function toBuyQuantity(need, stock, unit) {
   return Math.max(0, Math.ceil(raw - 1e-9));
 }
 
+// Load the per-ingredient house measures. Best effort: the table is new, so a
+// missing one must not break the boot.
+async function loadIngredientUnitConversionsFromDb(client) {
+  if (!client) return false;
+  try {
+    const { data, error } = await client
+      .from('ingredient_unit_conversions')
+      .select('ingredient_id, from_unit, to_unit, factor');
+    if (error) {
+      if (isMissingColumnError(error) || /ingredient_unit_conversions/.test(String(error.message))) return false;
+      throw error;
+    }
+    setIngredientUnitConversions(data && data.length ? data : []);
+    return true;
+  } catch (err) {
+    console.error('Failed to load ingredient unit conversions:', err.message);
+    return false;
+  }
+}
+
 module.exports = {
   isCountUnit,
   toBuyQuantity,
