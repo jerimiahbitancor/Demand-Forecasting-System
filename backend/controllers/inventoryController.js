@@ -399,6 +399,11 @@ const getInventoryItems = async (req, res) => {
       });
     }
 
+    // ---- The sales shortfalls that are still open ----
+    // A sale that could not be fully served leaves a short behind. It is not
+    // paid off by a delivery (the delivery is stock on hand), so it is shown
+    // next to the stock until a stock count clears it.
+    const openShortfalls = await readOpenShortfalls(pageIds);
     // Which forecast the statuses above are measured against, for the
     // "As of Latest Forecast" note. Its own try/catch: a failure here must
     // never stop the table from loading.
@@ -791,6 +796,15 @@ const updateInventoryItem = async (req, res) => {
       actorOf(req)
     );
 
+    res.json({
+      success: true,
+      data: {
+        ...data,
+        open_shortfall: openShortfalls.get(Number(id))?.total || 0,
+        open_shortfall_sales: openShortfalls.get(Number(id))?.sales || 0
+      },
+      message: 'Item updated successfully'
+    });
     // Stock, min_stock or unit may have changed: refresh the stock alerts.
     // Not awaited and never throws (see queueStockRefresh).
     queueStockRefresh('stock_edit');
@@ -941,6 +955,7 @@ const restoreInventoryItem = async (req, res) => {
       actorOf(req)
     );
 
+    console.log('✅ Item unarchived successfully:', id);
     console.log('✅ Item restored successfully:', id);
     // A restored ingredient that is low alerts again. Not awaited, never throws.
     queueStockRefresh('restore');
