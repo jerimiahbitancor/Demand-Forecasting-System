@@ -4,12 +4,46 @@
 // ingredient's stock/price unit (e.g. "1 cup" vs an ingredient priced per L).
 // Keep the tables in sync with the frontend copy.
 //
-// Unit conversion metadata now lives in the ingredient_units table
+// Precision rules (U1-U4 of the inventory hardening task):
+//   - Every quantity is a decimal.js Decimal, never a JS float. Postgres
+//     numerics arrive as STRINGS; they are parsed into Decimal, never
+//     through Number().
+//   - A conversion that cannot be RESOLVED throws UnitConversionError. There
+//     is no silent 1:1 fallback: guessing a unit corrupts stock levels.
+//   - The canonical unit of an ingredient is its base_unit ('g' | 'mL' |
+//     'piece'). ingredients.unit stays display-only.
+//
+// Unit conversion metadata lives in the ingredient_units table
 // (see backend/sql/ingredient_unit_conversion_schema.sql): family
 // (mass/volume/count), base_factor (grams or mL per 1 unit), is_piece, and
-// per-piece weights. Load it once at boot with setUnitMetadata()/loadUnitMetadataFromDb().
-// Until then (or if the migration hasn't run) the static tables below act as
-// the offline fallback so costing never blocks on a database read.
+// per-piece weights. Load it once at boot with setUnitMetadata()/
+// loadUnitMetadataFromDb(). Until then (or if the migration hasn't run) the
+// static tables below act as the offline fallback so costing never blocks on
+// a database read.
+//
+// House measures that have no universal answer (1 tbsp sugar = 12 g) live in
+// the ingredient_unit_conversions table and are loaded with
+// setIngredientUnitConversions(). They WIN over the generic density tables.
+
+const Decimal = require('decimal.js');
+
+// 40 significant digits is far more than numeric(18,6) can hold, so the
+// running totals never lose precision before the single final rounding.
+Decimal.set({ precision: 40, rounding: Decimal.ROUND_HALF_UP });
+
+/**
+ * Thrown when a recipe amount cannot be expressed in the ingredient's
+ * canonical unit. The caller decides what to do with it (the upload pipeline
+ * marks the ingredient "unconvertible" and surfaces a warning).
+ */
+class UnitConversionError extends Error {
+  constructor(message, details = {}) {
+    super(message);
+    this.name = 'UnitConversionError';
+    this.code = 'UNIT_CONVERSION_FAILED';
+    this.details = details;
+  }
+}
 
 const RECIPE_UNIT_BASE_FACTOR = {
   // mass (base: grams)
@@ -59,81 +93,58 @@ const RECIPE_COUNT_PIECE_UNITS = new Set([
   'stick', 'sticks', 'stick (pcs)', 'sticks (pcs)'
 ]);
 
-// Default per-piece weights (grams) used when a recipe quantity uses a piece
-// unit but the ingredient is priced by weight.
-const PIECE_WEIGHT_KEYWORDS = [
-  { match: /\bpotato(es)?\b/i, g: 150 },
-  { match: /\bonions?\b/i, g: 110 },
-  { match: /\btomato(es)?\b/i, g: 120 },
-  { match: /\bcarrots?\b/i, g: 60 },
-  { match: /\beggs?\b/i, g: 50 },
-  { match: /\blemon/i, g: 100 },
-  { match: /calamansi|kalamansi/i, g: 30 },
-  { match: /\bbananas?\b/i, g: 120 },
-  { match: /\bapples?\b/i, g: 180 },
-  { match: /\bgarlic/i, g: 3 },
-  { match: /\bbreads?\b/i, g: 30 }
-];
+// The canonical spelling of a unit: 'kg', 'g', 'mg', 'ml', 'l', 'cup', 'tbsp',
+// 'tsp', 'pcs', 'slice', 'clove', 'stick', 'pack', 'sachet', 'bottle', 'can',
+// 'bunch'. Aliases and display names ('Kilograms (kg)', 'pcs', 'Pieces (pcs)')
+// all collapse onto the same key, so "pcs" and "Pieces (pcs)" are recognised
+// as the SAME unit.
+const RECIPE_UNIT_CANONICAL = {
+  kg: 'kg', kilogram: 'kg', kilograms: 'kg', kilo: 'kg', kilos: 'kg',
+  'kg (kg)': 'kg', 'kilograms (kg)': 'kg', 'kilogram (kg)': 'kg',
+  g: 'g', gram: 'g', grams: 'g', gm: 'g', 'g (g)': 'g', 'gram (g)': 'g', 'grams (g)': 'g',
+  mg: 'mg', milligram: 'mg', milligrams: 'mg',
+  lb: 'lb', lbs: 'lb', pound: 'lb', pounds: 'lb',
+  oz: 'oz', ounce: 'oz', ounces: 'oz',
+  l: 'l', L: 'l', litre: 'l', liter: 'l', litres: 'l', liters: 'l',
+  'l (l)': 'l', 'liter (l)': 'l', 'liters (l)': 'l', 'litre (l)': 'l', 'litres (l)': 'l',
+  ml: 'ml', mL: 'ml', millilitre: 'ml', milliliter: 'ml', millilitres: 'ml', milliliters: 'ml',
+  'ml (ml)': 'ml', 'milliliter (ml)': 'ml', 'milliliters (ml)': 'ml', 'millilitre (ml)': 'ml',
+  cup: 'cup', cups: 'cup',
+  tbsp: 'tbsp', tablespoon: 'tbsp', tablespoons: 'tbsp',
+  tsp: 'tsp', tps: 'tsp', teaspoon: 'tsp', teaspoons: 'tsp',
+  floz: 'floz', 'fl oz': 'floz', 'fluid ounce': 'floz', 'fluid ounces': 'floz',
+  pt: 'pt', pint: 'pt', pints: 'pt',
+  qt: 'qt', quart: 'qt', quarts: 'qt',
+  gal: 'gal', gallon: 'gal', gallons: 'gal',
+  pcs: 'pcs', pc: 'pcs', piece: 'pcs', pieces: 'pcs',
+  'pcs (pcs)': 'pcs', 'pc (pcs)': 'pcs', 'piece (pcs)': 'pcs', 'pieces (pcs)': 'pcs',
+  slice: 'slice', slices: 'slice', 'slice (pcs)': 'slice', 'slices (pcs)': 'slice',
+  clove: 'clove', cloves: 'clove', 'clove (pcs)': 'clove', 'cloves (pcs)': 'clove',
+  stick: 'stick', sticks: 'stick', 'stick (pcs)': 'stick', 'sticks (pcs)': 'stick',
+  pack: 'pack', packs: 'pack', 'pack (pcs)': 'pack', 'packs (pcs)': 'pack',
+  sachet: 'sachet', sachets: 'sachet',
+  bottle: 'bottle', bottles: 'bottle',
+  can: 'can', cans: 'can',
+  bunch: 'bunch', bunches: 'bunch',
+};
 
-// Common kitchen densities (grams per 240 mL cup) used when a recipe line is in
-// a volume unit (cup, tbsp, tsp...) but the ingredient is stocked/priced by
-// weight and has no grams_per_cup of its own. Matched loosely against the
-// ingredient name, most specific first (brown sugar before sugar). Mirrors
-// DENSITY_KEYWORDS in frontend/src/utils/recipeUnits.js and _DENSITY_KEYWORDS
-// in ml-service/services/data_loader.py; ml-service/tests/fixtures/
-// recipe_unit_cases.json keeps all three honest.
-const DENSITY_KEYWORDS = [
-  { match: /cake flour/i, g: 114 },
-  { match: /bread flour/i, g: 127 },
-  { match: /all[- ]?purpose|plain flour|flour/i, g: 125 },
-  { match: /brown sugar|demerara|muscovado/i, g: 220 },
-  { match: /powdered sugar|confectioner|icing sugar/i, g: 120 },
-  { match: /sugar/i, g: 200 },
-  { match: /butter/i, g: 227 },
-  { match: /rice/i, g: 185 },
-  { match: /cooking oil|oil/i, g: 216 },
-  { match: /condensed milk/i, g: 306 },
-  { match: /evaporated milk/i, g: 240 },
-  { match: /heavy cream|whipping cream/i, g: 240 },
-  { match: /cream/i, g: 240 },
-  { match: /milk/i, g: 240 },
-  { match: /water/i, g: 240 },
-  { match: /yogurt|yoghurt/i, g: 245 },
-  { match: /oats|oat/i, g: 90 },
-  { match: /cornstarch|corn starch/i, g: 128 },
-  { match: /baking powder/i, g: 192 },
-  { match: /baking soda|bicarbonate/i, g: 220 },
-  { match: /cocoa/i, g: 85 },
-  { match: /honey/i, g: 340 },
-  { match: /chocolate chip|choc chip/i, g: 170 },
-  { match: /nuts?|peanut|cashew|almond/i, g: 120 },
-  { match: /breadcrumb|panko/i, g: 108 },
-  { match: /cheese/i, g: 113 },
-  { match: /mayonnaise|mayo/i, g: 220 },
-  { match: /soy sauce/i, g: 255 },
-  { match: /vinegar/i, g: 240 },
-  { match: /salt/i, g: 273 }
-];
-
-// Grams per 240 mL cup: the ingredient's own grams_per_cup when set, else a
-// name-based estimate, else null (no trusted density).
-function densityOf(gramsPerCup, ingredientName) {
-  const explicit = Number(gramsPerCup);
-  if (Number.isFinite(explicit) && explicit > 0) return explicit;
-  const name = String(ingredientName || '');
-  for (const { match, g } of DENSITY_KEYWORDS) {
-    if (match.test(name)) return g;
-  }
-  return null;
-}
-
-// ===========================================================================
-// Database-driven overrides. Populated from ingredient_units by
-// setUnitMetadata(); every lookup below consults this map first and falls
-// back to the static tables above only when the unit isn't registered.
-// ===========================================================================
-// key (lowercased name/alias) -> { family, factor, isPiece, pieceWeightGrams }
+// ---------------------------------------------------------------------------
+// Database-driven metadata.
+// ---------------------------------------------------------------------------
+// key (lowercased name/alias) -> { family, factor, isPiece, pieceWeightGrams, canonical }
 const unitMetadata = new Map();
+// key `${ingredientId}|${fromUnit}|${toUnit}` -> Decimal factor
+const ingredientUnitConversions = new Map();
+
+// The canonical key of a unit row: the short name in the brackets when the
+// display name has one ('Kilograms (kg)' -> 'kg'), else the name itself.
+function canonicalUnitName(name) {
+  const text = String(name || '').trim();
+  const inner = text.match(/\(([^)]+)\)\s*$/);
+  const short = inner ? inner[1].trim() : text;
+  const key = short.toLowerCase();
+  return RECIPE_UNIT_CANONICAL[key] || key;
+}
 
 // Accept rows shaped like the ingredient_units table:
 //   { name, family, base_factor, is_piece, piece_weight_grams, aliases: [] }
@@ -146,15 +157,34 @@ function setUnitMetadata(rows) {
     const family = u.family === 'mass' || u.family === 'volume' ? u.family : 'count';
     const meta = {
       family,
-      factor: family === 'count' ? null : Number(u.base_factor),
+      factor: family === 'count' || u.base_factor == null ? null : String(u.base_factor),
       isPiece: Boolean(u.is_piece) && family === 'count',
-      pieceWeightGrams: u.piece_weight_grams != null ? Number(u.piece_weight_grams) : null,
+      pieceWeightGrams: u.piece_weight_grams == null ? null : String(u.piece_weight_grams),
+      canonical: canonicalUnitName(name),
     };
     const keys = [name, ...(Array.isArray(u.aliases) ? u.aliases : [])];
     for (const key of keys) {
       const clean = String(key || '').trim().toLowerCase();
       if (clean) unitMetadata.set(clean, meta);
     }
+  }
+}
+
+// Accept rows shaped like the ingredient_unit_conversions table:
+//   { ingredient_id, from_unit, to_unit, factor }
+// House measures (1 tbsp sugar = 12 g). They override the generic density
+// tables, because a kitchen measure depends on the ingredient, not the unit.
+function setIngredientUnitConversions(rows = []) {
+  ingredientUnitConversions.clear();
+  for (const row of rows || []) {
+    if (row == null) continue;
+    const ingredientId = row.ingredient_id;
+    const from = String(row.from_unit || '').trim().toLowerCase();
+    const to = String(row.to_unit || '').trim().toLowerCase();
+    if (ingredientId == null || !from || !to || row.factor == null) continue;
+    const factor = new Decimal(row.factor);
+    if (!factor.isFinite() || factor.lte(0)) continue;
+    ingredientUnitConversions.set(`${ingredientId}|${from}|${to}`, factor);
   }
 }
 
@@ -181,24 +211,37 @@ function unitFactor(key) {
   return RECIPE_UNIT_BASE_FACTOR[key] ?? null;
 }
 
-// Grams per piece for `pieceUnit` pieces of `ingredientName`, or null when no
-// trusted estimate exists. A unit-level default set on the ingredient_units
-// row (piece_weight_grams) wins; otherwise a name-based estimate is used.
+// The canonical key of a unit: 'pcs' and 'Pieces (pcs)' are the same unit.
+function canonicalOf(unit) {
+  const key = String(unit || '').trim().toLowerCase();
+  if (!key) return '';
+  const ov = unitMetadata.get(key);
+  if (ov) return ov.canonical;
+  return RECIPE_UNIT_CANONICAL[key] || key;
+}
+
+// True when both spellings mean the same unit.
+function sameUnit(a, b) {
+  const left = String(a || '').trim().toLowerCase();
+  const right = String(b || '').trim().toLowerCase();
+  if (!left || !right) return false;
+  if (left === right) return true;
+  return canonicalOf(left) === canonicalOf(right);
+}
+
+// Grams per piece from explicitly configured unit metadata. Ingredient-name
+// guesses are intentionally not used for stock deductions.
+function densityOf(gramsPerCup) {
+  if (gramsPerCup == null || gramsPerCup === '') return null;
+  const density = new Decimal(String(gramsPerCup));
+  return density.isFinite() && density.gt(0) ? density : null;
+}
+
 function pieceWeightOf(ingredientName, pieceUnit) {
   const unit = String(pieceUnit || '').trim().toLowerCase();
   const ov = unitMetadata.get(unit);
   if (ov && ov.family === 'count' && ov.isPiece && ov.pieceWeightGrams != null) return ov.pieceWeightGrams;
-  if (/^sticks?(\s\(pcs\))?$/.test(unit) && /butter/i.test(String(ingredientName || ''))) return 113;
-  const name = String(ingredientName || '');
-  for (const { match, g } of PIECE_WEIGHT_KEYWORDS) {
-    if (match.test(name)) return g;
-  }
   return null;
-}
-
-function roundTo(value, places = 4) {
-  const factor = 10 ** places;
-  return Math.round((value + Number.EPSILON) * factor) / factor;
 }
 
 // Parse a recipe-style quantity into a number: "1/2" -> 0.5, "1 1/2" -> 1.5,
@@ -227,6 +270,41 @@ function parseRecipeQuantity(value) {
   return parseFloat(trimmed);
 }
 
+// Parse a recipe quantity EXACTLY into a Decimal. Fractions and mixed numbers
+// are exact: "1/3" -> 0.3333... (40 digits), never 0.3333333333333333.
+function parseRecipeQuantityDecimal(value) {
+  if (value === undefined || value === null || value === '') return null;
+  if (value instanceof Decimal) return value;
+  const trimmed = String(value).trim();
+  if (!trimmed) return null;
+
+  const mixed = trimmed.match(/^(-?\d+(?:\.\d+)?)\s+([+-]?\d+)\s*\/\s*(\d+)$/);
+  if (mixed) {
+    const den = new Decimal(mixed[3]);
+    if (den.isZero()) return null;
+    return new Decimal(mixed[1]).plus(new Decimal(mixed[2]).div(den));
+  }
+
+  const fraction = trimmed.match(/^(-?\d+)\s*\/\s*(\d+)$/);
+  if (fraction) {
+    const den = new Decimal(fraction[2]);
+    if (den.isZero()) return null;
+    return new Decimal(fraction[1]).div(den);
+  }
+
+  if (!/^[+-]?(?:\d+(?:\.\d*)?|\.\d+)$/.test(trimmed)) return null;
+  const parsed = new Decimal(trimmed);
+  return parsed.isFinite() ? parsed : null;
+}
+
+function recipeQuantityForStorage(value) {
+  const quantity = parseRecipeQuantityDecimal(value);
+  if (!quantity || !quantity.isFinite()) {
+    throw new TypeError(`Invalid recipe quantity: ${value}`);
+  }
+  return quantity.toDecimalPlaces(6, Decimal.ROUND_HALF_UP).toFixed();
+}
+
 // Convert `quantity` expressed in `fromUnit` into `toUnit`. Same-family units
 // convert; unrecognised or cross-family units are left as-is.
 //
@@ -246,74 +324,25 @@ function parseRecipeQuantity(value) {
 // stock unit (1 Sachets -> 0.15 kg) and lets a measured amount count out in
 // packs when the ingredient is stocked by the pack (300 g -> 2 Packs).
 function normalizeRecipeQuantityToUnit(quantity, fromUnit, toUnit, gramsPerCup, pieceWeightGrams, pack) {
-  const qty = parseRecipeQuantity(quantity);
-  if (!Number.isFinite(qty) || qty <= 0) return qty || 0;
-  const from = String(fromUnit || '').trim().toLowerCase();
-  const to = String(toUnit || '').trim().toLowerCase();
-  const fromKind = unitKind(from);
-  const toKind = unitKind(to);
-  const fromFactor = unitFactor(from);
-  const toFactor = unitFactor(to);
-
-  if (
-    fromKind === 'volume' &&
-    toKind === 'mass' &&
-    fromFactor != null &&
-    toFactor != null &&
-    Number(gramsPerCup) > 0
-  ) {
-    // volume (mL) -> grams via density (grams per 240 mL cup), then -> target mass.
-    const grams = (qty * fromFactor) * (Number(gramsPerCup) / 240);
-    return roundTo(grams / toFactor);
+  const target = String(toUnit || '').trim();
+  const targetCanonical = canonicalOf(target);
+  const targetKind = unitKind(targetCanonical);
+  const ingredient = {
+    id: null,
+    name: '',
+    unit: target,
+    base_unit: target,
+    unit_family: targetKind === 'piece' ? 'count' : targetKind,
+    density_g_per_ml: gramsPerCup == null || gramsPerCup === ''
+      ? null
+      : new Decimal(String(gramsPerCup)).div(240).toString(),
+    piece_weight_grams: pieceWeightGrams == null ? null : String(pieceWeightGrams),
+    pack_size: null,
+  };
+  if (pack?.qty != null && pack?.unit) {
+    ingredient.pack_size = unitService.resolve(pack.qty, pack.unit, ingredient).baseAmount.toString();
   }
-
-  if (
-    fromKind === 'piece' &&
-    toKind === 'mass' &&
-    toFactor != null &&
-    Number(pieceWeightGrams) > 0
-  ) {
-    // pieces -> grams (per-piece weight), then -> target mass.
-    return roundTo((qty * Number(pieceWeightGrams)) / toFactor);
-  }
-
-  const packQty = pack ? Number(pack.qty) : NaN;
-  const packUnit = pack ? String(pack.unit || '').trim() : '';
-  if (packQty > 0 && packUnit) {
-    const packTargetOk = (toKind === 'mass' || toKind === 'volume')
-      && canConvertBetween(packUnit, toUnit, gramsPerCup);
-    // 1 Sachets of a 150 g sachet -> 0.15 kg. `fromKind === null` covers a
-    // count word that was never registered as a unit (e.g. an old free-text
-    // recipe row saying "sachet"), as long as it is not a known mass,
-    // volume or piece unit.
-    if (
-      (fromKind === 'count' || fromKind === null) &&
-      fromKind !== 'piece' &&
-      packTargetOk
-    ) {
-      const onePackInTarget = normalizeRecipeQuantityToUnit(
-        packQty, packUnit, toUnit, gramsPerCup, null, null
-      );
-      if (onePackInTarget > 0) return roundTo(qty * onePackInTarget);
-    }
-
-    // The other direction: the ingredient is stocked by the pack, so an
-    // amount is measured out in packs (300 g of a 150 g pack -> 2 packs).
-    if (
-      (toKind === 'count' || toKind === null) &&
-      (fromKind === 'mass' || fromKind === 'volume') &&
-      canConvertBetween(fromUnit, packUnit, gramsPerCup)
-    ) {
-      const inPackUnit = normalizeRecipeQuantityToUnit(
-        qty, fromUnit, packUnit, gramsPerCup, null, null
-      );
-      if (inPackUnit > 0) return roundTo(inPackUnit / packQty);
-    }
-  }
-
-  const sameFamily = fromKind != null && fromKind === toKind && (fromKind === 'mass' || fromKind === 'volume');
-  if (!sameFamily || fromFactor == null || toFactor == null) return qty;
-  return roundTo((qty * fromFactor) / toFactor);
+  return unitService.resolve(quantity, fromUnit, ingredient).baseAmount;
 }
 
 // True when `from` can be expressed in `to` with the rules this file
@@ -330,7 +359,13 @@ function canConvertBetween(from, to, gramsPerCup) {
   const toKind = unitKind(t);
   if (fromKind == null || toKind == null) return false;
   if (fromKind === toKind && (fromKind === 'mass' || fromKind === 'volume')) return true;
-  if (fromKind === 'volume' && toKind === 'mass' && Number(gramsPerCup) > 0) return true;
+  if (fromKind === 'volume' && toKind === 'mass') {
+    try {
+      return new Decimal(String(gramsPerCup)).gt(0);
+    } catch {
+      return false;
+    }
+  }
   return false;
 }
 
@@ -345,32 +380,52 @@ function canConvertBetween(from, to, gramsPerCup) {
 //   packQty/packUnit ingredients.pack_qty / pack_unit, so an opaque count
 //                    unit (sachet, pack...) can weigh out via the pack.
 function convertRecipeQuantity(quantity, fromUnit, toUnit, { gramsPerCup = null, ingredientName = '', packQty = null, packUnit = '' } = {}) {
-  return normalizeRecipeQuantityToUnit(
-    quantity,
-    fromUnit,
-    toUnit,
-    densityOf(gramsPerCup, ingredientName),
-    pieceWeightOf(ingredientName, fromUnit),
-    Number(packQty) > 0 && packUnit ? { qty: Number(packQty), unit: packUnit } : null
-  );
+  const target = String(toUnit || '').trim();
+  const unit = canonicalOf(target);
+  const family = unitKind(unit);
+  const ingredient = {
+    id: null,
+    name: ingredientName,
+    unit: target,
+    base_unit: target,
+    unit_family: family === 'piece' ? 'count' : family,
+    density_g_per_ml: gramsPerCup == null || gramsPerCup === ''
+      ? null
+      : new Decimal(String(gramsPerCup)).div(240).toString(),
+    pack_size: null,
+  };
+  if (packQty != null && packUnit) {
+    const packContents = unitService.resolve(packQty, packUnit, ingredient);
+    ingredient.pack_size = packContents.baseAmount.toString();
+  }
+  return unitService.resolve(quantity, fromUnit, ingredient).baseAmount;
 }
 
 // Unit cost (price per ingredients.unit) derived from a purchase pack:
-// "150 g for ₱200" on a kg-stocked ingredient -> ₱1333.33 per kg. Returns
+// "150 g for 200" on a kg-stocked ingredient -> 1333.33 per kg. Returns
 // null when the pack is incomplete or its unit cannot be expressed in the
 // stock unit (then the owner's own unit cost is kept instead).
 function deriveUnitPrice({ packQty, packUnit, packPrice, stockUnit, gramsPerCup = null, ingredientName = '' }) {
-  const qty = Number(parseRecipeQuantity(packQty));
-  const price = Number(parseRecipeQuantity(packPrice));
+  const qty = parseRecipeQuantityDecimal(packQty);
+  const price = parseRecipeQuantityDecimal(packPrice);
   const from = String(packUnit || '').trim();
   const to = String(stockUnit || '').trim();
-  if (!(qty > 0) || !(price > 0) || !from || !to) return null;
-  if (from.toLowerCase() === to.toLowerCase()) return roundTo(price / qty, 6);
-  const density = densityOf(gramsPerCup, ingredientName);
-  if (!canConvertBetween(from, to, density)) return null;
-  const inStockUnit = normalizeRecipeQuantityToUnit(qty, from, to, density, null, null);
-  if (!(inStockUnit > 0)) return null;
-  return roundTo(price / inStockUnit, 6);
+  if (!qty?.gt(0) || !price?.gt(0) || !from || !to) return null;
+  try {
+    const inStockUnit = normalizeRecipeQuantityToUnit(
+      qty,
+      from,
+      to,
+      gramsPerCup,
+      null,
+      null
+    );
+    if (!inStockUnit.gt(0)) return null;
+    return price.div(inStockUnit).toDecimalPlaces(6, Decimal.ROUND_HALF_UP);
+  } catch (error) {
+    if (error instanceof UnitConversionError) return null;
+    throw error;
+  }
 }
 
 // True when a Supabase/Postgres error means the product_ingredients.unit
@@ -392,6 +447,270 @@ function isMissingColumnError(error) {
   );
 }
 
+// ---------------------------------------------------------------------------
+// unitService.resolve(amount, fromUnit, ingredient)
+// The strict, canonical-unit resolver. Everything internal works in the
+// ingredient's base_unit ('g' | 'mL' | 'piece'); the `unit` column is
+// display-only.
+//
+// Throws UnitConversionError when the conversion cannot be resolved. There is
+// NO silent 1:1 fallback: an ingredient whose recipe unit cannot be resolved
+// is marked "unconvertible" and is not deducted at all.
+// ---------------------------------------------------------------------------
+
+// The canonical unit of an ingredient. base_unit wins; otherwise derive it
+// from the unit_family / the unit's own family.
+function baseUnitOf(ingredient = {}) {
+  const explicit = String(ingredient.base_unit || '').trim();
+  if (explicit) return canonicalOf(explicit) || explicit;
+  const family = String(ingredient.unit_family || '').trim().toLowerCase();
+  if (family === 'mass') return 'g';
+  if (family === 'volume') return 'ml';
+  if (family === 'count') return 'pcs';
+  // Fall back to the stock unit itself, which is already in the ingredient's
+  // own unit when the canonical columns were never filled in.
+  const unit = String(ingredient.unit || '').trim();
+  if (!unit) return null;
+  return canonicalOf(unit) || unit;
+}
+
+// The family of a unit, taking the ingredient's own unit_family into account
+// for the (unregistered) base units 'g', 'mL' and 'piece'.
+function familyOf(unit, ingredient = {}) {
+  const key = String(unit || '').trim().toLowerCase();
+  if (key === 'g' || key === 'gram' || key === 'grams' || key === 'gm') return 'mass';
+  if (key === 'ml' || key === 'millilitre' || key === 'milliliter') return 'volume';
+  if (key === 'piece' || key === 'pcs' || key === 'pc' || key === 'pieces') return 'count';
+  const canonical = canonicalOf(unit).toLowerCase();
+  const kind = unitKind(key) || unitKind(canonical);
+  if (kind) return kind === 'piece' ? 'count' : kind;
+  // Unknown unit: the ingredient's own family is the only hint available.
+  const family = String(ingredient.unit_family || '').trim().toLowerCase();
+  return family || null;
+}
+
+// Grams per mL for an ingredient.
+//
+// ONLY ingredients.density_g_per_ml counts (U2). There is no name-based
+// estimate here and no grams_per_cup fallback: a guessed density silently
+// corrupts the stock level. The migration fills density_g_per_ml from
+// grams_per_cup (grams_per_cup / 240), so an ingredient that used to work
+// keeps working once the migration has run.
+function densityOfIngredient(ingredient = {}) {
+  const explicit = ingredient.density_g_per_ml;
+  if (explicit == null || explicit === '') return null;
+  const d = new Decimal(explicit);
+  return d.isFinite() && d.gt(0) ? d : null;
+}
+
+// A "pack"-like unit word: an opaque count unit the ingredient is bought in.
+const PACK_UNIT_WORDS = new Set(['pack', 'packs', 'sachet', 'sachets', 'packet', 'packets', 'bag', 'bags', 'box', 'boxes', 'bottle', 'bottles', 'can', 'cans', 'bunch', 'bunches', 'dozen', 'dozens']);
+
+function isPackUnit(unit) {
+  const key = String(unit || '').trim().toLowerCase();
+  if (!key) return false;
+  if (PACK_UNIT_WORDS.has(key)) return true;
+  // "150 g pack", "pack (150g)" -> still a pack.
+  return /\bpack(s|et|ets|age|ages)?\b/.test(key);
+}
+
+const unitService = {
+  /**
+   * Convert `amount` (a Decimal, a numeric string, or a number) from
+   * `fromUnit` into the ingredient's canonical base unit.
+   *
+   * Returns { baseAmount: Decimal, baseUnit: string }.
+   * Throws UnitConversionError when the conversion cannot be resolved.
+   */
+  resolve(amount, fromUnit, ingredient = {}) {
+    const qty = amount instanceof Decimal
+      ? amount
+      : parseRecipeQuantityDecimal(amount);
+
+    if (qty == null || !qty.isFinite()) {
+      throw new UnitConversionError(
+        `Recipe quantity for ${ingredient.name || 'an ingredient'} is not a number`,
+        { ingredientId: ingredient.id, amount: amount == null ? null : String(amount) }
+      );
+    }
+    if (qty.lte(0)) {
+      return { baseAmount: new Decimal(0), baseUnit: baseUnitOf(ingredient) || String(fromUnit || '') };
+    }
+
+    const from = String(fromUnit || '').trim().toLowerCase();
+    const baseUnit = baseUnitOf(ingredient);
+    if (!from) {
+      throw new UnitConversionError(
+        `Recipe for ${ingredient.name || 'an ingredient'} has no unit, so it cannot be converted to ${baseUnit || 'the stock unit'}`,
+        { ingredientId: ingredient.id, fromUnit: fromUnit == null ? null : String(fromUnit), toUnit: baseUnit }
+      );
+    }
+    if (!baseUnit) {
+      throw new UnitConversionError(
+        `Ingredient ${ingredient.name || ingredient.id} has no base unit, so a recipe in ${from} cannot be converted`,
+        { ingredientId: ingredient.id, fromUnit, toUnit: null }
+      );
+    }
+
+    const baseLower = String(baseUnit).toLowerCase();
+    const fail = (reason) => {
+      throw new UnitConversionError(
+        `Cannot convert ${from} to ${baseUnit} for ${ingredient.name || `ingredient #${ingredient.id}`}: ${reason}`,
+        { ingredientId: ingredient.id, fromUnit: from, toUnit: baseUnit, reason }
+      );
+    };
+
+    // 1. The units already match ('pcs' and 'Pieces (pcs)' are the same unit).
+    if (sameUnit(from, baseUnit)) {
+      return { baseAmount: qty, baseUnit: baseUnit };
+    }
+
+    // 2. Per-ingredient house measure (1 tbsp sugar = 12 g). These win over
+    //    the generic density tables.
+    if (ingredient.id != null) {
+      const prefix = `${ingredient.id}|${from}|`;
+      const overrides = ingredient.unitConversions || ingredient.unit_conversions || [];
+      const candidates = overrides.filter((row) => (
+        String(row.from_unit || '').trim().toLowerCase() === from
+      ));
+      const directOverride = candidates.find((row) => (
+        sameUnit(row.to_unit, baseUnit)
+      )) || (candidates.length === 1 ? candidates[0] : null);
+      const globalMatches = [...ingredientUnitConversions.entries()].filter(([key]) => key.startsWith(prefix));
+      const globalOverride = globalMatches.find(([key]) => sameUnit(key.slice(prefix.length), baseUnit))
+        || (globalMatches.length === 1 ? globalMatches[0] : null);
+      const selectedOverride = directOverride
+        ? [`${prefix}${String(directOverride.to_unit).trim().toLowerCase()}`, new Decimal(String(directOverride.factor))]
+        : globalOverride;
+      if (!selectedOverride && (candidates.length > 1 || globalMatches.length > 1)) {
+        fail('multiple house-measure overrides match this recipe unit');
+      }
+      const match = selectedOverride;
+      const override = match && match[1];
+      if (override) {
+        const overrideTarget = match[0].slice(prefix.length);
+        if (sameUnit(overrideTarget, baseUnit)) {
+          return { baseAmount: qty.mul(override), baseUnit };
+        }
+        const converted = unitService.resolve(
+          qty.mul(override),
+          overrideTarget,
+          { ...ingredient, id: null }
+        );
+        return { baseAmount: converted.baseAmount, baseUnit };
+      }
+    }
+
+    const fromFamily = familyOf(from, ingredient);
+    const baseFamily = familyOf(baseLower, ingredient);
+
+    // 3. pack -> the ingredient's own unit: one pack holds pack_size base
+    //    units (a 12-egg pack of an ingredient stocked in pcs, a 150 g sachet
+    //    of an ingredient stocked in g).
+    if (isPackUnit(from)) {
+      const packSize = ingredient.pack_size != null && ingredient.pack_size !== ''
+        ? new Decimal(ingredient.pack_size)
+        : null;
+      if (packSize == null || !packSize.isFinite() || packSize.lte(0)) {
+        fail('the ingredient has no valid pack_size');
+      }
+      return { baseAmount: qty.mul(packSize), baseUnit: baseUnit };
+    }
+
+    // 4. mass <-> volume: only with a known density.
+    const crossFamily = (fromFamily === 'mass' && baseFamily === 'volume')
+      || (fromFamily === 'volume' && baseFamily === 'mass');
+    if (crossFamily) {
+      const density = densityOfIngredient(ingredient);
+      if (density == null) {
+        fail('the ingredient has no density_g_per_ml, so mass and volume cannot be mixed');
+      }
+      const fromFactor = unitFactor(from);
+      const baseFactor = unitFactor(baseLower);
+      if (fromFactor == null || baseFactor == null) {
+        fail('the unit is not registered, so it cannot be converted');
+      }
+      const grams = fromFamily === 'mass'
+        ? qty.mul(new Decimal(String(fromFactor)))
+        : qty.mul(new Decimal(String(fromFactor))).mul(density);
+      if (baseFamily === 'mass') {
+        return { baseAmount: grams.div(new Decimal(String(baseFactor))), baseUnit: baseUnit };
+      }
+      const ml = grams.div(density);
+      return { baseAmount: ml.div(new Decimal(String(baseFactor))), baseUnit: baseUnit };
+    }
+
+    // 5. Same family (mass with mass, volume with volume).
+    if (fromFamily && fromFamily === baseFamily && (fromFamily === 'mass' || fromFamily === 'volume')) {
+      const fromFactor = unitFactor(from);
+      const baseFactor = unitFactor(baseLower);
+      if (fromFactor == null || baseFactor == null) {
+        fail('the unit is not registered, so it cannot be converted');
+      }
+      return {
+        baseAmount: qty.mul(new Decimal(String(fromFactor))).div(new Decimal(String(baseFactor))),
+        baseUnit: baseUnit,
+      };
+    }
+
+    // 6. count -> count that is not a pack: only an explicit override or an
+    //    identical unit can be right. Never assume 1:1.
+    if (fromFamily === 'count' && baseFamily === 'count') {
+      fail('a count unit can only be converted through the ingredient\'s pack_size or a house measure');
+    }
+
+    // 7. piece -> mass via the per-piece weight.
+    if (fromFamily === 'count' && baseFamily === 'mass') {
+      const weight = ingredient.piece_weight_grams != null
+        ? new Decimal(String(ingredient.piece_weight_grams))
+        : pieceWeightOf(ingredient.name, from);
+      const baseFactor = unitFactor(baseLower);
+      if (weight == null || baseFactor == null) {
+        fail('there is no known weight for this piece unit');
+      }
+      return {
+        baseAmount: qty.mul(weight instanceof Decimal ? weight : new Decimal(String(weight))).div(new Decimal(String(baseFactor))),
+        baseUnit: baseUnit,
+      };
+    }
+
+    fail('the unit families do not match');
+    return null; // unreachable; fail() always throws
+  },
+};
+
+function inventoryUnitMetadata({ unit, name, gramsPerCup, packQty, packUnit }) {
+  const stockUnit = String(unit || '').trim();
+  const baseUnit = canonicalOf(stockUnit);
+  const unitFamily = familyOf(stockUnit, { unit: stockUnit });
+  const gramsPerCupDecimal = parseRecipeQuantityDecimal(gramsPerCup);
+  const density = gramsPerCupDecimal?.gt(0)
+    ? gramsPerCupDecimal.div(240).toDecimalPlaces(6, Decimal.ROUND_HALF_UP).toString()
+    : null;
+  const ingredient = {
+    name,
+    unit: stockUnit,
+    base_unit: baseUnit,
+    unit_family: unitFamily,
+    density_g_per_ml: density,
+  };
+  let packSize = null;
+
+  if (packQty != null && packUnit) {
+    packSize = unitService.resolve(packQty, packUnit, ingredient)
+      .baseAmount.toDecimalPlaces(6, Decimal.ROUND_HALF_UP).toString();
+  }
+
+  return {
+    base_unit: baseUnit,
+    unit_family: unitFamily,
+    stock_scale: 3,
+    allow_fractional: unitFamily !== 'count',
+    pack_size: packSize,
+    density_g_per_ml: density,
+  };
+}
+
 // Load the conversion metadata for every active unit from the ingredient_units
 // table and warm the override map. Falls back to the static tables when the
 // migration hasn't run or the table is unreachable.
@@ -407,6 +726,7 @@ async function loadUnitMetadataFromDb(client) {
       throw error;
     }
     setUnitMetadata(data && data.length ? data : []);
+    await loadIngredientUnitConversionsFromDb(client);
     return true;
   } catch (err) {
     console.error('Failed to load unit conversion metadata:', err.message);
@@ -452,6 +772,26 @@ function toBuyQuantity(need, stock, unit) {
   return Math.max(0, Math.ceil(raw - 1e-9));
 }
 
+// Load the per-ingredient house measures. Best effort: the table is new, so a
+// missing one must not break the boot.
+async function loadIngredientUnitConversionsFromDb(client) {
+  if (!client) return false;
+  try {
+    const { data, error } = await client
+      .from('ingredient_unit_conversions')
+      .select('ingredient_id, from_unit, to_unit, factor');
+    if (error) {
+      if (isMissingColumnError(error) || /ingredient_unit_conversions/.test(String(error.message))) return false;
+      throw error;
+    }
+    setIngredientUnitConversions(data && data.length ? data : []);
+    return true;
+  } catch (err) {
+    console.error('Failed to load ingredient unit conversions:', err.message);
+    return false;
+  }
+}
+
 module.exports = {
   isCountUnit,
   toBuyQuantity,
@@ -461,8 +801,19 @@ module.exports = {
   canConvertBetween,
   densityOf,
   parseRecipeQuantity,
+  parseRecipeQuantityDecimal,
+  recipeQuantityForStorage,
   pieceWeightOf,
+  canonicalOf,
+  sameUnit,
   setUnitMetadata,
+  setIngredientUnitConversions,
   loadUnitMetadataFromDb,
+  loadIngredientUnitConversionsFromDb,
   isMissingColumnError,
+  familyOf,
+  inventoryUnitMetadata,
+  unitService,
+  UnitConversionError,
+  Decimal,
 };

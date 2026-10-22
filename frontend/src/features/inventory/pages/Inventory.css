@@ -1659,6 +1659,82 @@
   font-weight: 600;
 }
 
+/* ============ INLINE STOCK COUNT ============ */
+/* The stock number in the table is a button: clicking it opens a small input
+   right in the cell, so the owner can set the counted amount without leaving
+   the list. It looks like plain text until it is hovered. */
+.inventory-table .inventory-stock-value {
+  padding: 0;
+  border: none;
+  background: none;
+  color: inherit;
+  font: inherit;
+  font-weight: inherit;
+  cursor: pointer;
+  text-align: left;
+  border-bottom: 1px dashed transparent;
+}
+
+.inventory-table .inventory-stock-value:hover {
+  border-bottom-color: currentColor;
+}
+
+/* The inline stock count. The input sits on its own line and the buttons sit
+   UNDER it: side by side the three of them were wider than the column, so the
+   buttons spilled into the next column and the input was squished. */
+.inventory-table .inventory-inline-stock {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.25rem;
+  min-width: 6rem;
+}
+
+.inventory-table .inventory-inline-stock .form-input {
+  width: 100%;
+  max-width: 7rem;
+  min-height: 2rem;
+  padding: 0.2rem 0.4rem;
+  font-size: 0.875rem;
+}
+
+.inventory-table .inventory-inline-stock-actions {
+  display: flex;
+  gap: 0.25rem;
+  width: 100%;
+  max-width: 7rem;
+}
+
+.inventory-table .inventory-inline-stock-btn {
+  flex: 1 1 0;
+  min-width: 0;
+  padding: 0.25rem 0.35rem;
+  border: 1px solid #d1d5db;
+  border-radius: 6px;
+  background: #ffffff;
+  color: #374151;
+  font-size: 0.75rem;
+  line-height: 1.4;
+  white-space: nowrap;
+  text-align: center;
+  cursor: pointer;
+}
+
+.inventory-table .inventory-inline-stock-btn.save {
+  background: #16a34a;
+  border-color: #16a34a;
+  color: #ffffff;
+}
+
+.inventory-table .inventory-inline-stock-btn.cancel:hover {
+  background: #f3f4f6;
+}
+
+.inventory-table .inventory-inline-stock-btn:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
 /* ============ ACTION BUTTONS ============ */
 .inventory-action-btn.restore {
   color: #16a34a;

@@ -11,7 +11,8 @@ const {
   archiveInventoryItem,
   restoreInventoryItem,
   restockInventoryItem,
-  getItemTransactions
+  getItemTransactions,
+  getIngredientRecipes
 } = require('../controllers/inventoryController');
 
 // All routes require authentication
@@ -27,5 +28,6 @@ router.patch('/items/:id/archive', archiveInventoryItem);
 router.patch('/items/:id/restore', restoreInventoryItem);
 router.post('/items/:id/restock', restockInventoryItem);
 router.get('/items/:id/transactions', getItemTransactions);
+router.get('/items/:id/recipes', getIngredientRecipes);
 
 module.exports = router;

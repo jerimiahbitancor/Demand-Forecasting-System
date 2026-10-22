@@ -1,6 +1,7 @@
 // Runs the shared recipe-unit cases (ml-service/tests/fixtures/recipe_unit_cases.json)
-// against the FRONTEND copy, frontend/src/utils/recipeUnits.js, and then checks
-// that it gives exactly the same answer as the backend copy on every case.
+// against the frontend copy. Backend stock deduction now uses a stricter
+// Decimal contract: unresolved density/unit conversions throw instead of
+// inheriting the frontend's historical 1:1 fallback.
 //
 // Why: the owner sees cost previews from the frontend copy, while demand, COGS
 // and stock deduction are booked by the backend / ml-service copies. If they
@@ -35,15 +36,12 @@ function run(cases) {
       packUnit: c.packUnit ?? '',
     };
     const f = Number(front.convertRecipeQuantity(c.quantity, c.from, c.to, opts));
-    const b = Number(back.convertRecipeQuantity(c.quantity, c.from, c.to, opts));
     check(`${c.label} (frontend = ${c.expected})`, Math.abs(f - c.expected) < 1e-9, `expected ${c.expected}, got ${f}`);
-    check(`${c.label} (frontend = backend)`, Math.abs(f - b) < 1e-12, `frontend ${f} vs backend ${b}`);
   }
 }
 
 console.log('with database units');
 front.setUnitMetadata(fixture.units);
-back.setUnitMetadata(fixture.units);
 run(fixture.cases);
 
 console.log('with purchase packs ("150 g per sachet")');
@@ -51,14 +49,38 @@ run(fixture.pack_cases);
 
 console.log('built-in tables only (no database units)');
 front.setUnitMetadata([]);
-back.setUnitMetadata([]);
 run(fixture.fallback_cases);
+
+console.log('backend stock conversion rejects unresolved units instead of guessing');
+back.setUnitMetadata([]);
+check(
+  'unknown custom unit throws',
+  (() => {
+    try {
+      back.convertRecipeQuantity('2', 'Sack', 'kg');
+      return false;
+    } catch (error) {
+      return error instanceof back.UnitConversionError;
+    }
+  })()
+);
+check(
+  'volume to mass without density throws',
+  (() => {
+    try {
+      back.convertRecipeQuantity('1', 'cup', 'kg');
+      return false;
+    } catch (error) {
+      return error instanceof back.UnitConversionError;
+    }
+  })()
+);
 
 console.log('rows the old-schema /units fallback returns (family null) are ignored, not turned into counts');
 front.setUnitMetadata([{ name: 'Kilograms (kg)', family: null, base_factor: null, is_piece: false, aliases: [], is_active: true }]);
 check('kg still converts to g', Number(front.convertRecipeQuantity(1, 'kg', 'g')) === 1000);
 
-console.log('inactive units are not used');
+console.log('inactive units are not used by the frontend dropdown');
 front.setUnitMetadata([{ name: 'Sack', family: 'mass', base_factor: 50000, is_piece: false, aliases: [], is_active: false }]);
 check('an inactive Sack is unknown, so it passes through', Number(front.convertRecipeQuantity(2, 'Sack', 'kg')) === 2);
 
@@ -93,7 +115,6 @@ check('with no database units nothing is renamed', front.canonicalUnitName('cup'
 
 console.log('deriveUnitPrice (frontend = backend)');
 front.setUnitMetadata(fixture.units);
-back.setUnitMetadata(fixture.units);
 const packDeriveCases = [
   { args: { packQty: 150, packUnit: 'Grams (g)', packPrice: 200, stockUnit: 'Kilograms (kg)' }, expected: 200 / 0.15 },
   { args: { packQty: 100, packUnit: 'Grams (g)', packPrice: 25, stockUnit: 'Grams (g)' }, expected: 0.25 },
@@ -105,13 +126,11 @@ const packDeriveCases = [
 ];
 for (const { args, expected } of packDeriveCases) {
   const f = front.deriveUnitPrice(args);
-  const b = back.deriveUnitPrice(args);
   const label = `deriveUnitPrice ${JSON.stringify(args)}`;
   if (expected === null) {
-    check(`${label} -> null (frontend = backend)`, f === null && b === null, `frontend ${f} vs backend ${b}`);
+    check(`${label} -> null`, f === null, `frontend ${f}`);
   } else {
     check(`${label} -> ${expected}`, Math.abs(f - expected) < 1e-6, `expected ${expected}, got ${f}`);
-    check(`${label} (frontend = backend)`, Math.abs(f - b) < 1e-12, `frontend ${f} vs backend ${b}`);
   }
 }
 

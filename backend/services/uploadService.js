@@ -17,7 +17,7 @@ const timezone = require('dayjs/plugin/timezone');
 dayjs.extend(utc);
 dayjs.extend(timezone);
 const PH_TZ = 'Asia/Manila';
-const { convertRecipeQuantity, isMissingColumnError } = require('../utils/recipeUnits');
+const { convertRecipeQuantity, isMissingColumnError, unitService, Decimal } = require('../utils/recipeUnits');
 const {
   splitModifiers,
   aggregateSalesRecords,
@@ -26,6 +26,7 @@ const {
   shouldDeduct,
   describeShortfall,
   normalizeKeyword,
+  roundQuantity,
 } = require('../utils/salesModifiers');
 const { createNotificationOnce } = require('./notificationService');
 const { loadAliasMap } = require('./productAliasService');
@@ -334,6 +335,12 @@ class UploadService {
               upload_id: uploadId,
               ingredient_id: item.ingredientId,
               shortfall: item.shortfall,
+              shortfall_exact: item.shortfallExact || String(item.shortfall),
+              requested_exact: item.requestedExact || null,
+              requested_quantity: item.requiredQuantity || null,
+              available_quantity: item.availableQuantity || null,
+              applied_quantity: item.applied || null,
+              unit: item.unit || null,
             },
           });
         }
@@ -587,6 +594,7 @@ class UploadService {
       const createdProductNames = [...(options.createdProductNames || [])];
       productsDetected += createdProductNames.length;
       let shortfallSummary = [];
+      let unconvertibleSummary = [];
 
       // POS modifiers ("... NO EGG") — see utils/salesModifiers.js.
       const modifierRules = await this.getModifierRules();
@@ -842,32 +850,103 @@ class UploadService {
           (productRows || []).filter((product) => !isArchivedProduct(product)).map((product) => product.id)
         );
         if (deductingProductIds.size > 0) {
-          const ingredientCols = (withPack) => (withPack
-            ? 'name, unit, grams_per_cup, created_at, pack_qty, pack_unit'
-            : 'name, unit, grams_per_cup, created_at');
-          const recipeColumns = (withUnit, withPack) => (withUnit
-            ? `product_id, ingredient_id, quantity_per_serving, unit, ingredients!inner(${ingredientCols(withPack)})`
-            : `product_id, ingredient_id, quantity_per_serving, ingredients!inner(${ingredientCols(withPack)})`);
-          let recipeResult = await supabaseAdmin
-            .from('product_ingredients')
-            .select(recipeColumns(true, true))
-            .in('product_id', [...deductingProductIds]);
+          // Ingredient columns, most complete first. The canonical ones
+          // (base_unit, unit_family, stock_scale, allow_fractional, pack_size,
+          // density_g_per_ml) only exist once the inventory migration has run;
+          // until then the older columns are used and the legacy conversion
+          // keeps working, so an un-migrated database still uploads fine.
+          const CANONICAL_INGREDIENT_COLS = 'name, unit, base_unit, unit_family, stock_scale, allow_fractional, pack_size, density_g_per_ml, grams_per_cup, pack_qty, pack_unit';
+          const LEGACY_INGREDIENT_COLS = 'name, unit, grams_per_cup, created_at, pack_qty, pack_unit';
+          const MINIMAL_INGREDIENT_COLS = 'name, unit, grams_per_cup, created_at';
+          const buildRecipeColumns = (withUnit, cols) => (withUnit
+            ? `product_id, ingredient_id, quantity_per_serving, unit, ingredients!inner(${cols})`
+            : `product_id, ingredient_id, quantity_per_serving, ingredients!inner(${cols})`);
 
-          if (recipeResult.error && isMissingColumnError(recipeResult.error)) {
-            recipeResult = await supabaseAdmin
+          const attempts = [
+            { withUnit: true, cols: CANONICAL_INGREDIENT_COLS, canonical: true },
+            { withUnit: true, cols: LEGACY_INGREDIENT_COLS, canonical: false },
+            { withUnit: false, cols: CANONICAL_INGREDIENT_COLS, canonical: true },
+            { withUnit: false, cols: LEGACY_INGREDIENT_COLS, canonical: false },
+            { withUnit: false, cols: MINIMAL_INGREDIENT_COLS, canonical: false },
+          ];
+          let recipeResult = null;
+          let canonicalUnitsAvailable = false;
+          for (const attempt of attempts) {
+            const attemptResult = await supabaseAdmin
               .from('product_ingredients')
-              .select(recipeColumns(true, false))
+              .select(buildRecipeColumns(attempt.withUnit, attempt.cols))
               .in('product_id', [...deductingProductIds]);
-          }
-          if (recipeResult.error && isMissingColumnError(recipeResult.error)) {
-            recipeResult = await supabaseAdmin
-              .from('product_ingredients')
-              .select(recipeColumns(false, false))
-              .in('product_id', [...deductingProductIds]);
+            recipeResult = attemptResult;
+            if (!attemptResult.error) {
+              canonicalUnitsAvailable = attempt.canonical;
+              break;
+            }
+            if (!isMissingColumnError(attemptResult.error)) break; // a real error, not a missing column
           }
 
-          const { data: recipeRows, error: recipeError } = recipeResult;
+          const { data: recipeRows, error: recipeError } = recipeResult || {};
           if (recipeError) throw recipeError;
+
+          const recipeIngredientIds = [...new Set((recipeRows || []).map((row) => row.ingredient_id))];
+          const unitConversionsByIngredient = new Map();
+          if (recipeIngredientIds.length > 0) {
+            const { data: conversions, error: conversionsError } = await supabaseAdmin
+              .from('ingredient_unit_conversions')
+              .select('ingredient_id, from_unit, to_unit, factor')
+              .in('ingredient_id', recipeIngredientIds);
+            if (conversionsError && !isMissingTableError(conversionsError)) throw conversionsError;
+            if (conversionsError) {
+              warnings.push('Ingredient-specific unit overrides are unavailable until the inventory stock hardening migration is applied.');
+            }
+            for (const conversion of conversions || []) {
+              const list = unitConversionsByIngredient.get(conversion.ingredient_id) || [];
+              list.push(conversion);
+              unitConversionsByIngredient.set(conversion.ingredient_id, list);
+            }
+          }
+
+          // The per-serving amount, in the ingredient's CANONICAL base unit.
+          //
+          //   unitService.resolve() throws UnitConversionError when the
+          //   recipe unit cannot be expressed in the base unit (no density, no
+          //   pack size, an unknown unit). There is no 1:1 fallback: a
+          //   guessed amount silently corrupts the stock level. The error is
+          //   caught per recipe below and turned into a warning.
+          const perServingFor = (recipe) => {
+            const ingredient = recipe.ingredients || {};
+            // A recipe row with no unit of its own is in the ingredient's own
+            // unit: that is the only unit available, not a guess.
+            const fromUnit = recipe.unit || ingredient.unit || null;
+            if (canonicalUnitsAvailable) {
+              return unitService.resolve(recipe.quantity_per_serving, fromUnit, {
+                id: recipe.ingredient_id,
+                name: ingredient.name,
+                unit: ingredient.unit,
+                base_unit: ingredient.base_unit,
+                unit_family: ingredient.unit_family,
+                stock_scale: ingredient.stock_scale,
+                allow_fractional: ingredient.allow_fractional,
+                pack_size: ingredient.pack_size,
+                density_g_per_ml: ingredient.density_g_per_ml,
+                grams_per_cup: ingredient.grams_per_cup,
+                unitConversions: unitConversionsByIngredient.get(recipe.ingredient_id) || [],
+              });
+            }
+            // The canonical columns are not in the database yet: the legacy
+            // conversion keeps working (it never throws).
+            const legacy = convertRecipeQuantity(
+              recipe.quantity_per_serving,
+              fromUnit,
+              ingredient.unit,
+              {
+                gramsPerCup: ingredient.grams_per_cup,
+                ingredientName: ingredient.name,
+                packQty: ingredient.pack_qty,
+                packUnit: ingredient.pack_unit,
+              }
+            );
+            return new Decimal(String(legacy == null ? 0 : legacy));
+          };
 
           // Full recipe for every plate, except a modifier plate leaves out
           // the one ingredient its rule maps to (and only if that ingredient
@@ -881,29 +960,24 @@ class UploadService {
             recipeRows: recipeRows || [],
             deductingProductIds,
             ingredientIdByKeyword,
-            perServingFor: (recipe) => {
-              const ingredientUnit = recipe.ingredients?.unit || recipe.unit || null;
-              return convertRecipeQuantity(
-                recipe.quantity_per_serving,
-                recipe.unit,
-                ingredientUnit,
-                {
-                  gramsPerCup: recipe.ingredients?.grams_per_cup,
-                  ingredientName: recipe.ingredients?.name,
-                  packQty: recipe.ingredients?.pack_qty,
-                  packUnit: recipe.ingredients?.pack_unit,
-                }
-              );
-            },
+            perServingFor,
           });
 
           const ingredientInfo = new Map();
           for (const recipe of recipeRows || []) {
             if (!ingredientInfo.has(recipe.ingredient_id)) {
               ingredientInfo.set(recipe.ingredient_id, {
+                id: recipe.ingredient_id,
                 name: recipe.ingredients?.name || null,
                 unit: recipe.ingredients?.unit || null,
-                createdAt: recipe.ingredients?.created_at || null,
+                base_unit: recipe.ingredients?.base_unit || null,
+                unit_family: recipe.ingredients?.unit_family || null,
+                stock_scale: recipe.ingredients?.stock_scale ?? null,
+                allow_fractional: recipe.ingredients?.allow_fractional ?? null,
+                pack_size: recipe.ingredients?.pack_size ?? null,
+                density_g_per_ml: recipe.ingredients?.density_g_per_ml ?? null,
+                grams_per_cup: recipe.ingredients?.grams_per_cup ?? null,
+                unitConversions: unitConversionsByIngredient.get(recipe.ingredient_id) || [],
               });
             }
           }
@@ -928,36 +1002,60 @@ class UploadService {
 
           const shortfalls = [];
           const skippedForCount = [];
-          for (const [ingredientId, byDay] of deductionsByDate) {
+          for (const [ingredientId, entry] of deductionsByDate) {
             const info = ingredientInfo.get(ingredientId) || {};
+            // The last COUNT only: the newest adjustment transaction. The
+            // ingredient's own created_at is not a count (U7).
             const lastCountAt = lastStockCountAt({
-              createdAt: info.createdAt,
               latestAdjustmentAt: latestAdjustmentAt.get(ingredientId) || null,
             });
 
-            let deduction = 0;
+            // Exact total, in the ingredient's base unit, over the days that
+            // still deduct. Nothing is rounded here.
+            let exact = new Decimal(0);
             const skippedDays = [];
-            for (const [saleDate, amount] of [...byDay].sort((a, b) => a[0].localeCompare(b[0]))) {
-              if (shouldDeduct(saleDate, lastCountAt)) deduction += amount;
+            for (const [saleDate, amount] of [...entry.byDate].sort((a, b) => a[0].localeCompare(b[0]))) {
+              if (shouldDeduct(saleDate, lastCountAt)) exact = exact.plus(amount);
               else skippedDays.push(saleDate);
             }
+            entry.skippedDates = skippedDays;
             if (skippedDays.length > 0) skippedForCount.push({ name: info.name || `ingredient #${ingredientId}`, days: skippedDays });
-            if (!(deduction > 0)) continue;
+            if (!exact.gt(0)) continue;
+
+            // THE ONE rounding, at the very end (U4): mass/volume half-up to
+            // stock_scale, a discrete count CEILed to whole pieces.
+            const deduction = roundQuantity(exact, {
+              unit_family: info.unit_family,
+              allow_fractional: info.allow_fractional,
+              stock_scale: info.stock_scale,
+            });
+            if (!deduction.gt(0)) continue;
 
             // Was SELECT quantity, then compute new = max(0, old - deduction)
             // in JS, then UPDATE — two round trips wide open to a lost
             // update: two concurrent uploads deducting the same ingredient
             // can both read the same starting quantity before either write
             // lands, so the second UPDATE clobbers the first instead of
-            // stacking. deduct_ingredient_stock() (migrations/
-            // 001_add_deduct_ingredient_stock_function.sql) does the read,
-            // clamp, and write as one atomic statement in Postgres, so
-            // concurrent callers serialize on the row instead of racing.
+            // stacking. deduct_ingredient_stock() does the read, the clamp,
+            // the stock write AND the inventory_transactions log as one
+            // atomic statement in Postgres, so concurrent callers serialize
+            // on the row instead of racing.
+            //
+            // p_deduction goes over as TEXT: Postgres parses the decimal
+            // exactly, while a JSON float would already have lost digits.
+            // The (reference_type, reference_id, ingredient_id) key makes a
+            // retry of the same upload a no-op instead of a second deduction.
             const { data: deductionResult, error: deductionError } = await supabaseAdmin
               .rpc('deduct_ingredient_stock', {
                 p_ingredient_id: ingredientId,
-                p_deduction: deduction,
-                p_updated_by: numericId
+                p_deduction: deduction.toString(),
+                p_reference_type: 'upload',
+                p_reference_id: uploadId,
+                p_updated_by: numericId,
+                p_notes: skippedDays.length
+                  ? `Not deducted for ${skippedDays.join(', ')}: counted after that day ended.`
+                  : null,
+                p_requested_exact: exact.toString(),
               });
 
             if (deductionError) throw deductionError;
@@ -967,34 +1065,52 @@ class UploadService {
               throw new Error(`Ingredient ${ingredientId} not found while deducting stock`);
             }
 
-            const previousQuantity = Number(deductionRow.previous_quantity) || 0;
-            const newQuantity = Number(deductionRow.new_quantity) || 0;
-            const shortfall = describeShortfall({
-              ingredientName: info.name,
-              unit: info.unit,
-              requested: deduction,
-              inStock: previousQuantity,
-            });
-            const notes = [
-              shortfall ? shortfall.notes : null,
-              skippedDays.length ? `Not deducted for ${skippedDays.join(', ')}: counted after that day ended.` : null,
-            ].filter(Boolean).join(' ') || null;
+            const previousQuantity = new Decimal(deductionRow.previous_quantity == null ? 0 : deductionRow.previous_quantity);
+            const appliedQuantity = new Decimal(deductionRow.applied_quantity == null ? 0 : deductionRow.applied_quantity);
+            const shortfallQuantity = new Decimal(deductionRow.shortfall_quantity == null ? 0 : deductionRow.shortfall_quantity);
+            const alreadyApplied = Boolean(deductionRow.already_applied);
 
-            const { error: transactionError } = await supabaseAdmin
-              .from('inventory_transactions')
-              .insert({
-                ingredient_id: ingredientId,
-                transaction_type: 'sale',
-                quantity: -deduction,
-                previous_quantity: previousQuantity,
-                new_quantity: newQuantity,
-                reason: 'Automatic deduction from mapped product sales',
-                notes,
-                created_by: numericId
+            const shortfall = shortfallQuantity.gt(0)
+              ? describeShortfall({
+                ingredientName: info.name,
+                unit: info.unit,
+                requested: exact,
+                required: deduction,
+                inStock: previousQuantity,
+              })
+              : null;
+
+            if (shortfall) {
+              shortfalls.push({
+                ingredientId,
+                name: info.name,
+                ...shortfall,
+                applied: appliedQuantity.toString(),
+                requestedExact: exact.toString(),
+                requiredQuantity: deduction.toString(),
+                availableQuantity: previousQuantity.toString(),
+                unit: info.unit || null,
+                alreadyApplied,
               });
+            }
+          }
 
-            if (transactionError) throw transactionError;
-            if (shortfall) shortfalls.push({ ingredientId, name: info.name, ...shortfall });
+          // An ingredient whose recipe unit could not be resolved is NOT
+          // deducted: a warning says so instead of the stock silently going
+          // down by a guessed amount.
+          const unconvertible = deductionsByDate.unconvertible || [];
+          unconvertibleSummary = unconvertible.map((item) => ({
+            ingredientId: item.ingredient_id,
+            name: ingredientInfo.get(item.ingredient_id)?.name || `ingredient #${item.ingredient_id}`,
+            warnings: item.warnings || [],
+          }));
+          for (const item of unconvertible) {
+            const info = ingredientInfo.get(item.ingredient_id) || {};
+            const reason = (item.warnings || [])[0]?.reason || 'the recipe unit could not be resolved';
+            warnings.push(
+              `Could not convert the recipe unit for ${info.name || `ingredient #${item.ingredient_id}`}: `
+              + `${reason}. Its stock was not deducted.`
+            );
           }
 
           for (const item of shortfalls) {
@@ -1020,6 +1136,7 @@ class UploadService {
         productsDetected,
         productsUpdated,
         warnings,
+        unconvertibleIngredients: unconvertibleSummary,
         uploadSummary: summaryNow(),
       };
     } catch (error) {

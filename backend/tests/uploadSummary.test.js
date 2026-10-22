@@ -5,6 +5,7 @@
 
 const test = require('node:test');
 const assert = require('node:assert/strict');
+const Decimal = require('decimal.js');
 const { createFakeSupabase, installFake } = require('./helpers/fakeSupabase');
 
 process.env.LOG_LEVEL = 'error';
@@ -13,9 +14,20 @@ const fake = createFakeSupabase({}, {
   rpc: {
     deduct_ingredient_stock: ({ p_ingredient_id: id, p_deduction: amount }, tables) => {
       const row = (tables.ingredients || []).find((i) => i.id === id);
-      const previous = Number(row.quantity) || 0;
-      row.quantity = Math.max(0, previous - Number(amount));
-      return { data: [{ previous_quantity: previous, new_quantity: row.quantity }], error: null };
+      const previous = new Decimal(String(row.quantity || 0));
+      const requested = new Decimal(String(amount));
+      const applied = Decimal.min(previous, requested);
+      row.quantity = Decimal.max(0, previous.minus(applied)).toString();
+      return {
+        data: [{
+          previous_quantity: previous.toString(),
+          new_quantity: row.quantity,
+          applied_quantity: applied.toString(),
+          shortfall_quantity: Decimal.max(0, requested.minus(previous)).toString(),
+          already_applied: false,
+        }],
+        error: null,
+      };
     },
   },
 });
@@ -98,7 +110,7 @@ test('processSalesData returns the upload summary: modifiers, sizes, new product
   assert.equal(s.shortfalls.length, 1);
   assert.equal(s.shortfalls[0].ingredient, 'Egg');
   assert.equal(s.shortfalls[0].shortfall, 2);
-  assert.equal(s.shortfalls[0].message, 'Egg: 4 pcs used but 2 pcs in stock. Please monitor it.');
+  assert.equal(s.shortfalls[0].message, 'Egg: 4 pcs requested, 2 pcs available; 2 pcs could not be deducted.');
   assert.equal(result.productsDetected, 1);
 });
 
