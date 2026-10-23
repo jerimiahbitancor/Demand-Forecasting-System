@@ -8,6 +8,7 @@ import {
 	packSizeHelp,
 	packUnitHelp,
 	packPriceHelp,
+	packScenarioGuide,
 	cupFieldNotNeededNote,
 } from "../../../utils/ingredientPurchase";
 import "./InventoryFormModal.css";
@@ -184,6 +185,14 @@ const InventoryFormModal = ({
               placeholder="e.g. 1"
             />
             <span className="form-hint">{packSizeHelp(formData.unit)}</span>
+            <div className="form-pack-guide">
+              <span className="form-pack-guide-title">Which pack should I record?</span>
+              {packScenarioGuide.map((scenario) => (
+                <span className="form-pack-guide-line" key={scenario.title}>
+                  <strong>{scenario.title}:</strong> {scenario.detail}
+                </span>
+              ))}
+            </div>
           </div>
           <div className="form-group">
             <label className="form-label">

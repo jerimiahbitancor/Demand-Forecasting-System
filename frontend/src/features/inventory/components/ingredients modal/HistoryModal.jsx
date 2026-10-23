@@ -125,6 +125,31 @@ const HistoryModal = ({ item, apiClient, onClose }) => {
                 {status.label}
               </span>
             </div>
+
+            {/* The demand a sale could not cover. A delivery never pays it
+                off, so it stays open until a stock count clears it. */}
+            {Number(item.open_shortfall) > 0 && (
+              <div
+                className="info-card-inline status-card-inline"
+                style={{
+                  backgroundColor: '#fef3c7',
+                  borderColor: '#f59e0b',
+                }}
+              >
+                <span className="info-card-label-inline" style={{ color: '#b45309' }}>
+                  <FaExclamationTriangle className="info-icon-inline" style={{ color: '#f59e0b' }} />
+                  Open Short
+                </span>
+                <br />
+                <span className="info-card-value-inline" style={{ color: '#b45309' }}>
+                  {formatStockQty(item.open_shortfall, item.unit)} {item.unit || 'kg'}
+                </span>
+                <br />
+                <span className="info-card-hint-inline">
+                  from {Number(item.open_shortfall_sales) === 1 ? '1 sale' : `${Number(item.open_shortfall_sales) || 0} sales`} — a stock count clears it
+                </span>
+              </div>
+            )}
           </div>
         </div>
 

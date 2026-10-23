@@ -3,12 +3,14 @@ import { FaSave, FaTimes } from "react-icons/fa";
 import InventoryModal from "../InventoryModal";
 import InfoTip from "../InfoTip";
 import { deriveUnitPrice, unitShortLabel } from "../../../../utils/recipeUnits";
+import { formatStockQty } from "../../../../utils/formatStockQty.js";
 import {
 	purchasePackSummary,
 	shouldShowCupField,
 	packSizeHelp,
 	packUnitHelp,
 	packPriceHelp,
+	packScenarioGuide,
 	cupFieldNotNeededNote,
 } from "../../../../utils/ingredientPurchase";
 import "./EditIngredientModal.css";
@@ -21,6 +23,8 @@ const EditIngredientModal = ({
 	categories,
 	units,
 	itemId,
+	openShortfall = 0,
+	openShortfallSales = 0,
 	apiClient,
 	onChange,
 	onSubmit,
@@ -147,6 +151,11 @@ const EditIngredientModal = ({
 						/>
 						{formErrors.quantity && <span className="form-error">{formErrors.quantity}</span>}
 						<span className="form-hint">
+							{openShortfall > 0
+								? `${formatStockQty(openShortfall, formData.unit)} ${formData.unit || 'pcs'} is still short from `
+									+ `${openShortfallSales === 1 ? '1 sale' : `${openShortfallSales} sales`}. `
+									+ 'A stock count clears it: set the number in the Current Stock column of the list.'
+								: 'Change it in the Current Stock column of the list (a stock count), or use Add Stock to receive new stock.'}
 						</span>
 					</div>
 
@@ -196,6 +205,14 @@ const EditIngredientModal = ({
 							placeholder="e.g. 1"
 						/>
 						<span className="form-hint">{packSizeHelp(formData.unit)}</span>
+						<div className="form-pack-guide">
+							<span className="form-pack-guide-title">Which pack should I record?</span>
+							{packScenarioGuide.map((scenario) => (
+								<span className="form-pack-guide-line" key={scenario.title}>
+									<strong>{scenario.title}:</strong> {scenario.detail}
+								</span>
+							))}
+						</div>
 					</div>
 
 					<div className="form-group">

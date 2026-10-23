@@ -27,9 +27,12 @@ export function stockMovementDetail(transaction = {}, stockUnit = '') {
   const parts = [];
 
   // Stock that could not be handed out: the demand that is still open.
+  // A delivery never pays it off (the delivery is stock on hand), so the line
+  // says how it is closed: a stock count.
   const shortfall = amount(transaction.shortfall_quantity);
   if (shortfall !== null && shortfall > 0) {
     parts.push(`Short ${formatStockQty(shortfall, unit)} ${unit}`.trim());
+    parts.push('a stock count clears it');
   }
 
   // A note the owner typed is worth keeping; the wording the database writes

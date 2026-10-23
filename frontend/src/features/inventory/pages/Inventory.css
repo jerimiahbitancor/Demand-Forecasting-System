@@ -1679,6 +1679,17 @@
   border-bottom-color: currentColor;
 }
 
+/* The demand a sale could not cover. It stays open until a stock count
+   records what is really on hand, so it is written under the stock number. */
+.inventory-table .inventory-stock-short {
+  margin-top: 0.15rem;
+  color: #b45309;
+  font-size: 0.7rem;
+  font-weight: 600;
+  line-height: 1.25;
+  white-space: normal;
+}
+
 /* The inline stock count. The input sits on its own line and the buttons sit
    UNDER it: side by side the three of them were wider than the column, so the
    buttons spilled into the next column and the input was squished. */

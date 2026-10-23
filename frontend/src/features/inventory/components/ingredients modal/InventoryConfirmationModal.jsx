@@ -23,10 +23,10 @@ const InventoryConfirmationModal = ({
   const title = isDelete
     ? "Delete Item"
     : isRestore
-      ? "Restore Item"
+      ? "Unarchive Item"
       : "Archive Item";
-  const action = isDelete ? "Delete" : isRestore ? "Restore" : "Archive";
-  const submittingAction = isRestore ? "Restoring" : `${action}ing`;
+  const action = isDelete ? "Delete" : isRestore ? "Unarchive" : "Archive";
+  const submittingAction = isRestore ? "Unarchiving" : `${action}ing`;
   const close = () => {
     if (!isSubmitting) onClose();
   };
@@ -88,7 +88,7 @@ const InventoryConfirmationModal = ({
             `${submittingAction}...`
           ) : (
             <>
-              {!isRestore && icon}
+              {icon}
               {action} Item
             </>
           )}
