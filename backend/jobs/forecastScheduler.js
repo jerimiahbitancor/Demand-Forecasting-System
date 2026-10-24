@@ -36,6 +36,11 @@ const { supabaseAdmin } = require('../config/supabase');
 const logger = require('../utils/logger');
 const { forecastSlotFor, forecastRanSince } = require('../utils/forecastSlot');
 
+// "scheduled daily forecast run" / "first forecast after training".
+const describeRun = (trigger, runType) => (trigger === 'post_training'
+  ? 'first forecast after training'
+  : `scheduled ${runType} forecast run`);
+
 const PH_TZ = 'Asia/Manila';
 const COLD_RETRY_WAIT_MS = 30 * 1000;
 const COLD_STATUSES = new Set([429, 502, 503, 504]);
@@ -148,6 +153,7 @@ async function runScheduledForecast({
     }
     const forecastedCount = (result?.results || []).filter((r) => r.status === 'forecasted').length;
     const skippedCount = (result?.results || []).filter((r) => r.status === 'skipped').length;
+    const failedCount = (result?.results || []).filter((r) => r.status === 'failed').length;
     // The forecast itself succeeded; a later notification failure must not
     // relabel it as failed.
     Object.assign(run, { status: 'succeeded', finishedAt: new Date().toISOString(), forecastedCount, skippedCount });
@@ -155,6 +161,7 @@ async function runScheduledForecast({
     console.log(
       `[forecastScheduler] ${label} forecast run completed — ${forecastedCount} product(s) forecasted` +
       (skippedCount ? `, ${skippedCount} skipped` : '') +
+      (failedCount ? `, ${failedCount} FAILED (see the ml-service log)` : '') +
       (result?.stale_days ? ` (data ${result.stale_days} day(s) stale)` : '') +
       '.'
     );
@@ -166,7 +173,8 @@ async function runScheduledForecast({
     await notifyAllUsers({
       type: 'success',
       title: `${label} forecast completed`,
-      message: `The scheduled ${runType} forecast run finished — ${forecastedCount} product(s) forecasted.`,
+      message: `The ${describeRun(trigger, runType)} finished — ${forecastedCount} product(s) forecasted.`
+        + (failedCount ? ` ${failedCount} product(s) could not be forecast.` : ''),
       metadata: { kind: 'forecast', status: 'completed', run_type: runType, horizon_days: horizonDays, scheduled: true, forecasted_count: forecastedCount },
     });
     return { status: 'succeeded', forecastedCount };
@@ -188,7 +196,7 @@ async function runScheduledForecast({
     await notifyAllUsers({
       type: 'error',
       title: `${label} forecast failed`,
-      message: `The scheduled ${runType} forecast run failed — ${(error && error.message) || 'check ml-service logs.'}`,
+      message: `The ${describeRun(trigger, runType)} failed — ${(error && error.message) || 'check ml-service logs.'}`,
       metadata: { kind: 'forecast', status: 'failed', run_type: runType, horizon_days: horizonDays, scheduled: true },
     });
     return { status: 'failed', error: run.error };

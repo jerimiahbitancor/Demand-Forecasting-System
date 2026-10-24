@@ -78,8 +78,10 @@ const rows = (...items) => items.map(([name, sold]) => ({
   'Item name': name, Category: 'Rice Meals', 'Items sold': String(sold), 'Items refunded': '0',
 }));
 
-test('processSalesData returns the upload summary: modifiers, sizes, new products, aliases, duplicates, shortfalls', async () => {
+test('processSalesData returns the upload summary: modifiers, sizes, new products, aliases, duplicates', async () => {
   seed();
+  // Enough eggs: a short ingredient now refuses the whole file (next test).
+  fake.tables.ingredients.find((i) => i.id === EGG).quantity = 10;
   const restore = quiet();
   let result;
   try {
@@ -106,12 +108,32 @@ test('processSalesData returns the upload summary: modifiers, sizes, new product
   assert.deepEqual(s.possibleDuplicates.map((d) => [d.newProduct.name, d.looksLike.name, d.reason]),
     [['Cheesy Spicy Hunggarian', 'Cheesy Spicy Hungarian', 'typo']]);
   assert.deepEqual(s.unmatchedNames, []);
-  // 5 plates of Porksilog, 1 of them NO EGG -> 4 eggs, only 2 in stock.
-  assert.equal(s.shortfalls.length, 1);
-  assert.equal(s.shortfalls[0].ingredient, 'Egg');
-  assert.equal(s.shortfalls[0].shortfall, 2);
-  assert.equal(s.shortfalls[0].message, 'Egg: 4 pcs requested, 2 pcs available; 2 pcs could not be deducted.');
+  // 5 plates of Porksilog, 1 of them NO EGG -> 4 eggs out of 10.
+  assert.deepEqual(s.shortfalls, []);
+  assert.equal(fake.tables.ingredients.find((i) => i.id === EGG).quantity, '6');
   assert.equal(result.productsDetected, 1);
+});
+
+test('a short ingredient refuses the file: the modifier rule is applied before the stock check', async () => {
+  seed(); // 2 eggs in stock
+  const restore = quiet();
+  let error = null;
+  try {
+    await uploadService.processSalesData(
+      rows(['Marinated Porksilog', 4], ['Marinated Porksilog NO EGG', 1]),
+      7, 72, 'item-sales-summary-2026-10-12-2026-10-12.csv'
+    );
+  } catch (e) {
+    error = e;
+  } finally {
+    restore();
+  }
+  assert.ok(error, 'refused');
+  assert.equal(error.code, 'INSUFFICIENT_STOCK');
+  // 5 plates, 1 of them NO EGG -> 4 eggs needed, not 5.
+  assert.deepEqual(error.shortfalls.map((x) => [x.name, x.required, x.available, x.shortfall]), [['Egg', '4', '2', '2']]);
+  assert.equal(fake.tables.daily_sales.length, 0);
+  assert.equal((fake.tables.daily_sales_modifiers || []).length, 0, 'modifier counts are not saved either');
 });
 
 test('products the route already created still count as new (route syncs first)', async () => {

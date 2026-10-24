@@ -237,6 +237,63 @@ test('a valid file still goes through: sales saved, day confirmed open, upload p
   }
 });
 
+// ---------------------------------------------------------------- A8 (migration 017)
+
+test('A8: not enough stock -> 422, nothing saved, upload failed, one "Unmet condition" notice (no generic one)', async () => {
+  const seedData = seedProducts();
+  seedData.ingredients = [{
+    id: 40, name: 'Rice', unit: 'Kilograms (kg)', quantity: 1, created_at: '2026-01-01T00:00:00Z',
+    base_unit: 'kg', unit_family: 'mass', stock_scale: 3, allow_fractional: true,
+  }];
+  seedData.product_ingredients = [{
+    product_id: 1, ingredient_id: 40, quantity_per_serving: 0.2, unit: 'Kilograms (kg)',
+    ingredients: {
+      name: 'Rice', unit: 'Kilograms (kg)', grams_per_cup: null, created_at: '2026-01-01T00:00:00Z',
+      base_unit: 'kg', unit_family: 'mass', stock_scale: 3, allow_fractional: true,
+    },
+  }];
+  seedData.inventory_transactions = [];
+  seedData.notifications = [];
+  fake.reset(seedData);
+
+  const server = await startServer();
+  const restore = quiet();
+  try {
+    // 5 sold - 1 refunded = 4 plates x 0.2 kg = 0.8 kg: fits in 1 kg.
+    // 10 plates x 0.2 kg = 2 kg: does not.
+    const res = await request(server, 'POST', '/api/upload', {
+      filename: 'item-sales-summary-2026-10-12-2026-10-12.csv',
+      csv: csv('Adobo,Rice Meals,10,1200,0,0,1200'),
+    });
+    await settle();
+    assert.equal(res.status, 422, JSON.stringify(res.body));
+    assert.equal(res.body.insufficientStock, true);
+    assert.equal(res.body.error, 'Not enough stock');
+    assert.deepEqual(res.body.shortfalls, [{
+      ingredientId: 40, name: 'Rice', unit: 'Kilograms (kg)', required: '2', available: '1', shortfall: '1',
+    }]);
+    assert.match(res.body.message, /was not saved/);
+
+    assert.equal(fake.tables.daily_sales.filter((r) => r.upload_id === res.body.uploadId).length, 0, 'no sales saved');
+    assert.equal(fake.tables.ingredients[0].quantity, 1, 'stock untouched');
+    const uploadRow = fake.tables.uploads.find((u) => u.id === res.body.uploadId);
+    assert.equal(uploadRow.status, 'failed', 'a failed row never blocks re-uploading the same file later');
+    assert.equal((fake.tables.business_days || []).length, 0, 'the day is NOT confirmed open');
+
+    const notes = fake.tables.notifications;
+    assert.equal(notes.length, 1, JSON.stringify(notes.map((n) => n.title)));
+    assert.equal(notes[0].title, 'Unmet condition: not enough stock (1 ingredient)');
+    assert.equal(notes[0].type, 'error');
+    assert.equal(notes[0].link, '/ingredient-management');
+    assert.equal(notes[0].metadata.kind, 'upload_blocked_stock');
+    assert.equal(notes[0].metadata.key, `upload_blocked_stock:${res.body.uploadId}`);
+    assert.match(notes[0].message, /Rice: needs 2 kg, 1 kg in stock \(1 kg short\)\./);
+  } finally {
+    restore();
+    server.close();
+  }
+});
+
 // ---------------------------------------------------------------- A7
 
 test('A7: DELETE /api/upload/:id returns 403 and deletes nothing', async () => {

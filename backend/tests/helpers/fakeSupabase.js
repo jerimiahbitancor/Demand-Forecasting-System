@@ -177,6 +177,77 @@ function createFakeSupabase(seed = {}, options = {}) {
     return b;
   }
 
+  // Mirrors migrations/017_sales_upload_requires_stock.sql apply_sales_upload():
+  // check EVERY ingredient first; if any is short, write nothing and return
+  // { ok: false, shortfalls }. Otherwise insert daily_sales (unique on
+  // product_id + sale_date -> 23505) and deduct each ingredient through the
+  // test's own deduct_ingredient_stock handler. All or nothing: a failure part
+  // way restores the tables, like a rolled-back transaction.
+  // Amounts are compared with plain Number here; the real function uses
+  // numeric(18,6). Tests that need exact decimals assert on the deduct
+  // handler, which keeps its own Decimal maths.
+  function applySalesUpload(args, tbls) {
+    const sales = args.p_daily_sales || [];
+    const deductions = args.p_deductions || [];
+    const ingredients = tbls.ingredients || [];
+    const shortfalls = [];
+    for (const d of deductions) {
+      const row = ingredients.find((i) => String(i.id) === String(d.ingredient_id));
+      if (!row) return { data: null, error: { code: 'P0001', message: `apply_sales_upload: ingredient ${d.ingredient_id} does not exist` } };
+      const available = Math.max(0, Number(row.quantity || 0));
+      const required = Number(d.deduction);
+      if (required > available + 1e-9) {
+        shortfalls.push({
+          ingredient_id: row.id,
+          name: row.name,
+          unit: row.unit,
+          required: String(d.deduction),
+          available: String(available),
+          shortfall: String(+(required - available).toFixed(6)),
+        });
+      }
+    }
+    if (shortfalls.length) return { data: { ok: false, shortfalls }, error: null };
+
+    const snapshot = JSON.parse(JSON.stringify(tbls));
+    const restore = () => {
+      for (const key of Object.keys(tbls)) delete tbls[key];
+      Object.assign(tbls, snapshot);
+    };
+    const existing = rowsOf('daily_sales');
+    for (const s of sales) {
+      const clash = existing.some((r) => String(r.product_id) === String(s.product_id) && day(r.sale_date) === day(s.sale_date));
+      if (clash) {
+        restore();
+        return {
+          data: null,
+          error: { code: '23505', message: 'duplicate key value violates unique constraint "daily_sales_product_id_sale_date_key"' },
+        };
+      }
+      existing.push(assignId('daily_sales', { ...s, upload_id: args.p_upload_id }));
+    }
+    writes.push({ op: 'insert', table: 'daily_sales', rows: sales.map((s) => ({ ...s, upload_id: args.p_upload_id })) });
+
+    const results = [];
+    const deduct = rpcHandlers.deduct_ingredient_stock;
+    for (const d of [...deductions].sort((a, b) => Number(a.ingredient_id) - Number(b.ingredient_id))) {
+      if (!deduct) { restore(); return { data: null, error: { message: 'no fake rpc deduct_ingredient_stock' } }; }
+      const out = deduct({
+        p_ingredient_id: d.ingredient_id,
+        p_deduction: d.deduction,
+        p_reference_type: 'upload',
+        p_reference_id: args.p_upload_id,
+        p_updated_by: args.p_updated_by,
+        p_notes: d.notes ?? null,
+        p_requested_exact: d.requested_exact ?? null,
+      }, tbls);
+      if (out.error) { restore(); return out; }
+      const r = Array.isArray(out.data) ? out.data[0] : out.data;
+      results.push({ ingredient_id: d.ingredient_id, ...r });
+    }
+    return { data: { ok: true, sales_rows: sales.length, deductions: results }, error: null };
+  }
+
   return {
     tables,
     writes,
@@ -191,12 +262,19 @@ function createFakeSupabase(seed = {}, options = {}) {
       rpcCalls.length = 0;
       options.rejectInsert = newOptions.rejectInsert || (() => false);
       options.missingTables = newOptions.missingTables || [];
+      options.missingFunctions = newOptions.missingFunctions || [];
     },
     from: (table) => builder(table),
     rpc: async (name, args) => {
       rpcCalls.push({ name, args });
-      const handler = rpcHandlers[name];
-      return handler ? handler(args, tables) : { data: null, error: { message: `no fake rpc ${name}` } };
+      const handler = rpcHandlers[name]
+        || (name === 'apply_sales_upload' && !options.missingFunctions?.includes(name) ? applySalesUpload : null);
+      if (handler) return handler(args, tables);
+      // PostgREST's real answer for a function that does not exist yet.
+      if (options.missingFunctions && options.missingFunctions.includes(name)) {
+        return { data: null, error: { code: 'PGRST202', message: `Could not find the function public.${name} in the schema cache` } };
+      }
+      return { data: null, error: { message: `no fake rpc ${name}` } };
     },
     writesTo(table) { return writes.filter((w) => w.table === table); },
   };

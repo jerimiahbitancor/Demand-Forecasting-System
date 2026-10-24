@@ -11,7 +11,10 @@ const menuService = require('../services/menuService');
 const mappingService = require('../services/mappingService');
 const businessDayService = require('../services/businessDayService');
 const { logAction } = require('../services/auditService');
-const { createNotification, queueStockRefresh } = require('../services/notificationService');
+const { createNotification, createNotificationOnce, queueStockRefresh } = require('../services/notificationService');
+const { isInsufficientStockError, buildInsufficientStockNotice } = require('../utils/insufficientStock');
+const { parseFilenames, summarizeUploadStatuses } = require('../utils/uploadRecovery');
+const { fetchAllRows } = require('../utils/fetchAllRows');
 
 const actorOf = (req) => req.user?.name || req.user?.email || null;
 
@@ -26,6 +29,10 @@ const notifyUploadOutcome = (req, res, next) => {
 
   res.on('finish', () => {
     if (req.method !== 'POST' || res.statusCode < 400) return;
+    // A refusal that already sent its own, more specific notification
+    // (e.g. "Unmet condition: not enough stock") must not get a second,
+    // generic "Upload failed" one.
+    if (res.locals.failureNoticeSent) return;
     const userId = req.user?.user_id || req.user?.id || null;
     if (!userId) return;
 
@@ -369,6 +376,37 @@ router.post(
         }
       }
 
+      // Unmet condition: the file needs more of an ingredient than is in
+      // stock, so NOTHING was saved (migration 017). 422, not 409: the
+      // upload screen reads 409 as "already uploaded, harmless", and this is
+      // neither. Not retried by the client either (only 429/5xx are).
+      if (isInsufficientStockError(error)) {
+        const filename = req.file?.originalname || null;
+        const notice = buildInsufficientStockNotice({ shortfalls: error.shortfalls, filename, uploadId });
+        res.locals.failureNoticeSent = true;
+        try {
+          const userId = req.user?.user_id || req.user?.id || null;
+          const numericId = await uploadService.getNumericUserId(userId);
+          if (numericId) await createNotificationOnce({ userId: numericId, ...notice });
+        } catch (noticeError) {
+          console.error('Could not send the not-enough-stock notification:', noticeError);
+        }
+        logAction(
+          'upload_sales_blocked_stock',
+          `Sales upload "${filename || 'file'}" was not saved: not enough stock for `
+            + `${error.shortfalls.map((s) => s.name).join(', ')}`,
+          actorOf(req)
+        );
+        return res.status(422).json({
+          success: false,
+          error: 'Not enough stock',
+          insufficientStock: true,
+          message: notice.message,
+          uploadId,
+          shortfalls: error.shortfalls,
+        });
+      }
+
       if (error.message && error.message.includes('Duplicate upload')) {
         return res.status(409).json({
           success: false,
@@ -439,6 +477,39 @@ router.post(
     }
   }
 );
+
+// POST /api/upload/status-by-filename  { filenames: ['a.csv', ...] }
+// After a page refresh in the middle of a bulk upload, the screen asks which
+// of its files the server actually saved (a refresh kills the browser's
+// requests, not the server's work). One row per filename, newest upload
+// wins: saved / processing / failed (with the reason) / not_found.
+// Only this user's uploads. POST, not GET: up to 500 names do not fit in a URL.
+router.post('/status-by-filename', authenticate, async (req, res) => {
+  try {
+    const parsed = parseFilenames(req.body);
+    if (!parsed.ok) {
+      return res.status(400).json({ success: false, error: parsed.error });
+    }
+    const userId = req.user?.user_id || req.user?.id || null;
+    const numericId = await uploadService.getNumericUserId(userId);
+    if (!numericId) {
+      return res.status(400).json({ success: false, error: 'User not found in system' });
+    }
+    const { supabaseAdmin } = require('../config/supabase');
+    const { data, error } = await fetchAllRows(() => supabaseAdmin
+      .from('uploads')
+      .select('id, filename, status, upload_date, error_message')
+      .eq('user_id', numericId)
+      .in('filename', parsed.filenames)
+      .order('upload_date', { ascending: false })
+      .order('id', { ascending: false }));
+    if (error) throw error;
+    return res.json({ success: true, data: summarizeUploadStatuses(parsed.filenames, data || []) });
+  } catch (error) {
+    console.error('Error checking upload status by filename:', error);
+    return res.status(500).json({ success: false, error: 'Failed to check upload status', details: error.message });
+  }
+});
 
 // GET /api/upload - Get all uploads
 router.get('/', authenticate, async (req, res) => {

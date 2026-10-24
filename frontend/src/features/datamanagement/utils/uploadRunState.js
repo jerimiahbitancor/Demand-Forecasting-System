@@ -47,8 +47,14 @@ export const peekStoredUploadStatus = (type) => readAll()[type] || null;
 
 // Mount-time-only recovery. A page load destroys any request that was in
 // flight, so a persisted 'loading' can't be real by the time a FRESH page
-// reads it — trusting it would disable the upload button forever. So it is
-// corrected to 'error'.
+// reads it — trusting it would disable the upload button forever.
+//
+// For SALES it becomes 'interrupted', not 'error' (Oct 24 2026): a refresh
+// kills the browser's requests but not the server's work, so some of those
+// files were very likely saved. "Upload failed" was a lie for them. The
+// screen then asks the server which files made it
+// (POST /api/upload/status-by-filename, see describeRecovery below).
+// The menu flow has no such check and keeps 'error'.
 //
 // BUT only when no upload is alive in this page. A component rebuilt while
 // its upload is still running is not a reload: the run is real, and
@@ -62,7 +68,7 @@ export const getStoredUploadStatus = (type) => {
     const status = stored[type] || null;
 
     if (status && status.status === 'loading' && !isRunAlive(type)) {
-      const corrected = { ...status, status: 'error' };
+      const corrected = { ...status, status: type === 'sales' ? 'interrupted' : 'error' };
       stored[type] = corrected;
       try {
         sessionStorage.setItem(BULK_UPLOAD_STATUS_KEY, JSON.stringify(stored));
@@ -132,3 +138,48 @@ export const initialRunView = (type) => (
     ? unpackRun(peekStoredUploadStatus(type)?.run)
     : unpackRun(null)
 );
+
+// ---------------------------------------------------------------------------
+// After a refresh: what happened to each file of the interrupted run.
+// ---------------------------------------------------------------------------
+// statuses: the server's answer, [{ filename, state, reason }] with state
+// 'saved' | 'processing' | 'failed' | 'not_found' (backend
+// utils/uploadRecovery.js). Matched to the stored file list by name.
+//
+// Returns {
+//   byIndex: Map<index, { state, label, title }>,
+//   counts: { saved, processing, notSaved },
+//   message: one sentence for the banner,
+// }
+// "Not saved" covers both 'failed' and 'not_found': either way the owner has
+// to select that file again (the browser cannot keep a File across a
+// refresh, for security reasons). A failed file keeps its reason as a
+// tooltip, e.g. "Not enough stock for 1 ingredient(s): Rice".
+export const describeRecovery = (files = [], statuses = []) => {
+  const byName = new Map((statuses || []).map((s) => [s.filename, s]));
+  const byIndex = new Map();
+  const counts = { saved: 0, processing: 0, notSaved: 0 };
+  files.forEach((file, index) => {
+    const s = byName.get(file && file.name);
+    const state = s ? s.state : 'not_found';
+    if (state === 'saved') {
+      counts.saved += 1;
+      byIndex.set(index, { state, label: '✓ Saved', title: 'The server saved this file before the refresh.' });
+    } else if (state === 'processing') {
+      counts.processing += 1;
+      byIndex.set(index, { state, label: '… Still processing', title: 'The server is still working on this file. Check again in a moment.' });
+    } else {
+      counts.notSaved += 1;
+      byIndex.set(index, {
+        state: 'not_saved',
+        label: 'Not saved — select it again',
+        title: (s && s.reason) || 'The server never received this file.',
+      });
+    }
+  });
+  const total = files.length;
+  const parts = [`${counts.saved} of ${total} file(s) were saved.`];
+  if (counts.processing) parts.push(`${counts.processing} still processing — check again in a moment.`);
+  if (counts.notSaved) parts.push(`Select the ${counts.notSaved} file(s) marked "Not saved" again.`);
+  return { byIndex, counts, message: `Upload interrupted by a page refresh. ${parts.join(' ')}` };
+};

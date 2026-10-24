@@ -113,6 +113,22 @@ router.post('/train', authenticate, async (req, res) => {
       metadata: { kind: 'training', status: 'completed' },
     });
 
+    // Run the first forecast right away instead of waiting for tomorrow's
+    // 9:00 AM job, so the dashboard has today's forecast as soon as the
+    // model exists. Same horizon as today's scheduled slot (weekly on
+    // Monday, daily otherwise). Not awaited: the training response must not
+    // wait for it, and runScheduledForecast() never throws (it records and
+    // notifies its own success or failure, and skips if a run is already
+    // going). Required lazily so this route file stays cheap to load.
+    try {
+      const { runScheduledForecast, forecastSlotFor } = require('../jobs/forecastScheduler');
+      const slot = forecastSlotFor(new Date());
+      runScheduledForecast({ horizonDays: slot.horizonDays, runType: slot.runType, trigger: 'post_training' })
+        .catch((forecastError) => console.error('Post-training forecast failed:', forecastError));
+    } catch (scheduleError) {
+      console.error('Could not start the post-training forecast:', scheduleError);
+    }
+
     res.json({ success: true, data: result });
   } catch (error) {
     await createNotification({
@@ -151,13 +167,22 @@ router.post('/forecast', authenticate, async (req, res) => {
     // New forecast -> new ingredient needs: refresh the stock alerts.
     queueStockRefresh('forecast');
 
+    // Products that threw inside the ML service are reported as "failed"
+    // there (one bad product no longer sinks the whole run). Say so here
+    // instead of announcing a clean success.
+    const failedProducts = (result?.results || []).filter((r) => r.status === 'failed');
+    const failedNote = failedProducts.length
+      ? ` ${failedProducts.length} product(s) could not be forecast: ${failedProducts[0].reason}`
+      : '';
     await createNotification({
       userId: userIdOf(req),
-      type: 'success',
-      title: 'Forecast report is ready',
-      message: `Forecast${horizonDays === 7 ? ' for the next week' : ' for today'} has been generated and saved. Check the Forecasts page to review it.`,
+      type: failedProducts.length ? 'warning' : 'success',
+      title: failedProducts.length ? 'Forecast ready, with some products missing' : 'Forecast report is ready',
+      message: `Forecast${horizonDays === 7 ? ' for the next week' : ' for today'} has been generated and saved. Check the Forecasts page to review it.${failedNote}`,
       link: '/analytics',
-      metadata: { kind: 'forecast', status: 'ready', horizon_days: horizonDays || 1 },
+      metadata: {
+        kind: 'forecast', status: 'ready', horizon_days: horizonDays || 1, failed_count: failedProducts.length,
+      },
     });
 
     res.json({ success: true, data: result });

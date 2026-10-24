@@ -12,10 +12,12 @@ Plus /health for Render's health check and for Express to confirm this
 service is up before showing "Training in progress" style states.
 """
 import logging
+import traceback
 from datetime import date
 from functools import wraps
 import pandas as pd
 from flask import Flask, request, jsonify
+from werkzeug.exceptions import HTTPException
 
 from config import ML_SERVICE_SHARED_SECRET, MIN_TRAINING_OBSERVATIONS
 from services.data_loader import (
@@ -43,6 +45,40 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("ml-service")
 
 app = Flask(__name__)
+
+
+def _error_reason(exc: Exception) -> str:
+    """'KeyError: 'price'' style text, trimmed. Only Express (behind the
+    shared secret) ever sees it."""
+    text = f"{type(exc).__name__}: {exc}".strip()
+    return text[:500]
+
+
+@app.errorhandler(Exception)
+def handle_unexpected_error(exc):
+    """
+    Any exception a route did not catch. Without this handler Flask answers
+    with its generic HTML "500 Internal Server Error" page, which tells
+    Express (and the owner) nothing: the real cause was only in the Render
+    log. Now the full traceback is still logged, AND the response is JSON
+    with the exception type and message, which Express already shows as the
+    error reason (backend/services/mlService.js reads `reason`).
+
+    HTTP errors Flask raises on purpose (404, 405, ...) pass through
+    unchanged.
+    """
+    if isinstance(exc, HTTPException):
+        return exc
+    logger.error(
+        "Unhandled error on %s %s:\n%s",
+        request.method, request.path, traceback.format_exc(),
+    )
+    return jsonify({
+        "status": "failed",
+        "reason": _error_reason(exc),
+        "error_type": type(exc).__name__,
+        "path": request.path,
+    }), 500
 
 
 def require_shared_secret(f):
@@ -376,6 +412,30 @@ def forecast():
         except ModelNotReadyError as e:
             logger.warning(f"Forecast skipped for product {product_id}: {e}")
             results.append({"product_id": product_id, "status": "skipped", "reason": str(e)})
+        except Exception as e:  # noqa: BLE001 - one product must not sink the run
+            # Anything else (a bad recipe row, a write error, a NaN) used to
+            # escape the loop and turn the WHOLE run into an HTML 500 with no
+            # forecasts written. Now that product is reported as failed, with
+            # the reason and a logged traceback, and the others continue.
+            logger.error(
+                "Forecast failed for product %s:\n%s", product_id, traceback.format_exc(),
+            )
+            results.append({
+                "product_id": product_id, "status": "failed", "reason": _error_reason(e),
+            })
+
+    # Every product that was attempted failed: that is a systemic problem
+    # (database, schema, model), not one bad product. Report it as a failed
+    # run, with the first reason, instead of a "successful" run that wrote
+    # nothing. No forecast_runs row is written for it.
+    attempted = [r for r in results if r["status"] in ("forecasted", "failed")]
+    failed = [r for r in results if r["status"] == "failed"]
+    if attempted and len(failed) == len(attempted):
+        return jsonify({
+            "status": "failed",
+            "reason": f"every product failed to forecast; first error: {failed[0]['reason']}",
+            "results": results,
+        }), 500
 
     # POS modifiers ("NO EGG"): leave out the share of plates that skip an
     # ingredient, measured over the store's last 28 confirmed-open days.
@@ -413,6 +473,7 @@ def forecast():
 
     return jsonify({
         "results": results,
+        "failed_count": len(failed),
         "ingredient_demand": ingredient_demand_df.to_dict(orient="records"),
         "last_confirmed_date": last_confirmed_date,
         "stale_days": stale_days,

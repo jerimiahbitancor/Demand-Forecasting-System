@@ -437,6 +437,8 @@ const SCENARIOS = [
   ['span too short', 'uploaded-insufficient', () => build({ days: 100, products: 2 })],
   ['ready to train', 'ready-to-train', () => build({ days: 400, products: 3, gapEvery: 7, closeGaps: true })],
   ['no model, training in flight', 'training-in-progress', () => build({ days: 50, products: 2 }), true],
+  // Reference says training-in-progress; the new rule says fully-operational
+  // with a notice (MODEL_WITHOUT_FORECAST below).
   ['model, no forecasts yet', 'training-in-progress', () => { const t = build({ days: 50 }); t.model_metrics.push(model()); return t; }],
   ['stale forecast run', 'data-needs-attention', () => {
     const t = withForecast(build({ days: 50 }));
@@ -515,13 +517,20 @@ function checkTrained(now, old, label) {
   assert.equal(now.mapping.hasUnmapped, now.mapping.unmappedCount > 0, `${label}: hasUnmapped matches the count`);
   if (old.state === 'data-needs-attention') {
     // Same attention payload as before (stale fields per Task 2.10).
-    const strip = (a) => { const c = { ...a }; for (const f of STALE_FIELDS) delete c[f]; return c; };
+    // noUpcomingForecast / forecastInFlight were added Oct 24 2026 (the
+    // reference has no such fields); they are asserted below instead.
+    const strip = (a) => {
+      const c = { ...a };
+      for (const f of [...STALE_FIELDS, 'noUpcomingForecast', 'forecastInFlight']) delete c[f];
+      return c;
+    };
     assert.deepEqual(strip(now.attention), strip(old.attention), `${label}: attention unchanged`);
     checkStale(now, old, label);
   } else {
     // The baseline found nothing wrong: every flag must still be off.
     for (const f of ATTENTION_FLAGS) assert.ok(!now.attention[f], `${label}: ${f} stays off`);
   }
+  assert.equal(now.attention.noUpcomingForecast, false, `${label}: forecasts exist, so no forecast notice`);
   if (old.state === 'forecasts-ready-recipes-pending') {
     assert.equal(now.mapping.unmappedCount, old.mapping.unmappedCount, `${label}: unmappedCount`);
     assert.equal(now.mapping.activeCount, old.mapping.activeCount, `${label}: activeCount`);
@@ -530,6 +539,21 @@ function checkTrained(now, old, label) {
   if (old.state === 'fully-operational') {
     assert.equal(now.mapping.hasUnmapped, false, `${label}: every active product has a recipe`);
   }
+}
+
+// DELIBERATE CHANGE (owner-approved Oct 24 2026): a trained model with no
+// upcoming forecast (the first forecast has not run yet, or it failed) used
+// to show 'training-in-progress', so after a successful training the owner
+// could be stuck on "Training in progress". It is now the full dashboard
+// with attention.noUpcomingForecast = true (a notice with Generate Forecast).
+const MODEL_WITHOUT_FORECAST = new Set(['model, no forecasts yet']);
+function checkModelWithoutForecast(now, old, label) {
+  assert.equal(old.state, 'training-in-progress', `${label}: the reference still says training`);
+  assert.equal(now.state, 'fully-operational', `${label}: a trained model shows the full dashboard`);
+  assert.deepEqual(comparable({ stats: now.stats, progress: now.progress }), comparable({ stats: old.stats, progress: old.progress }), `${label}: stats/progress`);
+  assert.equal(now.attention.noUpcomingForecast, true, `${label}: the missing forecast is a notice`);
+  assert.equal(now.attention.forecastInFlight, false, label);
+  assert.ok(now.mapping && typeof now.mapping === 'object', `${label}: mapping is always sent`);
 }
 
 // Compare a new result with the baseline's, by the right rule for its state.
@@ -566,8 +590,14 @@ for (const [name, expected, make, inFlight = false] of SCENARIOS) {
       const warm = await run(() => newSvc.getDashboardState(userId));
 
       assert.equal(old.result.state, expected, `baseline state for user ${userId}`);
-      checkAgainstBaseline(cold.result, old.result, `first check, user ${userId}`);
-      checkAgainstBaseline(warm.result, old.result, `cached check, user ${userId}`);
+      if (MODEL_WITHOUT_FORECAST.has(name)) {
+        // DELIBERATE CHANGE (Oct 24 2026): see checkModelWithoutForecast.
+        checkModelWithoutForecast(cold.result, old.result, `first check, user ${userId}`);
+        checkModelWithoutForecast(warm.result, old.result, `cached check, user ${userId}`);
+      } else {
+        checkAgainstBaseline(cold.result, old.result, `first check, user ${userId}`);
+        checkAgainstBaseline(warm.result, old.result, `cached check, user ${userId}`);
+      }
       assert.ok(warm.calls <= cold.calls, 'a cached check never costs more than a cold one');
     }
     trainingInFlight = false;

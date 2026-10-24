@@ -1,7 +1,8 @@
 // components/DashboardNotices.jsx
 //
-// Notice cards shown ABOVE the normal dashboard once a model is trained and
-// forecasts exist (owner decision, Oct 14 2026). Problems no longer replace
+// Notice cards shown ABOVE the normal dashboard once a model is trained
+// (owner decision, Oct 14 2026; since Oct 24 2026 also before the first
+// forecast exists, see the "no forecast yet" notice). Problems no longer replace
 // the dashboard with another screen; each one is a card here, built only
 // from flags the backend actually found true (getDashboardState() in
 // backend/services/uploadService.js returns `attention` and `mapping`).
@@ -18,7 +19,7 @@ import { useState } from "react";
 import axios from "axios";
 import toast from "react-hot-toast";
 import { useNavigate } from "react-router-dom";
-import { FaArrowRight, FaDatabase, FaRedo, FaUpload, FaClipboardList } from "react-icons/fa";
+import { FaArrowRight, FaDatabase, FaRedo, FaUpload, FaClipboardList, FaChartLine } from "react-icons/fa";
 import { RiErrorWarningLine } from "react-icons/ri";
 import Swal from "../../../utils/swal";
 import { lowAccuracyNotice } from "../../../utils/accuracyText.js";
@@ -44,6 +45,7 @@ const VISIBLE_NOTICES = 3;
 const DashboardNotices = ({ attention, mapping, onRefreshState }) => {
   const navigate = useNavigate();
   const [isRetraining, setIsRetraining] = useState(false);
+  const [isForecasting, setIsForecasting] = useState(false);
   const [showAll, setShowAll] = useState(false);
 
   // Retraining is only offered on the "retraining due" card. It is the one
@@ -78,7 +80,50 @@ const DashboardNotices = ({ attention, mapping, onRefreshState }) => {
     }
   };
 
+  // Same request as Analytics' "Generate Forecast" (a 7-day refresh with
+  // the current model; it never retrains).
+  const handleGenerateForecast = async () => {
+    setIsForecasting(true);
+    const toastId = toast.loading("Generating forecast… (the first run after a quiet period can take about a minute)");
+    try {
+      const response = await axios.post(`${API_URL}/ml/forecast`, { horizonDays: 7 }, {
+        headers: { Authorization: `Bearer ${getAuthToken()}` },
+      });
+      const results = response.data?.data?.results || [];
+      const done = results.filter((r) => r.status === "forecasted").length;
+      const failed = results.filter((r) => r.status === "failed").length;
+      const text = `Forecast generated${done ? ` for ${plural(done, "product")}` : ""}.`
+        + (failed ? ` ${plural(failed, "product")} could not be forecast; see Notifications.` : "");
+      if (failed) toast(text, { id: toastId, icon: "⚠️" });
+      else toast.success(text, { id: toastId });
+      onRefreshState?.();
+    } catch (err) {
+      toast.error(err.response?.data?.error || "Failed to generate forecast", { id: toastId });
+    } finally {
+      setIsForecasting(false);
+    }
+  };
+
   const notices = [];
+
+  // A trained model with no forecast for today onwards: the first forecast
+  // has not run yet, is running now, or failed. Shown first: without a
+  // forecast the rest of the dashboard has nothing to compare against.
+  if (attention?.noUpcomingForecast) {
+    const running = attention.forecastInFlight || isForecasting;
+    notices.push({
+      key: "no-forecast",
+      tone: "danger",
+      icon: <FaChartLine />,
+      title: running ? "Forecast is being generated" : "No forecast yet",
+      text: running
+        ? "The model is trained and today's forecast is running. This page updates when it is ready."
+        : "The model is trained, but there is no forecast for today yet (it has not run, or the last run failed). Generate one now.",
+      actionLabel: running ? "Generating…" : "Generate forecast",
+      onAction: handleGenerateForecast,
+      disabled: running,
+    });
+  }
 
   if (attention?.isStale) {
     // staleDays counts OPERATING days with no upload (backend

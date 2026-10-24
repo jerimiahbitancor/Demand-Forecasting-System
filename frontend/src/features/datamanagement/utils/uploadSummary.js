@@ -103,6 +103,28 @@ export function collectCellErrors(fileName, responseData) {
     .map((e) => ({ file: fileName, row: e.row ?? null, column: e.column ?? null, message: String(e.message) }));
 }
 
+/**
+ * The ingredients that blocked a file, from a 422 "Not enough stock"
+ * response ({ insufficientStock: true, shortfalls: [...] }), tagged with the
+ * file name. One row per ingredient. Anything else gives [].
+ * (Nothing from such a file was saved: see migration 017.)
+ */
+export function collectStockRefusals(fileName, responseData) {
+  if (!responseData || responseData.insufficientStock !== true) return [];
+  const items = Array.isArray(responseData.shortfalls) ? responseData.shortfalls : [];
+  return items
+    .filter((s) => s && typeof s === 'object')
+    .map((s) => ({
+      file: fileName,
+      ingredientId: s.ingredientId ?? null,
+      ingredient: String(s.name || 'Ingredient'),
+      unit: s.unit || null,
+      required: s.required ?? null,
+      available: s.available ?? null,
+      shortfall: s.shortfall ?? null,
+    }));
+}
+
 // "NO EGG 3, NO RICE 2"
 export function formatPlates(plates = {}) {
   return Object.entries(plates)

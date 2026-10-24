@@ -6,7 +6,7 @@
 //   cd frontend && node tests/uploadSummary.test.mjs
 
 const {
-  mergeUploadSummaries, hasSummaryContent, collectCellErrors, formatPlates, emptySummary,
+  mergeUploadSummaries, hasSummaryContent, collectCellErrors, collectStockRefusals, formatPlates, emptySummary,
 } = await import('../src/features/datamanagement/utils/uploadSummary.js');
 
 const failures = [];
@@ -75,6 +75,22 @@ check('per-cell errors: file, row, column, message', same(cells, [
 ]), JSON.stringify(cells));
 check('no errors array -> []', same(collectCellErrors('x.csv', { error: 'Duplicate upload' }), []) && same(collectCellErrors('x.csv', undefined), []));
 check('formatPlates', formatPlates({ 'NO RICE': 1, 'NO EGG': 5 }) === 'NO EGG 5, NO RICE 1');
+
+// 422 "Not enough stock" (migration 017): one row per short ingredient.
+const refusals = collectStockRefusals('day-2.csv', {
+  success: false,
+  insufficientStock: true,
+  shortfalls: [
+    { ingredientId: 40, name: 'Rice', unit: 'Kilograms (kg)', required: '2', available: '1', shortfall: '1' },
+    null,
+  ],
+});
+check('stock refusals: file, ingredient, amounts as sent', same(refusals, [
+  { file: 'day-2.csv', ingredientId: 40, ingredient: 'Rice', unit: 'Kilograms (kg)', required: '2', available: '1', shortfall: '1' },
+]), JSON.stringify(refusals));
+check('stock refusals: only for an insufficientStock response',
+  same(collectStockRefusals('x.csv', { duplicate: true, shortfalls: [{ name: 'Rice' }] }), [])
+  && same(collectStockRefusals('x.csv', undefined), []));
 
 console.log();
 if (failures.length) {
