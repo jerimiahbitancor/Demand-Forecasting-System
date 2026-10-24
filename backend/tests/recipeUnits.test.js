@@ -5,7 +5,6 @@ const {
   UnitConversionError,
   convertRecipeQuantity,
   inventoryUnitMetadata,
-  setIngredientUnitConversions,
   unitService,
 } = require('../utils/recipeUnits');
 
@@ -30,29 +29,9 @@ test('mass and volume conversions are exact Decimal values', () => {
   assert.ok(unitService.resolve('1', 'L', liquid).baseAmount.eq('1'));
   assert.ok(unitService.resolve('500', 'mL', liquid).baseAmount.eq('0.5'));
   assert.ok(unitService.resolve('1', 'tsp', liquid).baseAmount.eq('0.005'));
-  assert.ok(unitService.resolve('1', 'cup', liquid).baseAmount.eq('0.24'));
 });
 
-test('per-ingredient house measures override generic volume conversion', () => {
-  setIngredientUnitConversions([{
-    ingredient_id: 3,
-    from_unit: 'tbsp',
-    to_unit: 'g',
-    factor: '12',
-  }]);
-  const sugar = {
-    id: 3,
-    name: 'Sugar',
-    unit: 'Kilograms (kg)',
-    base_unit: 'kg',
-    unit_family: 'mass',
-    density_g_per_ml: '0.83',
-  };
-  assert.ok(unitService.resolve('1', 'tbsp', sugar).baseAmount.eq('0.012'));
-  setIngredientUnitConversions([]);
-});
-
-test('mass and volume cannot cross without explicit ingredient density', () => {
+test('unsupported Cups and cross-family conversions are rejected', () => {
   const flour = {
     id: 4,
     name: 'Flour',
@@ -61,72 +40,36 @@ test('mass and volume cannot cross without explicit ingredient density', () => {
     unit_family: 'mass',
   };
   assert.throws(() => unitService.resolve('1', 'cup', flour), UnitConversionError);
-  assert.ok(unitService.resolve('100', 'mL', {
-    ...flour,
-    density_g_per_ml: '0.85',
-    base_unit: 'g',
-  }).baseAmount.eq('85'));
-  assert.ok(convertRecipeQuantity('1', 'cup', 'g', { gramsPerCup: '120' }).eq('120'));
+  assert.throws(() => convertRecipeQuantity('240', 'mL', 'g'), UnitConversionError);
 });
 
-test('pack-to-piece conversion requires positive pack_size', () => {
+test('unsupported units are rejected and count conversion is identity-only', () => {
   const egg = {
     id: 5,
     name: 'Egg',
     unit: 'Pieces (pcs)',
     base_unit: 'pcs',
     unit_family: 'count',
-    pack_size: '12',
   };
-  assert.ok(unitService.resolve('1', 'pack', egg).baseAmount.eq('12'));
-  assert.throws(() => unitService.resolve('1', 'pack', { ...egg, pack_size: null }), UnitConversionError);
+  assert.ok(unitService.resolve('2', 'Pieces (pcs)', egg).baseAmount.eq('2'));
+  assert.throws(() => unitService.resolve('1', 'pack', egg), UnitConversionError);
+  assert.throws(() => unitService.resolve('0', 'pack', egg), UnitConversionError);
+  assert.throws(() => convertRecipeQuantity('0', 'pcs', 'g'), UnitConversionError);
 });
 
-test('inventory unit metadata captures pack contents for mass, volume and discrete stock', () => {
-  const strawberryPowder = inventoryUnitMetadata({
+test('inventory unit metadata is limited to the supported stock units', () => {
+  const grams = inventoryUnitMetadata({
     unit: 'Grams (g)',
-    name: 'Strawberry Powder',
-    packQty: '50',
-    packUnit: 'Grams (g)',
   });
-  assert.equal(strawberryPowder.base_unit, 'g');
-  assert.equal(strawberryPowder.unit_family, 'mass');
-  assert.equal(strawberryPowder.pack_size, '50');
-  assert.equal(strawberryPowder.allow_fractional, true);
-
-  const chicken = inventoryUnitMetadata({
-    unit: 'Kilograms (kg)',
-    name: 'Chicken Breast',
-    packQty: '500',
-    packUnit: 'Grams (g)',
-  });
-  assert.equal(chicken.base_unit, 'kg');
-  assert.equal(chicken.pack_size, '0.5');
-
-  const syrup = inventoryUnitMetadata({
-    unit: 'Milliliters (mL)',
-    name: 'Syrup',
-    packQty: '1',
-    packUnit: 'Liters (L)',
-  });
-  assert.equal(syrup.pack_size, '1000');
-
+  assert.equal(grams.base_unit, 'g');
+  assert.equal(grams.unit_family, 'mass');
+  assert.equal(grams.allow_fractional, true);
   const eggs = inventoryUnitMetadata({
     unit: 'Pieces (pcs)',
-    name: 'Egg',
-    packQty: '12',
-    packUnit: 'Pieces (pcs)',
   });
-  assert.equal(eggs.pack_size, '12');
   assert.equal(eggs.allow_fractional, false);
-});
-
-test('inventory pack metadata rejects incompatible or guessed conversions', () => {
   assert.throws(() => inventoryUnitMetadata({
-    unit: 'Grams (g)',
-    name: 'Unknown ingredient',
-    packQty: '1',
-    packUnit: 'Cup',
+    unit: 'Packs',
   }), UnitConversionError);
 });
 

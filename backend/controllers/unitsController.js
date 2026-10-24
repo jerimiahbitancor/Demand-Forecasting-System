@@ -2,6 +2,8 @@ const { supabaseAdmin } = require('../config/supabase');
 const { logAction } = require('../services/auditService');
 const { isMissingColumnError, setUnitMetadata } = require('../utils/recipeUnits');
 const { fetchAllRows } = require('../utils/fetchAllRows');
+const { units: SUPPORTED_UNIT_DEFINITIONS } = require('../../shared/ingredientUnits.json');
+const SUPPORTED_UNIT_NAMES = new Set(SUPPORTED_UNIT_DEFINITIONS.map((unit) => unit.name.toLowerCase()));
 
 const actorOf = (req) => req.user?.name || req.user?.email || null;
 
@@ -35,7 +37,9 @@ const getUnits = async (req, res) => {
         .select('id, name, created_at, updated_at')
         .order('name');
       if (fallback.error) throw fallback.error;
-      return res.json({ success: true, data: (fallback.data || []).map((u) => ({
+      return res.json({ success: true, data: (fallback.data || []).filter((u) => (
+        SUPPORTED_UNIT_NAMES.has(String(u.name || '').trim().toLowerCase())
+      )).map((u) => ({
         ...u,
         family: null,
         base_factor: null,
@@ -47,7 +51,13 @@ const getUnits = async (req, res) => {
     }
 
     if (error) throw error;
-    res.json({ success: true, data: data || [] });
+    res.json({
+      success: true,
+      data: (data || []).filter((unit) => (
+        unit.is_active !== false
+        && SUPPORTED_UNIT_NAMES.has(String(unit.name || '').trim().toLowerCase())
+      )),
+    });
   } catch (error) {
     console.error('Error fetching units:', error);
     if (error.code === '42P01') {
@@ -104,6 +114,9 @@ const createUnit = async (req, res) => {
     const name = req.body.name?.trim();
     if (!name) return res.status(400).json({ success: false, error: 'Unit name is required' });
     if (name.length > 50) return res.status(400).json({ success: false, error: 'Unit name must be 50 characters or fewer' });
+    if (!SUPPORTED_UNIT_NAMES.has(name.toLowerCase())) {
+      return res.status(400).json({ success: false, error: 'Only the supported ingredient units can be added' });
+    }
 
     // The recipe math needs to know what kind of unit this is. Without a
     // family it would be treated as a plain count and never converted.
@@ -180,6 +193,9 @@ const updateUnit = async (req, res) => {
     const name = req.body.name?.trim();
     if (!name) return res.status(400).json({ success: false, error: 'Unit name is required' });
     if (name.length > 50) return res.status(400).json({ success: false, error: 'Unit name must be 50 characters or fewer' });
+    if (!SUPPORTED_UNIT_NAMES.has(name.toLowerCase())) {
+      return res.status(400).json({ success: false, error: 'Only the supported ingredient units can be used' });
+    }
 
     const { data: units, error: unitsError } = await supabaseAdmin
       .from('ingredient_units')
@@ -240,7 +256,7 @@ const updateUnit = async (req, res) => {
 };
 
 // Who still uses this unit: ingredients (archived ones count, they can be
-// restored) and saved recipe lines. A recipe line may hold an alias ("cup")
+// restored) and saved recipe lines. A recipe line may hold a unit alias
 // rather than the unit's display name, so every lookup key is checked.
 const findUnitUsage = async (unit) => {
   const keys = new Set(unitKeys(unit));

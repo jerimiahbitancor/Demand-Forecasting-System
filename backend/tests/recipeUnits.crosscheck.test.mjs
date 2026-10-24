@@ -1,15 +1,5 @@
-// Runs the shared recipe-unit cases (ml-service/tests/fixtures/recipe_unit_cases.json)
-// against the frontend copy. Backend stock deduction now uses a stricter
-// Decimal contract: unresolved density/unit conversions throw instead of
-// inheriting the frontend's historical 1:1 fallback.
-//
-// Why: the owner sees cost previews from the frontend copy, while demand, COGS
-// and stock deduction are booked by the backend / ml-service copies. If they
-// disagree, the screen shows one number and the system books another.
-//
-// Run:  cd backend && node tests/recipeUnits.crosscheck.test.mjs
-// No network, no Supabase, no credentials.
-
+// Shared conversion cases keep the frontend and ML-service rules aligned.
+// Run: cd backend && node tests/recipeUnits.crosscheck.test.mjs
 import { createRequire } from 'module';
 import { readFileSync } from 'fs';
 import { fileURLToPath, pathToFileURL } from 'url';
@@ -27,37 +17,22 @@ function check(label, condition, detail = '') {
   else { console.log(`  FAIL  ${label}  ${detail}`); failures.push(label); }
 }
 
-function run(cases) {
-  for (const c of cases) {
-    const opts = {
-      gramsPerCup: c.gramsPerCup ?? null,
-      ingredientName: c.ingredient || '',
-      packQty: c.packQty ?? null,
-      packUnit: c.packUnit ?? '',
-    };
-    const f = Number(front.convertRecipeQuantity(c.quantity, c.from, c.to, opts));
-    check(`${c.label} (frontend = ${c.expected})`, Math.abs(f - c.expected) < 1e-9, `expected ${c.expected}, got ${f}`);
-  }
+front.setUnitMetadata(fixture.units);
+back.setUnitMetadata(fixture.units);
+for (const c of fixture.cases) {
+  const f = Number(front.convertRecipeQuantity(c.quantity, c.from, c.to));
+  const b = Number(back.convertRecipeQuantity(c.quantity, c.from, c.to));
+  check(`${c.label} (frontend)`, Math.abs(f - c.expected) < 1e-9, `expected ${c.expected}, got ${f}`);
+  check(`${c.label} (backend)`, Math.abs(b - c.expected) < 1e-9, `expected ${c.expected}, got ${b}`);
 }
 
-console.log('with database units');
-front.setUnitMetadata(fixture.units);
-run(fixture.cases);
-
-console.log('with purchase packs ("150 g per sachet")');
-run(fixture.pack_cases);
-
-console.log('built-in tables only (no database units)');
-front.setUnitMetadata([]);
-run(fixture.fallback_cases);
-
-console.log('backend stock conversion rejects unresolved units instead of guessing');
-back.setUnitMetadata([]);
+check('Pack is rejected by frontend conversion', Number.isNaN(front.convertRecipeQuantity(1, 'Pack', 'g')));
+check('zero Pack is still rejected by frontend conversion', Number.isNaN(front.convertRecipeQuantity(0, 'Pack', 'g')));
 check(
-  'unknown custom unit throws',
+  'Pack is rejected by backend conversion',
   (() => {
     try {
-      back.convertRecipeQuantity('2', 'Sack', 'kg');
+      back.convertRecipeQuantity(1, 'Pack', 'g');
       return false;
     } catch (error) {
       return error instanceof back.UnitConversionError;
@@ -65,77 +40,38 @@ check(
   })()
 );
 check(
-  'volume to mass without density throws',
+  'zero Pack is still rejected by backend conversion',
   (() => {
     try {
-      back.convertRecipeQuantity('1', 'cup', 'kg');
+      back.convertRecipeQuantity(0, 'Pack', 'g');
       return false;
     } catch (error) {
       return error instanceof back.UnitConversionError;
     }
   })()
 );
+check('Cups are rejected by frontend conversion', Number.isNaN(front.convertRecipeQuantity(1, 'cup', 'mL')));
+check(
+  'Cups are rejected by backend conversion',
+  (() => {
+    try {
+      back.convertRecipeQuantity(1, 'cup', 'mL');
+      return false;
+    } catch (error) {
+      return error instanceof back.UnitConversionError;
+    }
+  })()
+);
+check('mass-to-volume conversion is rejected by frontend', Number.isNaN(front.convertRecipeQuantity(1, 'g', 'mL')));
 
-console.log('rows the old-schema /units fallback returns (family null) are ignored, not turned into counts');
-front.setUnitMetadata([{ name: 'Kilograms (kg)', family: null, base_factor: null, is_piece: false, aliases: [], is_active: true }]);
-check('kg still converts to g', Number(front.convertRecipeQuantity(1, 'kg', 'g')) === 1000);
-
-console.log('inactive units are not used by the frontend dropdown');
-front.setUnitMetadata([{ name: 'Sack', family: 'mass', base_factor: 50000, is_piece: false, aliases: [], is_active: false }]);
-check('an inactive Sack is unknown, so it passes through', Number(front.convertRecipeQuantity(2, 'Sack', 'kg')) === 2);
-
-console.log('unitKindOf');
-front.setUnitMetadata(fixture.units);
-check('Sack is mass', front.unitKindOf('Sack') === 'mass');
-check('Wedge is a piece', front.unitKindOf('Wedge') === 'piece');
-check('Carton is a plain count', front.unitKindOf('Carton') === 'count');
-check('unknown unit is null', front.unitKindOf('flurb') === null);
-
-console.log('unit dropdown lists exactly the database units');
 const groups = front.groupUnitsForSelect(fixture.units);
 const listed = groups.flatMap((g) => g.units);
-check('groups are Weight, Volume, Count / pieces in that order', JSON.stringify(groups.map((g) => g.label)) === JSON.stringify(['Weight', 'Volume', 'Count / pieces']), JSON.stringify(groups.map((g) => g.label)));
-check('every database unit is listed once', listed.length === fixture.units.length && new Set(listed).size === listed.length, `${listed.length} listed`);
-check('no alias is offered as its own choice (cup, kg, tps, pcs, sacks)', !listed.some((n) => ['cup', 'kg', 'tps', 'pcs', 'sacks', 'tbsp'].includes(n)), listed.join(' | '));
-check('weight is small -> large', JSON.stringify(groups[0].units) === JSON.stringify(['Grams (g)', 'Kilograms (kg)', 'Sack']), JSON.stringify(groups[0].units));
-check('volume is small -> large', JSON.stringify(groups[1].units) === JSON.stringify(['Milliliters (mL)', 'Teaspoons (tsp)', 'Tablespoons (tbsp)', 'Scoop', 'Cups (cup)', 'Pints (pt)', 'Quarts (qt)', 'Liters (L)', 'Gallons (gal)']), JSON.stringify(groups[1].units));
-const withInactive = [...fixture.units, { name: 'Retired', family: 'mass', base_factor: 7, aliases: [], is_active: false }];
-check('inactive units are not offered', !front.groupUnitsForSelect(withInactive).flatMap((g) => g.units).includes('Retired'));
-check('no rows loaded -> built-in cooking units as a fallback', front.groupUnitsForSelect([]).flatMap((g) => g.units).includes('cup'));
-
-console.log('canonicalUnitName');
-front.setUnitMetadata(fixture.units);
-check('"cup" -> "Cups (cup)"', front.canonicalUnitName('cup') === 'Cups (cup)');
-check('"KG" -> "Kilograms (kg)" (case-insensitive)', front.canonicalUnitName('KG') === 'Kilograms (kg)');
-check('"tps" -> "Teaspoons (tsp)"', front.canonicalUnitName('tps') === 'Teaspoons (tsp)');
-check('already canonical stays', front.canonicalUnitName('Sack') === 'Sack');
-check('unknown unit is returned unchanged', front.canonicalUnitName('flurb') === 'flurb');
-front.setUnitMetadata([]);
-check('with no database units nothing is renamed', front.canonicalUnitName('cup') === 'cup');
-
-console.log('deriveUnitPrice (frontend = backend)');
-front.setUnitMetadata(fixture.units);
-const packDeriveCases = [
-  { args: { packQty: 150, packUnit: 'Grams (g)', packPrice: 200, stockUnit: 'Kilograms (kg)' }, expected: 200 / 0.15 },
-  { args: { packQty: 100, packUnit: 'Grams (g)', packPrice: 25, stockUnit: 'Grams (g)' }, expected: 0.25 },
-  { args: { packQty: 12, packUnit: 'Pieces (pcs)', packPrice: 60, stockUnit: 'Pieces (pcs)' }, expected: 5 },
-  { args: { packQty: 1, packUnit: 'Cups (cup)', packPrice: 50, stockUnit: 'Grams (g)', gramsPerCup: 120 }, expected: 50 / 120 },
-  { args: { packQty: 1, packUnit: 'Cups (cup)', packPrice: 50, stockUnit: 'Kilograms (kg)' }, expected: null },
-  { args: { packQty: 12, packUnit: 'Carton', packPrice: 60, stockUnit: 'Kilograms (kg)' }, expected: null },
-  { args: { packQty: 150, packUnit: '', packPrice: 200, stockUnit: 'Kilograms (kg)' }, expected: null },
-];
-for (const { args, expected } of packDeriveCases) {
-  const f = front.deriveUnitPrice(args);
-  const label = `deriveUnitPrice ${JSON.stringify(args)}`;
-  if (expected === null) {
-    check(`${label} -> null`, f === null, `frontend ${f}`);
-  } else {
-    check(`${label} -> ${expected}`, Math.abs(f - expected) < 1e-6, `expected ${expected}, got ${f}`);
-  }
-}
+check('exactly seven supported units are offered', listed.length === 7 && new Set(listed).size === 7);
+check('Pack is not offered', !listed.some((name) => name.toLowerCase().includes('pack')));
+check('Cups are not offered', !listed.some((name) => name.toLowerCase().includes('cup')));
 
 if (failures.length) {
   console.log(`\n${failures.length} check(s) FAILED`);
   process.exit(1);
 }
-console.log('\nAll frontend recipe unit checks passed');
+console.log('\nAll frontend/backend recipe unit checks passed');

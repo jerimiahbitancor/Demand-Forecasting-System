@@ -95,14 +95,9 @@ display: flex;
   border-color: #a31d1d;
 }
 
-.inventory-date-filter {
-  min-width: 150px;
-}
-
 /* Tablet tier. The controls bar is `flex-wrap: nowrap` on desktop because the
    filters fit on one line at full width. They do not fit in the 641-1024px
-   range though: search (200px) + 3 selects (128px each) + date filter (150px)
-   + sort select (128px) + "Add New Item" (~140px) plus gaps is ~1,100px of
+   range though: search (200px) + 4 selects (128px each) + "Add New Item" (~140px) plus gaps is ~1,100px of
    content, so at 820px (iPad Air portrait) the row overflowed its container
    and the right-hand filters were clipped off-screen with nothing to scroll
    to. Unstack here instead of waiting for the 768px phone tier. */
@@ -126,7 +121,7 @@ display: flex;
     gap: 10px;
   }
 
-  /* 13px is under the 16px iOS threshold: focusing a text/date input smaller
+  /* 13px is under the 16px iOS threshold: focusing a text input smaller
      than that auto-zooms the viewport and leaves the page unusable. */
   .inventory-search-input,
   .inventory-sort-select {
@@ -137,11 +132,6 @@ display: flex;
   .inventory-sort-select {
     flex: 1 1 150px;
     min-width: 150px;
-  }
-
-  .inventory-date-filter {
-    flex: 1 1 170px;
-    min-width: 170px;
   }
 
   .inventory-controls-right .btn-warning,
@@ -178,7 +168,6 @@ display: flex;
   }
 
   .inventory-sort-select,
-  .inventory-date-filter,
   .inventory-controls-right .btn-warning,
   .inventory-controls-right .btn-secondary,
   .inventory-controls-right .btn-primary {

@@ -279,7 +279,7 @@ function setEmail(on) {
   if (on) Object.assign(process.env, { EMAIL_REMINDERS_ENABLED: 'true', BREVO_API_KEY: 'k', BREVO_SENDER_EMAIL: 's@example.com', FRONTEND_URL: 'https://chefduo.example.app' });
 }
 
-const ingredientRow = (id, name, quantity, unit = 'kg', min_stock = 0) => ({ id, name, quantity, unit, min_stock, is_archived: false, category: 'x', price: 0, grams_per_cup: null });
+const ingredientRow = (id, name, quantity, unit = 'kg', min_stock = 0) => ({ id, name, quantity, unit, min_stock, is_archived: false, category: 'x', price: 0 });
 // forecastRan: today's (and tomorrow's) 9:00 forecast_runs rows exist.
 // salesUploaded: Fri 16 and Sat 17 are answered in business_days.
 function seedWorld({ riceQty = 8, eggQty = 50, users = [{ id: 7 }], forecastRan = true, salesUploaded = true } = {}) {
