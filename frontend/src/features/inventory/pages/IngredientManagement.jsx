@@ -569,12 +569,13 @@ const IngredientManagement = () => {
     try {
       const response = await apiClient.patch(`/inventory/items/${selectedItem.id}/restore`);
       if (response.data.success) {
-        toast.success('Item restored successfully!');
+        toast.success('Item unarchived successfully!');
         setIsRestoreModalOpen(false);
+        setSelectedItem(null);
         setTimeout(() => fetchInventory(), 500);
       }
     } catch (error) {
-      toast.error(error.response?.data?.error || 'Failed to restore item');
+      toast.error(error.response?.data?.error || 'Failed to unarchive item');
     } finally {
       setIsSubmitting(false);
     }
@@ -666,11 +667,19 @@ const IngredientManagement = () => {
         const newQuantity = savedQuantity === null || savedQuantity === undefined
           ? amount
           : Number(savedQuantity);
+        // A stock count is also what clears an open sales shortfall, so the
+        // number the database holds now is the one that is shown.
+        const openShortfall = Number(response.data?.data?.open_shortfall) || 0;
+        const openShortfallSales = Number(response.data?.data?.open_shortfall_sales) || 0;
         setInventoryItems((items) => items.map((row) => (
-          row.id === item.id ? { ...row, quantity: newQuantity } : row
+          row.id === item.id
+            ? { ...row, quantity: newQuantity, open_shortfall: openShortfall, open_shortfall_sales: openShortfallSales }
+            : row
         )));
         setSelectedItem((current) => (
-          current && current.id === item.id ? { ...current, quantity: newQuantity } : current
+          current && current.id === item.id
+            ? { ...current, quantity: newQuantity, open_shortfall: openShortfall, open_shortfall_sales: openShortfallSales }
+            : current
         ));
         toast.success(`${item.name} stock set to ${formatStockQty(newQuantity, item.unit)} ${item.unit || 'pcs'}.`);
         cancelStockEdit();
@@ -1292,6 +1301,19 @@ const IngredientManagement = () => {
                             {formatStockQty(item.quantity ?? 0, item.unit)} {item.unit || 'pcs'}
                           </button>
                         )}
+                        {/* The demand a sale could not cover. It stays open until
+                            a stock count records what is really on hand. */}
+                        {editingStockId !== item.id && Number(item.open_shortfall) > 0 && (
+                          <div
+                            className="inventory-stock-short"
+                            title="A sale could not be fully served. A stock count (set the current stock) clears this."
+                          >
+                            {formatStockQty(item.open_shortfall, item.unit)} {item.unit || 'pcs'} short
+                            {Number(item.open_shortfall_sales) === 1
+                              ? ' from 1 sale'
+                              : ` from ${Number(item.open_shortfall_sales) || 0} sales`}
+                          </div>
+                        )}
                       </td>
                       <td data-label="Unit Cost">{formatCurrency(item.price)}</td>
                       <td data-label="Pack / Count">
@@ -1348,14 +1370,23 @@ const IngredientManagement = () => {
                           >
                             <FaHistory size={14} />
                           </button>
-                          <button 
-                            className="inventory-action-btn archive"
-                            onClick={!isArchived ? () => openArchiveModal(item) : () => openRestoreModal(item)}
-                            title={isArchived ? 'Archived' : 'Archive'}
-                            disabled={isArchived}
-                          >
-                            <FaArchive size={14} />
-                          </button>
+                          {isArchived ? (
+                            <button 
+                              className="inventory-action-btn restore"
+                              onClick={() => openRestoreModal(item)}
+                              title="Unarchive Item"
+                            >
+                              <FaUndo size={14} />
+                            </button>
+                          ) : (
+                            <button 
+                              className="inventory-action-btn archive"
+                              onClick={() => openArchiveModal(item)}
+                              title="Archive"
+                            >
+                              <FaArchive size={14} />
+                            </button>
+                          )}
                         
                         </div>
                       </td>
@@ -1448,6 +1479,8 @@ const IngredientManagement = () => {
         categories={categories}
         units={units}
         itemId={selectedItem?.id}
+        openShortfall={Number(selectedItem?.open_shortfall) || 0}
+        openShortfallSales={Number(selectedItem?.open_shortfall_sales) || 0}
         apiClient={apiClient}
         onChange={setFormData}
         onSubmit={handleUpdateItem}
@@ -1926,59 +1959,6 @@ const IngredientManagement = () => {
                 disabled={isSubmitting}
               >
                 {isSubmitting ? 'Archiving...' : <><FaArchive /> Archive Item</>}
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* Restore Modal */}
-      {isRestoreModalOpen && (
-        <div className="modal-overlay" onClick={() => {
-          if (!isSubmitting) setIsRestoreModalOpen(false);
-        }}>
-          <div className="modal-content modal-md" onClick={(e) => e.stopPropagation()}>
-            <div className="modal-header">
-              <h3 className="modal-title">Restore Item</h3>
-              <button className="modal-close-btn" onClick={() => {
-                if (!isSubmitting) setIsRestoreModalOpen(false);
-              }}>
-                <FaTimes />
-              </button>
-            </div>
-
-            <div className="modal-body">
-              <div className="confirmation-content">
-                <div className="confirmation-icon success" style={{ background: '#dcfce7', color: '#16a34a' }}>
-                  <FaUndo size={32} />
-                </div>
-                <h4>Restore this item?</h4>
-                <p>
-                  You are about to restore <strong>"{selectedItem?.name}"</strong>.
-                  The item will be visible in the main inventory again.
-                </p>
-                <div className="item-details">
-                  <p><strong>Category:</strong> {selectedItem?.category || 'N/A'}</p>
-                  <p><strong>Quantity:</strong> {formatStockQty(selectedItem?.quantity ?? 0, selectedItem?.unit)} {selectedItem?.unit || 'pcs'}</p>
-                </div>
-              </div>
-            </div>
-
-            <div className="modal-footer">
-              <button 
-                className="btn-secondary" 
-                onClick={() => setIsRestoreModalOpen(false)}
-                disabled={isSubmitting}
-              >
-                Cancel
-              </button>
-              <button 
-                className="btn-primary" 
-                onClick={handleRestoreItem}
-                disabled={isSubmitting}
-                style={{ background: '#16a34a' }}
-              >
-                {isSubmitting ? 'Restoring...' : <><FaUndo /> Restore Item</>}
               </button>
             </div>
           </div>

@@ -172,3 +172,26 @@ export const packPriceHelp =
 // not measured with cups at all.
 export const cupFieldNotNeededNote =
 	'Not needed — this item is not measured with cups. It is only used when a recipe measures the item in cups or spoons.';
+
+// Which pack should be recorded? The same item can be set up two ways, and
+// the cost per gram is the same either way — only the number you type in the
+// recipes changes.
+//
+//   Scenario A: you buy the whole pack.
+//   Scenario B: you sell or use the small packs.
+//
+// The example is one real case: a 165.6 g pack for ₱63 holds 6 small packs of
+// 27.6 g, and 6 x ₱10.50 = ₱63, so the cost per gram stays ₱0.38/g.
+export const packScenarioGuide = Object.freeze([
+	Object.freeze({
+		title: 'You buy the whole pack',
+		detail: 'Record what one delivery holds: 165.6 g for ₱63 (₱0.38/g).',
+	}),
+	Object.freeze({
+		title: 'You sell or use the small packs',
+		detail:
+			'Record the small pack: 27.6 g for ₱10.50 (₱63 ÷ 6 packs). Same ₱0.38/g — '
+			+ 'and your recipes can then say "1 pack" instead of "27.6 g".',
+	}),
+]);
+

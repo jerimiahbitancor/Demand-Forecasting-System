@@ -51,6 +51,43 @@ const readPendingShortfalls = async (ingredientId) => {
   }
 };
 
+// The open sales shortfalls of the given ingredients: how much demand is
+// still waiting to be covered, and how many sales it came from. A sale that
+// could not be fully served leaves a short behind; it stays open until a
+// stock count (an "adjustment") records what is really on hand.
+const readOpenShortfalls = async (ingredientIds) => {
+  const totals = new Map();
+  const ids = (ingredientIds || [])
+    .map((id) => Number(id))
+    .filter((id) => Number.isFinite(id));
+  if (!ids.length) return totals;
+
+  try {
+    const { data, error } = await supabaseAdmin
+      .from('inventory_shortfall_balances')
+      .select('ingredient_id, remaining_quantity')
+      .in('ingredient_id', ids)
+      .gt('remaining_quantity', 0);
+    if (error) {
+      console.warn('Could not read the open shortfalls:', error.message);
+      return totals;
+    }
+    for (const row of data || []) {
+      const remaining = Number(row.remaining_quantity) || 0;
+      if (remaining <= 0) continue;
+      const entry = totals.get(row.ingredient_id) || { total: 0, sales: 0 };
+      entry.total += remaining;
+      entry.sales += 1;
+      totals.set(row.ingredient_id, entry);
+    }
+  } catch (error) {
+    // The shortfall ledger is optional: a database without it simply has no
+    // open shorts.
+    console.warn('Could not read the open shortfalls:', error.message);
+  }
+  return totals;
+};
+
 const writeShortfallRemaining = async (rows) => {
   for (const row of rows) {
     const { error } = await supabaseAdmin
@@ -361,6 +398,11 @@ const getInventoryItems = async (req, res) => {
       });
     }
 
+    // ---- The sales shortfalls that are still open ----
+    // A sale that could not be fully served leaves a short behind. It is not
+    // paid off by a delivery (the delivery is stock on hand), so it is shown
+    // next to the stock until a stock count clears it.
+    const openShortfalls = await readOpenShortfalls(pageIds);
     // Which forecast the statuses above are measured against, for the
     // "As of Latest Forecast" note. Its own try/catch: a failure here must
     // never stop the table from loading.
@@ -375,7 +417,9 @@ const getInventoryItems = async (req, res) => {
       ...item,
       forecasted_need: dailyNeeds.get(item.id) || 0,
       stock_status: statusFor(item),
-      avg_market_price: avgMap[item.id] !== undefined ? avgMap[item.id] : null
+      avg_market_price: avgMap[item.id] !== undefined ? avgMap[item.id] : null,
+      open_shortfall: openShortfalls.get(item.id)?.total || 0,
+      open_shortfall_sales: openShortfalls.get(item.id)?.sales || 0
     }));
 
     res.json({
@@ -418,7 +462,17 @@ const getInventoryItem = async (req, res) => {
       return res.status(404).json({ success: false, error: 'Item not found' });
     }
 
-    res.json({ success: true, data });
+    // The sales shortfalls that are still open for this ingredient.
+    const openShortfalls = await readOpenShortfalls([Number(id)]);
+
+    res.json({
+      success: true,
+      data: {
+        ...data,
+        open_shortfall: openShortfalls.get(Number(id))?.total || 0,
+        open_shortfall_sales: openShortfalls.get(Number(id))?.sales || 0
+      }
+    });
   } catch (error) {
     console.error('Error fetching item:', error);
     res.status(500).json({ success: false, error: error.message });
@@ -728,6 +782,11 @@ const updateInventoryItem = async (req, res) => {
         }]);
     }
 
+    // The open shortfalls are read again: a stock count (an "adjustment")
+    // clears the shortages that are older than the count, so the answer has
+    // to be the one the database holds now.
+    const openShortfalls = await readOpenShortfalls([Number(id)]);
+
     console.log('✅ Item updated successfully:', data.id);
 
     await logAction(
@@ -736,6 +795,15 @@ const updateInventoryItem = async (req, res) => {
       actorOf(req)
     );
 
+    res.json({
+      success: true,
+      data: {
+        ...data,
+        open_shortfall: openShortfalls.get(Number(id))?.total || 0,
+        open_shortfall_sales: openShortfalls.get(Number(id))?.sales || 0
+      },
+      message: 'Item updated successfully'
+    });
     // Stock, min_stock or unit may have changed: refresh the stock alerts.
     // Not awaited and never throws (see queueStockRefresh).
     queueStockRefresh('stock_edit');
@@ -821,7 +889,7 @@ const archiveInventoryItem = async (req, res) => {
     const { data, error } = await supabaseAdmin
       .from('ingredients')
       .update({
-        is_archived: !currentItem.is_archived,
+        is_archived: true,
         updated_by: userId
       })
       .eq('id', id)
@@ -832,7 +900,7 @@ const archiveInventoryItem = async (req, res) => {
 
     await logAction(
       'item_archived',
-      `${currentItem.is_archived ? 'Unarchived' : 'Archived'} ingredient "${currentItem.name}"`,
+      `Archived ingredient "${currentItem.name}"`,
       actorOf(req)
     );
 
@@ -843,7 +911,7 @@ const archiveInventoryItem = async (req, res) => {
     res.json({ 
       success: true, 
       data, 
-      message: currentItem.is_archived ? 'Item unarchived successfully' : 'Item archived successfully' 
+      message: 'Item archived successfully' 
     });
   } catch (error) {
     console.error('Error archiving item:', error);
@@ -864,6 +932,10 @@ const restoreInventoryItem = async (req, res) => {
       .eq('id', id)
       .single();
 
+    if (fetchError || !currentItem) {
+      return res.status(404).json({ success: false, error: 'Item not found' });
+    }
+
     const { data, error } = await supabaseAdmin
       .from('ingredients')
       .update({
@@ -878,20 +950,21 @@ const restoreInventoryItem = async (req, res) => {
 
     await logAction(
       'item_restored',
-      `Restored ingredient "${currentItem?.name || data?.name || id}"`,
+      `Unarchived ingredient "${currentItem.name}"`,
       actorOf(req)
     );
 
+    console.log('✅ Item unarchived successfully:', id);
     console.log('✅ Item restored successfully:', id);
     // A restored ingredient that is low alerts again. Not awaited, never throws.
     queueStockRefresh('restore');
     res.json({
       success: true,
       data,
-      message: 'Item restored successfully'
+      message: 'Item unarchived successfully'
     });
   } catch (error) {
-    console.error('Error restoring item:', error);
+    console.error('Error unarchiving item:', error);
     res.status(500).json({ success: false, error: error.message });
   }
 };
@@ -1023,7 +1096,13 @@ const restockInventoryItem = async (req, res) => {
       if (updateError) throw updateError;
     }
 
-    const data = { ...currentItem, quantity: finalQuantity.toString() };
+    const openShortfalls = await readOpenShortfalls([Number(id)]);
+    const data = {
+      ...currentItem,
+      quantity: finalQuantity.toString(),
+      open_shortfall: openShortfalls.get(Number(id))?.total || 0,
+      open_shortfall_sales: openShortfalls.get(Number(id))?.sales || 0
+    };
 
     // The movement row is finished here, so the numbers in the stock history
     // never carry the raw decimals of the database ("30.000000").
