@@ -223,6 +223,22 @@ test('job: lastRuns records succeeded / skipped (no model) / failed', async () =
 
 // ---------------------------------------------------------------- card endpoint
 
+test('GET /api/business-days/pending: no trained model -> no days (first-time user)', async () => {
+  // Brand-new system: no model, no sales, nothing resolved. Without the gate
+  // every operating day of the last 60 days was listed.
+  seedWorld({ model: false });
+  fake.tables.daily_sales = [];
+  fake.tables.business_days = [];
+  const direct = await getPendingDays(fake, { now: SUNDAY_0400 });
+  assert.deepEqual(direct.days, []);
+  assert.equal(direct.modelExists, false);
+
+  // Still nothing once history is uploaded but no model is trained yet.
+  seedWorld({ model: false });
+  const withSales = await getPendingDays(fake, { now: SUNDAY_0400 });
+  assert.deepEqual(withSales.days, []);
+});
+
 test('GET /api/business-days/pending lists unanswered operating days, newest last', async () => {
   seedWorld();
   // Also leave Wed 2026-10-07 unanswered; Sun 2026-10-04 is not an operating day.

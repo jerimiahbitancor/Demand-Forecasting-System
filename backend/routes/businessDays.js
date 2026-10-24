@@ -87,7 +87,8 @@ router.post('/close', authenticate, async (req, res) => {
 // to yesterday (Asia/Manila), with no upload and no closed mark. Feeds the
 // "Days that need your answer" card on Data Management, which the 4:00 AM /
 // 7:00 AM upload reminders link to. Same rule as the reminders
-// (utils/uploadReminders.js).
+// (utils/uploadReminders.js), including the gate: an empty list until a
+// model has been trained (data.modelExists tells the card why).
 router.get('/pending', authenticate, async (req, res) => {
   try {
     const { supabaseAdmin } = require('../config/supabase');

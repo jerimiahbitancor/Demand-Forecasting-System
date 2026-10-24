@@ -35,6 +35,9 @@ const EMAIL_REMINDER_KINDS = Object.freeze([
   'upload_reminder',   // 4:00 / 7:00 AM: upload yesterday's sales or mark closed
   'unconfirmed_days',  // 4:00 AM summary of other unanswered days
   'stock_shortfall',   // an upload used more of an ingredient than was in stock
+                       // (only possible before migration 017 is run)
+  'upload_blocked_stock', // a sales upload was refused: not enough stock
+                          // (migration 017, Oct 2026)
   'restock_summary',   // the daily restock email (ingredient list); only rows
                        // with metadata.emailed === true are sent, see
                        // runStockRefresh. Per-ingredient 'low_stock' alerts
@@ -62,6 +65,12 @@ function emailDedupeKey(notification, now = new Date()) {
   const md = (notification && notification.metadata) || {};
   if (md.kind === 'stock_shortfall' && md.ingredient_id != null) {
     return `stock_shortfall:${md.ingredient_id}:${manilaDate(now)}`;
+  }
+  // One "upload refused" email per Manila day, not one per file: a refused
+  // 288-file backfill must not send 288 emails. Each file still gets its own
+  // bell notification with its own list of short ingredients.
+  if (md.kind === 'upload_blocked_stock') {
+    return `upload_blocked_stock:${manilaDate(now)}`;
   }
   if (md.kind === 'restock_summary' && md.email_key) return String(md.email_key);
   if (md.key) return String(md.key);

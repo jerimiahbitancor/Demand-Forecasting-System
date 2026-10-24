@@ -121,7 +121,7 @@ test('kind not in EMAIL_REMINDER_KINDS -> no email (upload success, training, fo
   // Per-ingredient 'low_stock' alerts stay in the bell (Oct 17 2026): only
   // the daily restock_summary emails, see tests/restockEmail.test.js.
   assert.deepEqual([...notificationService.EMAIL_REMINDER_KINDS].sort(),
-    ['restock_summary', 'stock_shortfall', 'unconfirmed_days', 'upload_reminder']);
+    ['restock_summary', 'stock_shortfall', 'unconfirmed_days', 'upload_blocked_stock', 'upload_reminder']);
 });
 
 test('missing or invalid business email -> skipped, notification still created', async () => {
@@ -198,6 +198,17 @@ test('no key -> kind + title + Manila date; shortfalls grouped per ingredient pe
   await create(shortfall(500));
   await create(shortfall(501)); // a bulk backfill: another file, same ingredient, same day
   assert.equal(brevoCalls.length, 2, 'one shortfall email for Rice today, not one per file');
+
+  // A refused upload (not enough stock) is emailed, once per Manila day.
+  const blocked = (uploadId) => ({
+    userId: 7, type: 'error', title: 'Unmet condition: not enough stock (1 ingredient)',
+    message: '"a.csv" was not saved because these ingredients do not have enough stock: Rice: needs 2 kg, 1 kg in stock (1 kg short).',
+    link: '/ingredient-management',
+    metadata: { kind: 'upload_blocked_stock', key: `upload_blocked_stock:${uploadId}`, upload_id: uploadId },
+  });
+  await create(blocked(600));
+  await create(blocked(601)); // another refused file the same day
+  assert.equal(brevoCalls.length, 3, 'one "upload refused" email per day, not one per file');
 
   // Manila date: 2026-10-13 23:30 UTC is already Oct 14 in Manila.
   assert.equal(

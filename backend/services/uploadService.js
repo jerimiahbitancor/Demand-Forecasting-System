@@ -24,14 +24,13 @@ const {
   computeStockDeductionsByDate,
   lastStockCountAt,
   shouldDeduct,
-  describeShortfall,
   normalizeKeyword,
   roundQuantity,
 } = require('../utils/salesModifiers');
-const { createNotificationOnce } = require('./notificationService');
 const { loadAliasMap } = require('./productAliasService');
 const { productNameKey } = require('../utils/productNameKey');
 const { buildUploadSummary } = require('../utils/uploadSummary');
+const { InsufficientStockError } = require('../utils/insufficientStock');
 
 // modifier_rules is read once per minute at most: a 288-file backfill would
 // otherwise query it 288 times for a table of a handful of rows.
@@ -45,6 +44,15 @@ function isMissingTableError(error) {
   return error.code === 'PGRST205'
     || error.code === '42P01'
     || /does not exist|could not find the table/i.test(error.message || '');
+}
+
+// PGRST202 = PostgREST cannot find the function; 42883 = Postgres "function
+// does not exist". Either means migration 017 has not been run yet.
+function isMissingFunctionError(error) {
+  if (!error) return false;
+  return error.code === 'PGRST202'
+    || error.code === '42883'
+    || /could not find the function|function .* does not exist/i.test(error.message || '');
 }
 
 function warnMissingModifierTablesOnce() {
@@ -306,48 +314,6 @@ class UploadService {
       .trim()
       .replace(/\s+/g, ' ')
       .replace(/\s*[-–—]\s*/g, ' ');
-  }
-
-  /**
-   * One "Low stock" warning per ingredient per upload when a deduction was
-   * bigger than the stock (key stock_shortfall:<upload_id>:<ingredient_id>,
-   * never sent twice). Sent to every user, like the low-stock alerts.
-   * Best effort: a notification failure never fails the upload.
-   */
-  async notifyStockShortfalls(shortfalls = [], uploadId = null) {
-    if (!shortfalls.length) return;
-    try {
-      const { data: users, error } = await supabaseAdmin.from('user').select('id');
-      if (error) throw error;
-      for (const user of users || []) {
-        for (const item of shortfalls) {
-          const key = `stock_shortfall:${uploadId}:${item.ingredientId}`;
-          await createNotificationOnce({
-            userId: user.id,
-            type: 'warning',
-            // Built by describeShortfall(): "Stock shortfall: <ingredient>".
-            title: item.title || `Stock shortfall: ingredient #${item.ingredientId}`,
-            message: item.message,
-            link: '/ingredient-management',
-            metadata: {
-              kind: 'stock_shortfall',
-              key,
-              upload_id: uploadId,
-              ingredient_id: item.ingredientId,
-              shortfall: item.shortfall,
-              shortfall_exact: item.shortfallExact || String(item.shortfall),
-              requested_exact: item.requestedExact || null,
-              requested_quantity: item.requiredQuantity || null,
-              available_quantity: item.availableQuantity || null,
-              applied_quantity: item.applied || null,
-              unit: item.unit || null,
-            },
-          });
-        }
-      }
-    } catch (error) {
-      console.error('Could not send stock shortfall notifications:', error);
-    }
   }
 
   /**
@@ -795,7 +761,6 @@ class UploadService {
       // For the upload summary (utils/uploadSummary.js).
       const createdProductNames = [...(options.createdProductNames || [])];
       productsDetected += createdProductNames.length;
-      let shortfallSummary = [];
       let unconvertibleSummary = [];
       // Why an ingredient was NOT deducted (timing rule / unit problem), and
       // any error in the follow-up processing. These used to exist only as
@@ -880,7 +845,9 @@ class UploadService {
         aliasProductIds,
         newProductNames: createdProductNames,
         unmatchedNames: aggregated.unmatchedNames,
-        shortfalls: shortfallSummary,
+        // Always empty: a short ingredient refuses the whole file instead
+        // (migration 017). Kept so the summary shape does not change.
+        shortfalls: [],
         modifierKeywords,
         isArchived: isArchivedProduct,
       });
@@ -910,15 +877,52 @@ class UploadService {
         });
       }
 
-      if (dailySalesRows.length > 0) {
-        const { error: saleInsertError } = await supabaseAdmin
-          .from('daily_sales')
-          .insert(dailySalesRows);
+      // ------------------------------------------------------------------
+      // Stock first, sales second (migration 017, owner's decision Oct 2026).
+      //
+      // A sales file that needs more of ANY ingredient than is in stock is
+      // not saved at all: no daily_sales rows, no deductions. Before, the
+      // rows were inserted first and the deduction clamped at 0 afterwards,
+      // so the sales were kept while the stock no longer matched them.
+      //
+      //   1. plan   — what each ingredient would lose (read-only)
+      //   2. check  — a quick read of the current stock, for a fast,
+      //               precise refusal
+      //   3. commit — apply_sales_upload(): locks the ingredient rows,
+      //               checks AGAIN, inserts the rows and deducts, all in one
+      //               transaction. Step 2 alone is not enough: with 3 files
+      //               uploading at once, two can pass it at the same moment.
+      //
+      // Archived products never deduct. Status refresh (below) never
+      // archives a product, so `products` from the fetch above is enough.
+      // ------------------------------------------------------------------
+      const deductingProductIds = new Set(
+        (products || [])
+          .filter((product) => productIds.has(product.id) && !isArchivedProduct(product))
+          .map((product) => product.id)
+      );
+      const stockPlan = await this.planStockDeductions({
+        dailySalesRows,
+        modifierRows,
+        deductingProductIds,
+        ingredientIdByKeyword,
+        warnings,
+      });
+      unconvertibleSummary = stockPlan.unconvertibleSummary;
+      stockNotDeductedSummary = stockPlan.stockNotDeductedSummary;
 
-        if (saleInsertError) {
-          throw saleInsertError;
-        }
+      const shortNow = await this.findInsufficientStock(stockPlan.items);
+      if (shortNow.length > 0) {
+        throw new InsufficientStockError(shortNow, { filename });
       }
+
+      await this.commitSalesAndStock({
+        uploadId,
+        numericId,
+        dailySalesRows,
+        items: stockPlan.items,
+        filename,
+      });
 
       // Modifier counts are written AFTER daily_sales and never fail the
       // upload: daily_sales is the training input and is already committed.
@@ -939,20 +943,15 @@ class UploadService {
         }
       }
 
-      // Everything from here on is best-effort. daily_sales already has
-      // this file's rows safely committed at this point — that's the part
-      // that actually matters for training data, and it's what
-      // checkDuplicateUpload/the unique constraint protect. If anything
-      // below throws (a stale product_ingredients row pointing at a
-      // deleted ingredient, a transient Supabase hiccup, etc.), the OLD
-      // behavior let it propagate all the way up to routes/upload.js's
-      // catch, which marks the whole upload 'failed' — even though the
-      // sales data is already in. A retry of the exact same file would
-      // then hit a false "duplicate" 23505 on data that's already
-      // correctly there, with no way to actually finish the upload. So
-      // category backfill, stock deduction, and status reconciliation are
-      // now caught here and turned into warnings instead of aborting the
-      // whole request.
+      // Everything from here on is best-effort. daily_sales AND the stock
+      // deductions are already committed together at this point. If
+      // anything below throws (a transient Supabase hiccup, etc.), letting
+      // it reach routes/upload.js's catch would mark the whole upload
+      // 'failed' even though the sales are in, and a retry of the same file
+      // would hit a false "duplicate" 23505. So category backfill and status
+      // reconciliation are caught here and turned into warnings instead.
+      // (Stock deduction used to live here too; it now happens in the same
+      // transaction as the insert, above.)
       let productsUpdated = 0;
       try {
         // Skip products that don't need a change (still in memory from the
@@ -1002,8 +1001,8 @@ class UploadService {
         // mappingService.reconcileProductActivation() uses for all products.
         const statusInputs = await loadStatusInputs(supabaseAdmin, { productIds: selectedProductIds });
 
-        // 1. Status refresh for the products in this file. Runs BEFORE stock
-        // deduction so the deduction sees this upload's status (v3).
+        // Status refresh for the products in this file. Never archives a
+        // product, so the deducting set chosen above stays correct.
         for (const product of productRows || []) {
           // Archived stays archived: never rewrite its status or reason here.
           if (isArchivedProduct(product)) continue;
@@ -1047,266 +1046,10 @@ class UploadService {
           Object.assign(product, nextValues);
           productsUpdated += 1;
         }
-
-        // 2. Stock deduction (owner's v3 flowchart, page 2).
-        //  - Every product in the file that is NOT archived deducts, whatever
-        //    its status: New and Discontinued dishes used real ingredients
-        //    too. A product with no recipe simply adds nothing (skipped per
-        //    product, never the whole upload).
-        //  - Per ingredient, a day's plates are deducted only if that business
-        //    day ended (D+1 03:00 Manila) AFTER the ingredient's last stock
-        //    count: a count taken later already includes them (shouldDeduct).
-        //  - Stock still floors at 0 (deduct_ingredient_stock); any shortfall
-        //    is written to the transaction's notes, sent once as a warning,
-        //    and returned in the upload warnings.
-        const deductingProductIds = new Set(
-          (productRows || []).filter((product) => !isArchivedProduct(product)).map((product) => product.id)
-        );
-        if (deductingProductIds.size > 0) {
-          const { recipeRows, canonicalUnitsAvailable } =
-            await this.loadSalesRecipeRows([...deductingProductIds]);
-
-          // The per-serving amount, in the ingredient's CANONICAL base unit.
-          //
-          //   unitService.resolve() throws UnitConversionError when the
-          //   recipe unit cannot be expressed in the base unit. There is no 1:1 fallback: a
-          //   guessed amount silently corrupts the stock level. The error is
-          //   caught per recipe below and turned into a warning.
-          const perServingFor = (recipe) => {
-            const ingredient = recipe.ingredients || {};
-            // A recipe row with no unit of its own is in the ingredient's own
-            // unit: that is the only unit available, not a guess.
-            const fromUnit = recipe.unit || ingredient.unit || null;
-            if (canonicalUnitsAvailable) {
-              return unitService.resolve(recipe.quantity_per_serving, fromUnit, {
-                id: recipe.ingredient_id,
-                name: ingredient.name,
-                unit: ingredient.unit,
-                base_unit: ingredient.base_unit,
-                unit_family: ingredient.unit_family,
-                stock_scale: ingredient.stock_scale,
-                allow_fractional: ingredient.allow_fractional,
-                material_type: ingredient.material_type || 'dry',
-              });
-            }
-            // The canonical columns are not in the database yet: the legacy
-            // conversion keeps working (it never throws).
-            const legacy = convertRecipeQuantity(
-              recipe.quantity_per_serving,
-              fromUnit,
-              ingredient.unit,
-              { materialType: ingredient.material_type || 'dry' }
-            );
-            return new Decimal(String(legacy == null ? 0 : legacy));
-          };
-
-          // Full recipe for every plate, except a modifier plate leaves out
-          // the one ingredient its rule maps to (and only if that ingredient
-          // is in this recipe). 10 plain + 3 NO EGG + 2 NO RICE -> egg 12,
-          // rice 13. Kept per sale date so each day can be checked against
-          // the last stock count; still deducted once per ingredient, so the
-          // 0-floor in deduct_ingredient_stock can't distort it.
-          const deductionsByDate = computeStockDeductionsByDate({
-            dailySalesRows,
-            modifierRows,
-            recipeRows: recipeRows || [],
-            deductingProductIds,
-            ingredientIdByKeyword,
-            perServingFor,
-          });
-
-          const ingredientInfo = new Map();
-          for (const recipe of recipeRows || []) {
-            if (!ingredientInfo.has(recipe.ingredient_id)) {
-              ingredientInfo.set(recipe.ingredient_id, {
-                id: recipe.ingredient_id,
-                name: recipe.ingredients?.name || null,
-                unit: recipe.ingredients?.unit || null,
-                base_unit: recipe.ingredients?.base_unit || null,
-                unit_family: recipe.ingredients?.unit_family || null,
-                stock_scale: recipe.ingredients?.stock_scale ?? null,
-                allow_fractional: recipe.ingredients?.allow_fractional ?? null,
-                material_type: recipe.ingredients?.material_type || 'dry',
-              });
-            }
-          }
-
-          // Latest 'adjustment' (an Edit of the stock) per ingredient. A
-          // 'restock' is a delivery, not a count, so it is not read here.
-          const ingredientIds = [...deductionsByDate.keys()];
-          const latestAdjustmentAt = new Map();
-          if (ingredientIds.length > 0) {
-            const { data: adjustments, error: adjustmentError } = await fetchAllRows(() => supabaseAdmin
-              .from('inventory_transactions')
-              .select('ingredient_id, created_at')
-              .eq('transaction_type', 'adjustment')
-              .in('ingredient_id', ingredientIds)
-              .order('created_at', { ascending: false })
-              .order('id', { ascending: true }));
-            if (adjustmentError) throw adjustmentError;
-            for (const row of adjustments || []) {
-              if (!latestAdjustmentAt.has(row.ingredient_id)) latestAdjustmentAt.set(row.ingredient_id, row.created_at);
-            }
-          }
-
-          const shortfalls = [];
-          const skippedForCount = [];
-          for (const [ingredientId, entry] of deductionsByDate) {
-            const info = ingredientInfo.get(ingredientId) || {};
-            // The last COUNT only: the newest adjustment transaction. The
-            // ingredient's own created_at is not a count (U7).
-            const lastCountAt = lastStockCountAt({
-              latestAdjustmentAt: latestAdjustmentAt.get(ingredientId) || null,
-            });
-
-            // Exact total, in the ingredient's base unit, over the days that
-            // still deduct. Nothing is rounded here.
-            let exact = new Decimal(0);
-            const skippedDays = [];
-            for (const [saleDate, amount] of [...entry.byDate].sort((a, b) => a[0].localeCompare(b[0]))) {
-              if (shouldDeduct(saleDate, lastCountAt)) exact = exact.plus(amount);
-              else skippedDays.push(saleDate);
-            }
-            entry.skippedDates = skippedDays;
-            if (skippedDays.length > 0) {
-              skippedForCount.push({
-                ingredientId,
-                name: info.name || `ingredient #${ingredientId}`,
-                days: skippedDays,
-                lastCountAt: lastCountAt ? lastCountAt.toISOString() : null,
-              });
-            }
-            if (!exact.gt(0)) continue;
-
-            // THE ONE rounding, at the very end (U4): mass/volume half-up to
-            // stock_scale, a discrete count CEILed to whole pieces.
-            const deduction = roundQuantity(exact, {
-              unit_family: info.unit_family,
-              allow_fractional: info.allow_fractional,
-              stock_scale: info.stock_scale,
-            });
-            if (!deduction.gt(0)) continue;
-
-            // Was SELECT quantity, then compute new = max(0, old - deduction)
-            // in JS, then UPDATE — two round trips wide open to a lost
-            // update: two concurrent uploads deducting the same ingredient
-            // can both read the same starting quantity before either write
-            // lands, so the second UPDATE clobbers the first instead of
-            // stacking. deduct_ingredient_stock() does the read, the clamp,
-            // the stock write AND the inventory_transactions log as one
-            // atomic statement in Postgres, so concurrent callers serialize
-            // on the row instead of racing.
-            //
-            // p_deduction goes over as TEXT: Postgres parses the decimal
-            // exactly, while a JSON float would already have lost digits.
-            // The (reference_type, reference_id, ingredient_id) key makes a
-            // retry of the same upload a no-op instead of a second deduction.
-            const { data: deductionResult, error: deductionError } = await supabaseAdmin
-              .rpc('deduct_ingredient_stock', {
-                p_ingredient_id: ingredientId,
-                p_deduction: deduction.toString(),
-                p_reference_type: 'upload',
-                p_reference_id: uploadId,
-                p_updated_by: numericId,
-                p_notes: skippedDays.length
-                  ? `Not deducted for ${skippedDays.join(', ')}: counted after that day ended.`
-                  : null,
-                p_requested_exact: exact.toString(),
-              });
-
-            if (deductionError) throw deductionError;
-
-            const deductionRow = Array.isArray(deductionResult) ? deductionResult[0] : deductionResult;
-            if (!deductionRow) {
-              throw new Error(`Ingredient ${ingredientId} not found while deducting stock`);
-            }
-
-            const previousQuantity = new Decimal(deductionRow.previous_quantity == null ? 0 : deductionRow.previous_quantity);
-            const appliedQuantity = new Decimal(deductionRow.applied_quantity == null ? 0 : deductionRow.applied_quantity);
-            const shortfallQuantity = new Decimal(deductionRow.shortfall_quantity == null ? 0 : deductionRow.shortfall_quantity);
-            const alreadyApplied = Boolean(deductionRow.already_applied);
-
-            const shortfall = shortfallQuantity.gt(0)
-              ? describeShortfall({
-                ingredientName: info.name,
-                unit: info.unit,
-                requested: exact,
-                required: deduction,
-                inStock: previousQuantity,
-              })
-              : null;
-
-            if (shortfall) {
-              shortfalls.push({
-                ingredientId,
-                name: info.name,
-                ...shortfall,
-                applied: appliedQuantity.toString(),
-                requestedExact: exact.toString(),
-                requiredQuantity: deduction.toString(),
-                availableQuantity: previousQuantity.toString(),
-                unit: info.unit || null,
-                alreadyApplied,
-              });
-            }
-          }
-
-          // An ingredient whose recipe unit could not be resolved is NOT
-          // deducted: a warning says so instead of the stock silently going
-          // down by a guessed amount.
-          const unconvertible = deductionsByDate.unconvertible || [];
-          unconvertibleSummary = unconvertible.map((item) => ({
-            ingredientId: item.ingredient_id,
-            name: ingredientInfo.get(item.ingredient_id)?.name || `ingredient #${item.ingredient_id}`,
-            warnings: item.warnings || [],
-          }));
-          for (const item of unconvertible) {
-            const info = ingredientInfo.get(item.ingredient_id) || {};
-            const reason = (item.warnings || [])[0]?.reason || 'the recipe unit could not be resolved';
-            warnings.push(
-              `Could not convert the recipe unit for ${info.name || `ingredient #${item.ingredient_id}`}: `
-              + `${reason}. Its stock was not deducted.`
-            );
-          }
-
-          for (const item of shortfalls) {
-            warnings.push(item.message);
-          }
-          if (skippedForCount.length > 0) {
-            warnings.push(
-              `Stock was not deducted for ${skippedForCount.length} ingredient(s) on days before their last stock count `
-              + `(the count already includes those plates): ${skippedForCount.map((s) => s.name).join(', ')}.`
-            );
-          }
-          shortfallSummary = shortfalls;
-          stockNotDeductedSummary = [
-            ...skippedForCount.map((s) => ({
-              ingredientId: s.ingredientId,
-              ingredient: s.name,
-              reason: 'counted_after',
-              days: s.days,
-              lastCountAt: s.lastCountAt,
-              message: `${s.name}: sales on ${s.days.join(', ')} were not deducted because the stock `
-                + `was edited (treated as a stock count) on ${s.lastCountAt || 'a later date'}, `
-                + 'after those days ended.',
-            })),
-            ...unconvertibleSummary.map((u) => ({
-              ingredientId: u.ingredientId,
-              ingredient: u.name,
-              reason: 'unit_conversion',
-              days: [],
-              lastCountAt: null,
-              message: `${u.name}: not deducted — ${(u.warnings || [])[0]?.reason || 'the recipe unit could not be converted'}.`,
-            })),
-          ];
-          if (shortfalls.length > 0) {
-            await this.notifyStockShortfalls(shortfalls, uploadId);
-          }
-        }
       } catch (postInsertError) {
-        console.error('Sales data was saved, but follow-up processing (category backfill / stock deduction / status reconciliation) failed:', postInsertError);
+        console.error('Sales data and stock deductions were saved, but follow-up processing (category backfill / status reconciliation) failed:', postInsertError);
         warnings.push(`Sales data was saved, but some follow-up processing did not complete: ${postInsertError.message}`);
-        followUpErrors.push(`Stock deduction or status update did not complete: ${postInsertError.message}`);
+        followUpErrors.push(`Product category or status update did not complete: ${postInsertError.message}`);
       }
 
       return {
@@ -1320,6 +1063,367 @@ class UploadService {
       console.error('Error processing sales data:', error);
       throw error;
     }
+  }
+
+  /**
+   * What this sales file would take out of stock, per ingredient, WITHOUT
+   * writing anything (owner's v3 flowchart, page 2; migration 017).
+   *
+   *  - Every product in the file that is NOT archived deducts, whatever its
+   *    status: New and Discontinued dishes used real ingredients too. A
+   *    product with no recipe simply adds nothing.
+   *  - Per ingredient, a day's plates count only if that business day ended
+   *    (D+1 03:00 Manila) AFTER the ingredient's last stock count: a count
+   *    taken later already includes them (shouldDeduct).
+   *  - An ingredient whose recipe unit cannot be resolved is left out and
+   *    reported, never deducted by a guessed amount.
+   *  - Each total is rounded ONCE, at the end (roundQuantity).
+   *
+   * Returns {
+   *   items: [{ ingredientId, info, exact: Decimal, deduction: Decimal, skippedDays, notes }],
+   *   unconvertibleSummary, stockNotDeductedSummary,
+   * }
+   * Throws on a database error: without a plan the stock cannot be checked,
+   * so the upload must not be saved.
+   */
+  async planStockDeductions({
+    dailySalesRows = [],
+    modifierRows = [],
+    deductingProductIds = new Set(),
+    ingredientIdByKeyword = new Map(),
+    warnings = [],
+  } = {}) {
+    const empty = { items: [], unconvertibleSummary: [], stockNotDeductedSummary: [] };
+    if (deductingProductIds.size === 0 || dailySalesRows.length === 0) return empty;
+
+    // Ingredient columns, most complete first. The canonical ones
+    // (base_unit, unit_family, stock_scale, allow_fractional, pack_size,
+    // density_g_per_ml) only exist once the inventory migration has run;
+    // until then the older columns are used and the legacy conversion
+    // keeps working, so an un-migrated database still uploads fine.
+    const CANONICAL_INGREDIENT_COLS = 'name, unit, base_unit, unit_family, stock_scale, allow_fractional, pack_size, density_g_per_ml, grams_per_cup, pack_qty, pack_unit';
+    const LEGACY_INGREDIENT_COLS = 'name, unit, grams_per_cup, created_at, pack_qty, pack_unit';
+    const MINIMAL_INGREDIENT_COLS = 'name, unit, grams_per_cup, created_at';
+    const buildRecipeColumns = (withUnit, cols) => (withUnit
+      ? `product_id, ingredient_id, quantity_per_serving, unit, ingredients!inner(${cols})`
+      : `product_id, ingredient_id, quantity_per_serving, ingredients!inner(${cols})`);
+
+    const attempts = [
+      { withUnit: true, cols: CANONICAL_INGREDIENT_COLS, canonical: true },
+      { withUnit: true, cols: LEGACY_INGREDIENT_COLS, canonical: false },
+      { withUnit: false, cols: CANONICAL_INGREDIENT_COLS, canonical: true },
+      { withUnit: false, cols: LEGACY_INGREDIENT_COLS, canonical: false },
+      { withUnit: false, cols: MINIMAL_INGREDIENT_COLS, canonical: false },
+    ];
+    let recipeResult = null;
+    let canonicalUnitsAvailable = false;
+    for (const attempt of attempts) {
+      const attemptResult = await supabaseAdmin
+        .from('product_ingredients')
+        .select(buildRecipeColumns(attempt.withUnit, attempt.cols))
+        .in('product_id', [...deductingProductIds]);
+      recipeResult = attemptResult;
+      if (!attemptResult.error) {
+        canonicalUnitsAvailable = attempt.canonical;
+        break;
+      }
+      if (!isMissingColumnError(attemptResult.error)) break; // a real error, not a missing column
+    }
+
+    const { data: recipeRows, error: recipeError } = recipeResult || {};
+    if (recipeError) throw recipeError;
+
+    const recipeIngredientIds = [...new Set((recipeRows || []).map((row) => row.ingredient_id))];
+    const unitConversionsByIngredient = new Map();
+    if (recipeIngredientIds.length > 0) {
+      const { data: conversions, error: conversionsError } = await supabaseAdmin
+        .from('ingredient_unit_conversions')
+        .select('ingredient_id, from_unit, to_unit, factor')
+        .in('ingredient_id', recipeIngredientIds);
+      if (conversionsError && !isMissingTableError(conversionsError)) throw conversionsError;
+      if (conversionsError) {
+        warnings.push('Ingredient-specific unit overrides are unavailable until the inventory stock hardening migration is applied.');
+      }
+      for (const conversion of conversions || []) {
+        const list = unitConversionsByIngredient.get(conversion.ingredient_id) || [];
+        list.push(conversion);
+        unitConversionsByIngredient.set(conversion.ingredient_id, list);
+      }
+    }
+
+    // The per-serving amount, in the ingredient's CANONICAL base unit.
+    //
+    //   unitService.resolve() throws UnitConversionError when the
+    //   recipe unit cannot be expressed in the base unit (no density, no
+    //   pack size, an unknown unit). There is no 1:1 fallback: a
+    //   guessed amount silently corrupts the stock level. The error is
+    //   caught per recipe below and turned into a warning.
+    const perServingFor = (recipe) => {
+      const ingredient = recipe.ingredients || {};
+      // A recipe row with no unit of its own is in the ingredient's own
+      // unit: that is the only unit available, not a guess.
+      const fromUnit = recipe.unit || ingredient.unit || null;
+      if (canonicalUnitsAvailable) {
+        return unitService.resolve(recipe.quantity_per_serving, fromUnit, {
+          id: recipe.ingredient_id,
+          name: ingredient.name,
+          unit: ingredient.unit,
+          base_unit: ingredient.base_unit,
+          unit_family: ingredient.unit_family,
+          stock_scale: ingredient.stock_scale,
+          allow_fractional: ingredient.allow_fractional,
+          pack_size: ingredient.pack_size,
+          density_g_per_ml: ingredient.density_g_per_ml,
+          grams_per_cup: ingredient.grams_per_cup,
+          unitConversions: unitConversionsByIngredient.get(recipe.ingredient_id) || [],
+        });
+      }
+      // The canonical columns are not in the database yet: the legacy
+      // conversion keeps working (it never throws).
+      const legacy = convertRecipeQuantity(
+        recipe.quantity_per_serving,
+        fromUnit,
+        ingredient.unit,
+        {
+          gramsPerCup: ingredient.grams_per_cup,
+          ingredientName: ingredient.name,
+          packQty: ingredient.pack_qty,
+          packUnit: ingredient.pack_unit,
+        }
+      );
+      return new Decimal(String(legacy == null ? 0 : legacy));
+    };
+
+    // Full recipe for every plate, except a modifier plate leaves out
+    // the one ingredient its rule maps to (and only if that ingredient
+    // is in this recipe). 10 plain + 3 NO EGG + 2 NO RICE -> egg 12,
+    // rice 13. Kept per sale date so each day can be checked against
+    // the last stock count; still deducted once per ingredient, so the
+    // 0-floor in deduct_ingredient_stock can't distort it.
+    const deductionsByDate = computeStockDeductionsByDate({
+      dailySalesRows,
+      modifierRows,
+      recipeRows: recipeRows || [],
+      deductingProductIds,
+      ingredientIdByKeyword,
+      perServingFor,
+    });
+
+    const ingredientInfo = new Map();
+    for (const recipe of recipeRows || []) {
+      if (!ingredientInfo.has(recipe.ingredient_id)) {
+        ingredientInfo.set(recipe.ingredient_id, {
+          id: recipe.ingredient_id,
+          name: recipe.ingredients?.name || null,
+          unit: recipe.ingredients?.unit || null,
+          base_unit: recipe.ingredients?.base_unit || null,
+          unit_family: recipe.ingredients?.unit_family || null,
+          stock_scale: recipe.ingredients?.stock_scale ?? null,
+          allow_fractional: recipe.ingredients?.allow_fractional ?? null,
+          pack_size: recipe.ingredients?.pack_size ?? null,
+          density_g_per_ml: recipe.ingredients?.density_g_per_ml ?? null,
+          grams_per_cup: recipe.ingredients?.grams_per_cup ?? null,
+          unitConversions: unitConversionsByIngredient.get(recipe.ingredient_id) || [],
+        });
+      }
+    }
+
+    // Latest 'adjustment' (an Edit of the stock) per ingredient. A
+    // 'restock' is a delivery, not a count, so it is not read here.
+    const ingredientIds = [...deductionsByDate.keys()];
+    const latestAdjustmentAt = new Map();
+    if (ingredientIds.length > 0) {
+      const { data: adjustments, error: adjustmentError } = await fetchAllRows(() => supabaseAdmin
+        .from('inventory_transactions')
+        .select('ingredient_id, created_at')
+        .eq('transaction_type', 'adjustment')
+        .in('ingredient_id', ingredientIds)
+        .order('created_at', { ascending: false })
+        .order('id', { ascending: true }));
+      if (adjustmentError) throw adjustmentError;
+      for (const row of adjustments || []) {
+        if (!latestAdjustmentAt.has(row.ingredient_id)) latestAdjustmentAt.set(row.ingredient_id, row.created_at);
+      }
+    }
+
+    const items = [];
+    const skippedForCount = [];
+    for (const [ingredientId, entry] of deductionsByDate) {
+      const info = ingredientInfo.get(ingredientId) || {};
+      // The last COUNT only: the newest adjustment transaction. The
+      // ingredient's own created_at is not a count (U7).
+      const lastCountAt = lastStockCountAt({
+        latestAdjustmentAt: latestAdjustmentAt.get(ingredientId) || null,
+      });
+
+      // Exact total, in the ingredient's base unit, over the days that
+      // still deduct. Nothing is rounded here.
+      let exact = new Decimal(0);
+      const skippedDays = [];
+      for (const [saleDate, amount] of [...entry.byDate].sort((a, b) => a[0].localeCompare(b[0]))) {
+        if (shouldDeduct(saleDate, lastCountAt)) exact = exact.plus(amount);
+        else skippedDays.push(saleDate);
+      }
+      entry.skippedDates = skippedDays;
+      if (skippedDays.length > 0) {
+        skippedForCount.push({
+          ingredientId,
+          name: info.name || `ingredient #${ingredientId}`,
+          days: skippedDays,
+          lastCountAt: lastCountAt ? lastCountAt.toISOString() : null,
+        });
+      }
+      if (!exact.gt(0)) continue;
+
+      // THE ONE rounding, at the very end (U4): mass/volume half-up to
+      // stock_scale, a discrete count CEILed to whole pieces.
+      const deduction = roundQuantity(exact, {
+        unit_family: info.unit_family,
+        allow_fractional: info.allow_fractional,
+        stock_scale: info.stock_scale,
+      });
+      if (!deduction.gt(0)) continue;
+
+      items.push({
+        ingredientId,
+        info,
+        exact,
+        deduction,
+        skippedDays,
+        notes: skippedDays.length
+          ? `Not deducted for ${skippedDays.join(', ')}: counted after that day ended.`
+          : null,
+      });
+    }
+
+    // An ingredient whose recipe unit could not be resolved is NOT
+    // deducted: a warning says so instead of the stock silently going
+    // down by a guessed amount.
+    const unconvertible = deductionsByDate.unconvertible || [];
+    const unconvertibleSummary = unconvertible.map((item) => ({
+      ingredientId: item.ingredient_id,
+      name: ingredientInfo.get(item.ingredient_id)?.name || `ingredient #${item.ingredient_id}`,
+      warnings: item.warnings || [],
+    }));
+    for (const item of unconvertible) {
+      const info = ingredientInfo.get(item.ingredient_id) || {};
+      const reason = (item.warnings || [])[0]?.reason || 'the recipe unit could not be resolved';
+      warnings.push(
+        `Could not convert the recipe unit for ${info.name || `ingredient #${item.ingredient_id}`}: `
+        + `${reason}. Its stock was not deducted.`
+      );
+    }
+    if (skippedForCount.length > 0) {
+      warnings.push(
+        `Stock was not deducted for ${skippedForCount.length} ingredient(s) on days before their last stock count `
+        + `(the count already includes those plates): ${skippedForCount.map((s) => s.name).join(', ')}.`
+      );
+    }
+    const stockNotDeductedSummary = [
+      ...skippedForCount.map((s) => ({
+        ingredientId: s.ingredientId,
+        ingredient: s.name,
+        reason: 'counted_after',
+        days: s.days,
+        lastCountAt: s.lastCountAt,
+        message: `${s.name}: sales on ${s.days.join(', ')} were not deducted because the stock `
+          + `was edited (treated as a stock count) on ${s.lastCountAt || 'a later date'}, `
+          + 'after those days ended.',
+      })),
+      ...unconvertibleSummary.map((u) => ({
+        ingredientId: u.ingredientId,
+        ingredient: u.name,
+        reason: 'unit_conversion',
+        days: [],
+        lastCountAt: null,
+        message: `${u.name}: not deducted — ${(u.warnings || [])[0]?.reason || 'the recipe unit could not be converted'}.`,
+      })),
+    ];
+
+    return { items, unconvertibleSummary, stockNotDeductedSummary };
+  }
+
+  /**
+   * The ingredients in `items` that do not have enough stock right now.
+   * A fast, read-only pre-check so a refused file costs one query and gets a
+   * precise message. It is NOT the guarantee: two uploads can both pass it at
+   * the same moment. The guarantee is the locked re-check inside
+   * apply_sales_upload() (migration 017).
+   */
+  async findInsufficientStock(items = []) {
+    if (!items.length) return [];
+    const ids = [...new Set(items.map((item) => item.ingredientId))];
+    const { data, error } = await supabaseAdmin
+      .from('ingredients')
+      .select('id, name, unit, quantity')
+      .in('id', ids);
+    if (error) throw error;
+    const byId = new Map((data || []).map((row) => [row.id, row]));
+    const short = [];
+    for (const item of items) {
+      const row = byId.get(item.ingredientId);
+      const available = Decimal.max(0, new Decimal(row && row.quantity != null ? String(row.quantity) : 0));
+      if (item.deduction.gt(available)) {
+        short.push({
+          ingredientId: item.ingredientId,
+          name: (row && row.name) || item.info?.name || null,
+          unit: (row && row.unit) || item.info?.unit || null,
+          required: item.deduction.toString(),
+          available: available.toString(),
+          shortfall: item.deduction.minus(available).toString(),
+        });
+      }
+    }
+    return short;
+  }
+
+  /**
+   * Saves the file's daily_sales rows AND its deductions, all or nothing,
+   * through apply_sales_upload() (migration 017). It locks the ingredient
+   * rows, re-checks the stock, and inserts + deducts in one transaction. If
+   * it reports a shortfall, nothing was written and an
+   * InsufficientStockError is thrown.
+   *
+   * There is deliberately NO fallback to the old insert-then-deduct path:
+   * that path could still come up short (two uploads racing), and the rule
+   * is that a shortfall must never be deducted. If the function is missing,
+   * the upload fails with nothing saved and a message naming the migration.
+   */
+  async commitSalesAndStock({ uploadId, numericId, dailySalesRows = [], items = [], filename = null }) {
+    if (dailySalesRows.length === 0) return { deductions: [] };
+
+    const { data, error } = await supabaseAdmin.rpc('apply_sales_upload', {
+      p_upload_id: uploadId,
+      p_updated_by: numericId,
+      p_daily_sales: dailySalesRows.map((row) => ({
+        product_id: row.product_id,
+        sale_date: row.sale_date,
+        quantity_sold: row.quantity_sold,
+      })),
+      // Amounts as TEXT: Postgres parses the decimal exactly.
+      p_deductions: items.map((item) => ({
+        ingredient_id: item.ingredientId,
+        deduction: item.deduction.toString(),
+        requested_exact: item.exact.toString(),
+        notes: item.notes,
+      })),
+    });
+
+    if (error && isMissingFunctionError(error)) {
+      const missing = new Error(
+        'The database is missing apply_sales_upload(). Run backend/migrations/017_sales_upload_requires_stock.sql '
+        + 'in the Supabase SQL editor. Nothing from this file was saved.'
+      );
+      missing.code = 'STOCK_GUARD_MISSING';
+      throw missing;
+    }
+    if (error) throw error;
+    if (!data || data.ok !== true) {
+      throw new InsufficientStockError((data && data.shortfalls) || [], { filename });
+    }
+    return {
+      deductions: (data.deductions || []).map((row) => ({ ...row, ingredientId: row.ingredient_id })),
+    };
   }
 
   validateFileColumns(headers, requiredColumns, fileType) {
@@ -2156,7 +2260,9 @@ class UploadService {
 
   async hasUpcomingForecasts() {
     if (!this.isSupabaseReady()) return false;
-    const today = new Date().toISOString().slice(0, 10);
+    // Manila date, not UTC: between 00:00 and 08:00 Manila the UTC date is
+    // still yesterday, so "upcoming" used to include yesterday's rows.
+    const today = dayjs().tz(PH_TZ).format('YYYY-MM-DD');
     const { count, error } = await supabaseAdmin
       .from('forecasts')
       .select('id', { count: 'exact', head: true })
@@ -2370,31 +2476,21 @@ class UploadService {
       settle(this.getUnmappedActiveProductInfo()),
     ]);
 
+    // A trained model ALWAYS gets the full dashboard (owner decision, Oct 24
+    // 2026). "No upcoming forecast" used to map to 'training-in-progress',
+    // so a forecast that failed after a successful training (or simply had
+    // not run yet) left the owner looking at "Training in progress" for a
+    // model that was already trained. It is now a notice on the full
+    // dashboard, like stale data and missing recipes, with a Generate
+    // Forecast action. 'training-in-progress' is only for a real training
+    // run (mlService.isTrainingInFlight(), checked above).
     const hasForecasts = take(hasForecastsResult);
-    if (!hasForecasts) {
-      // A model exists but no current forecasts yet (e.g. trained just
-      // now, first /forecast run hasn't landed). No dedicated state for
-      // this narrow window in the 7-state spec — training-in-progress is
-      // the closest fit, since the dashboard genuinely isn't usable yet
-      // for a different reason than "not trained at all". Deliberately
-      // checked BEFORE the attention checks below, regardless of accuracy:
-      // a system that has never yet attempted to operate (no forecast run
-      // has happened at all) isn't a production problem yet — judging it
-      // as one is premature. (A prior version of this function reordered
-      // this check to run AFTER the attention checks specifically so a bad
-      // model would surface immediately — that meant a system whose
-      // accuracy never improves could get permanently stuck in
-      // 'data-needs-attention' without ever reaching 'training-in-progress'
-      // (post-model), 'forecasts-ready-recipes-pending', or
-      // 'fully-operational', since nothing was ever wired up to actually
-      // call POST /api/ml/forecast and flip hasUpcomingForecasts() to
-      // true. That's fixed separately — see the Generate Forecast button
-      // and the cron scheduler — which is what makes restoring this
-      // original order safe again.)
-      return { state: 'training-in-progress', stats, progress };
-    }
+    const noUpcomingForecast = !hasForecasts;
+    const forecastInFlight = typeof mlService.isForecastInFlight === 'function'
+      ? mlService.isForecastInFlight()
+      : false;
 
-    // Model trained + forecasts exist — NOW check the data-needs-attention
+    // Model trained — NOW check the data-needs-attention
     // OR before deciding forecasts-ready-recipes-pending vs
     // fully-operational, since staleness/accuracy/retraining/data-quality
     // issues can happen to an otherwise-complete dashboard. This is the
@@ -2447,8 +2543,8 @@ class UploadService {
 
     const { hasUnmapped, unmappedCount, activeCount } = take(unmappedResult);
 
-    // Owner decision (Oct 14 2026): once a model is trained and forecasts
-    // exist, the dashboard is ALWAYS the full operational screen. Problems
+    // Owner decision (Oct 14 2026, widened Oct 24 2026): once a model is
+    // trained, the dashboard is ALWAYS the full operational screen. Problems
     // (stale data, accuracy, retraining due, data quality, missing recipes)
     // ride along as notices shown above it, instead of replacing it with
     // 'data-needs-attention' / 'forecasts-ready-recipes-pending'.
@@ -2462,6 +2558,7 @@ class UploadService {
         isLowAccuracy, accuracy, baselineAccuracy, beatsBaseline: beatsBaselineFlag,
         needsRetraining, daysSinceTraining,
         dataQualityIssue,
+        noUpcomingForecast, forecastInFlight,
       },
       mapping: { unmappedCount, activeCount, hasUnmapped },
     };

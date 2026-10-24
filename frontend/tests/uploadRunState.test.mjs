@@ -23,6 +23,7 @@ const mod = await import('../src/features/datamanagement/utils/uploadRunState.js
 const {
   isRunAlive, setRunAlive, peekStoredUploadStatus, getStoredUploadStatus,
   saveUploadStatus, getStoredFiles, clearUploadStatus, packRun, unpackRun, initialRunView,
+  describeRecovery,
 } = mod;
 
 const failures = [];
@@ -118,9 +119,9 @@ dead.fileStarted(0); dead.fileStarted(1);
 setRunAlive('sales', false);   // a reload wipes in-memory state AND the run itself
 
 const afterReload = getStoredUploadStatus('sales');
-check('RELOAD: a leftover "loading" is corrected to "error"', afterReload.status === 'error', `got ${afterReload.status}`);
+check('RELOAD: a leftover sales "loading" becomes "interrupted" (not a fake "failed")', afterReload.status === 'interrupted', `got ${afterReload.status}`);
 check('RELOAD: the correction is written back to storage',
-      peekStoredUploadStatus('sales').status === 'error');
+      peekStoredUploadStatus('sales').status === 'interrupted');
 check('RELOAD: dead run\'s files are NOT shown as "Uploading..."',
       initialRunView('sales').processing.size === 0, `got ${initialRunView('sales').processing.size}`);
 
@@ -175,6 +176,27 @@ reset();
 saveUploadStatus('menu', { status: 'loading', progress: 10 });
 check('menu: a stored "loading" is still corrected to "error" on mount (old behaviour kept)',
       getStoredUploadStatus('menu').status === 'error');
+
+// ---------------------------------------------------------------
+// 8. After a refresh: the server says which files were saved
+// ---------------------------------------------------------------
+const files = [{ name: 'd1.csv' }, { name: 'd2.csv' }, { name: 'd3.csv' }, { name: 'd4.csv' }];
+const rec = describeRecovery(files, [
+  { filename: 'd1.csv', state: 'saved' },
+  { filename: 'd2.csv', state: 'processing' },
+  { filename: 'd3.csv', state: 'failed', reason: 'Not enough stock for 1 ingredient(s): Rice. The sales file was not saved.' },
+  // d4.csv: not in the answer at all -> never received
+]);
+check('recovery: saved / processing / not saved, per file',
+      JSON.stringify([...rec.byIndex.values()].map((r) => r.state)) === JSON.stringify(['saved', 'processing', 'not_saved', 'not_saved']),
+      JSON.stringify([...rec.byIndex.values()]));
+check('recovery: labels the owner sees',
+      rec.byIndex.get(0).label === '✓ Saved' && rec.byIndex.get(2).label === 'Not saved — select it again');
+check('recovery: a failed file keeps its reason as the tooltip', /Not enough stock/.test(rec.byIndex.get(2).title));
+check('recovery: counts', JSON.stringify(rec.counts) === JSON.stringify({ saved: 1, processing: 1, notSaved: 2 }), JSON.stringify(rec.counts));
+check('recovery: banner sentence',
+      rec.message === 'Upload interrupted by a page refresh. 1 of 4 file(s) were saved. 1 still processing — check again in a moment. Select the 2 file(s) marked "Not saved" again.',
+      rec.message);
 
 clearUploadStatus('sales');
 

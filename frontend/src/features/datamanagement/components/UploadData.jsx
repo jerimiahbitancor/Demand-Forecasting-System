@@ -29,8 +29,9 @@ import {
   packRun,
   unpackRun,
   initialRunView,
+  describeRecovery,
 } from "../utils/uploadRunState";
-import { mergeUploadSummaries, collectCellErrors } from "../utils/uploadSummary";
+import { mergeUploadSummaries, collectCellErrors, collectStockRefusals } from "../utils/uploadSummary";
 import UploadSummaryReport from "./UploadSummaryReport";
 
 // Runs `worker(item, index)` over `items` in fixed-size batches instead of
@@ -144,6 +145,13 @@ const UploadData = ({
   // Upload summary of the last sales run (stays until the owner closes it;
   // the panel itself resets 3 s after a run).
   const [salesReport, setSalesReport] = useState(null);
+  // After a refresh mid-upload: what the server says happened to each file
+  // ({ checking, error, byIndex, counts, message }, see describeRecovery).
+  // Starts as "checking" when this page load found an interrupted run, so the
+  // effect below only has to start the request (no setState inside it).
+  const [salesRecovery, setSalesRecovery] = useState(
+    () => (getStoredUploadStatus('sales')?.status === 'interrupted' ? { checking: true, error: null } : null)
+  );
 
   // Menu upload state - MULTIPLE FILES
   const [menuFiles, setMenuFiles] = useState(() => getStoredFiles('menu'));
@@ -282,6 +290,66 @@ const UploadData = ({
     },
     (error) => Promise.reject(error)
   );
+
+  // ---- Page refresh during an upload --------------------------------------
+  // 1. Warn before leaving while an upload started on this page is running.
+  //    The browser shows its own generic "Leave site?" text (custom text is
+  //    ignored by modern browsers); returnValue must be set for Chrome.
+  useEffect(() => {
+    const warnIfUploading = (event) => {
+      if (isRunAlive('sales') || menuSubmittingRef.current) {
+        event.preventDefault();
+        event.returnValue = '';
+      }
+    };
+    window.addEventListener('beforeunload', warnIfUploading);
+    return () => window.removeEventListener('beforeunload', warnIfUploading);
+  }, []);
+
+  // 2. After a refresh anyway: ask the server which of the stored files it
+  //    actually saved (a refresh kills the browser's requests, not the
+  //    server's work), instead of claiming the whole run failed.
+  // Fetches the answer and returns the recovery object; never throws and
+  // never touches state, so it can be used from an effect too.
+  const fetchRecovery = async (files) => {
+    const names = files.map((file) => file.name).filter(Boolean);
+    try {
+      const response = await apiClient.post('/upload/status-by-filename', { filenames: names });
+      return { checking: false, error: null, ...describeRecovery(files, response.data?.data || []) };
+    } catch (error) {
+      return {
+        checking: false,
+        error: error.response?.data?.error || "Couldn't check which files were saved. Try again.",
+      };
+    }
+  };
+
+  // "Check again" button.
+  const checkInterruptedRun = async () => {
+    if (salesFiles.length === 0) return;
+    setSalesRecovery((prev) => ({ ...(prev || {}), checking: true, error: null }));
+    setSalesRecovery(await fetchRecovery(salesFiles));
+  };
+
+  // Once, for a run that was interrupted before this page loaded. The
+  // initial state above already says "checking".
+  const recoveryCheckedRef = useRef(false);
+  useEffect(() => {
+    if (recoveryCheckedRef.current) return undefined;
+    if (salesUploadStatus !== 'interrupted' || salesFiles.length === 0) return undefined;
+    recoveryCheckedRef.current = true;
+    let cancelled = false;
+    fetchRecovery(salesFiles).then((result) => {
+      if (!cancelled) setSalesRecovery(result);
+    });
+    return () => { cancelled = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [salesUploadStatus, salesFiles]);
+
+  const clearInterruptedRun = () => {
+    setSalesRecovery(null);
+    handleSalesDiscard();
+  };
 
   const readFileData = (file) => {
     return new Promise((resolve, reject) => {
@@ -584,6 +652,7 @@ const UploadData = ({
     if (validFiles.length === 0) return;
 
     clearUploadStatus('sales');
+    setSalesRecovery(null);
     setSalesFiles(prev => [...prev.filter(file => !file.isRestored), ...validFiles]);
     setSalesUploadStatus(null);
     setSalesProgress(0);
@@ -797,6 +866,12 @@ const UploadData = ({
           // responses) — expected and harmless, not a real failure. Any
           // other status (or no response at all) is a genuine error.
           const isDuplicate = err?.response?.data?.duplicate === true || err?.response?.status === 409;
+          // 422 "Not enough stock" (migration 017): an ingredient did not
+          // have enough stock, so NOTHING from this file was saved. Not a
+          // duplicate and not a crash: its own status, so the owner sees
+          // exactly which files to upload again after restocking.
+          const isStockRefusal = err?.response?.status === 422 && err?.response?.data?.insufficientStock === true;
+          const status = isDuplicate ? 'duplicate' : isStockRefusal ? 'insufficient_stock' : 'error';
           const message = err?.response?.data?.message || err?.response?.data?.error || err?.message || 'Upload failed';
           const stockShortages = Array.isArray(err?.response?.data?.shortages)
             ? err.response.data.shortages
@@ -806,17 +881,18 @@ const UploadData = ({
             : [];
           // 400 "Invalid sales file": the backend lists each bad cell.
           const cellErrors = err?.response?.status === 400 ? collectCellErrors(file.name, err.response.data) : [];
+          const stockRefusals = isStockRefusal ? collectStockRefusals(file.name, err.response.data) : [];
           fileOutcomes.set(i, {
-            status: isDuplicate ? 'duplicate' : 'error',
+            status,
             message,
             cellErrors,
             stockShortages,
             stockValidationErrors,
-          });
-          run.failed.set(i, { status: isDuplicate ? 'duplicate' : 'error', message, stockShortages, stockValidationErrors });
+         , stockRefusals });
+          run.failed.set(i, { status, message, stockShortages, stockValidationErrors });
           setSalesFailedIndices((prev) => {
             const next = new Map(prev);
-            next.set(i, { status: isDuplicate ? 'duplicate' : 'error', message, stockShortages, stockValidationErrors });
+            next.set(i, { status, message, stockShortages, stockValidationErrors });
             return next;
           });
           throw err;
@@ -838,6 +914,7 @@ const UploadData = ({
 
       let duplicateCount = 0;
       let errorCount = 0;
+      let stockRefusedCount = 0;
       salesResults.forEach((result, i) => {
         if (result.status === 'fulfilled' && result.value?.data?.success) {
           uploaded++;
@@ -847,6 +924,8 @@ const UploadData = ({
           const outcome = fileOutcomes.get(i);
           if (outcome?.status === 'duplicate') {
             duplicateCount++;
+          } else if (outcome?.status === 'insufficient_stock') {
+            stockRefusedCount++;
           } else {
             errorCount++;
           }
@@ -865,11 +944,12 @@ const UploadData = ({
             .filter(Boolean)
         ),
         cellErrors: [...fileOutcomes.values()].flatMap((outcome) => outcome.cellErrors || []),
+        stockRefusals: [...fileOutcomes.values()].flatMap((outcome) => outcome.stockRefusals || []),
         filesUploaded: uploaded,
         totalFiles,
       });
 
-      if (uploaded === 0 && errorCount === 0 && duplicateCount > 0) {
+      if (uploaded === 0 && errorCount === 0 && stockRefusedCount === 0 && duplicateCount > 0) {
         // Every file that "failed" was actually already uploaded before —
         // nothing is broken and no data was lost, so this doesn't belong
         // in the same red "Upload failed" path as a real error. Treat it
@@ -944,7 +1024,10 @@ const UploadData = ({
       if (salesToastId) toast.dismiss(salesToastId);
       const duplicateMessage = duplicateCount > 0 ? ` ${duplicateCount} already uploaded previously (skipped).` : '';
       const errorMessage = errorCount > 0 ? ` ${errorCount} failed.` : '';
-      const id = toast.success(`Uploaded ${uploaded}/${totalFiles} sales files.${duplicateMessage}${errorMessage}`);
+      const stockMessage = stockRefusedCount > 0
+        ? ` ${stockRefusedCount} not saved: not enough stock (see the upload summary).`
+        : '';
+      const id = toast.success(`Uploaded ${uploaded}/${totalFiles} sales files.${duplicateMessage}${errorMessage}${stockMessage}`);
       setSalesToastId(id);
 
       await checkUploadStatus();
@@ -1014,6 +1097,14 @@ const UploadData = ({
         // backend that isn't there just repeats the same silent hang, so
         // this is surfaced immediately instead of a generic message.
         const id = toast.error("Can't reach the server — check that the backend is running.");
+        setSalesToastId(id);
+      } else if (underlying.response?.status === 422 && underlying.response?.data?.insufficientStock) {
+        const names = (underlying.response.data.shortfalls || []).map((s) => s.name).filter(Boolean);
+        const id = toast.error(
+          `Not saved: not enough stock${names.length ? ` for ${names.slice(0, 3).join(', ')}${names.length > 3 ? '…' : ''}` : ''}. `
+          + 'See the upload summary below.',
+          { duration: 8000 }
+        );
         setSalesToastId(id);
       } else if (underlying.response?.status === 409) {
         const id = toast.error(`Upload failed: ${underlying.response?.data?.message || 'Duplicate file detected'}`);
@@ -1432,7 +1523,7 @@ const UploadData = ({
   const ProgressBar = ({ progress, status }) => {
     const getColor = () => {
       if (status === 'error') return '#ef4444';
-      if (status === 'duplicate') return '#f59e0b';
+      if (status === 'duplicate' || status === 'interrupted') return '#f59e0b';
       if (status === 'success') return '#10b981';
       if (progress < 100) return '#3b82f6';
       return '#10b981';
@@ -1476,7 +1567,7 @@ const UploadData = ({
           fontSize: '12px',
           color: '#6b7280'
         }}>
-          <span>{status === 'loading' ? 'Uploading...' : status === 'success' ? 'Complete!' : status === 'duplicate' ? 'Already uploaded' : status === 'error' ? 'Failed' : 'Ready'}</span>
+          <span>{status === 'loading' ? 'Uploading...' : status === 'success' ? 'Complete!' : status === 'duplicate' ? 'Already uploaded' : status === 'error' ? 'Failed' : status === 'interrupted' ? 'Interrupted' : 'Ready'}</span>
           <span>{Math.min(progress, 100)}%</span>
         </div>
         <style>{`
@@ -1500,7 +1591,7 @@ const UploadData = ({
   // processingIndices/doneIndices are Sets, since UPLOAD_CONCURRENCY > 1
   // means several files are genuinely uploading at the same time — a
   // single "current index" can no longer represent progress accurately.
-  const renderFileList = (files, onRemove, uploadStatus, processingIndices, doneIndices, uploadedCount, failedIndices = new Map()) => {
+  const renderFileList = (files, onRemove, uploadStatus, processingIndices, doneIndices, uploadedCount, failedIndices = new Map(), recoveryByIndex = null) => {
     if (files.length === 0) return null;
 
     return (
@@ -1532,6 +1623,17 @@ const UploadData = ({
                 )}
                 {!processingIndices.has(index) && failure?.status === 'error' && (
                   <span className="file-status error" title={failure.message}>✗ Failed</span>
+                )}
+                {!processingIndices.has(index) && failure?.status === 'insufficient_stock' && (
+                  <span className="file-status error" title={failure.message}>✗ Not enough stock</span>
+                )}
+                {uploadStatus === 'interrupted' && recoveryByIndex?.get(index) && (
+                  <span
+                    className={`file-status ${recoveryByIndex.get(index).state === 'saved' ? 'done' : recoveryByIndex.get(index).state === 'processing' ? 'uploading' : 'error'}`}
+                    title={recoveryByIndex.get(index).title}
+                  >
+                    {recoveryByIndex.get(index).label}
+                  </span>
                 )}
                 {uploadStatus !== 'loading' && (
                   <button
@@ -1641,7 +1743,8 @@ const UploadData = ({
                 salesProcessingIndices,
                 salesDoneIndices,
                 salesUploadedCount,
-                salesFailedIndices
+                salesFailedIndices,
+                salesRecovery?.byIndex || null
               )}
 
               {/* Upload Status with Progress Bar */}
@@ -1664,6 +1767,29 @@ const UploadData = ({
                   <FiAlertCircle size={20} />
                   Already uploaded — {salesFailedIndices.size} file(s) were previously uploaded. No changes were made.
                   <ProgressBar progress={100} status="duplicate" />
+                </div>
+              )}
+              {salesUploadStatus === 'interrupted' && (
+                <div className="upload-status warning" role="status">
+                  <FiAlertCircle size={20} />
+                  {salesRecovery?.checking
+                    ? 'Upload interrupted by a page refresh. Checking which files were saved…'
+                    : salesRecovery?.error
+                      ? `Upload interrupted by a page refresh. ${salesRecovery.error}`
+                      : salesRecovery?.message || 'Upload interrupted by a page refresh.'}
+                  <div className="upload-recovery-actions" style={{ display: 'flex', gap: '8px', marginTop: '8px' }}>
+                    <button
+                      type="button"
+                      className="btn-secondary"
+                      onClick={checkInterruptedRun}
+                      disabled={salesRecovery?.checking}
+                    >
+                      Check again
+                    </button>
+                    <button type="button" className="btn-secondary" onClick={clearInterruptedRun}>
+                      Clear
+                    </button>
+                  </div>
                 </div>
               )}
               {salesUploadStatus === 'error' && (

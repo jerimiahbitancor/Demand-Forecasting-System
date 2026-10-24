@@ -79,18 +79,23 @@ async function loadReminderInputs(client, today) {
   };
 }
 
-// For the Data Management card. Not gated on a trained model: the card is
-// useful before the first training too (the bell is not).
+// For the Data Management card. Gated on a trained model, same as the bell
+// reminders: before the first training the owner is still loading history,
+// and the dashboard's first-use history review is where missing days get
+// sorted out. Without the gate a first-time user (no sales yet, so no
+// firstSaleDate to start from) saw every operating day of the last 60 days
+// listed as "needs your answer".
 async function getPendingDays(client, { now = new Date() } = {}) {
   const today = todayManila(now);
   const inputs = await loadReminderInputs(client, today);
-  const dates = findUnresolvedOperatingDays(inputs);
+  const dates = inputs.modelExists ? findUnresolvedOperatingDays(inputs) : [];
   return {
     today,
     businessDate: addDays(today, -1),
     lookbackDays: LOOKBACK_DAYS,
     operatingDays: [...inputs.operatingDays].sort(),
     operatingDaysSource: inputs.operatingDaysSource,
+    modelExists: inputs.modelExists,
     days: dates.map((date) => ({ date, label: formatReminderDate(date) })),
   };
 }

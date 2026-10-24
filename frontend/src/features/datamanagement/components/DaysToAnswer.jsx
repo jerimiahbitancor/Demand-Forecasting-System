@@ -7,6 +7,10 @@
 // Each day has two answers: upload that day's sales file (opens the upload
 // panel below), or mark the store closed for that day. The list comes from
 // GET /api/business-days/pending, the same rule the reminders use.
+//
+// Hidden until a model has been trained (data.modelExists). Before that the
+// owner is still loading history, and the dashboard's first-use history
+// review is where missing days are answered.
 import { useCallback, useEffect, useRef, useState } from "react";
 import toast from "react-hot-toast";
 import Swal from "../../../utils/swal";
@@ -18,6 +22,9 @@ const ANCHOR = "days-to-answer";
 
 const DaysToAnswer = ({ refreshKey = 0, onUploadClick }) => {
   const [days, setDays] = useState(null);
+  // null = not loaded yet. Defaults to true if an older backend leaves the
+  // field out, so the card keeps working during a staggered deploy.
+  const [modelExists, setModelExists] = useState(null);
   const [loadError, setLoadError] = useState(null);
   const [closingDate, setClosingDate] = useState(null);
   const [reloadKey, setReloadKey] = useState(0);
@@ -36,7 +43,9 @@ const DaysToAnswer = ({ refreshKey = 0, onUploadClick }) => {
     apiClient.get("/business-days/pending")
       .then((res) => {
         if (cancelled) return;
-        setDays(res.data?.data?.days || []);
+        const data = res.data?.data || {};
+        setDays(data.days || []);
+        setModelExists(data.modelExists !== false);
         setLoadError(null);
       })
       .catch((error) => {
@@ -103,6 +112,10 @@ const DaysToAnswer = ({ refreshKey = 0, onUploadClick }) => {
   }
 
   if (days === null) return null;
+
+  // First-time user (no trained model yet): nothing to answer here, and no
+  // "all answered" message either, since there was never anything to answer.
+  if (modelExists === false) return null;
 
   if (days.length === 0) {
     // Nothing to answer: stay out of the way, unless a reminder sent the

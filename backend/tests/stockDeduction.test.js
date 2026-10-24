@@ -7,8 +7,8 @@
 //       that count — shouldDeduct()
 //   C3  every non-archived product in the file with a recipe deducts,
 //       whatever its status
-//   C4  shortfall: stock floors at 0, notes on the transaction, one warning
-//       per ingredient per upload, and an upload warning
+//   C4  not enough of ANY ingredient -> the whole file is refused: no sales
+//       rows, no deductions (migration 017, Oct 2026)
 //   H1  units are resolved strictly: no density -> error, no 1:1 fallback
 //   H2  quantities are exact decimals, rounded ONCE at the end
 //   H3  the deduction is atomic and idempotent per (upload, ingredient)
@@ -441,50 +441,79 @@ test('C1/U7: an ingredient created after the day ended is NOT a stock count', as
   assert.equal(stock(RICE).toString(), '8', 'created_at is not a count, so the plates still deduct');
 });
 
-test('C4: shortfall floors stock at 0, writes notes, one warning per ingredient per upload', async () => {
-  seed();
-  // Old Dish uses 1 egg per plate; 5 plates against 2 eggs in stock.
-  const result = await upload([['Old Dish', 5], ['Adobo', 10]], 54, 'item-sales-summary-2026-10-10-2026-10-10.csv');
-  assert.equal(stock(EGG).toString(), '0', 'never negative');
-  const tx = sales(EGG)[0];
-  assert.equal(new Decimal(tx.requested_quantity).toString(), '5', 'the full requested amount is kept');
-  assert.equal(new Decimal(tx.applied_quantity).toString(), '2', 'only what was in stock was applied');
-  assert.equal(new Decimal(tx.shortfall_quantity).toString(), '3', 'the shortfall is recorded');
-  assert.equal(new Decimal(tx.previous_quantity).toString(), '2');
-  assert.equal(new Decimal(tx.new_quantity).toString(), '0');
-  assert.ok(/shortfall/i.test(tx.notes), `the transaction explains the shortfall: ${tx.notes}`);
-  assert.equal(new Decimal(sales(RICE)[0].shortfall_quantity).toString(), '0', 'enough rice -> no shortfall');
+// ---------------------------------------------------------------- C4 (Oct 2026): not enough stock -> nothing saved
+//
+// The owner's rule since Oct 2026 (migration 017): a sales file that needs
+// more of ANY ingredient than is in stock is not saved at all. No
+// daily_sales rows, no deductions, no partial "floor at 0". This replaced
+// the old C4 (deduct what is there, record the shortfall, keep the sales).
 
-  assert.ok(result.warnings.includes('Egg: 5 pcs requested, 2 pcs available; 3 pcs could not be deducted.'), JSON.stringify(result.warnings));
+const { InsufficientStockError } = require('../utils/insufficientStock');
 
-  const notes = fake.tables.notifications;
-  assert.equal(notes.length, 1, 'one notification: egg only');
-  assert.equal(notes[0].title, 'Stock shortfall: Egg', 'not "Low stock", which looks like the out-of-stock alert');
-  assert.equal(notes[0].message, 'Egg: 5 pcs requested, 2 pcs available; 3 pcs could not be deducted.');
-  assert.equal(notes[0].type, 'warning');
-  assert.equal(notes[0].link, '/ingredient-management');
-  assert.deepEqual(notes[0].metadata, {
-    kind: 'stock_shortfall',
-    key: `stock_shortfall:54:${EGG}`,
-    upload_id: 54,
-    ingredient_id: EGG,
-    shortfall: 3,
-    shortfall_exact: '3',
-    requested_exact: '5',
-    requested_quantity: '5',
-    available_quantity: '2',
-    applied_quantity: '2',
-    unit: 'Pieces (pcs)',
-  });
+const salesOfUpload = (uploadId) => fake.tables.daily_sales.filter((r) => r.upload_id === uploadId);
 
-  // The same upload's shortfall is never sent twice.
+async function uploadExpectingRefusal(file, uploadId, filename) {
   const restore = quiet();
-  await uploadService.notifyStockShortfalls([{ ingredientId: EGG, shortfall: 3, title: 't', message: 'm' }], 54);
-  restore();
-  assert.equal(fake.tables.notifications.length, 1);
+  try {
+    await uploadService.processSalesData(rows(...file), OWNER, uploadId, filename);
+  } catch (error) {
+    return error;
+  } finally {
+    restore();
+  }
+  assert.fail('the upload should have been refused');
+  return null;
+}
+
+test('C4: one short ingredient -> the whole file is refused; nothing is saved or deducted', async () => {
+  seed();
+  // Old Dish uses 1 egg per plate: 5 plates against 2 eggs. Adobo's rice
+  // (10 x 0.2 = 2 kg of 10 kg) is fine on its own, but must NOT be deducted.
+  const error = await uploadExpectingRefusal([['Old Dish', 5], ['Adobo', 10]], 54, 'item-sales-summary-2026-10-10-2026-10-10.csv');
+  assert.ok(error instanceof InsufficientStockError, String(error));
+  assert.equal(error.code, 'INSUFFICIENT_STOCK');
+  assert.deepEqual(error.shortfalls, [{
+    ingredientId: EGG, name: 'Egg', unit: 'Pieces (pcs)', required: '5', available: '2', shortfall: '3',
+  }]);
+  assert.match(error.message, /Not enough stock for 1 ingredient\(s\): Egg/);
+
+  assert.equal(salesOfUpload(54).length, 0, 'no daily_sales rows were saved');
+  assert.equal(stock(EGG).toString(), '2', 'egg untouched');
+  assert.equal(stock(RICE).toString(), '10', 'rice untouched too: all or nothing');
+  assert.equal(fake.tables.inventory_transactions.length, 0, 'no stock movement logged');
+  assert.equal(fake.tables.notifications.length, 0, 'the route sends the notice, not the service');
+  assert.equal(fake.rpcCalls.filter((c) => c.name === 'apply_sales_upload').length, 0,
+    'the read-only pre-check refused it before any write was attempted');
 });
 
-test('real sales CSV with zero stock records the full shortfall and sends an out-of-stock notification', async () => {
+test('C4: exactly enough stock is enough (the check is "more than in stock", not "all of it")', async () => {
+  seed();
+  await upload([['Old Dish', 2]], 56, 'item-sales-summary-2026-10-10-2026-10-10.csv');
+  assert.equal(stock(EGG).toString(), '0');
+  assert.equal(salesOfUpload(56).length, 1);
+  assert.equal(new Decimal(sales(EGG)[0].shortfall_quantity).toString(), '0');
+});
+
+test('C4: the locked re-check refuses even when the pre-check passed (two uploads racing)', async () => {
+  seed();
+  // Simulate the race: the pre-check ran while there were still eggs, then
+  // another upload took them before this one's transaction started.
+  const original = uploadService.findInsufficientStock;
+  uploadService.findInsufficientStock = async () => [];
+  try {
+    const error = await uploadExpectingRefusal([['Old Dish', 5]], 57, 'item-sales-summary-2026-10-10-2026-10-10.csv');
+    assert.ok(error instanceof InsufficientStockError, String(error));
+    assert.equal(error.shortfalls[0].ingredientId, EGG);
+    assert.equal(error.shortfalls[0].shortfall, '3');
+  } finally {
+    uploadService.findInsufficientStock = original;
+  }
+  assert.equal(fake.rpcCalls.filter((c) => c.name === 'apply_sales_upload').length, 1);
+  assert.equal(salesOfUpload(57).length, 0);
+  assert.equal(stock(EGG).toString(), '2');
+});
+
+test('real sales CSV with zero stock is refused with the exact amount needed', async () => {
   seed();
   const rice = fake.tables.ingredients.find((ingredient) => ingredient.id === RICE);
   rice.quantity = '0';
@@ -510,34 +539,45 @@ test('real sales CSV with zero stock records the full shortfall and sends an out
   assert.equal(plainRiceRow['Items sold'], '12.000');
 
   const restore = quiet();
-  let result;
+  let error = null;
   try {
-    result = await uploadService.processSalesData([plainRiceRow], OWNER, 55, filename);
+    await uploadService.processSalesData([plainRiceRow], OWNER, 55, filename);
+  } catch (e) {
+    error = e;
   } finally {
     restore();
   }
 
-  assert.ok(stock(RICE).isZero(), 'zero stock cannot go negative');
-  const transaction = sales(RICE)[0];
-  assert.equal(new Decimal(transaction.requested_quantity).toString(), '1.5', '12 sold x 0.125 kg per serving');
-  assert.equal(new Decimal(transaction.applied_quantity).toString(), '0', 'nothing is applied with no stock');
-  assert.equal(new Decimal(transaction.shortfall_quantity).toString(), '1.5');
-  assert.ok(result.warnings.some((warning) => /no stock was available/i.test(warning)));
-  assert.equal(fake.tables.notifications.length, 1);
-  assert.equal(fake.tables.notifications[0].metadata.key, `stock_shortfall:55:${RICE}`);
-  assert.match(fake.tables.notifications[0].message, /no stock was available\. none of this usage could be deducted/i);
-  assert.equal(fake.tables.notifications[0].metadata.requested_exact, '1.5');
-  assert.equal(fake.tables.notifications[0].metadata.available_quantity, '0');
-  assert.equal(fake.tables.notifications[0].metadata.applied_quantity, '0');
+  assert.ok(error instanceof InsufficientStockError, String(error));
+  assert.deepEqual(error.shortfalls, [{
+    ingredientId: RICE, name: 'Rice', unit: 'Kilograms (kg)', required: '1.5', available: '0', shortfall: '1.5',
+  }], '12 sold x 0.125 kg per serving');
+  assert.ok(stock(RICE).isZero());
+  assert.equal(sales(RICE).length, 0);
+  assert.equal(salesOfUpload(55).length, 0);
 });
 
-test('H3: the same upload retried does not deduct twice', async () => {
+test('H3: the same file retried is refused as a duplicate and deducts nothing more', async () => {
   seed();
   await upload([['Adobo', 10]], 60, 'item-sales-summary-2026-10-10-2026-10-10.csv');
   assert.equal(stock(RICE).toString(), '8', 'first pass deducted 2 kg');
-  await upload([['Adobo', 10]], 60, 'item-sales-summary-2026-10-10-2026-10-10.csv');
-  assert.equal(stock(RICE).toString(), '8', 'the retry changed nothing');
+  // A new request is a new upload row; its daily_sales hit the unique key.
+  const error = await uploadExpectingRefusal([['Adobo', 10]], 61, 'item-sales-summary-2026-10-10-2026-10-10.csv');
+  assert.equal(error.code, '23505', String(error && error.message));
+  assert.equal(stock(RICE).toString(), '8', 'the retry changed nothing: the insert and deduction roll back together');
   assert.equal(sales(RICE).length, 1, 'and it did not write a second transaction');
+});
+
+test('migration 017 not run (no apply_sales_upload): the upload is refused, nothing saved, no old fallback', async () => {
+  seed();
+  fake.reset({ ...JSON.parse(JSON.stringify(fake.tables)) }, { missingFunctions: ['apply_sales_upload'] });
+  const error = await uploadExpectingRefusal([['Adobo', 10]], 62, 'item-sales-summary-2026-10-10-2026-10-10.csv');
+  assert.equal(error.code, 'STOCK_GUARD_MISSING');
+  assert.match(error.message, /017_sales_upload_requires_stock\.sql/);
+  assert.equal(salesOfUpload(62).length, 0, 'no sales saved');
+  assert.equal(stock(RICE).toString(), '10', 'no stock deducted');
+  assert.equal(fake.rpcCalls.filter((c) => c.name === 'deduct_ingredient_stock').length, 0,
+    'the old per-ingredient deduction is never called directly');
 });
 
 test('H3: a fractional discrete unit is requested exactly and applied whole', async () => {
@@ -547,7 +587,7 @@ test('H3: a fractional discrete unit is requested exactly and applied whole', as
     recipe(1, EGG, 0.5, fake.tables.ingredients.find((i) => i.id === EGG)),
   ];
   fake.tables.ingredients.find((i) => i.id === EGG).quantity = '5';
-  await upload([['Adobo', 3]], 61, 'item-sales-summary-2026-10-10-2026-10-10.csv');
+  await upload([['Adobo', 3]], 64, 'item-sales-summary-2026-10-10-2026-10-10.csv');
   const tx = sales(EGG)[0];
   assert.equal(new Decimal(tx.requested_exact_quantity).toString(), '1.5', 'the exact amount is recorded');
   assert.equal(new Decimal(tx.requested_quantity).toString(), '2', 'the request is rounded up to a whole egg');
@@ -560,7 +600,7 @@ test('H1: upload reports an unconvertible recipe and leaves its stock untouched'
   fake.tables.product_ingredients[0].unit = 'handful';
   const result = await upload(
     [['Adobo', 2]],
-    62,
+    65,
     'item-sales-summary-2026-10-10-2026-10-10.csv'
   );
 

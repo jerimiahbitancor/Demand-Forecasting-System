@@ -2,8 +2,8 @@
 //
 // Shown after a sales upload finishes (owner's v3 flowchart, page 2,
 // "Output (upload summary)"), and stays until the owner closes it:
+//   - files NOT saved because an ingredient did not have enough stock
 //   - problems found in rejected files (row, column, message)
-//   - stock shortfalls
 //   - new products, and new products whose name looks like an existing one
 //   - item names that matched no product
 //   - names matched through an alias ("OG Tapsilog -> Original Tapsilog")
@@ -13,10 +13,20 @@
 import { Link } from "react-router-dom";
 import { FiX } from "react-icons/fi";
 import { formatPlates, hasSummaryContent } from "../utils/uploadSummary";
+import { formatStockQty } from "../../../utils/formatStockQty";
 import "./UploadSummaryReport.css";
 
 const MAX_CELL_ERRORS = 50;
 const PRODUCT_MANAGEMENT = "/inventory-management?tab=product";
+const INGREDIENT_MANAGEMENT = "/ingredient-management";
+
+// "Kilograms (kg)" -> "kg"
+const unitLabel = (unit) => {
+  const text = String(unit || "").trim();
+  const inner = /\(([^)]+)\)\s*$/.exec(text);
+  return inner ? inner[1].trim() : text;
+};
+const amount = (value, unit) => `${formatStockQty(value, unit)}${unit ? ` ${unitLabel(unit)}` : ""}`;
 
 const Section = ({ title, count, tone = "info", children }) => (
   <section className={`upload-report__section upload-report__section--${tone}`}>
@@ -29,9 +39,10 @@ const Section = ({ title, count, tone = "info", children }) => (
 
 const UploadSummaryReport = ({ report, onClose }) => {
   if (!report) return null;
-  const { summary, cellErrors = [], filesUploaded = 0, totalFiles = 0 } = report;
+  const { summary, cellErrors = [], stockRefusals = [], filesUploaded = 0, totalFiles = 0 } = report;
   const hasContent = hasSummaryContent(summary);
-  if (!hasContent && cellErrors.length === 0) return null;
+  if (!hasContent && cellErrors.length === 0 && stockRefusals.length === 0) return null;
+  const refusedFiles = new Set(stockRefusals.map((r) => r.file)).size;
 
   return (
     <div className="upload-report" role="region" aria-label="Upload summary">
@@ -44,6 +55,36 @@ const UploadSummaryReport = ({ report, onClose }) => {
           <FiX />
         </button>
       </div>
+
+      {stockRefusals.length > 0 && (
+        <Section
+          title={`Not saved: not enough stock (${refusedFiles} file${refusedFiles === 1 ? "" : "s"})`}
+          count={stockRefusals.length}
+          tone="error"
+        >
+          <div className="upload-report__table-wrap">
+            <table className="upload-report__table">
+              <thead><tr><th>File</th><th>Ingredient</th><th>Needed</th><th>In stock</th><th>Short by</th></tr></thead>
+              <tbody>
+                {stockRefusals.map((r, i) => (
+                  <tr key={`${r.file}-${r.ingredientId}-${i}`}>
+                    <td>{r.file}</td>
+                    <td>{r.ingredient}</td>
+                    <td>{amount(r.required, r.unit)}</td>
+                    <td>{amount(r.available, r.unit)}</td>
+                    <td>{amount(r.shortfall, r.unit)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          <p className="upload-report__note">
+            Nothing from these files was saved: no sales and no stock deducted. Restock the ingredients
+            or correct the count in <Link to={INGREDIENT_MANAGEMENT}>Ingredient Management</Link>, then
+            upload the same files again.
+          </p>
+        </Section>
+      )}
 
       {cellErrors.length > 0 && (
         <Section title="Problems found (these files were not uploaded)" count={cellErrors.length} tone="error">
@@ -66,11 +107,11 @@ const UploadSummaryReport = ({ report, onClose }) => {
       )}
 
       {summary.followUpErrors.length > 0 && (
-        <Section title="Stock was not updated" count={summary.followUpErrors.length} tone="error">
+        <Section title="Follow-up update did not finish" count={summary.followUpErrors.length} tone="error">
           <ul className="upload-report__list">
             {summary.followUpErrors.map((m) => <li key={m}>{m}</li>)}
           </ul>
-          <p className="upload-report__note">The sales were saved. Check the backend logs, fix the cause, then adjust the stock.</p>
+          <p className="upload-report__note">The sales and stock were saved; only the product category/status update after them failed. Check the backend logs.</p>
         </Section>
       )}
 
@@ -83,19 +124,6 @@ const UploadSummaryReport = ({ report, onClose }) => {
             Editing an ingredient&apos;s quantity counts as a stock count, so sales from days that ended before
             that edit are not deducted again. Use Restock to add deliveries instead.
           </p>
-        </Section>
-      )}
-
-      {summary.shortfalls.length > 0 && (
-        <Section title="Stock shortfalls" count={summary.shortfalls.length} tone="warning">
-          <ul className="upload-report__list">
-            {summary.shortfalls.map((s) => (
-              <li key={s.ingredientId}>
-                {s.message}{s.files > 1 ? ` (${s.files} files ran short)` : ""}
-              </li>
-            ))}
-          </ul>
-          <p className="upload-report__note">Stock stays at 0. Count the real stock and update it in Ingredient Management.</p>
         </Section>
       )}
 
