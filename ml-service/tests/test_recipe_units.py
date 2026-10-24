@@ -51,12 +51,7 @@ def check(label, condition, detail=""):
 
 def run(cases):
     for c in cases:
-        pack = None
-        if c.get("packQty") and c.get("packUnit"):
-            pack = {"qty": c["packQty"], "unit": c["packUnit"]}
-        got = dl._normalize_recipe_quantity(
-            c["quantity"], c["from"], c["to"], c.get("gramsPerCup"), c.get("ingredient", ""), pack
-        )
+        got = dl._normalize_recipe_quantity(c["quantity"], c["from"], c["to"])
         check(c["label"], math.isclose(got, c["expected"], abs_tol=1e-9), f"expected {c['expected']}, got {got}")
 
 
@@ -64,18 +59,34 @@ print("with database units")
 dl.set_unit_metadata(FIXTURE["units"])
 run(FIXTURE["cases"])
 
-print("with purchase packs (\"150 g per sachet\")")
-run(FIXTURE["pack_cases"])
-
 print("built-in tables only (no database units)")
 dl.set_unit_metadata([])
-run(FIXTURE["fallback_cases"])
+run(FIXTURE["cases"])
 
-print("bad rows never turn a known unit into a plain count")
+print("unsupported units are rejected")
 dl.set_unit_metadata([{"name": "Kilograms (kg)", "family": None, "base_factor": None, "aliases": [], "is_active": True}])
 check("kg still converts to g", dl._normalize_recipe_quantity(1, "kg", "g") == 1000)
 dl.set_unit_metadata([{"name": "Sack", "family": "mass", "base_factor": 50000, "aliases": [], "is_active": False}])
-check("an inactive Sack is unknown, so it passes through", dl._normalize_recipe_quantity(2, "Sack", "kg") == 2)
+try:
+    dl._normalize_recipe_quantity(2, "Sack", "kg")
+    check("unsupported Sack is rejected", False)
+except ValueError:
+    check("unsupported Sack is rejected", True)
+try:
+    dl._normalize_recipe_quantity(0, "Pack", "kg")
+    check("unsupported Pack is rejected at zero quantity", False)
+except ValueError:
+    check("unsupported Pack is rejected at zero quantity", True)
+try:
+    dl._normalize_recipe_quantity(1, "cup", "mL")
+    check("unsupported Cups are rejected", False)
+except ValueError:
+    check("unsupported Cups are rejected", True)
+try:
+    dl._normalize_recipe_quantity(1, "g", "mL")
+    check("mass-to-volume conversion is rejected", False)
+except ValueError:
+    check("mass-to-volume conversion is rejected", True)
 
 
 # ---- load_unit_metadata against a fake client -----------------------------
@@ -115,11 +126,11 @@ try:
     dl.set_unit_metadata([])
     dl.supabase = _FakeClient(rows=FIXTURE["units"])
     check("returns True when the table is read", dl.load_unit_metadata() is True)
-    check("a unit added in Settings now converts (2 Sack -> 100 kg)", dl._normalize_recipe_quantity(2, "Sack", "kg") == 100)
+    check("shared supported units still convert", dl._normalize_recipe_quantity(2, "kg", "g") == 2000)
 
     dl.supabase = _FakeClient(error=RuntimeError("relation does not exist"))
     check("returns False when the table can't be read", dl.load_unit_metadata() is False)
-    check("keeps the last good units after a failed read", dl._normalize_recipe_quantity(2, "Sack", "kg") == 100)
+    check("keeps supported unit conversions after a failed read", dl._normalize_recipe_quantity(2, "kg", "g") == 2000)
     check("built-in units still convert", dl._normalize_recipe_quantity(1, "kg", "g") == 1000)
 finally:
     dl.supabase = real_client

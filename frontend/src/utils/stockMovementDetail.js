@@ -5,7 +5,7 @@
 // lives in this short line under the amount, so the table stays readable:
 //   sale with a shortfall -> "Short 2.5 Kilograms (kg)"
 //   sale without one      -> nothing (the change and the balance say it all)
-//   restock by pack       -> "Received 1 pack (50 Grams (g))"
+//   restock with received quantity -> "Received 50 Grams (g)"
 //   stock count           -> the note the owner typed
 // The long text the database writes for a sale ("Exact requested: 2.8;
 // rounded request: 2.8; applied: 2.8; shortfall: 0 Kilograms (kg)") is not
@@ -43,12 +43,12 @@ export function stockMovementDetail(transaction = {}, stockUnit = '') {
       const text = part.trim();
       if (!text) continue;
       if (/^stock is now\b/i.test(text)) continue;
-      if (/^received\b/i.test(text) && !/^received \d+ packs?\b/i.test(text)) continue;
+      if (/^received\b/i.test(text)) continue;
       parts.push(text);
     }
   }
 
-  // Restocking by pack: how many packs arrived is not visible anywhere else.
+  // Show the received quantity when it differs from the amount added to stock.
   if (type === 'restock') {
     const received = amount(transaction.received_quantity);
     const change = amount(transaction.quantity);

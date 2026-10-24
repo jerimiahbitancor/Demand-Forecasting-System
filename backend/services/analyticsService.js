@@ -516,28 +516,21 @@ async function getSafetyBufferPercentage() {
 // product_id -> [{ ingredientId, name, category, unit, unitCost, currentStock, qtyPerServing }]
 // Mirrors ml-service/services/data_loader.py's get_recipe_and_stock().
 async function getRecipeMap() {
-  // Query with the recipe-unit and purchase-pack columns. The ladder below
-  // degrades gracefully: migration 012 (pack) first, then migration 008
-  // (recipe unit), then the oldest schema where every quantity is already in
-  // the ingredient's own unit and no conversion is needed.
-  const ingredientCols = (withPack) => withPack
-    ? 'id, name, category, unit, price, quantity, grams_per_cup, pack_qty, pack_unit, pack_price'
-    : 'id, name, category, unit, price, quantity, grams_per_cup';
-  const recipeSelect = (withUnit, withPack) =>
-    `product_id, ${withUnit ? 'unit, ' : ''}quantity_per_serving, ingredients!inner(${ingredientCols(withPack)})`;
+  const ingredientCols = 'id, name, category, unit, price, quantity, material_type';
+  const recipeSelect = (withUnit) =>
+    `product_id, ${withUnit ? 'unit, ' : ''}quantity_per_serving, ingredients!inner(${ingredientCols})`;
 
   let attempt = await supabaseAdmin
     .from('product_ingredients')
-    .select(recipeSelect(true, true));
+    .select(recipeSelect(true));
   if (attempt.error && isMissingColumnError(attempt.error)) {
     attempt = await supabaseAdmin
       .from('product_ingredients')
-      .select(recipeSelect(true, false));
+      .select(`product_id, unit, quantity_per_serving, ingredients!inner(id, name, category, unit, price, quantity)`);
   }
   if (attempt.error && isMissingColumnError(attempt.error)) {
-    attempt = await supabaseAdmin
-      .from('product_ingredients')
-      .select(recipeSelect(false, false));
+    attempt = await supabaseAdmin.from('product_ingredients')
+      .select(`product_id, quantity_per_serving, ingredients!inner(id, name, category, unit, price, quantity)`);
   }
   if (attempt.error) throw attempt.error;
   const data = attempt.data;
@@ -548,21 +541,13 @@ async function getRecipeMap() {
     // The recipe's stored unit (row.unit) may differ from the ingredient's
     // stock unit (ingredient.unit). Normalise to the ingredient's unit so
     // every downstream quantity (demand, stock deduction, COGS) is in the
-    // same unit the price and stock are quoted in. grams_per_cup lets a
-    // volume recipe unit (e.g. cup) convert into a mass stock unit (kg),
-    // piece units (e.g. pcs of potato) convert into mass via a per-piece
-    // weight, and count units (a sachet) weigh out via the purchase pack.
+    // same unit the price and stock are quoted in.
     const normalizedPerServing = 'unit' in row
       ? convertRecipeQuantity(
           row.quantity_per_serving,
           row.unit || ingredient.unit,
           ingredient.unit,
-          {
-            gramsPerCup: ingredient.grams_per_cup,
-            ingredientName: ingredient.name,
-            packQty: ingredient.pack_qty,
-            packUnit: ingredient.pack_unit,
-          }
+          { materialType: ingredient.material_type || 'dry' }
         )
       : parseRecipeQuantity(row.quantity_per_serving) || 0;
     const entry = {

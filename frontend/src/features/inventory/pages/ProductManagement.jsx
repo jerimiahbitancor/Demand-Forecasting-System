@@ -21,7 +21,7 @@ import toast from 'react-hot-toast';
 import "./ProductManagement.css";
 import "../InventoryControls.css";
 import { useAuth } from "../../../context/AuthContext";
-import { convertRecipeQuantity, setUnitMetadata, unitKindOf, canonicalUnitName, groupUnitsForSelect, recipeDensityFor, pieceWeightOf, priceRecipeIngredient, parseRecipeQuantity } from "../../../utils/recipeUnits";
+import { convertRecipeQuantity, setUnitMetadata, canonicalUnitName, groupUnitsForSelect, priceRecipeIngredient, parseRecipeQuantity } from "../../../utils/recipeUnits";
 import Tippy from '@tippyjs/react';
 import 'tippy.js/dist/tippy.css';
 import 'tippy.js/animations/scale.css';
@@ -45,10 +45,7 @@ const calculateProductCogs = (product) => {
     const recipeUnit = ingredient.unit || ingredientUnit;
     const quantity = Number(
       convertRecipeQuantity(ingredient.quantity_per_serving, recipeUnit, ingredientUnit, {
-        gramsPerCup: ingredient.ingredients?.grams_per_cup,
-        ingredientName: ingredient.ingredients?.name,
-        packQty: ingredient.ingredients?.pack_qty,
-        packUnit: ingredient.ingredients?.pack_unit
+        materialType: ingredient.ingredients?.material_type || 'dry'
       })
     ) || 0;
     return total + ingredientPrice * quantity;
@@ -170,7 +167,7 @@ const ProductManagement = () => {
   });
 
   const [statusFilter, setStatusFilter] = useState(() => {
-    return 'all';
+    return 'active';
   });
 
   // ============ INVENTORY ITEMS FOR INGREDIENTS ============
@@ -200,7 +197,7 @@ const ProductManagement = () => {
   const [draftIngredient, setDraftIngredient] = useState(null);
 
   // The unit dropdown lists exactly the active rows of ingredient_units (grouped
-  // by kind). Aliases such as "cup" or "kg" are lookup keys for old recipe
+  // by kind). Aliases such as "kg" are lookup keys for old recipe
   // lines, not separate choices.
   const unitGroups = useMemo(() => groupUnitsForSelect(ingredientUnits), [ingredientUnits]);
 
@@ -964,7 +961,7 @@ const ProductManagement = () => {
     // Store the quantity exactly as typed, alongside the unit the user chose.
     // Conversion to the ingredient's stock/price unit happens at read time
     // (COGS here, ingredient demand in analyticsService, stock deductions in
-    // uploadService) so "1 cup" stays "1 cup" in the recipe.
+    // uploadService) so a recipe unit stays attached to its quantity.
     const usedUnit = newIngredient.unit || inventoryItem?.unit || 'kg';
 
     setFormData({
@@ -1001,15 +998,9 @@ const ProductManagement = () => {
     const qty = parseRecipeQuantity(newIngredient.quantity);
     if (!Number.isFinite(qty) || qty <= 0) return null;
     const unitPrice = Number(item.price) || 0;
-    const gramsPerCup = recipeDensityFor(item.grams_per_cup, item.name);
-    const pieceWeight = pieceWeightOf(item.name, newIngredient.unit);
     const converted = convertRecipeQuantity(qty, newIngredient.unit, item.unit, {
-      gramsPerCup: item.grams_per_cup,
-      ingredientName: item.name,
-      packQty: item.pack_qty,
-      packUnit: item.pack_unit
+      materialType: item.material_type || 'dry'
     });
-    const volumeToMass = unitKindOf(newIngredient.unit) === 'volume' && unitKindOf(item.unit) === 'mass';
     return {
       name: item.name,
       qty,
@@ -1018,9 +1009,6 @@ const ProductManagement = () => {
       converted,
       cost: converted * unitPrice,
       unitPrice,
-      gramsPerCup,
-      pieceWeight,
-      needsDensity: volumeToMass && !gramsPerCup
     };
     // ingredientUnits is not read here, but the conversion reads the unit map
     // loaded from it (module state React can't see), so recompute when it loads.
@@ -1046,10 +1034,7 @@ const ProductManagement = () => {
       recipeUnit: ing.unit || item.unit,
       stockUnit: item.unit,
       price: unitPrice,
-      gramsPerCup: item.grams_per_cup,
-      ingredientName: item.name,
-      packQty: item.pack_qty,
-      packUnit: item.pack_unit
+      materialType: item.material_type || 'dry'
     });
     return Number.isFinite(cost) && cost > 0 ? cost : null;
     // ingredientUnits: see costPreview above.
@@ -1744,7 +1729,6 @@ const ProductManagement = () => {
             <option value="active">Active</option>
             <option value="new">Inactive (Not enough data)</option>
             <option value="discontinued">Inactive (Discontinued)</option>
-            <option value="unmapped">Unmapped</option>
             <option value="high-food-cost">High Food Cost</option>
             <option value="archived">Archived products</option>
           </select>
@@ -1830,12 +1814,10 @@ const ProductManagement = () => {
                   <th>#</th>
                   <th>Item Name</th>
                   <th>Category</th>
-                  <th>Modifier</th>
                   <th>Ingredients</th>
                   <th>Selling Price</th>
-                  <th>Total Ingredient Cost</th>
+                  <th className="total-ingredient-cost-cell">Total Ingredient Cost</th>
                   <th>Status</th>
-                  <th>Date Created</th>
                   <th>Last Updated</th>
                   <th>Actions</th>
                 </tr>
@@ -1860,7 +1842,6 @@ const ProductManagement = () => {
                       <td data-label="#">{startIndex + index + 1}</td>
                       <td data-label="Item Name" className="product-item-name">{item.name}</td>
                       <td data-label="Category"><span className="product-category-badge">{item.category || 'Uncategorized'}</span></td>
-                      <td data-label="Modifier">{item.serving_size_label || '—'}</td>
                       <td data-label="Ingredients" className="ingredients-cell">
                         {item.product_ingredients && item.product_ingredients.length > 0 ? (
                           <Tippy
@@ -1896,7 +1877,9 @@ const ProductManagement = () => {
                         )}
                       </td>
                       <td data-label="Selling Price" className="price-cell">{formatCurrency(item.price)}</td>
-                      <td data-label="Total Ingredient Cost">{totalIngredientCost === null ? 'N/A' : formatCurrency(totalIngredientCost)}</td>
+                      <td data-label="Total Ingredient Cost" className="total-ingredient-cost-cell">
+                        {formatCurrency(totalIngredientCost ?? 0)}
+                      </td>
                       <td data-label="Status">
                         <div className="status-pill-group">
                           <Tippy
@@ -1915,28 +1898,29 @@ const ProductManagement = () => {
                               {status.label}
                             </span>
                           </Tippy>
-                          {status.indicators.map((indicator) => (
-                            <Tippy
-                              key={indicator.key}
-                              content={indicator.tooltip}
-                              placement="top"
-                              animation="scale"
-                              duration={200}
-                              theme="dark"
-                              arrow
-                              trigger="mouseenter focus"
-                              appendTo={() => document.body}
-                              zIndex={100000}
-                            >
-                              <span className={`product-status-badge product-status-indicator ${indicator.className}`} tabIndex={0} style={{ cursor: 'help' }}>
-                                <span className="product-status-dot" style={{ backgroundColor: indicator.dotColor }}></span>
-                                {indicator.label}
-                              </span>
-                            </Tippy>
-                          ))}
+                          {status.indicators
+                            .filter((indicator) => indicator.key !== 'unmapped' && indicator.key !== 'no-price')
+                            .map((indicator) => (
+                              <Tippy
+                                key={indicator.key}
+                                content={indicator.tooltip}
+                                placement="top"
+                                animation="scale"
+                                duration={200}
+                                theme="dark"
+                                arrow
+                                trigger="mouseenter focus"
+                                appendTo={() => document.body}
+                                zIndex={100000}
+                              >
+                                <span className={`product-status-badge product-status-indicator ${indicator.className}`} tabIndex={0} style={{ cursor: 'help' }}>
+                                  <span className="product-status-dot" style={{ backgroundColor: indicator.dotColor }}></span>
+                                  {indicator.label}
+                                </span>
+                              </Tippy>
+                            ))}
                         </div>
                       </td>
-                      <td data-label="Date Created">{formatDate(item.created_at)}</td>
                       <td data-label="Last Updated">{formatDate(item.updated_at)}</td>
                       <td data-label="Actions">
                         <div className="product-action-buttons">
@@ -2315,22 +2299,12 @@ const ProductManagement = () => {
                 )}
 
                 {costPreview && (
-                  <div className={`ingredient-cost-preview ${costPreview.needsDensity ? 'preview-warning' : ''}`}>
-                    {costPreview.needsDensity ? (
-                      <>
-                        <strong>{costPreview.name}:</strong> recipe uses a volume unit ({costPreview.unit}) but the ingredient is bought by weight ({costPreview.stockUnit}). Set <em>Grams per Cup</em> on the ingredient (flour ≈ 125) so the cup converts to {costPreview.stockUnit}.
-                      </>
-                    ) : (
-                      <>
-                        <strong>{costPreview.name}:</strong> {costPreview.qty} {costPreview.unit}
-                        {costPreview.stockUnit.toLowerCase() !== String(costPreview.unit).toLowerCase()
-                          ? ` = ${formatStockQty(costPreview.converted, costPreview.stockUnit)} ${costPreview.stockUnit}`
-                          : ''}
-                        {' '}× ₱{Number(costPreview.unitPrice).toFixed(2)}/{costPreview.stockUnit} ≈ <strong>₱{Number(costPreview.cost).toFixed(2)}</strong> per serving
-                        {costPreview.gramsPerCup ? ` (density ${costPreview.gramsPerCup} g/cup)` : ''}
-                        {costPreview.pieceWeight ? ` (est ~${costPreview.pieceWeight} g/pc)` : ''}
-                      </>
-                    )}
+                  <div className="ingredient-cost-preview">
+                    <strong>{costPreview.name}:</strong> {costPreview.qty} {costPreview.unit}
+                    {costPreview.stockUnit.toLowerCase() !== String(costPreview.unit).toLowerCase()
+                      ? ` = ${formatStockQty(costPreview.converted, costPreview.stockUnit)} ${costPreview.stockUnit}`
+                      : ''}
+                    {' '}× ₱{Number(costPreview.unitPrice).toFixed(2)}/{costPreview.stockUnit} ≈ <strong>₱{Number(costPreview.cost).toFixed(2)}</strong> per serving
                   </div>
                 )}
 

@@ -536,6 +536,208 @@ class UploadService {
     }
   }
 
+  async loadSalesRecipeRows(productIds) {
+    const ingredientColumns = [
+      {
+        canonical: true,
+        withMaterialType: true,
+        columns: 'name, unit, base_unit, unit_family, stock_scale, allow_fractional, material_type, quantity',
+      },
+      {
+        canonical: true,
+        withMaterialType: false,
+        columns: 'name, unit, base_unit, unit_family, stock_scale, allow_fractional, quantity',
+      },
+      {
+        canonical: false,
+        withMaterialType: true,
+        columns: 'name, unit, material_type, quantity',
+      },
+      {
+        canonical: false,
+        withMaterialType: false,
+        columns: 'name, unit, quantity',
+      },
+    ];
+    const attempts = [];
+    for (const ingredient of ingredientColumns) {
+      attempts.push({ withUnit: true, ...ingredient });
+    }
+    for (const ingredient of ingredientColumns) {
+      attempts.push({ withUnit: false, ...ingredient });
+    }
+    attempts.push({ withUnit: false, canonical: false, columns: 'name, unit, quantity' });
+
+    let result = null;
+    let canonicalUnitsAvailable = false;
+    for (const attempt of attempts) {
+      const recipeColumns = attempt.withUnit
+        ? `product_id, ingredient_id, quantity_per_serving, unit, ingredients!inner(${attempt.columns})`
+        : `product_id, ingredient_id, quantity_per_serving, ingredients!inner(${attempt.columns})`;
+      result = await supabaseAdmin
+        .from('product_ingredients')
+        .select(recipeColumns)
+        .in('product_id', productIds);
+      if (!result.error) {
+        canonicalUnitsAvailable = attempt.canonical;
+        break;
+      }
+      if (!isMissingColumnError(result.error)) break;
+    }
+
+    if (result?.error) throw result.error;
+    return {
+      recipeRows: result?.data || [],
+      canonicalUnitsAvailable,
+    };
+  }
+
+  async validateSalesStock(rows = [], userId = null, filename = null) {
+    if (!Array.isArray(rows) || rows.length === 0) {
+      return { sufficient: true, shortages: [], validationErrors: [] };
+    }
+
+    const numericId = userId ? await this.getNumericUserId(userId) : null;
+    if (!numericId || !this.isSupabaseReady()) {
+      throw new Error('Stock validation is unavailable. No sales upload was saved; please try again when inventory data is available.');
+    }
+
+    const modifierRules = await this.getModifierRules();
+    const modifierKeywords = modifierRules.map((rule) => rule.keyword);
+    const ingredientIdByKeyword = new Map(modifierRules.map((rule) => [rule.keyword, rule.ingredient_id]));
+    const { data: products, error: productsError } = await supabaseAdmin
+      .from('products')
+      .select('id, name, created_at, first_sold_date, is_active, inactive_reason, inactive_since, category, status');
+    if (productsError) throw productsError;
+
+    const productIdByName = new Map();
+    for (const product of products || []) {
+      productIdByName.set(productNameKey(product.name), product.id);
+    }
+    const aliasProductIds = await loadAliasMap(supabaseAdmin);
+    for (const [aliasKey, productId] of aliasProductIds) {
+      if (!productIdByName.has(aliasKey)) productIdByName.set(aliasKey, productId);
+    }
+
+    const fallbackDate = this.extractDateFromFilename(filename) || new Date().toISOString().slice(0, 10);
+    const records = rows.map((row) => ({
+      name: this.normalizeProductName(
+        this.getColumnValueByNames(row, ['Item name', 'Item Name', 'Product', 'Product name'])
+      ),
+      sold: this.getColumnValueByNames(row, ['Items sold', 'Items Sold', 'Quantity', 'Units sold']),
+      refunded: this.getColumnValueByNames(row, ['Items refunded', 'Items Refunded']),
+      category: this.getColumnValueByNames(row, ['Category', 'Category Name'])?.toString()?.trim() || 'Uncategorized',
+      saleDate: this.getSaleDateValue(row, fallbackDate),
+    }));
+    const { dailySalesRows, modifierRows } = aggregateSalesRecords(records, {
+      productIdByName,
+      keywords: modifierKeywords,
+      uploadId: null,
+    });
+    const productById = new Map((products || []).map((product) => [product.id, product]));
+    const deductingProductIds = new Set(
+      dailySalesRows
+        .map((sale) => sale.product_id)
+        .filter((id) => {
+          const product = productById.get(id);
+          return product && !isArchivedProduct(product);
+        })
+    );
+    if (deductingProductIds.size === 0) {
+      return { sufficient: true, shortages: [], validationErrors: [] };
+    }
+
+    const { recipeRows, canonicalUnitsAvailable } = await this.loadSalesRecipeRows([...deductingProductIds]);
+    const perServingFor = (recipe) => {
+      const ingredient = recipe.ingredients || {};
+      const fromUnit = recipe.unit || ingredient.unit || null;
+      if (canonicalUnitsAvailable) {
+        return unitService.resolve(recipe.quantity_per_serving, fromUnit, {
+          id: recipe.ingredient_id,
+          name: ingredient.name,
+          unit: ingredient.unit,
+          base_unit: ingredient.base_unit,
+          unit_family: ingredient.unit_family,
+          stock_scale: ingredient.stock_scale,
+          allow_fractional: ingredient.allow_fractional,
+          material_type: ingredient.material_type || 'dry',
+        });
+      }
+      return new Decimal(String(convertRecipeQuantity(
+        recipe.quantity_per_serving,
+        fromUnit,
+        ingredient.unit,
+        { materialType: ingredient.material_type || 'dry' }
+      )));
+    };
+    const deductionsByDate = computeStockDeductionsByDate({
+      dailySalesRows,
+      modifierRows,
+      recipeRows,
+      deductingProductIds,
+      ingredientIdByKeyword,
+      perServingFor,
+    });
+    const ingredientInfo = new Map();
+    for (const recipe of recipeRows) {
+      if (!ingredientInfo.has(recipe.ingredient_id)) ingredientInfo.set(recipe.ingredient_id, recipe.ingredients || {});
+    }
+
+    const ingredientIds = [...deductionsByDate.keys()];
+    const latestAdjustmentAt = new Map();
+    if (ingredientIds.length > 0) {
+      const { data: adjustments, error: adjustmentError } = await fetchAllRows(() => supabaseAdmin
+        .from('inventory_transactions')
+        .select('ingredient_id, created_at')
+        .eq('transaction_type', 'adjustment')
+        .in('ingredient_id', ingredientIds)
+        .order('created_at', { ascending: false })
+        .order('id', { ascending: true }));
+      if (adjustmentError) throw adjustmentError;
+      for (const row of adjustments || []) {
+        if (!latestAdjustmentAt.has(row.ingredient_id)) latestAdjustmentAt.set(row.ingredient_id, row.created_at);
+      }
+    }
+
+    const validationErrors = (deductionsByDate.unconvertible || []).map((entry) => ({
+      ingredientId: entry.ingredient_id,
+      ingredient: ingredientInfo.get(entry.ingredient_id)?.name || `Ingredient #${entry.ingredient_id}`,
+      reasons: (entry.warnings || []).map((warning) => warning.reason),
+    }));
+    if (validationErrors.length > 0) {
+      return { sufficient: false, shortages: [], validationErrors };
+    }
+
+    const shortages = [];
+    for (const [ingredientId, entry] of deductionsByDate) {
+      const ingredient = ingredientInfo.get(ingredientId) || {};
+      const lastCountAt = lastStockCountAt({
+        latestAdjustmentAt: latestAdjustmentAt.get(ingredientId) || null,
+      });
+      let exact = new Decimal(0);
+      for (const [saleDate, amount] of [...entry.byDate].sort((a, b) => a[0].localeCompare(b[0]))) {
+        if (shouldDeduct(saleDate, lastCountAt)) exact = exact.plus(amount);
+      }
+      if (!exact.gt(0)) continue;
+
+      const required = roundQuantity(exact, ingredient);
+      const available = new Decimal(String(ingredient.quantity || 0));
+      if (required.gt(available)) {
+        const short = required.minus(available);
+        shortages.push({
+          ingredientId,
+          ingredient: ingredient.name || `Ingredient #${ingredientId}`,
+          requiredAmount: required.toString(),
+          availableAmount: available.toString(),
+          shortAmount: short.toString(),
+          unit: ingredient.base_unit || ingredient.unit || '',
+        });
+      }
+    }
+
+    return { sufficient: shortages.length === 0, shortages, validationErrors: [] };
+  }
+
   // options.createdProductNames: products the caller's own sync already
   // created for this file (routes/upload.js syncs before calling this), so
   // the upload summary still lists them as new.

@@ -873,14 +873,26 @@ const UploadData = ({
           const isStockRefusal = err?.response?.status === 422 && err?.response?.data?.insufficientStock === true;
           const status = isDuplicate ? 'duplicate' : isStockRefusal ? 'insufficient_stock' : 'error';
           const message = err?.response?.data?.message || err?.response?.data?.error || err?.message || 'Upload failed';
+          const stockShortages = Array.isArray(err?.response?.data?.shortages)
+            ? err.response.data.shortages
+            : [];
+          const stockValidationErrors = Array.isArray(err?.response?.data?.validationErrors)
+            ? err.response.data.validationErrors
+            : [];
           // 400 "Invalid sales file": the backend lists each bad cell.
           const cellErrors = err?.response?.status === 400 ? collectCellErrors(file.name, err.response.data) : [];
           const stockRefusals = isStockRefusal ? collectStockRefusals(file.name, err.response.data) : [];
-          fileOutcomes.set(i, { status, message, cellErrors, stockRefusals });
-          run.failed.set(i, { status, message });
+          fileOutcomes.set(i, {
+            status,
+            message,
+            cellErrors,
+            stockShortages,
+            stockValidationErrors,
+         , stockRefusals });
+          run.failed.set(i, { status, message, stockShortages, stockValidationErrors });
           setSalesFailedIndices((prev) => {
             const next = new Map(prev);
-            next.set(i, { status, message });
+            next.set(i, { status, message, stockShortages, stockValidationErrors });
             return next;
           });
           throw err;
@@ -1097,6 +1109,15 @@ const UploadData = ({
       } else if (underlying.response?.status === 409) {
         const id = toast.error(`Upload failed: ${underlying.response?.data?.message || 'Duplicate file detected'}`);
         setSalesToastId(id);
+      } else if (underlying.response?.status === 422) {
+        const shortages = Array.isArray(underlying.response?.data?.shortages)
+          ? underlying.response.data.shortages
+          : [];
+        const shortageSummary = shortages.map((shortage) =>
+          `${shortage.ingredient}: short ${shortage.shortAmount} ${shortage.unit}`
+        ).join('; ');
+        const id = toast.error(`${underlying.response?.data?.message || errorMsg}${shortageSummary ? ` (${shortageSummary})` : ''}`);
+        setSalesToastId(id);
       } else if (underlying.response?.status === 400) {
         const id = toast.error(`Validation error: ${details || errorMsg}`);
         setSalesToastId(id);
@@ -1108,7 +1129,7 @@ const UploadData = ({
         setSalesToastId(id);
       }
 
-      setTimeout(() => {
+      if (underlying.response?.status !== 422) setTimeout(() => {
         // Same reasoning as the success-path reset above: this must also
         // clear sessionStorage, not just local state, or a failed upload
         // reappears as a stale "Upload failed" banner on the next visit
@@ -1778,6 +1799,35 @@ const UploadData = ({
                   <ProgressBar progress={salesProgress} status="error" />
                 </div>
               )}
+              {[...salesFailedIndices.entries()]
+                .filter(([, failure]) => failure.status === 'error'
+                  && (failure.stockShortages?.length || failure.stockValidationErrors?.length))
+                .map(([index, failure]) => (
+                  <div className="stock-shortage-report" key={`stock-shortage-${index}`} role="alert">
+                    <strong>{salesFiles[index]?.name || 'Sales file'} was not uploaded.</strong>
+                    {failure.stockShortages?.length > 0 && (
+                      <ul>
+                        {failure.stockShortages.map((shortage) => (
+                          <li key={shortage.ingredientId}>
+                            {shortage.ingredient}: requires {shortage.requiredAmount} {shortage.unit},
+                            {' '}available {shortage.availableAmount} {shortage.unit},
+                            {' '}short {shortage.shortAmount} {shortage.unit}.
+                          </li>
+                        ))}
+                      </ul>
+                    )}
+                    {failure.stockValidationErrors?.length > 0 && (
+                      <ul>
+                        {failure.stockValidationErrors.map((issue) => (
+                          <li key={issue.ingredientId}>
+                            {issue.ingredient}: {issue.reasons?.join('; ') || 'ingredient requirements could not be converted'}.
+                          </li>
+                        ))}
+                      </ul>
+                    )}
+                    <span>Adjust inventory or the recipe, then upload the file again.</span>
+                  </div>
+                ))}
 
               {/* Data Preview for Sales - Always shown */}
               <div className="data-preview">

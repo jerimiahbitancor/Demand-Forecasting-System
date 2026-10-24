@@ -25,6 +25,7 @@ const { isDailyPriceIndex, parseDailyPriceIndex } = require('../utils/dailyPrice
 const { toCoreName, matchIngredient, createIngredientFuse } = require('../utils/ingredientMatch');
 
 const router = express.Router();
+const { units: SUPPORTED_UNITS } = require('../../shared/ingredientUnits.json');
 router.use(authenticateToken);
 
 // ---- tuning ----------------------------------------------------------------
@@ -52,39 +53,13 @@ const SOURCE_KEY_RE = /^[a-z0-9_]{1,40}$/i;
 // the reviewer still sees the original text in the raw column.
 // lb/lbs map to null on purpose: converting pounds to kilos means changing
 // the quantity too, which is a human decision, not ours.
-const TO_STORABLE_UNIT = {
-  kg: 'kg',
-  k: 'kg',
-  kgs: 'kg',
-  kilo: 'kg',
-  kilos: 'kg',
-  g: 'g',
-  gram: 'g',
-  grams: 'g',
-  l: 'L',
-  litre: 'L',
-  litres: 'L',
-  liter: 'L',
-  liters: 'L',
-  ml: 'mL',
-  pc: 'pcs',
-  pcs: 'pcs',
-  p: 'pcs',
-  piece: 'pcs',
-  pieces: 'pcs',
-  pack: 'pack',
-  packs: 'pack',
-  box: 'box',
-  boxes: 'box',
-  bottle: 'pcs',
-  bottles: 'pcs',
-  can: 'pcs',
-  cans: 'pcs',
-  sack: 'pcs',
-  sacks: 'pcs',
-  lb: null,
-  lbs: null,
-};
+const unitShortName = (unit) => unit.name.match(/\(([^)]+)\)\s*$/)?.[1] || unit.name;
+const TO_STORABLE_UNIT = Object.fromEntries(SUPPORTED_UNITS.flatMap((unit) => {
+  const shortName = unitShortName(unit);
+  return [unit.name, ...unit.aliases].map((alias) => [alias.trim().toLowerCase(), shortName]);
+}));
+TO_STORABLE_UNIT.k = 'kg';
+TO_STORABLE_UNIT.p = 'pcs';
 
 // ---- receipt line parser ---------------------------------------------------
 
@@ -100,7 +75,7 @@ const PRICE_NUM = String.raw`\d{1,3}(?:,\d{3})+(?:[.,]\d{1,2})?|\d{1,6}(?:[.,]\d
 // forms (k, p, l) are what receipts use in per-unit prices: "100/k",
 // "60/p". Case-insensitive at use sites; every token is lower-case here
 // because TO_STORABLE_UNIT is keyed lower-case.
-const UNIT_TOKEN = String.raw`kilograms|kilogram|kgs|kilos|kg|kilo|k|grams|gram|g|millilitres|milliliters|millilitre|milliliter|ml|litres|liters|litre|liter|l|pieces|piece|pcs|pc|p|packs|pack|boxes|box|bottles|bottle|cans|can|sacks|sack|lbs|lb`;
+const UNIT_TOKEN = String.raw`kilograms|kilogram|kgs|kilos|kg|kilo|k|grams|gram|gm|g|millilitres|milliliters|millilitre|milliliter|ml|litres|liters|litre|liter|l|tablespoons|tablespoon|tbsp|teaspoons|teaspoon|tsp|pieces|piece|pcs|pc|p|lbs|lb`;
 
 // Full item line: optional name + optional (qty + unit) + price + optional
 // range ("240.00 - 280.00" on DA price lists) + optional per-unit suffix
@@ -161,7 +136,7 @@ const normalizeReceiptLine = (line) =>
     // "100/k") so PRICE_LINE_RE can see it; the lookahead keeps the word in
     // prose that merely precedes a number ("Receipt 5").
     .replace(/\b(?:php|pesos?)(?=\s*[\d.])/gi, ' ')
-    // Bare "P 100"/"P100" currency marker, but only outside a word: "cup 3"
+    // Bare "P 100"/"P100" currency marker, but only outside a word: "unit 3"
     // must keep its p.
     .replace(/(^|[^A-Za-z])p(?=\s*\d)/gi, '$1')
     // OCR reads capital O as zero inside numbers: "6O/p" -> "60/p",

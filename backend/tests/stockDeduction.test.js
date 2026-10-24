@@ -214,25 +214,16 @@ test('per-day amounts: a product outside the deducting set adds nothing', () => 
 // ---------------------------------------------------------------- H1 units
 
 test('H1: units are resolved exactly, and an unresolvable unit throws instead of guessing', () => {
-  const rice = { id: 1, name: 'Rice', unit: 'Kilograms (kg)', base_unit: 'kg', unit_family: 'mass', density_g_per_ml: '0.85' };
+  const rice = { id: 1, name: 'Rice', unit: 'Kilograms (kg)', base_unit: 'kg', unit_family: 'mass', material_type: 'dry' };
   assert.equal(unitService.resolve('0.5', 'kg', rice).baseAmount.toString(), '0.5', 'same unit, unchanged');
   assert.equal(unitService.resolve('500', 'g', rice).baseAmount.toString(), '0.5', 'g -> kg is exact');
   assert.equal(unitService.resolve('1', 'kg', rice).baseAmount.toString(), '1');
 
-  const water = { id: 2, name: 'Water', unit: 'Liters (L)', base_unit: 'l', unit_family: 'volume', density_g_per_ml: '1' };
+  const water = { id: 2, name: 'Water', unit: 'Liters (L)', base_unit: 'l', unit_family: 'volume', material_type: 'wet' };
   assert.equal(unitService.resolve('500', 'mL', water).baseAmount.toString(), '0.5', 'mL -> L is exact');
   assert.equal(unitService.resolve('1', 'tsp', water).baseAmount.toString(), '0.005', 'tsp -> L is exact');
-  assert.equal(unitService.resolve('1', 'cup', water).baseAmount.toString(), '0.24', 'cup -> L is exact');
-
-  // Volume -> mass needs the density.
-  assert.equal(unitService.resolve('100', 'mL', { ...rice, base_unit: 'g' }).baseAmount.toString(), '85', '100 mL of rice at 0.85 g/mL');
-
-  // No density: an error, never a silent 1:1.
-  assert.throws(
-    () => unitService.resolve('1', 'cup', { id: 3, name: 'Flour', unit: 'Kilograms (kg)', base_unit: 'kg', unit_family: 'mass' }),
-    (error) => error instanceof UnitConversionError && /density/.test(error.message),
-    'a missing density must throw'
-  );
+  assert.throws(() => unitService.resolve('1', 'cup', water), UnitConversionError, 'Cups are unsupported');
+  assert.throws(() => unitService.resolve('100', 'mL', { ...rice, base_unit: 'g' }), UnitConversionError, 'mass and volume are not interchangeable');
 
   // An unknown unit is an error too.
   assert.throws(
@@ -240,13 +231,11 @@ test('H1: units are resolved exactly, and an unresolvable unit throws instead of
     (error) => error instanceof UnitConversionError
   );
 
-  // pack -> the ingredient's own unit, through pack_size.
-  const eggs = { id: 4, name: 'Egg', unit: 'Pieces (pcs)', base_unit: 'pcs', unit_family: 'count', pack_size: '12' };
-  assert.equal(unitService.resolve('2', 'pack', eggs).baseAmount.toString(), '24', 'one pack is 12 pieces');
+  const eggs = { id: 4, name: 'Egg', unit: 'Pieces (pcs)', base_unit: 'pcs', unit_family: 'count' };
   assert.throws(
-    () => unitService.resolve('1', 'pack', { ...eggs, pack_size: null }),
-    (error) => error instanceof UnitConversionError && /pack_size/.test(error.message),
-    'a pack without a pack_size cannot be converted'
+    () => unitService.resolve('1', 'pack', eggs),
+    (error) => error instanceof UnitConversionError,
+    'unsupported units cannot be converted'
   );
 });
 
@@ -319,14 +308,11 @@ const recipe = (product_id, ingredient_id, qty, ing) => ({
   ingredients: {
     name: ing.name,
     unit: ing.unit,
-    grams_per_cup: null,
     created_at: ing.created_at,
     base_unit: ing.base_unit,
     unit_family: ing.unit_family,
     stock_scale: ing.stock_scale,
     allow_fractional: ing.allow_fractional,
-    pack_size: ing.pack_size,
-    density_g_per_ml: ing.density_g_per_ml,
   },
 });
 

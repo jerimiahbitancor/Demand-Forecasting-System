@@ -174,6 +174,45 @@
     font-size: 14px;
   }
 
+    .inventory-table.ingredient-management-table {
+      min-width: 1320px;
+      table-layout: auto;
+    }
+
+    .ingredient-management-table th,
+    .ingredient-management-table td {
+      padding-right: 18px;
+      padding-left: 18px;
+    }
+
+    .ingredient-management-table th:nth-child(3),
+    .ingredient-management-table td:nth-child(3) {
+      min-width: 180px;
+    }
+
+    .ingredient-management-table th:nth-child(9),
+    .ingredient-management-table td:nth-child(9) {
+      min-width: 235px;
+    }
+
+    .ingredient-management-table .ingredient-stock-status-heading,
+    .ingredient-management-table .ingredient-stock-status-cell {
+      text-align: center;
+    }
+
+    .ingredient-management-table .inventory-status-pair {
+      align-items: center;
+    }
+
+    .ingredient-management-table .inventory-status-entry {
+      justify-content: center;
+    }
+
+    .ingredient-management-table th:last-child,
+    .ingredient-management-table td:last-child {
+      min-width: 125px;
+    }
+
   .inventory-table thead {
     background: #faf8f7;
   }
@@ -231,6 +270,19 @@
     border-radius: 20px;
     font-size: 12px;
     font-weight: 600;
+  }
+
+  .inventory-status-pair {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 10px;
+  }
+
+  .inventory-status-entry {
+    display: flex;
+    align-items: center;
+    min-height: 32px;
   }
 
   .inventory-status-dot {
@@ -574,6 +626,38 @@
       width: 100%;
       display: block;
       table-layout: auto;
+    }
+
+    .inventory-table.ingredient-management-table {
+      min-width: 0;
+    }
+
+    .ingredient-management-table th,
+    .ingredient-management-table td {
+      padding-right: 0;
+      padding-left: 0;
+    }
+
+    .ingredient-management-table th:nth-child(3),
+    .ingredient-management-table td:nth-child(3),
+    .ingredient-management-table th:nth-child(9),
+    .ingredient-management-table td:nth-child(9),
+    .ingredient-management-table th:last-child,
+    .ingredient-management-table td:last-child {
+      min-width: 0;
+    }
+
+    .ingredient-management-table .ingredient-stock-status-cell {
+      text-align: right;
+    }
+
+    .ingredient-management-table .inventory-status-pair {
+      align-items: flex-end;
+      margin-left: auto;
+    }
+
+    .ingredient-management-table .inventory-status-entry {
+      justify-content: flex-end;
     }
 
     /* Hide the header row: the per-cell data-labels replace it. */

@@ -206,6 +206,36 @@ router.post(
             file.originalname
           );
 
+          if (validation.isValid) {
+            const stockCheck = await uploadService.validateSalesStock(
+              processedData.data,
+              numericId,
+              file.originalname
+            );
+            if (!stockCheck.sufficient) {
+              uploadService.markUploadComplete(file.originalname, numericId);
+              const shortageDetails = stockCheck.shortages.map((shortage) =>
+                `${shortage.ingredient}: requires ${shortage.requiredAmount} ${shortage.unit}, `
+                + `available ${shortage.availableAmount} ${shortage.unit}, `
+                + `short ${shortage.shortAmount} ${shortage.unit}.`
+              );
+              const validationDetails = stockCheck.validationErrors.map((issue) =>
+                `${issue.ingredient}: ${issue.reasons.join('; ') || 'the recipe unit could not be converted'}.`
+              );
+              const details = [...shortageDetails, ...validationDetails];
+              const hasShortages = stockCheck.shortages.length > 0;
+              return res.status(422).json({
+                success: false,
+                error: hasShortages ? 'Insufficient stock' : 'Stock validation failed',
+                message: hasShortages
+                  ? `Sales upload blocked. No upload record or sales were saved because stock is insufficient: ${details.join(' ')}`
+                  : `Sales upload blocked. No upload record or sales were saved because ingredient requirements could not be validated: ${details.join(' ')}`,
+                shortages: stockCheck.shortages,
+                validationErrors: stockCheck.validationErrors,
+              });
+            }
+          }
+
           uploadId = await uploadService.saveUploadRecord(
             {
               filename: file.filename || `${Date.now()}-${file.originalname}`,

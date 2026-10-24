@@ -29,32 +29,6 @@
   }
 }
 
-/* Plain English summary of the purchase pack, so the owner can see what the
-   pack details mean without opening every tooltip. */
-.inventory-modal-content.inventory-edit-modal .inventory-pack-summary {
-  grid-column: 1 / -1;
-  margin-top: 0.25rem;
-  padding: 0.55rem 0.75rem;
-  border: 1px solid #e5e7eb;
-  border-radius: 8px;
-  background: #f9fafb;
-  color: #374151;
-  font-size: 0.8125rem;
-  line-height: 1.5;
-}
-
-.inventory-modal-content.inventory-edit-modal .inventory-pack-summary-head {
-  font-weight: 600;
-  color: #1f2937;
-}
-
-.inventory-modal-content.inventory-edit-modal .inventory-pack-summary-note {
-  margin-top: 0.35rem;
-  color: #6b7280;
-  font-size: 0.75rem;
-  line-height: 1.45;
-}
-
 /* Where the recipe portions of this item live. Read only: the portion
    belongs to the dish, so it is edited in the Menu Builder. */
 .inventory-modal-content.inventory-edit-modal .inventory-recipes-panel {
@@ -119,18 +93,6 @@
   text-decoration: underline;
 }
 
-/* The note that takes the place of the "One cup weighs" field when the item
-   is never measured with cups. */
-.inventory-modal-content.inventory-edit-modal .inventory-cup-not-needed {
-  margin-top: 0;
-  padding: 0.4rem 0.55rem;
-  border: 1px dashed #e5e7eb;
-  border-radius: 8px;
-  background: #fafafa;
-}
-
-/* The cost per unit is worked out from the pack, so it is shown locked while
-   the pack details are filled in. */
 .inventory-modal-content.inventory-edit-modal .form-input-locked {
   background: #f3f4f6;
   color: #6b7280;
@@ -144,33 +106,4 @@
   color: #6b7280;
   font-size: 0.75rem;
   line-height: 1.4;
-}
-
-/* "Which pack should I record?" — the two ways to set the purchase pack up. */
-.inventory-modal-content.inventory-edit-modal .form-pack-guide {
-  display: flex;
-  flex-direction: column;
-  gap: 0.15rem;
-  margin-top: 0.4rem;
-  padding: 0.45rem 0.6rem;
-  border: 1px solid #e5e7eb;
-  border-left: 3px solid #3b82f6;
-  border-radius: 6px;
-  background: #f9fafb;
-}
-
-.inventory-modal-content.inventory-edit-modal .form-pack-guide-title {
-  color: #374151;
-  font-size: 0.75rem;
-  font-weight: 600;
-}
-
-.inventory-modal-content.inventory-edit-modal .form-pack-guide-line {
-  color: #6b7280;
-  font-size: 0.72rem;
-  line-height: 1.4;
-}
-
-.inventory-modal-content.inventory-edit-modal .form-pack-guide-line strong {
-  color: #374151;
 }

@@ -1,9 +1,8 @@
 // product modals/ProductMergeModal.jsx
 //
 // "Merge into..." (owner's v3 flowchart, page 4): pick the product to keep,
-// optionally a modifier (e.g. "Chick & Fries NO FRIES" is Chick & Fries with
-// the NO FRIES modifier), read what will happen, then confirm. The merge runs
-// on the server as one database transaction (POST /api/products/:id/merge).
+// read what will happen, then confirm. The merge runs on the server as one
+// database transaction (POST /api/products/:id/merge).
 import { useEffect, useMemo, useState } from 'react';
 import { FaTimes, FaCodeBranch, FaExchangeAlt } from 'react-icons/fa';
 import toast from 'react-hot-toast';
@@ -21,16 +20,14 @@ const ProductMergeModal = ({
 }) => {
   const [source, setSource] = useState(initialSource);
   const [products, setProducts] = useState([]);
-  const [keywords, setKeywords] = useState([]);
   const [search, setSearch] = useState('');
   const [target, setTarget] = useState(null);
-  const [keyword, setKeyword] = useState('');
   // The last preview answer, tagged with the request it answers. What is
   // shown is derived from it, so a changed pick never shows an old preview.
   const [previewState, setPreviewState] = useState({ key: null, data: null, error: null });
   const [merging, setMerging] = useState(false);
 
-  const previewKey = source && target ? `${source.id}>${target.id}>${keyword}` : null;
+  const previewKey = source && target ? `${source.id}>${target.id}` : null;
   const previewReady = previewKey !== null && previewState.key === previewKey;
   const preview = previewReady ? previewState.data : null;
   const previewError = previewReady ? previewState.error : null;
@@ -38,15 +35,11 @@ const ProductMergeModal = ({
 
   useEffect(() => {
     let cancelled = false;
-    Promise.all([
-      apiClient.get('/mapping/products', { params: { status: 'all', forceRefresh: true } }),
-      apiClient.get('/products/modifier-keywords'),
-    ])
-      .then(([productsRes, keywordsRes]) => {
+    apiClient.get('/mapping/products', { params: { status: 'all', forceRefresh: true } })
+      .then((productsRes) => {
         if (cancelled) return;
         const list = productsRes.data?.data || productsRes.data?.products || [];
         setProducts(Array.isArray(list) ? list : []);
-        setKeywords(keywordsRes.data?.data?.keywords || []);
         if (initialTargetId) {
           const found = (Array.isArray(list) ? list : []).find((p) => p.id === initialTargetId);
           if (found) setTarget({ id: found.id, name: found.name });
@@ -62,7 +55,7 @@ const ProductMergeModal = ({
     if (!previewKey) return undefined;
     let cancelled = false;
     apiClient.get(`/products/${source.id}/merge-preview`, {
-      params: { targetId: target.id, modifierKeyword: keyword || undefined },
+      params: { targetId: target.id },
     })
       .then((res) => {
         if (!cancelled) setPreviewState({ key: previewKey, data: res.data?.data || null, error: null });
@@ -73,7 +66,7 @@ const ProductMergeModal = ({
         }
       });
     return () => { cancelled = true; };
-  }, [previewKey, source, target, keyword]);
+  }, [previewKey, source, target]);
 
   const candidates = useMemo(() => {
     const q = search.trim().toLowerCase();
@@ -99,7 +92,6 @@ const ProductMergeModal = ({
     try {
       const res = await apiClient.post(`/products/${source.id}/merge`, {
         targetId: target.id,
-        modifierKeyword: keyword || undefined,
       });
       const r = res.data?.data?.result || {};
       toast.success(`Combined "${source.name}" with "${target.name}": ${r.days_moved ?? preview.daysMoved} day(s) of sales moved.`);
@@ -163,22 +155,6 @@ const ProductMergeModal = ({
             </ul>
           </>
         )}
-
-        <label className="merge-label" htmlFor="merge-modifier">Is this a version without an item? (optional)</label>
-        <select
-          id="merge-modifier"
-          className="merge-select"
-          value={keyword}
-          onChange={(e) => setKeyword(e.target.value)}
-          disabled={merging}
-        >
-          <option value="">No, it&apos;s the same product</option>
-          {keywords.map((k) => <option key={k} value={k}>{k}</option>)}
-        </select>
-        <p className="merge-hint">
-          Choose &quot;NO EGG&quot; if the old name was the same product served without egg.
-          {keywords.length === 0 ? ' No items are set up for this yet.' : ''}
-        </p>
 
         {loadingPreview && <p className="merge-hint">Checking what will change...</p>}
         {previewError && <p className="merge-error">{previewError}</p>}

@@ -1,0 +1,53 @@
+{
+  "units": [
+    {
+      "name": "Grams (g)",
+      "family": "mass",
+      "baseUnit": "g",
+      "baseFactor": 1,
+      "aliases": ["g", "gram", "grams", "gm", "gram (g)", "grams (g)"]
+    },
+    {
+      "name": "Kilograms (kg)",
+      "family": "mass",
+      "baseUnit": "g",
+      "baseFactor": 1000,
+      "aliases": ["kg", "kilogram", "kilograms", "kilo", "kilos", "kilogram (kg)", "kilograms (kg)"]
+    },
+    {
+      "name": "Milliliters (mL)",
+      "family": "volume",
+      "baseUnit": "mL",
+      "baseFactor": 1,
+      "aliases": ["ml", "milliliter", "milliliters", "millilitre", "millilitres"]
+    },
+    {
+      "name": "Liters (L)",
+      "family": "volume",
+      "baseUnit": "mL",
+      "baseFactor": 1000,
+      "aliases": ["l", "liter", "liters", "litre", "litres"]
+    },
+    {
+      "name": "Tablespoons (tbsp)",
+      "family": "volume",
+      "baseUnit": "mL",
+      "baseFactor": 15,
+      "aliases": ["tbsp", "tablespoon", "tablespoons"]
+    },
+    {
+      "name": "Teaspoons (tsp)",
+      "family": "volume",
+      "baseUnit": "mL",
+      "baseFactor": 5,
+      "aliases": ["tsp", "teaspoon", "teaspoons"]
+    },
+    {
+      "name": "Pieces (pcs)",
+      "family": "count",
+      "baseUnit": "pcs",
+      "baseFactor": 1,
+      "aliases": ["pcs", "pc", "piece", "pieces"]
+    }
+  ]
+}

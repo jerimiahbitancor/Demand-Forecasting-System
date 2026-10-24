@@ -237,6 +237,86 @@ test('a valid file still goes through: sales saved, day confirmed open, upload p
   }
 });
 
+function seedAdoboEggStock(quantity) {
+  const seed = seedProducts();
+  const egg = {
+    id: 10,
+    name: 'Egg',
+    unit: 'Pieces (pcs)',
+    base_unit: 'pcs',
+    unit_family: 'count',
+    stock_scale: 3,
+    allow_fractional: false,
+    material_type: 'dry',
+    quantity: String(quantity),
+  };
+  seed.ingredients = [egg];
+  seed.product_ingredients = [{
+    product_id: 1,
+    ingredient_id: egg.id,
+    quantity_per_serving: '1',
+    unit: 'Pieces (pcs)',
+    ingredients: egg,
+  }];
+  return seed;
+}
+
+test('insufficient ingredient stock blocks the upload before any database write', async () => {
+  fake.reset(seedAdoboEggStock(1));
+  const server = await startServer();
+  const restore = quiet();
+  try {
+    const res = await request(server, 'POST', '/api/upload', {
+      filename: 'item-sales-summary-2026-10-12-2026-10-12.csv',
+      csv: csv('Adobo,Rice Meals,2,240,0,0,240'),
+    });
+    await settle();
+    assert.equal(res.status, 422);
+    assert.equal(res.body.success, false);
+    assert.equal(res.body.error, 'Insufficient stock');
+    assert.match(res.body.message, /No upload record or sales were saved/);
+    assert.deepEqual(res.body.shortages, [{
+      ingredientId: 10,
+      ingredient: 'Egg',
+      requiredAmount: '2',
+      availableAmount: '1',
+      shortAmount: '1',
+      unit: 'pcs',
+    }]);
+    assert.equal(fake.tables.uploads.length, 1, 'only the pre-existing upload remains');
+    assert.equal(fake.tables.daily_sales.length, 3, 'no sales rows were added');
+    assert.equal(fake.writesTo('uploads').length, 0, 'no upload record was inserted');
+    assert.equal(fake.rpcCalls.length, 0, 'stock was not deducted');
+  } finally {
+    restore();
+    server.close();
+  }
+});
+
+test('sufficient ingredient stock allows a sales upload', async () => {
+  fake.reset(seedAdoboEggStock(10));
+  const server = await startServer();
+  const restore = quiet();
+  try {
+    const res = await request(server, 'POST', '/api/upload', {
+      filename: 'item-sales-summary-2026-10-12-2026-10-12.csv',
+      csv: csv('Adobo,Rice Meals,2,240,0,0,240'),
+    });
+    await settle();
+    assert.equal(res.status, 201, JSON.stringify(res.body));
+    assert.equal(fake.tables.uploads.find((u) => u.id === res.body.uploadId).status, 'processed');
+    assert.equal(fake.tables.daily_sales.filter((r) => r.upload_id === res.body.uploadId).length, 1);
+    assert.equal(
+      fake.writesTo('uploads').filter((write) => ['insert', 'upsert'].includes(write.op)).length,
+      1,
+      'valid upload record was saved'
+    );
+  } finally {
+    restore();
+    server.close();
+  }
+});
+
 // ---------------------------------------------------------------- A8 (migration 017)
 
 test('A8: not enough stock -> 422, nothing saved, upload failed, one "Unmet condition" notice (no generic one)', async () => {

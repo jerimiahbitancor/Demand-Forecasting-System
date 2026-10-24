@@ -2,11 +2,9 @@
 const { supabaseAdmin } = require('../config/supabase');
 const { logAction } = require('../services/auditService');
 const analyticsService = require('../services/analyticsService');
-const { classifyStock } = require('../services/stockAlertService');
 const { queueStockRefresh } = require('../services/notificationService');
 const {
   parseRecipeQuantityDecimal,
-  deriveUnitPrice,
   isMissingColumnError,
   inventoryUnitMetadata,
   Decimal,
@@ -14,6 +12,18 @@ const {
 } = require('../utils/recipeUnits');
 
 const actorOf = (req) => req.user?.name || req.user?.email || null;
+const withoutLegacyPurchaseFields = (item) => {
+  const ingredient = { ...(item || {}) };
+  for (const field of [
+    'pack_qty',
+    'pack_unit',
+    'pack_price',
+    'pack_size',
+    'grams_per_cup',
+    'density_g_per_ml',
+  ]) delete ingredient[field];
+  return ingredient;
+};
 
 // A stock amount as text, without trailing zeros: 30.000000 -> "30",
 // 0.500000 -> "0.5". The value itself is never rounded, only its text form
@@ -120,67 +130,6 @@ const writeRestockNote = async (ingredientId, received, { quantity, newQuantity,
     .eq('id', rows[0].id);
 };
 
-// Purchase pack ("150 g per sachet for ₱200") -> { pack_qty, pack_unit, pack_price }.
-// Anything missing or invalid is stored as NULL so the ingredient simply has
-// no pack recorded and keeps its manually typed unit cost.
-const readPackFields = (body = {}, stockUnit = '') => {
-  const rawQty = body.pack_qty;
-  const rawPrice = body.pack_price;
-  const qty = rawQty === '' || rawQty === null || rawQty === undefined ? null : parseRecipeQuantityDecimal(rawQty);
-  const price = rawPrice === '' || rawPrice === null || rawPrice === undefined ? null : parseRecipeQuantityDecimal(rawPrice);
-  const unitRaw = body.pack_unit ? String(body.pack_unit).trim() : String(stockUnit || '').trim();
-  const validQty = qty?.isFinite() && qty.gt(0);
-  return {
-    pack_qty: validQty ? qty.toDecimalPlaces(6, Decimal.ROUND_HALF_UP).toString() : null,
-    pack_unit: validQty && unitRaw ? unitRaw : null,
-    pack_price: price?.isFinite() && price.gt(0)
-      ? price.toDecimalPlaces(6, Decimal.ROUND_HALF_UP).toString()
-      : null,
-  };
-};
-
-// The unit cost saved on the ingredient is always the pack's price spread over
-// the amount it holds, expressed in the stock unit (150 g for ₱200 on a
-// kg-stocked ingredient -> ₱1333.33/kg) so COGS, demand and the grocery list
-// keep reading a plain price-per-stock-unit. Without a usable pack the price
-// the owner typed is kept as-is.
-const resolveUnitPrice = ({ pack, stockUnit, gramsPerCup, ingredientName, fallbackPrice }) => {
-  if (pack.pack_qty && pack.pack_price && pack.pack_unit) {
-    const derived = deriveUnitPrice({
-      packQty: pack.pack_qty,
-      packUnit: pack.pack_unit,
-      packPrice: pack.pack_price,
-      stockUnit,
-      gramsPerCup,
-      ingredientName,
-    });
-    if (derived != null) return derived.toString();
-  }
-  return fallbackPrice;
-};
-
-// Strip the pack columns and retry: migration 012 not applied yet.
-const stripPackColumns = (row) => {
-  const copy = { ...row };
-  delete copy.pack_qty;
-  delete copy.pack_unit;
-  delete copy.pack_price;
-  return copy;
-};
-
-const stripCanonicalUnitColumns = (row) => {
-  const copy = { ...row };
-  delete copy.base_unit;
-  delete copy.unit_family;
-  delete copy.stock_scale;
-  delete copy.allow_fractional;
-  delete copy.pack_size;
-  delete copy.density_g_per_ml;
-  return copy;
-};
-
-const stripCanonicalColumns = (row) => stripPackColumns(stripCanonicalUnitColumns(row));
-
 // Helper function to get user ID - SIMPLIFIED
 // Use req.user.id directly since it already contains the numeric user ID
 const getUserIdFromAuth = (req) => {
@@ -201,18 +150,16 @@ const getUserIdFromAuth = (req) => {
 const getInventoryItems = async (req, res) => {
   try {
     const {
-      search,
-      category,
-      sortBy = 'created_at',
-      sortOrder = 'desc',
-      page = 1,
-      limit = 5,
-      showArchived = false,
-      date,
-      dateStart,
-      dateEnd,
-      archived,
-      status
+        search,
+        category,
+        sortBy = 'created_at',
+        sortOrder = 'desc',
+        page = 1,
+        limit = 5,
+        showArchived = false,
+        statusField = 'predicted',
+        archived,
+        status
     } = req.query;
 
     const pageNumber = Math.max(parseInt(page, 10) || 1, 1);
@@ -240,38 +187,45 @@ const getInventoryItems = async (req, res) => {
       summaryQuery = summaryQuery.eq('category', category);
     }
 
-    if (date || (dateStart && dateEnd)) {
-      const startDate = dateStart ? new Date(dateStart) : new Date(`${date}T00:00:00.000Z`);
-      const endDate = dateEnd ? new Date(dateEnd) : new Date(startDate);
-      if (!dateEnd) endDate.setUTCDate(endDate.getUTCDate() + 1);
-      if (!Number.isNaN(startDate.getTime())) {
-        summaryQuery = summaryQuery
-          .gte('updated_at', startDate.toISOString())
-          .lt('updated_at', endDate.toISOString());
-      }
-    }
-
     const { data: summaryData, error: summaryError } = await summaryQuery;
     if (summaryError) throw summaryError;
 
-    // ---- Forecast-based stock status ----
-    // The settled spec classifies stock by comparing current quantity
-    // against the day's FORECASTED demand (Critical <50%, Low <100%,
-    // Normal 100-200%, Excess >200%), not against the static min_stock
-    // reorder point. min_stock thresholds made nearly every well-stocked
-    // ingredient read as "Excess Stock" (e.g. qty 25, min_stock 5:
-    // 25 >= 5*3 -> Excess). Compute the same forecasted need the
-    // Analytics > Ingredient Demand view uses, and derive status from it.
+    // Current stock uses min_stock as the ideal/reorder quantity. Predicted
+    // stock compares the same on-hand quantity with the forecasted need.
     const dailyNeeds = await analyticsService.getIngredientDailyNeeds();
-
-    // One rule shared with the bell's stock alerts and the restock email
-    // (services/stockAlertService.js classifyStock): out of stock is always
-    // "Critical Stock" on this page, whether or not a forecast exists.
-    const statusFor = (item) => classifyStock({
-      quantity: item.quantity,
-      isArchived: item.is_archived,
-      need: dailyNeeds.get(item.id) || 0,
-    }).pageLabel;
+    const currentStatusFor = (item) => {
+      const quantity = Number(item.quantity) || 0;
+      const ideal = Number(item.min_stock) || 0;
+      if (quantity <= 0) return 'Out of Stock';
+      if (ideal <= 0) return 'Normal Stock';
+      const ratio = quantity / ideal;
+      if (ratio < 0.5) return 'Low Stock';
+      if (ratio <= 1) return 'Normal Stock';
+      return 'Excess';
+    };
+    const predictedStatusFor = (item) => {
+      if (!dailyNeeds.has(item.id)) return 'Unassigned';
+      const need = Number(dailyNeeds.get(item.id)) || 0;
+      if (need <= 0) return 'Unassigned';
+      const quantity = Number(item.quantity) || 0;
+      if (quantity <= 0) return 'Critical Shortage';
+      const ratio = quantity / need;
+      const materialType = String(item.material_type || '').trim().toLowerCase();
+      const isWet = materialType
+        ? materialType === 'wet'
+        : /wet|liquid|meat|poultry|seafood|fish|dairy|vegetable|fruit|egg/i.test(String(item.category || ''));
+      if (ratio < (isWet ? 0.5 : 0.2)) return 'Insufficient Supply';
+      if (ratio <= 1) return 'Sufficient Supply';
+      return 'Above Forecast Limit';
+    };
+    const statusFor = (item) => {
+      if (statusField === 'current') {
+        return status === 'Unassigned'
+          ? predictedStatusFor(item)
+          : currentStatusFor(item);
+      }
+      return predictedStatusFor(item);
+    };
 
     const totalItems = summaryData?.length || 0;
     const totalStockValue = (summaryData || []).reduce((sum, item) => {
@@ -280,20 +234,20 @@ const getInventoryItems = async (req, res) => {
       return sum + (quantity * price);
     }, 0);
     const lowStockAlerts = (summaryData || []).filter((item) => {
-      const s = statusFor(item);
-      return s === 'Low Stock' || s === 'Critical Stock';
+      const s = currentStatusFor(item);
+      return s === 'Low Stock' || s === 'Out of Stock';
     }).length;
     const outOfStockItems = (summaryData || []).filter((item) => (Number(item.quantity) || 0) === 0).length;
     const stockCounts = (summaryData || []).reduce((counts, item) => {
-      const s = statusFor(item);
-      if (s === 'Critical Stock') counts.criticalStock++;
+      const s = currentStatusFor(item);
+      if (s === 'Out of Stock') counts.criticalStock++;
       else if (s === 'Low Stock') counts.lowStock++;
-      else if (s === 'Excess Stock') counts.excessStock++;
+      else if (s === 'Excess') counts.excessStock++;
       else if (s === 'Normal Stock') counts.normalStock++;
       return counts;
     }, { excessStock: 0, normalStock: 0, lowStock: 0, criticalStock: 0 });
 
-    // ---- Unmapped ingredients ----
+    // ---- Unassigned ingredients ----
     // Ingredients that exist in stock but appear in no product recipe. Counted
     // against the recipe map rather than dailyNeeds: an ingredient with a
     // recipe but no forecast row for today also reports 'No Forecast', and
@@ -301,7 +255,7 @@ const getInventoryItems = async (req, res) => {
     // are excluded unless the caller asked for them, so the card agrees with
     // the "Active inventory items" framing of the Total Items card.
     const mappedIngredientIds = await analyticsService.getMappedIngredientIds();
-    const unmappedIngredients = (summaryData || []).filter((item) => {
+    const unassignedIngredients = (summaryData || []).filter((item) => {
       if (item.is_archived) return false;
       return !mappedIngredientIds.has(item.id);
     }).length;
@@ -323,17 +277,6 @@ const getInventoryItems = async (req, res) => {
 
     if (category && category !== 'All') {
       query = query.eq('category', category);
-    }
-
-    if (date || (dateStart && dateEnd)) {
-      const startDate = dateStart ? new Date(dateStart) : new Date(`${date}T00:00:00.000Z`);
-      const endDate = dateEnd ? new Date(dateEnd) : new Date(startDate);
-      if (!dateEnd) endDate.setUTCDate(endDate.getUTCDate() + 1);
-      if (!Number.isNaN(startDate.getTime())) {
-        query = query
-          .gte('updated_at', startDate.toISOString())
-          .lt('updated_at', endDate.toISOString());
-      }
     }
 
     const validSortFields = ['created_at', 'updated_at', 'name', 'category', 'quantity', 'price'];
@@ -414,9 +357,10 @@ const getInventoryItems = async (req, res) => {
     }
 
     const data = (paginatedData || []).map((item) => ({
-      ...item,
+      ...withoutLegacyPurchaseFields(item),
       forecasted_need: dailyNeeds.get(item.id) || 0,
-      stock_status: statusFor(item),
+      current_stock_status: currentStatusFor(item),
+      predicted_stock_status: predictedStatusFor(item),
       avg_market_price: avgMap[item.id] !== undefined ? avgMap[item.id] : null,
       open_shortfall: openShortfalls.get(item.id)?.total || 0,
       open_shortfall_sales: openShortfalls.get(item.id)?.sales || 0
@@ -437,7 +381,7 @@ const getInventoryItems = async (req, res) => {
         excessStock: stockCounts.excessStock,
         normalStock: stockCounts.normalStock,
         criticalStock: stockCounts.criticalStock,
-        unmappedIngredients
+        unassignedIngredients
       },
       forecastBasis
     });
@@ -468,7 +412,7 @@ const getInventoryItem = async (req, res) => {
     res.json({
       success: true,
       data: {
-        ...data,
+        ...withoutLegacyPurchaseFields(data),
         open_shortfall: openShortfalls.get(Number(id))?.total || 0,
         open_shortfall_sales: openShortfalls.get(Number(id))?.sales || 0
       }
@@ -493,10 +437,9 @@ const createInventoryItem = async (req, res) => {
 
     console.log('📝 Creating inventory item:', { name, category, quantity, price });
 
-    const stockUnit = unit || 'pcs';
-    const pack = readPackFields(req.body, stockUnit);
+    const stockUnit = unit || 'Pieces (pcs)';
 
-    if (!name || !category || quantity === undefined || (price === undefined && !(pack.pack_qty && pack.pack_price && pack.pack_unit))) {
+    if (!name || !category || quantity === undefined || price === undefined) {
       return res.status(400).json({
         success: false,
         error: 'Name, category, quantity, and price are required'
@@ -510,22 +453,28 @@ const createInventoryItem = async (req, res) => {
         error: 'Quantity must be a valid number greater than or equal to 0'
       });
     }
+    const parsedPrice = parseRecipeQuantityDecimal(price);
+    if (!parsedPrice?.isFinite() || parsedPrice.lt(0)) {
+      return res.status(400).json({
+        success: false,
+        error: 'Price must be a valid number greater than or equal to 0'
+      });
+    }
 
     // Get user ID directly from req.user.id
     const userId = getUserIdFromAuth(req);
     console.log('👤 User ID:', userId);
 
     const parsedMinStock = parseRecipeQuantityDecimal(min_stock);
-    const parsedGramsPerCup = parseRecipeQuantityDecimal(req.body.grams_per_cup);
-    const gramsPerCup = parsedGramsPerCup?.gt(0) ? parsedGramsPerCup.toString() : null;
+    const materialType = req.body.material_type || 'dry';
+    if (!['dry', 'wet'].includes(materialType)) {
+      return res.status(400).json({ success: false, error: 'Material type must be dry or wet' });
+    }
     let canonicalFields;
     try {
       canonicalFields = inventoryUnitMetadata({
         unit: stockUnit,
-        name: name.trim(),
-        gramsPerCup,
-        packQty: pack.pack_qty,
-        packUnit: pack.pack_unit,
+        materialType,
       });
     } catch (error) {
       if (!(error instanceof UnitConversionError)) throw error;
@@ -536,25 +485,16 @@ const createInventoryItem = async (req, res) => {
       category: category.trim(),
       unit: stockUnit,
       quantity: parsedQuantity.toDecimalPlaces(6, Decimal.ROUND_HALF_UP).toString(),
-      price: resolveUnitPrice({
-        pack,
-        stockUnit,
-        gramsPerCup,
-        ingredientName: name.trim(),
-        fallbackPrice: price,
-      }),
+      price: parsedPrice.toDecimalPlaces(6, Decimal.ROUND_HALF_UP).toString(),
       min_stock: parsedMinStock?.isFinite()
         ? parsedMinStock.toDecimalPlaces(6, Decimal.ROUND_HALF_UP).toString()
         : '0',
-      pack_qty: pack.pack_qty,
-      pack_unit: pack.pack_unit,
-      pack_price: pack.pack_price,
+      material_type: materialType,
       ...canonicalFields,
       created_by: userId,
       updated_by: userId
     };
 
-    insertData.grams_per_cup = gramsPerCup;
 
     console.log('📦 Insert data:', insertData);
 
@@ -564,22 +504,14 @@ const createInventoryItem = async (req, res) => {
       .select()
       .single();
 
-    // Older databases may not have the package and canonical-unit columns yet.
+    // Older databases may not have the canonical-unit columns yet.
     if (insertResult.error && isMissingColumnError(insertResult.error)) {
       insertResult = await supabaseAdmin
         .from('ingredients')
-        .insert([stripCanonicalUnitColumns(insertData)])
+        .insert([insertData])
         .select()
         .single();
     }
-    if (insertResult.error && isMissingColumnError(insertResult.error)) {
-      insertResult = await supabaseAdmin
-        .from('ingredients')
-        .insert([stripCanonicalColumns(insertData)])
-        .select()
-        .single();
-    }
-
     const { data, error } = insertResult;
 
     if (error) {
@@ -608,7 +540,7 @@ const createInventoryItem = async (req, res) => {
       actorOf(req)
     );
 
-    res.json({ success: true, data, message: 'Item added successfully' });
+    res.json({ success: true, data: withoutLegacyPurchaseFields(data), message: 'Item added successfully' });
   } catch (error) {
     console.error('❌ Error creating item:', error);
     res.status(500).json({ success: false, error: error.message });
@@ -673,57 +605,26 @@ const updateInventoryItem = async (req, res) => {
       }
       updateData.min_stock = parsedMin.toDecimalPlaces(6, Decimal.ROUND_HALF_UP).toString();
     }
-    if (req.body.grams_per_cup !== undefined) {
-      const g = parseRecipeQuantityDecimal(req.body.grams_per_cup);
-      updateData.grams_per_cup = g?.gt(0)
-        ? g.toDecimalPlaces(6, Decimal.ROUND_HALF_UP).toString()
-        : null;
+    if (req.body.material_type !== undefined) {
+      const materialType = String(req.body.material_type).trim().toLowerCase();
+      if (!['wet', 'dry'].includes(materialType)) {
+        return res.status(400).json({ success: false, error: 'Material type must be wet or dry' });
+      }
+      updateData.material_type = materialType;
     }
-
-    // The pack is only touched when the client actually sent it, so older
-    // callers (and the restock/archive paths) never wipe it by accident.
-    const packSent = req.body.pack_qty !== undefined
-      || req.body.pack_unit !== undefined
-      || req.body.pack_price !== undefined;
     const nextStockUnit = updateData.unit !== undefined ? updateData.unit : currentItem.unit;
-    const pack = readPackFields(req.body, nextStockUnit);
-    if (packSent) {
-      updateData.pack_qty = pack.pack_qty;
-      updateData.pack_unit = pack.pack_unit;
-      updateData.pack_price = pack.pack_price;
-    }
-
-    // Re-derive the unit cost from the pack when one is set (see
-    // resolveUnitPrice); otherwise keep the price from the request.
     const effective = {
       unit: nextStockUnit,
-      name: updateData.name !== undefined ? updateData.name : currentItem.name,
-      gramsPerCup: updateData.grams_per_cup !== undefined ? updateData.grams_per_cup : currentItem.grams_per_cup,
-      pack_qty: packSent ? updateData.pack_qty : currentItem.pack_qty,
-      pack_unit: packSent ? updateData.pack_unit : currentItem.pack_unit,
-      pack_price: packSent ? updateData.pack_price : currentItem.pack_price,
     };
     try {
       Object.assign(updateData, inventoryUnitMetadata({
         unit: effective.unit,
-        name: effective.name,
-        gramsPerCup: effective.gramsPerCup,
-        packQty: effective.pack_qty,
-        packUnit: effective.pack_unit,
+        materialType: updateData.material_type || currentItem.material_type || 'dry',
       }));
     } catch (error) {
       if (!(error instanceof UnitConversionError)) throw error;
       return res.status(400).json({ success: false, error: error.message });
     }
-    const resolvedPrice = resolveUnitPrice({
-      pack: { pack_qty: effective.pack_qty, pack_unit: effective.pack_unit, pack_price: effective.pack_price },
-      stockUnit: effective.unit,
-      gramsPerCup: effective.gramsPerCup,
-      ingredientName: effective.name,
-      fallbackPrice: updateData.price,
-    });
-    if (resolvedPrice !== undefined) updateData.price = resolvedPrice;
-
     console.log('📦 Update data:', updateData);
 
     // Update item
@@ -734,24 +635,15 @@ const updateInventoryItem = async (req, res) => {
       .select()
       .single();
 
-    // Older databases may not have the package and canonical-unit columns yet.
+    // Older databases may not have the canonical-unit columns yet.
     if (updateResult.error && isMissingColumnError(updateResult.error)) {
       updateResult = await supabaseAdmin
         .from('ingredients')
-        .update(stripCanonicalUnitColumns(updateData))
+        .update(updateData)
         .eq('id', id)
         .select()
         .single();
     }
-    if (updateResult.error && isMissingColumnError(updateResult.error)) {
-      updateResult = await supabaseAdmin
-        .from('ingredients')
-        .update(stripCanonicalColumns(updateData))
-        .eq('id', id)
-        .select()
-        .single();
-    }
-
     const { data, error } = updateResult;
 
     if (error) {
@@ -798,7 +690,7 @@ const updateInventoryItem = async (req, res) => {
     res.json({
       success: true,
       data: {
-        ...data,
+        ...withoutLegacyPurchaseFields(data),
         open_shortfall: openShortfalls.get(Number(id))?.total || 0,
         open_shortfall_sales: openShortfalls.get(Number(id))?.sales || 0
       },
@@ -808,7 +700,6 @@ const updateInventoryItem = async (req, res) => {
     // Not awaited and never throws (see queueStockRefresh).
     queueStockRefresh('stock_edit');
 
-    res.json({ success: true, data, message: 'Item updated successfully' });
   } catch (error) {
     console.error('❌ Error updating item:', error);
     res.status(500).json({ success: false, error: error.message });
@@ -973,9 +864,9 @@ const restoreInventoryItem = async (req, res) => {
 const restockInventoryItem = async (req, res) => {
   try {
     const { id } = req.params;
-    const { quantity, pack_count: rawPackCount, reason, notes } = req.body;
+    const { quantity, reason, notes } = req.body;
 
-    console.log('📦 Restocking inventory item:', { id, quantity, pack_count: rawPackCount });
+    console.log('Restocking inventory item:', { id, quantity });
 
     const { data: currentItem, error: fetchError } = await supabaseAdmin
       .from('ingredients')
@@ -987,55 +878,24 @@ const restockInventoryItem = async (req, res) => {
       return res.status(404).json({ success: false, error: 'Item not found' });
     }
 
-    const packCount = rawPackCount === undefined || rawPackCount === null || rawPackCount === ''
-      ? null
-      : parseRecipeQuantityDecimal(rawPackCount);
-    let restockQuantity;
-    if (packCount !== null) {
-      if (!packCount?.isFinite() || packCount.lte(0)) {
-        return res.status(400).json({ success: false, error: 'Pack count must be greater than zero' });
-      }
-      let packSize = currentItem.pack_size;
-      if (packSize == null && currentItem.pack_qty != null && currentItem.pack_unit) {
-        try {
-          packSize = inventoryUnitMetadata({
-            unit: currentItem.unit,
-            name: currentItem.name,
-            gramsPerCup: currentItem.grams_per_cup,
-            packQty: currentItem.pack_qty,
-            packUnit: currentItem.pack_unit,
-          }).pack_size;
-        } catch (error) {
-          if (!(error instanceof UnitConversionError)) throw error;
-          return res.status(400).json({ success: false, error: error.message });
-        }
-      }
-      const packSizeDecimal = packSize == null ? null : new Decimal(String(packSize));
-      if (!packSizeDecimal?.isFinite() || packSizeDecimal.lte(0)) {
-        return res.status(400).json({
-          success: false,
-          error: 'This ingredient does not have a valid pack size. Update its pack details before restocking by pack.',
-        });
-      }
-      restockQuantity = packCount.mul(packSizeDecimal);
-    } else {
-      restockQuantity = parseRecipeQuantityDecimal(quantity);
-      if (!restockQuantity?.isFinite() || restockQuantity.lte(0)) {
-        return res.status(400).json({ success: false, error: 'Valid quantity is required' });
-      }
+    if (req.body.unit && String(req.body.unit).trim() !== String(currentItem.unit || '').trim()) {
+      return res.status(400).json({
+        success: false,
+        error: `Quantity must be provided in ${currentItem.unit || 'the ingredient stock unit'}`,
+      });
+    }
+
+    let restockQuantity = parseRecipeQuantityDecimal(quantity);
+    if (!restockQuantity?.isFinite() || restockQuantity.lte(0)) {
+      return res.status(400).json({ success: false, error: 'Valid quantity is required' });
     }
     restockQuantity = restockQuantity.toDecimalPlaces(6, Decimal.ROUND_HALF_UP);
 
     const userId = getUserIdFromAuth(req);
     console.log('👤 User ID:', userId);
     
-    const packNote = packCount === null
-      ? null
-      : `Received ${formatStockAmount(packCount)} pack${packCount.eq(1) ? '' : 's'}`
-        + ` (${formatStockAmount(restockQuantity)} ${currentItem.unit || currentItem.base_unit || 'units'})`;
     const restockNotes = [
       notes || null,
-      packNote,
     ].filter(Boolean).join(' · ') || null;
 
     // The incoming stock is stock on hand, so the pending sales shortfalls of
@@ -1114,11 +974,8 @@ const restockInventoryItem = async (req, res) => {
         newQuantity: finalQuantity.toString(),
         note: [
           notes || null,
-          packNote,
-          packNote
-            ? `Stock is now ${formatStockAmount(finalQuantity)} ${unitLabel}.`
-            : `Received ${formatStockAmount(receivedQuantity)} ${unitLabel}; `
-              + `stock is now ${formatStockAmount(finalQuantity)} ${unitLabel}.`,
+          `Received ${formatStockAmount(receivedQuantity)} ${unitLabel}; `
+            + `stock is now ${formatStockAmount(finalQuantity)} ${unitLabel}.`,
         ].filter(Boolean).join(' · '),
       }
     );
@@ -1185,7 +1042,7 @@ const getItemTransactions = async (req, res) => {
 // Read only on purpose. The portion belongs to the dish, not to the
 // ingredient, so it is edited in the Menu Builder. The ingredient window
 // only shows where the portions already are, so nobody types a portion into
-// the purchase pack fields.
+// the ingredient's purchase details.
 const getIngredientRecipes = async (req, res) => {
   try {
     const { id } = req.params;

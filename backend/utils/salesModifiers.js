@@ -258,8 +258,8 @@ function aggregateSalesRecords(records, { productIdByName, keywords = [], upload
  *   unitWarnings: object[],    // units that could not be resolved
  * }>
  *
- * A recipe whose unit cannot be resolved (no density, no pack size, an
- * unknown unit) makes the WHOLE ingredient unconvertible: the total would
+ * A recipe whose unit cannot be resolved (no density or an unknown unit)
+ * makes the WHOLE ingredient unconvertible: the total would
  * otherwise be silently short. Such an ingredient is removed from the map
  * and reported in the returned `unconvertible` list, so the caller can warn
  * the owner instead of deducting a wrong amount.
@@ -407,7 +407,7 @@ function computeStockDeductions(args) {
 // Rounding — the ONE place a quantity is rounded (U4).
 //
 //   mass / volume  -> half-up to stock_scale (default 3)
-//   count, allow_fractional = false -> CEIL to a whole piece (egg, pack)
+//   count, allow_fractional = false -> CEIL to a whole piece (e.g. egg)
 //   count, allow_fractional = true  -> half-up to stock_scale
 //
 // Returns a Decimal. A rounded amount of 0 means "do not deduct at all".

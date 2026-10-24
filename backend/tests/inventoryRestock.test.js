@@ -10,7 +10,6 @@ const fake = createFakeSupabase({
       name: 'Strawberry Powder',
       unit: 'Grams (g)',
       quantity: '0.1',
-      pack_size: '0.1',
       updated_by: null,
     },
   ],
@@ -68,12 +67,21 @@ const fake = createFakeSupabase({
   },
 });
 
+let ingredientDailyNeeds = new Map();
 installFake(fake, {
   'services/auditService.js': { logAction: async () => {} },
-  'services/analyticsService.js': {},
+  'services/analyticsService.js': {
+    getIngredientDailyNeeds: async () => ingredientDailyNeeds,
+    getMappedIngredientIds: async () => new Set(),
+    getForecastBasis: async () => null,
+  },
 });
 
-const { createInventoryItem, restockInventoryItem } = require('../controllers/inventoryController');
+const {
+  createInventoryItem,
+  getInventoryItems,
+  restockInventoryItem,
+} = require('../controllers/inventoryController');
 
 function callController(handler, { body, id } = {}) {
   return new Promise((resolve, reject) => {
@@ -95,16 +103,14 @@ function callController(handler, { body, id } = {}) {
   });
 }
 
-test('creating stock from a pack saves usable unit metadata and derives per-unit cost', async () => {
+test('creating stock saves the supported unit and entered per-unit cost', async () => {
   const result = await callController(createInventoryItem, {
     body: {
       name: 'New Strawberry Powder',
       category: 'Ingredients',
       unit: 'Grams (g)',
       quantity: '50',
-      pack_qty: '50',
-      pack_unit: '',
-      pack_price: '125',
+      price: '2.5',
     },
   });
 
@@ -113,14 +119,116 @@ test('creating stock from a pack saves usable unit metadata and derives per-unit
   assert.equal(result.body.data.price, '2.5');
   assert.equal(result.body.data.base_unit, 'g');
   assert.equal(result.body.data.unit_family, 'mass');
-  assert.equal(result.body.data.pack_size, '50');
-  assert.equal(result.body.data.pack_unit, 'Grams (g)');
+  assert.equal(result.body.data.material_type, 'dry');
 });
 
-test('restocking by pack count adds exact pack contents and logs the movement', async () => {
+test('creating stock rejects unsupported material types', async () => {
+  const result = await callController(createInventoryItem, {
+    body: {
+      name: 'Invalid Material',
+      category: 'Ingredients',
+      unit: 'Grams (g)',
+      quantity: '1',
+      price: '1',
+      material_type: 'liquid',
+    },
+  });
+  assert.equal(result.status, 400);
+  assert.equal(result.body.error, 'Material type must be dry or wet');
+  assert.equal(fake.writesTo('ingredients').length, 0);
+});
+
+test('ingredient list exposes separate stock statuses and omits removed purchase fields', async () => {
+  const statusRows = [
+    ['Out of Stock', 0, 10, 'dry'],
+    ['Low Stock', 2, 10, 'dry'],
+    ['Normal Stock', 5, 10, 'dry'],
+    ['Excess', 11, 10, 'dry'],
+    ['Critical Shortage', 0, 10, 'dry'],
+    ['Insufficient Supply', 1, 10, 'dry'],
+    ['Sufficient Supply', 2, 10, 'dry'],
+    ['Above Forecast Limit', 11, 10, 'dry'],
+    ['Wet Insufficient Supply', 4, 10, 'wet'],
+    ['Wet Sufficient Supply', 5, 10, 'wet'],
+    ['Unassigned', 5, 0, 'dry'],
+  ];
+  const ingredients = statusRows.map(([name, quantity, minStock, materialType], index) => ({
+    id: index + 1,
+    name,
+    unit: 'Grams (g)',
+    base_unit: 'g',
+    quantity,
+    min_stock: minStock,
+    material_type: materialType,
+    category: materialType === 'wet' ? 'Wet Raw Materials' : 'Dry Raw Materials',
+    price: 1,
+    is_archived: false,
+    pack_qty: 5,
+    pack_unit: 'Pack',
+    pack_price: 10,
+    pack_size: 5,
+    grams_per_cup: 200,
+    density_g_per_ml: 0.8,
+  }));
+  fake.reset({ ingredients, inventory_transactions: [], inventory_shortfall_balances: [] });
+  ingredientDailyNeeds = new Map([
+    [1, 1],
+    [2, 10],
+    [3, 10],
+    [4, 10],
+    [5, 1],
+    [6, 10],
+    [7, 10],
+    [8, 10],
+    [9, 10],
+    [10, 10],
+  ]);
+
+  const response = {
+    statusCode: 200,
+    payload: null,
+    status(code) { this.statusCode = code; return this; },
+    json(payload) { this.payload = payload; },
+  };
+  await getInventoryItems({ query: { statusField: 'predicted', limit: '20' } }, response);
+
+  assert.equal(response.statusCode, 200);
+  const byName = new Map(response.payload.data.map((item) => [item.name, item]));
+  assert.equal(byName.get('Out of Stock').current_stock_status, 'Out of Stock');
+  assert.equal(byName.get('Low Stock').current_stock_status, 'Low Stock');
+  assert.equal(byName.get('Normal Stock').current_stock_status, 'Normal Stock');
+  assert.equal(byName.get('Excess').current_stock_status, 'Excess');
+  assert.equal(byName.get('Critical Shortage').predicted_stock_status, 'Critical Shortage');
+  assert.equal(byName.get('Insufficient Supply').predicted_stock_status, 'Insufficient Supply');
+  assert.equal(byName.get('Sufficient Supply').predicted_stock_status, 'Sufficient Supply');
+  assert.equal(byName.get('Above Forecast Limit').predicted_stock_status, 'Above Forecast Limit');
+  assert.equal(byName.get('Wet Insufficient Supply').predicted_stock_status, 'Insufficient Supply');
+  assert.equal(byName.get('Wet Sufficient Supply').predicted_stock_status, 'Sufficient Supply');
+  assert.equal(byName.get('Unassigned').predicted_stock_status, 'Unassigned');
+  for (const item of response.payload.data) {
+    assert.equal('pack_qty' in item, false);
+    assert.equal('pack_unit' in item, false);
+    assert.equal('pack_price' in item, false);
+    assert.equal('grams_per_cup' in item, false);
+  }
+  ingredientDailyNeeds = new Map();
+  fake.reset({
+    ingredients: [{
+      id: 1,
+      name: 'Strawberry Powder',
+      unit: 'Grams (g)',
+      quantity: '0.1',
+      updated_by: null,
+    }],
+    inventory_transactions: [],
+    inventory_shortfall_balances: [],
+  });
+});
+
+test('restocking adds a quantity in the ingredient stock unit', async () => {
   const result = await callController(restockInventoryItem, {
     id: 1,
-    body: { pack_count: '2', reason: 'purchase_order' },
+    body: { quantity: '0.2', unit: 'Grams (g)', reason: 'purchase_order' },
   });
 
   assert.equal(result.status, 200);
@@ -131,8 +239,8 @@ test('restocking by pack count adds exact pack contents and logs the movement', 
   assert.equal(transaction.quantity, '0.2');
   assert.equal(transaction.previous_quantity, '0.1');
   assert.equal(transaction.new_quantity, '0.3');
-  assert.match(transaction.notes, /Received 2 packs \(0\.2 Grams \(g\)\)/);
-  assert.match(transaction.notes, /Stock is now 0\.3 Grams \(g\)/);
+  assert.match(transaction.notes, /Received 0\.2 Grams \(g\)/);
+  assert.match(transaction.notes, /stock is now 0\.3 Grams \(g\)/);
   assert.equal(fake.rpcCalls[0].name, 'restock_ingredient_stock');
   assert.equal(fake.rpcCalls[0].args.p_quantity, '0.2');
 });
@@ -145,7 +253,6 @@ test('restocking adds the received stock and leaves earlier sales shortfalls on 
       unit: 'Grams (g)',
       base_unit: 'g',
       quantity: '0',
-      pack_size: '50',
       updated_by: null,
     }],
     inventory_transactions: [],
@@ -195,7 +302,6 @@ test('restock messages and movement notes carry no trailing-zero decimals', asyn
       unit: 'Grams (g)',
       base_unit: 'g',
       quantity: '20',
-      pack_size: '50',
       updated_by: null,
     }],
     inventory_transactions: [],
@@ -226,7 +332,6 @@ test('restocking still adds the stock when the shortfall table is not installed'
       unit: 'Grams (g)',
       base_unit: 'g',
       quantity: '20',
-      pack_size: '50',
       updated_by: null,
     }],
     inventory_transactions: [],
