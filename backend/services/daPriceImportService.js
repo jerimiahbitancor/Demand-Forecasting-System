@@ -30,6 +30,7 @@
 'use strict';
 
 const { supabaseAdmin } = require('../config/supabase');
+const { units: SUPPORTED_UNITS } = require('../../shared/ingredientUnits.json');
 const { isDailyPriceIndex, parseDailyPriceIndex } = require('../utils/dailyPriceIndex');
 const { extractPdfText } = require('../utils/pdfText');
 const { createIngredientFuse, matchConfidence } = require('../utils/ingredientMatch');
@@ -254,21 +255,18 @@ async function alreadyImportedForDate(dateStr) {
   return Boolean(data && data.length);
 }
 
-// market_price.unit is NOT NULL and constrained to the store's units. The DA
-// sheet sells most commodities per kilo; eggs and a few others per piece —
-// but the ingredient list already knows its own unit, and the comparison view
-// displays the ingredient's unit regardless. Normalize what we can, else kg.
-const UNIT_ALIASES = {
-  kg: 'kg', kgs: 'kg', kilo: 'kg', kilos: 'kg', kilogram: 'kg', kilograms: 'kg',
-  g: 'g', gram: 'g', grams: 'g',
-  l: 'L', litre: 'L', liters: 'L', liter: 'L',
-  ml: 'mL', millilitre: 'mL', milliliters: 'mL', milliliter: 'mL',
-  pcs: 'pcs', pc: 'pcs', piece: 'pcs', pieces: 'pcs',
-  pack: 'pack', packs: 'pack', box: 'box', boxes: 'box',
+// The importer must not label an unsupported ingredient unit as kilograms:
+// that would create a misleading market-price record.
+const UNIT_ALIASES = Object.fromEntries(SUPPORTED_UNITS.flatMap((definition) => {
+  const shortName = definition.name.match(/\(([^)]+)\)\s*$/)?.[1] || definition.name;
+  return [definition.name, ...definition.aliases]
+    .map((alias) => [alias.trim().toLowerCase(), shortName]);
+}));
+const unitForIngredient = (unit) => {
+  const normalized = UNIT_ALIASES[String(unit || '').trim().toLowerCase()];
+  if (!normalized) throw new Error(`Cannot import a market price for unsupported ingredient unit "${unit || '(empty)'}".`);
+  return normalized;
 };
-// unitForIngredient is CJS-style: normalize unit, else kg.
-const unitForIngredient = (unit) =>
-  UNIT_ALIASES[String(unit || '').trim().toLowerCase()] || 'kg';
 
 // ---- confidence-matching -----------------------------------------------------
 

@@ -211,22 +211,18 @@ class MappingService {
       // Fetch all product ingredients in one query instead of one query per product.
       if (transformedData.length > 0) {
         const productIds = transformedData.map(product => product.id);
-        // Column ladder: migration 012 (pack) -> migration 008 (recipe unit)
-        // -> oldest schema. A missing column just drops that level.
-        const ingredientCols = (withPack) => (withPack
-          ? 'id, name, unit, price, grams_per_cup, pack_qty, pack_unit, pack_price'
-          : 'id, name, unit, price, grams_per_cup');
-        const recipeSelect = (withUnit, withPack) => `
+        const ingredientCols = 'id, name, unit, price, material_type';
+        const recipeSelect = (withUnit) => `
             product_id,
             quantity_per_serving,
             ${withUnit ? 'unit,' : ''}
             ingredients!inner (
-              ${ingredientCols(withPack)}
+              ${ingredientCols}
             )
           `;
         let ingredientsResult = await supabaseAdmin
           .from('product_ingredients')
-          .select(recipeSelect(true, true))
+          .select(recipeSelect(true))
           .in('product_id', productIds);
 
         // Migration 008 adds product_ingredients.unit. Until it runs, fall
@@ -235,13 +231,13 @@ class MappingService {
         if (ingredientsResult.error && isMissingColumnError(ingredientsResult.error)) {
           ingredientsResult = await supabaseAdmin
             .from('product_ingredients')
-            .select(recipeSelect(true, false))
+            .select(`product_id, quantity_per_serving, unit, ingredients!inner(id, name, unit, price)`)
             .in('product_id', productIds);
         }
         if (ingredientsResult.error && isMissingColumnError(ingredientsResult.error)) {
           ingredientsResult = await supabaseAdmin
             .from('product_ingredients')
-            .select(recipeSelect(false, false))
+            .select(`product_id, quantity_per_serving, ingredients!inner(id, name, unit, price)`)
             .in('product_id', productIds);
         }
 
@@ -256,16 +252,12 @@ class MappingService {
               id: pi.ingredients?.id,
               quantity_per_serving: pi.quantity_per_serving,
               unit: pi.unit || pi.ingredients?.unit || null,
-              grams_per_cup: pi.ingredients?.grams_per_cup ?? null,
               ingredients: {
                 id: pi.ingredients?.id,
                 name: pi.ingredients?.name,
                 unit: pi.ingredients?.unit,
                 price: pi.ingredients?.price,
-                grams_per_cup: pi.ingredients?.grams_per_cup ?? null,
-                pack_qty: pi.ingredients?.pack_qty ?? null,
-                pack_unit: pi.ingredients?.pack_unit ?? null,
-                pack_price: pi.ingredients?.pack_price ?? null
+                material_type: pi.ingredients?.material_type || 'dry'
               }
             });
             ingredientsByProduct.set(pi.product_id, productIngredients);
@@ -353,18 +345,14 @@ class MappingService {
         product_ingredients: []
       };
 
-      // Fetch ingredients (same column ladder as getProducts: pack ->
-      // recipe unit -> oldest schema).
-      const ingredientCols = (withPack) => (withPack
-        ? 'id, name, unit, price, grams_per_cup, pack_qty, pack_unit, pack_price'
-        : 'id, name, unit, price, grams_per_cup');
+      const ingredientCols = 'id, name, unit, price, material_type';
       let ingredientsResult = await supabaseAdmin
         .from('product_ingredients')
         .select(`
           quantity_per_serving,
           unit,
           ingredients!inner (
-            ${ingredientCols(true)}
+            ${ingredientCols}
           )
         `)
         .eq('product_id', id);
@@ -375,7 +363,7 @@ class MappingService {
           .select(`
             quantity_per_serving,
             ingredients!inner (
-              ${ingredientCols(true)}
+              id, name, unit, price
             )
           `)
           .eq('product_id', id);
@@ -386,7 +374,7 @@ class MappingService {
           .select(`
             quantity_per_serving,
             ingredients!inner (
-              ${ingredientCols(false)}
+              id, name, unit, price
             )
           `)
           .eq('product_id', id);
@@ -399,16 +387,12 @@ class MappingService {
           id: pi.ingredients?.id,
           quantity_per_serving: pi.quantity_per_serving,
           unit: pi.unit || pi.ingredients?.unit || null,
-          grams_per_cup: pi.ingredients?.grams_per_cup ?? null,
           ingredients: {
             id: pi.ingredients?.id,
             name: pi.ingredients?.name,
             unit: pi.ingredients?.unit,
             price: pi.ingredients?.price,
-            grams_per_cup: pi.ingredients?.grams_per_cup ?? null,
-            pack_qty: pi.ingredients?.pack_qty ?? null,
-            pack_unit: pi.ingredients?.pack_unit ?? null,
-            pack_price: pi.ingredients?.pack_price ?? null
+            material_type: pi.ingredients?.material_type || 'dry'
           }
         }));
       }

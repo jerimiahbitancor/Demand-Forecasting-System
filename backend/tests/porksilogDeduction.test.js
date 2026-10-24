@@ -11,7 +11,7 @@
 //   17 plain + 2 NO RICE + 3 NO EGG = 22 Marinated Porksilog, 0 refunded
 //   Pork 60 g/plate : 22 * 60 g          = 1.32 kg -> 50 - 1.32 = 48.68 kg
 //   Egg  1 pc/plate : (22 - 3) * 1 pc    = 19 pcs  -> 50 - 19   = 31 pcs
-//   Rice 1 cup/plate: (22 - 2) * 200 g   = 4 kg    -> 100 - 4   = 96 kg
+//   Rice 120 g/plate: (22 - 2) * 120 g  = 2.4 kg  -> 100 - 2.4 = 97.6 kg
 
 const test = require('node:test');
 const assert = require('node:assert/strict');
@@ -57,10 +57,9 @@ const INGREDIENTS = {
     base_unit: 'kg', unit_family: 'mass', stock_scale: 3, allow_fractional: true },
   [EGG]: { id: EGG, name: 'Egg', unit: 'Pieces (pcs)', quantity: '50', price: 8.5,
     base_unit: 'pcs', unit_family: 'count', stock_scale: 3, allow_fractional: false },
-  // 200 g per cup, stored the way the app stores it (density = 200 / 240 mL).
   [RICE]: { id: RICE, name: 'Rice', unit: 'Kilograms (kg)', quantity: '100', price: 50,
     base_unit: 'kg', unit_family: 'mass', stock_scale: 3, allow_fractional: true,
-    grams_per_cup: 200, density_g_per_ml: new Decimal(200).div(240).toDecimalPlaces(6).toString() },
+    material_type: 'dry' },
 };
 
 const recipe = (ingredientId, qty, unit) => {
@@ -71,7 +70,7 @@ const recipe = (ingredientId, qty, unit) => {
   };
 };
 
-function seed({ riceConversion = [] } = {}) {
+function seed() {
   fake.reset({
     user: [{ id: OWNER }],
     products: [{
@@ -80,8 +79,7 @@ function seed({ riceConversion = [] } = {}) {
     }],
     daily_sales: [],
     ingredients: Object.values(INGREDIENTS).map((i) => ({ ...i, created_at: '2026-01-01T00:00:00Z' })),
-    product_ingredients: [recipe(PORK, 60, 'g'), recipe(EGG, 1, 'pcs'), recipe(RICE, 1, 'cup')],
-    ingredient_unit_conversions: riceConversion,
+    product_ingredients: [recipe(PORK, 60, 'g'), recipe(EGG, 1, 'pcs'), recipe(RICE, 120, 'g')],
     modifier_rules: [
       { id: 1, keyword: 'NO RICE', ingredient_id: RICE },
       { id: 2, keyword: 'NO EGG', ingredient_id: EGG },
@@ -115,7 +113,7 @@ const SHEET = [
   row('Marinated Porksilog NO EGG', 3),
 ];
 
-test('golden example: 22 Porksilog (2 NO RICE, 3 NO EGG) -> Pork 48.68 kg, Egg 31 pcs, Rice 96 kg', async () => {
+test('golden example: 22 Porksilog (2 NO RICE, 3 NO EGG) -> Pork 48.68 kg, Egg 31 pcs, Rice 97.6 kg', async () => {
   seed();
   await uploadService.getModifierRules({ forceRefresh: true });
   const result = await uploadSheet(SHEET);
@@ -125,23 +123,16 @@ test('golden example: 22 Porksilog (2 NO RICE, 3 NO EGG) -> Pork 48.68 kg, Egg 3
 
   assert.equal(stock(PORK).toString(), '48.68', 'Pork: 50 kg - (22 x 60 g = 1.32 kg)');
   assert.equal(stock(EGG).toString(), '31', 'Egg: 50 pcs - (22 - 3) x 1 pc');
-  assert.equal(stock(RICE).toString(), '96', 'Rice: 100 kg - (22 - 2) x 200 g');
+  assert.equal(stock(RICE).toString(), '97.6', 'Rice: 100 kg - (22 - 2) x 120 g');
   assert.equal(result.uploadSummary.stockNotDeducted.length, 0, JSON.stringify(result.uploadSummary.stockNotDeducted));
-});
-
-test('golden example with an exact house measure (1 cup rice = 200 g) gives the same balances', async () => {
-  seed({ riceConversion: [{ ingredient_id: RICE, from_unit: 'cup', to_unit: 'g', factor: '200' }] });
-  await uploadService.getModifierRules({ forceRefresh: true });
-  await uploadSheet(SHEET, 2);
-  assert.equal(stock(RICE).toString(), '96');
 });
 
 test('refunds are subtracted before anything else: 22 sold, 2 refunded -> 20 plates', async () => {
   seed();
   await uploadService.getModifierRules({ forceRefresh: true });
   await uploadSheet([row('Marinated Porksilog', 17, 2), row('Marinated Porksilog NO RICE', 2), row('Marinated Porksilog NO EGG', 3)], 3);
-  // 20 plates: pork 20 x 60 g = 1.2 kg; egg 20 - 3 = 17; rice 20 - 2 = 18 cups = 3.6 kg
+  // 20 plates: pork 20 x 60 g = 1.2 kg; egg 20 - 3 = 17; rice 18 x 120 g = 2.16 kg
   assert.equal(stock(PORK).toString(), '48.8');
   assert.equal(stock(EGG).toString(), '33');
-  assert.equal(stock(RICE).toString(), '96.4');
+  assert.equal(stock(RICE).toString(), '97.84');
 });

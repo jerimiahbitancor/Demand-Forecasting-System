@@ -539,9 +539,9 @@ function ForecastConfig() {
                     onChange={(event) => setUnitForm({ ...unitForm, family: event.target.value })}
                   >
                     <option value="">Choose…</option>
-                    <option value="mass">Weight (g, kg, lb…)</option>
-                    <option value="volume">Volume (mL, L, cup…)</option>
-                    <option value="count">Count (pcs, pack, bottle…)</option>
+                    <option value="mass">Weight (g, kg)</option>
+                    <option value="volume">Volume (mL, L, tbsp, tsp)</option>
+                    <option value="count">Count (pcs)</option>
                   </select>
                 </label>
                 {(unitForm.family === 'mass' || unitForm.family === 'volume') && (
@@ -556,7 +556,7 @@ function ForecastConfig() {
                       step="any"
                       value={unitForm.baseFactor}
                       onChange={(event) => setUnitForm({ ...unitForm, baseFactor: event.target.value })}
-                      placeholder={unitForm.family === 'mass' ? 'e.g. 1000 for a kilogram' : 'e.g. 240 for a cup'}
+                      placeholder={unitForm.family === 'mass' ? 'e.g. 1000 for a kilogram' : 'e.g. 1000 for a liter'}
                     />
                   </label>
                 )}

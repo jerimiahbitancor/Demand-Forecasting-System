@@ -5,8 +5,8 @@ Ingredient demand with POS modifiers (business_logic.compute_modifier_shares
     Need_i = sum forecast x recipe_qty x (1 - modifier_share) x (1 + buffer)
 
 Worked example from the owner's spec: Marinated Porksilog forecast 20,
-recipe 1 egg + 1 cup rice. Over the window 15 plates sold, 3 NO EGG (20%)
-and 2 NO RICE (13.3%) -> egg 16, rice 17.33 cups before the buffer.
+recipe 1 egg + 120 g rice. Over the window 15 plates sold, 3 NO EGG (20%)
+and 2 NO RICE (13.3%) -> egg 16, rice 2,080 g before the buffer.
 
 Run:  cd ml-service && python tests/test_modifier_demand.py
 No network, no Supabase.
@@ -73,10 +73,10 @@ print("\n-- demand")
 recipe = pd.DataFrame([
     {"product_id": PORK, "qty_per_serving": 1.0, "ingredient_id": EGG, "ingredient_name": "Egg",
      "unit": "pcs", "unit_cost": 8.0, "current_stock": 50.0},
-    {"product_id": PORK, "qty_per_serving": 1.0, "ingredient_id": RICE, "ingredient_name": "Rice (cups)",
-     "unit": "cup", "unit_cost": 10.0, "current_stock": 10.0},
-    {"product_id": CHOP, "qty_per_serving": 1.0, "ingredient_id": RICE, "ingredient_name": "Rice (cups)",
-     "unit": "cup", "unit_cost": 10.0, "current_stock": 10.0},
+    {"product_id": PORK, "qty_per_serving": 120.0, "ingredient_id": RICE, "ingredient_name": "Rice",
+     "unit": "g", "unit_cost": 0.01, "current_stock": 1000.0},
+    {"product_id": CHOP, "qty_per_serving": 120.0, "ingredient_id": RICE, "ingredient_name": "Rice",
+     "unit": "g", "unit_cost": 0.01, "current_stock": 1000.0},
 ])
 
 
@@ -86,16 +86,16 @@ def need(df, ingredient_id):
 
 no_buffer = estimate_ingredient_demand({PORK: 20}, recipe, 0, modifier_shares=shares)
 check("egg 16 before buffer (20 x 1 x 0.8)", close(need(no_buffer, EGG), 16), str(need(no_buffer, EGG)))
-check("rice 17.33 cups before buffer (20 x 1 x 0.867)", close(need(no_buffer, RICE), 17.33), str(need(no_buffer, RICE)))
+check("rice 2,080 g before buffer (20 x 120 x 0.867)", close(need(no_buffer, RICE), 2080), str(need(no_buffer, RICE)))
 
 buffered = estimate_ingredient_demand({PORK: 20}, recipe, 15, modifier_shares=shares)
 check("buffer applied after: egg 16 x 1.15 = 18.4", close(need(buffered, EGG), 18.4), str(need(buffered, EGG)))
-check("buffer applied after: rice 17.33 x 1.15 = 19.93", close(need(buffered, RICE), 19.93), str(need(buffered, RICE)))
-check("To Buy unchanged rule: max(0, need - stock) = 9.93 rice",
-      close(float(buffered.loc[buffered.ingredient_id == RICE, "to_buy"].iloc[0]), 9.93))
+check("buffer applied after: rice 2,080 x 1.15 = 2,392 g", close(need(buffered, RICE), 2392), str(need(buffered, RICE)))
+check("To Buy unchanged rule: max(0, need - stock) = 1,392 g rice",
+      close(float(buffered.loc[buffered.ingredient_id == RICE, "to_buy"].iloc[0]), 1392))
 
 other = estimate_ingredient_demand({PORK: 20, CHOP: 10}, recipe, 0, modifier_shares=shares)
-check("another dish using rice keeps its full recipe (17.33 + 10)", close(need(other, RICE), 27.33), str(need(other, RICE)))
+check("another dish using rice keeps its full recipe (2,080 + 1,200 g)", close(need(other, RICE), 3280), str(need(other, RICE)))
 
 legacy = estimate_ingredient_demand({PORK: 20}, recipe, 15)
 check("no shares passed -> original formula (egg 23)", close(need(legacy, EGG), 23), str(need(legacy, EGG)))

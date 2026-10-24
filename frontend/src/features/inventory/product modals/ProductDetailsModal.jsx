@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { FaArchive, FaEye, FaTimes, FaUndo } from 'react-icons/fa';
 import InventoryModal from '../components/InventoryModal';
-import { convertRecipeQuantity, recipeDensityFor, parseRecipeQuantity } from '../../../utils/recipeUnits';
+import { convertRecipeQuantity, parseRecipeQuantity } from '../../../utils/recipeUnits';
 import './ProductDetailsModal.css';
 
 const ProductDetailsModal = ({
@@ -51,16 +51,12 @@ const ProductDetailsModal = ({
     const ingredientUnit = ingredient.ingredients?.unit || null;
     const recipeUnit = ingredient.unit || ingredientUnit;
     const stockName = ingredient.ingredients?.name || ingredient.name || '';
-    const gramsPerCup = recipeDensityFor(ingredient.ingredients?.grams_per_cup, stockName);
     const converted = Number(convertRecipeQuantity(
       ingredient.quantity_per_serving ?? ingredient.quantity,
       recipeUnit,
       ingredientUnit,
       {
-        gramsPerCup: ingredient.ingredients?.grams_per_cup,
-        ingredientName: stockName,
-        packQty: ingredient.ingredients?.pack_qty,
-        packUnit: ingredient.ingredients?.pack_unit
+        materialType: ingredient.ingredients?.material_type || 'dry'
       }
     )) || 0;
     return {
@@ -69,7 +65,6 @@ const ProductDetailsModal = ({
       recipeQty: parseRecipeQuantity(ingredient.quantity_per_serving ?? ingredient.quantity) || 0,
       recipeUnit,
       stockUnit: ingredientUnit || recipeUnit || '—',
-      gramsPerCup,
       converted,
       unitPrice,
       cost: converted * unitPrice

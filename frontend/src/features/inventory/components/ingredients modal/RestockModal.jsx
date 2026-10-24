@@ -7,7 +7,7 @@ import {
 import InventoryModal from "../InventoryModal";
 import "./RestockModal.css";
 import { formatStockQty } from "../../../../utils/formatStockQty.js";
-import { parseRecipeQuantity, convertRecipeQuantity, unitShortLabel } from "../../../../utils/recipeUnits";
+import { parseRecipeQuantity, unitShortLabel } from "../../../../utils/recipeUnits";
 
 const RestockModal = ({
   item,
@@ -41,31 +41,10 @@ const RestockModal = ({
   };
 
   const status = getStockStatus(item);
-  const isPackEntry = data.mode === "packs";
-
-  // What one purchase pack holds, turned into the stock unit so the owner can
-  // see it. The pack details live in pack_qty / pack_unit (the old pack_size
-  // column is no longer sent by the API).
-  const packQtyAmount = parseRecipeQuantity(item.pack_qty);
-  const packUnit = item.pack_unit || item.unit;
-  const packSizeInStockUnit = packQtyAmount > 0
-    ? convertRecipeQuantity(packQtyAmount, packUnit, item.unit, {
-      gramsPerCup: item.grams_per_cup,
-      ingredientName: item.name,
-      packQty: item.pack_qty,
-      packUnit: item.pack_unit,
-    })
-    : null;
-  const hasPackSize = Number(packSizeInStockUnit) > 0;
-
   // How much stock this entry adds, so the owner sees the new balance
   // before saving. The amount itself is never rounded, only the display.
   const enteredAmount = parseRecipeQuantity(data.quantity);
-  const addedAmount = isPackEntry
-    ? (Number.isFinite(enteredAmount) && Number.isFinite(packSizeInStockUnit)
-        ? enteredAmount * packSizeInStockUnit
-        : NaN)
-    : enteredAmount;
+  const addedAmount = enteredAmount;
   const currentAmount = parseRecipeQuantity(item.quantity);
   const hasPreview =
     Number.isFinite(addedAmount) && addedAmount > 0 && Number.isFinite(currentAmount);
@@ -161,21 +140,8 @@ const RestockModal = ({
         {/* Form */}
         <div className="inventory-restock-form">
           <div className="form-group">
-            {hasPackSize && (
-              <>
-                <label className="form-label">How do you want to add it?</label>
-                <select
-                  className="form-input"
-                  value={data.mode || "stock"}
-                  onChange={(event) => onChange({ ...data, quantity: "", mode: event.target.value })}
-                >
-                  <option value="stock">By {unitShortLabel(item.unit)} (amount)</option>
-                  <option value="packs">By purchase pack</option>
-                </select>
-              </>
-            )}
             <label className="form-label">
-              {isPackEntry ? "Number of packs to add" : `How much to add (${unitShortLabel(item.unit || "stock unit")})`}
+              Change Amount ({unitShortLabel(item.unit || "stock unit")})
               {" "}<span className="required-star">*</span>
             </label>
             <div className="quantity-input-wrapper">
@@ -187,14 +153,11 @@ const RestockModal = ({
                 onChange={(event) =>
                   onChange({ ...data, quantity: event.target.value })
                 }
-                placeholder={isPackEntry ? "e.g. 1" : "e.g. 0.5"}
+                placeholder="e.g. 0.5"
+                aria-label={`Change amount in ${unitShortLabel(item.unit || "stock unit")}`}
               />
+              <span className="quantity-unit" aria-hidden="true">{unitShortLabel(item.unit || "stock unit")}</span>
             </div>
-            {isPackEntry && (
-              <small>
-                1 pack holds {formatStockQty(packSizeInStockUnit, item.unit)} {item.unit}.
-              </small>
-            )}
             {hasPreview && (
               <small>
                 Stock after adding: {formatStockQty(balanceAfter, item.unit)}{" "}

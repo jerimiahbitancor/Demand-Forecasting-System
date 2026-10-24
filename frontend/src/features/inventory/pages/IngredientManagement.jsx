@@ -23,7 +23,7 @@ import {
 import axios from 'axios';
 import toast from 'react-hot-toast';
 import { useAuth } from "../../../context/AuthContext";
-import { parseRecipeQuantity, deriveUnitPrice, setUnitMetadata } from "../../../utils/recipeUnits";
+import { canonicalUnitName, parseRecipeQuantity, RECIPE_EXTRA_UNITS, setUnitMetadata } from "../../../utils/recipeUnits";
 import { formatStockQty } from "../../../utils/formatStockQty.js";
 import Tippy from '@tippyjs/react';
 import 'tippy.js/dist/tippy.css';
@@ -55,7 +55,6 @@ const IngredientManagement = () => {
   const [units, setUnits] = useState([]);
   const [selectedCategory, setSelectedCategory] = useState("All");
   const [statusFilter, setStatusFilter] = useState("All");
-  const [selectedDate, setSelectedDate] = useState("");
   // Which forecast the stock statuses are measured against (GET
   // /inventory/items -> forecastBasis; analyticsService.getForecastBasis).
   // null = no forecast has run yet, or it could not be loaded.
@@ -70,7 +69,7 @@ const IngredientManagement = () => {
     normalStock: 0,
     criticalStock: 0,
     archivedItems: 0,
-    unmappedIngredients: 0
+    unassignedIngredients: 0
   });
   
   // Modal States
@@ -101,21 +100,17 @@ const IngredientManagement = () => {
   const [formData, setFormData] = useState({
     name: '',
     category: '',
-    unit: 'kg',
+    unit: 'Kilograms (kg)',
     quantity: '',
     price: '',
     batch: '',
     min_stock: '',
     market_price: '',
-    grams_per_cup: '',
-    pack_qty: '',
-    pack_unit: '',
-    pack_price: ''
+    material_type: 'dry'
   });
 
   const [restockData, setRestockData] = useState({
     quantity: '',
-    mode: 'stock',
     reason: '',
     notes: ''
   });
@@ -176,102 +171,45 @@ const IngredientManagement = () => {
     return client;
   }, [getToken]);
 
-  // ============ GET STOCK STATUS ============
-  // Backend returns a forecast-based stock_status per row (Critical <50% of
-  // today's forecasted demand, Low <100%, Normal 100-200%, Excess >200%,
-  // No Forecast for ingredients with no recipe/forecast). Prefer it; the
-  // fallback below only applies when the backend hasn't attached one.
-  const getStockStatus = useCallback((item) => {
-    if (!item) {
-      return { label: 'No Forecast', className: 'status-no-forecast', color: '#9ca3af', hint: '' };
-    }
-
-    if (item.stock_status === 'Archived' || item.is_archived) {
-      return {
-        label: 'Archived',
-        className: 'status-archived',
-        color: '#6b7280',
-        hint: 'This ingredient is archived and is no longer used in active stock levels.'
-      };
-    }
-
-    if (item.stock_status) {
-      switch (item.stock_status) {
-        case 'Critical Stock':
-          return {
-            label: 'Critical Stock',
-            className: 'status-critical',
-            color: '#dc2626',
-            hint: `Quantity is below 50% of today's forecasted need${item.forecasted_need ? ` (${formatStockQty(item.forecasted_need, item.unit)})` : ''}. Prioritize restocking immediately.`
-          };
-        case 'Low Stock':
-          return {
-            label: 'Low Stock',
-            className: 'status-low',
-            color: '#f59e0b',
-            hint: `Quantity is below today's forecasted need${item.forecasted_need ? ` (${formatStockQty(item.forecasted_need, item.unit)})` : ''}. Consider restocking soon.`
-          };
-        case 'Excess Stock':
-          return {
-            label: 'Excess Stock',
-            className: 'status-excess',
-            color: '#3b82f6',
-            hint: `Quantity is more than 2x today's forecasted need${item.forecasted_need ? ` (${formatStockQty(item.forecasted_need, item.unit)})` : ''}. Excess stock ties up capital and storage space.`
-          };
-        case 'Normal Stock':
-          return {
-            label: 'Normal Stock',
-            className: 'status-normal',
-            color: '#16a34a',
-            hint: `Quantity is within 100–200% of today's forecasted need${item.forecasted_need ? ` (${formatStockQty(item.forecasted_need, item.unit)})` : ''}.`
-          };
-        default:
-          return {
-            label: 'No Forecast',
-            className: 'status-no-forecast',
-            color: '#9ca3af',
-            hint: 'Because the system doesn\'t know which dish uses this ingredient or has no forecast yet, it can\'t estimate the daily need, so it appears as "No Forecast".'
-          };
-      }
-    }
-
-    if (item.quantity === 0) {
-      return {
-        label: 'Critical Stock',
-        className: 'status-critical',
-        color: '#dc2626',
-        hint: 'This ingredient is out of stock. Restock as soon as possible to avoid shortages.'
-      };
-    } else if (item.quantity <= (item.min_stock || 0) * 0.5) {
-      return {
-        label: 'Critical Stock',
-        className: 'status-critical',
-        color: '#dc2626',
-        hint: `Quantity is at or below 50% of the minimum stock level (${formatStockQty(item.min_stock || 0, item.unit)}). Prioritize restocking immediately.`
-      };
-    } else if (item.quantity <= (item.min_stock || 0)) {
-      return {
-        label: 'Low Stock',
-        className: 'status-low',
-        color: '#f59e0b',
-        hint: 'Quantity is below the minimum stock level. Consider restocking soon.'
-      };
-    } else if (item.quantity >= (item.min_stock || 0) * 3) {
-      return {
-        label: 'Excess Stock',
-        className: 'status-excess',
-        color: '#3b82f6',
-        hint: 'Quantity exceeds the maximum stock level (3x the minimum). Excess stock ties up capital and storage space.'
-      };
-    } else {
-      return {
-        label: 'Normal Stock',
-        className: 'status-normal',
-        color: '#16a34a',
-        hint: 'Quantity is within the healthy range between minimum and maximum stock levels.'
-      };
-    }
+  const getStatusPresentation = useCallback((label, hint) => {
+    const styles = {
+      'Out of Stock': ['status-critical', '#dc2626'],
+      'Low Stock': ['status-low', '#f59e0b'],
+      'Normal Stock': ['status-normal', '#16a34a'],
+      Excess: ['status-excess', '#3b82f6'],
+      'Critical Shortage': ['status-critical', '#dc2626'],
+      'Insufficient Supply': ['status-low', '#f59e0b'],
+      'Sufficient Supply': ['status-normal', '#16a34a'],
+      'Above Forecast Limit': ['status-excess', '#3b82f6'],
+      Unassigned: ['status-no-forecast', '#9ca3af'],
+      Archived: ['status-archived', '#6b7280'],
+    };
+    const [className, color] = styles[label] || styles.Unassigned;
+    return { label, className, color, hint };
   }, []);
+
+  const getStockStatuses = useCallback((item) => {
+    if (!item) {
+      return {
+        current: getStatusPresentation('Unassigned', ''),
+        predicted: getStatusPresentation('Unassigned', ''),
+      };
+    }
+    const current = item.is_archived
+      ? getStatusPresentation('Archived', 'This ingredient is archived.')
+      : getStatusPresentation(
+        item.current_stock_status || 'Unassigned',
+        `Current stock is compared with the ideal stock requirement (${formatStockQty(item.min_stock || 0, item.unit)} ${item.unit || ''}).`
+      );
+    const materialType = item.material_type === 'wet' ? 'wet' : 'dry';
+    const predictedHint = item.predicted_stock_status === 'Unassigned'
+      ? 'No forecast data is assigned to this ingredient.'
+      : `Forecasted stock status for ${materialType} raw materials, based on ${formatStockQty(item.forecasted_need || 0, item.unit)} ${item.unit || ''} expected demand.`;
+    const predicted = item.is_archived
+      ? getStatusPresentation('Archived', 'This ingredient is archived.')
+      : getStatusPresentation(item.predicted_stock_status || 'Unassigned', predictedHint);
+    return { current, predicted };
+  }, [getStatusPresentation]);
 
   // ============ FETCH DATA ============
   const fetchInventory = useCallback(async () => {
@@ -295,18 +233,11 @@ const IngredientManagement = () => {
         params.category = selectedCategory;
       }
 
-      if (statusFilter === "archived") {
+      params.statusField = 'current';
+      if (statusFilter === "Archived") {
         params.archived = true;
       } else if (statusFilter !== "All") {
         params.status = statusFilter;
-      }
-
-      if (selectedDate) {
-        const localStart = new Date(`${selectedDate}T00:00:00`);
-        const localEnd = new Date(localStart);
-        localEnd.setDate(localEnd.getDate() + 1);
-        params.dateStart = localStart.toISOString();
-        params.dateEnd = localEnd.toISOString();
       }
 
       const response = await apiClient.get('/inventory/items', {
@@ -334,7 +265,7 @@ const IngredientManagement = () => {
           normalStock: summary.normalStock ?? 0,
           criticalStock: summary.criticalStock ?? 0,
           archivedItems: summary.archivedItems ?? 0,
-          unmappedIngredients: summary.unmappedIngredients ?? 0
+          unassignedIngredients: summary.unassignedIngredients ?? 0
         });
       }
     } catch (error) {
@@ -348,7 +279,7 @@ const IngredientManagement = () => {
     } finally {
       setLoading(false);
     }
-  }, [apiClient, searchTerm, sortField, sortDirection, currentPage, itemsPerPage, selectedCategory, statusFilter, selectedDate]);
+  }, [apiClient, searchTerm, sortField, sortDirection, currentPage, itemsPerPage, selectedCategory, statusFilter]);
 
   const fetchCategories = useCallback(async () => {
     try {
@@ -408,34 +339,19 @@ const IngredientManagement = () => {
         abortControllerRef.current.abort();
       }
     };
-  }, [fetchInventory, fetchCategories, fetchUnits, debouncedFetch, searchTerm, sortField, sortDirection, currentPage, selectedCategory, statusFilter, selectedDate]);
+  }, [fetchInventory, fetchCategories, fetchUnits, debouncedFetch, searchTerm, sortField, sortDirection, currentPage, selectedCategory, statusFilter]);
 
   // ============ CRUD OPERATIONS ============
-  // The unit cost is always what one stock unit costs. When a purchase pack is
-  // filled in ("150 g for ₱200") it is derived from the pack, so what the
-  // owner typed as a cost can never drift from the pack.
   // The stock is NOT part of an edit: the Current Stock field in the edit
   // window is locked, and sending a stale number would overwrite a movement
   // that happened while the window was open. The stock is set in the Current
   // Stock column of the list or with Add Stock.
   const buildItemPayload = ({ includeQuantity = true } = {}) => {
-    const derived = deriveUnitPrice({
-      packQty: formData.pack_qty,
-      packUnit: formData.pack_unit,
-      packPrice: formData.pack_price,
-      stockUnit: formData.unit,
-      gramsPerCup: formData.grams_per_cup,
-      ingredientName: formData.name
-    });
     const payload = {
       ...formData,
-      price: derived != null ? derived : parseFloat(formData.price),
+      price: parseFloat(formData.price),
       market_price: parseFloat(formData.market_price) || 0,
-      min_stock: parseRecipeQuantity(formData.min_stock) || 0,
-      grams_per_cup: formData.grams_per_cup ? parseFloat(formData.grams_per_cup) : null,
-      pack_qty: formData.pack_qty ? parseRecipeQuantity(formData.pack_qty) : null,
-      pack_unit: formData.pack_unit || null,
-      pack_price: formData.pack_price ? parseFloat(formData.pack_price) : null
+      min_stock: parseRecipeQuantity(formData.min_stock) || 0
     };
     if (includeQuantity) payload.quantity = parseRecipeQuantity(formData.quantity);
     else delete payload.quantity;
@@ -508,23 +424,18 @@ const IngredientManagement = () => {
   const handleRestock = async () => {
     const enteredQuantity = parseRecipeQuantity(restockData.quantity);
     if (!Number.isFinite(enteredQuantity) || enteredQuantity <= 0) {
-      toast.error(restockData.mode === 'packs'
-        ? 'Please enter a valid number of packs'
-        : 'Please enter a valid quantity');
+      toast.error('Please enter a valid quantity');
       return;
     }
 
     setIsSubmitting(true);
     try {
       const restockPayload = {
+        quantity: String(restockData.quantity).trim(),
+        unit: selectedItem.unit,
         reason: restockData.reason,
         notes: restockData.notes
       };
-      if (restockData.mode === 'packs') {
-        restockPayload.pack_count = String(restockData.quantity).trim();
-      } else {
-        restockPayload.quantity = String(restockData.quantity).trim();
-      }
       const response = await apiClient.post(`/inventory/items/${selectedItem.id}/restock`, restockPayload);
 
       if (response.data.success) {
@@ -537,7 +448,7 @@ const IngredientManagement = () => {
             current ? { ...current, quantity: updatedQuantity } : current
           ));
         }
-        setRestockData({ quantity: '', mode: 'stock', reason: '', notes: '' });
+        setRestockData({ quantity: '', reason: '', notes: '' });
         setIsRestockModalOpen(false);
         await fetchInventory();
       }
@@ -642,7 +553,7 @@ const IngredientManagement = () => {
   // ============ FORM HANDLERS ============
   // Inline stock count in the table: click the Current Stock cell, type the
   // counted amount and press Enter (or Save). Only the quantity is sent, so
-  // the pack, the price and the minimum stock stay as they are.
+  // the price and the minimum stock stay as they are.
   const startStockEdit = (item) => {
     setEditingStockId(item.id);
     setEditingStockValue(item.quantity === null || item.quantity === undefined ? '' : String(item.quantity));
@@ -704,25 +615,10 @@ const IngredientManagement = () => {
     } else if (!Number.isFinite(parseRecipeQuantity(formData.quantity)) || parseRecipeQuantity(formData.quantity) < 0) {
       errors.quantity = 'Quantity must be a valid number';
     }
-    const derived = deriveUnitPrice({
-      packQty: formData.pack_qty,
-      packUnit: formData.pack_unit,
-      packPrice: formData.pack_price,
-      stockUnit: formData.unit,
-      gramsPerCup: formData.grams_per_cup,
-      ingredientName: formData.name
-    });
-
     if (!formData.price || formData.price === '') {
-      if (derived == null) errors.price = 'Price is required';
+      errors.price = 'Price is required';
     } else if (!Number.isFinite(Number(formData.price)) || Number(formData.price) <= 0) {
-      if (derived == null) errors.price = 'Price must be greater than 0';
-    }
-    if (formData.pack_qty && !Number.isFinite(parseRecipeQuantity(formData.pack_qty))) {
-      errors.pack_qty = 'Pack size must be a valid number';
-    }
-    if (formData.pack_price && (!Number.isFinite(Number(formData.pack_price)) || Number(formData.pack_price) <= 0)) {
-      errors.pack_price = 'Pack price must be greater than 0';
+      errors.price = 'Price must be greater than 0';
     }
 
     setFormErrors(errors);
@@ -733,16 +629,13 @@ const IngredientManagement = () => {
     setFormData({
       name: '',
       category: '',
-      unit: 'kg',
+      unit: 'Kilograms (kg)',
       quantity: '',
       price: '',
       batch: '',
       min_stock: '',
       market_price: '',
-      grams_per_cup: '',
-      pack_qty: '',
-      pack_unit: '',
-      pack_price: ''
+      material_type: 'dry'
     });
     setFormErrors({});
   };
@@ -752,23 +645,20 @@ const IngredientManagement = () => {
     setFormData({
       name: item.name || '',
       category: item.category || '',
-      unit: item.unit || 'kg',
+      unit: canonicalUnitName(item.unit) || 'Kilograms (kg)',
       quantity: item.quantity?.toString() || '',
       price: item.price?.toString() || '',
       batch: item.batch || '',
       min_stock: item.min_stock?.toString() || '',
       market_price: item.market_price?.toString() || '',
-      grams_per_cup: item.grams_per_cup?.toString() || '',
-      pack_qty: item.pack_qty?.toString() || '',
-      pack_unit: item.pack_unit || '',
-      pack_price: item.pack_price?.toString() || ''
+      material_type: item.material_type || 'dry'
     });
     setIsEditModalOpen(true);
   };
 
   const openRestockModal = (item) => {
     setSelectedItem(item);
-    setRestockData({ quantity: '', mode: 'stock', reason: '', notes: '' });
+    setRestockData({ quantity: '', reason: '', notes: '' });
     setIsRestockModalOpen(true);
   };
 
@@ -822,12 +712,12 @@ const IngredientManagement = () => {
 
   // ============ STOCK LEGEND ============
   const stockLegend = [
-    { label: 'No Forecast', color: '#9ca3af', className: 'legend-no-forecast' },
+    { label: 'Unassigned', color: '#9ca3af', className: 'legend-no-forecast' },
     { label: 'Archived', color: '#6b7280', className: 'legend-archived' },
-    { label: 'Excess Stock', color: '#3b82f6', className: 'legend-excess' },
+    { label: 'Excess', color: '#3b82f6', className: 'legend-excess' },
     { label: 'Normal Stock', color: '#16a34a', className: 'legend-normal' },
     { label: 'Low Stock', color: '#f59e0b', className: 'legend-low' },
-    { label: 'Critical Stock', color: '#dc2626', className: 'legend-critical' }
+    { label: 'Out of Stock', color: '#dc2626', className: 'legend-critical' }
   ];
 
   // ============ RENDER ============
@@ -926,10 +816,9 @@ const IngredientManagement = () => {
                 content={(
                   <div className="inventory-card-tooltip">
                     <strong>Low Stock Alerts</strong>
-                    <span>This counts the ingredients that are running low or almost out — specifically those where your current stock won't be enough to cover tomorrow's expected usage.</span>
-                    <span>Only ingredients linked to a product recipe are counted here, since the system needs the recipe to know how much of each ingredient tomorrow's sales will use.</span>
+                    <span>This counts ingredients whose current stock is at or below 50% of their ideal stock requirement. Out of Stock items are included.</span>
+                    <span>Current Stock Status compares on-hand quantity with ideal stock. Predicted Stock Status is calculated separately from forecasted demand and the ingredient's wet/dry material type.</span>
                     <span>Click to view the Shopping List to see which ingredients need restocking right away.</span>
-                    <span>The 50% / 100% / 200% thresholds are global settings configured in Settings → Stock Level Thresholds and apply to all ingredients.</span>
                   </div>
                 )}
                 placement="bottom"
@@ -970,13 +859,13 @@ const IngredientManagement = () => {
         <div className="inventory-stat-card info">
           <div className="inventory-stat-card-content">
             <div className="inventory-stat-card-header">
-              <p className="inventory-stat-card-label">Unmapped Ingredients</p>
+              <p className="inventory-stat-card-label">Unassigned Ingredients</p>
               <Tippy
                 content={(
                   <div className="inventory-card-tooltip">
-                    <strong>Unmapped Ingredients</strong>
+                    <strong>Unassigned Ingredients</strong>
                     <span>These are ingredients that exist in your inventory but aren't connected to any product recipe yet.</span>
-                    <span>Because the system doesn't know which dish uses them, it can't calculate how much you'll need or give them a stock status, so they appear as “No Forecast” in the table.</span>
+                    <span>Because the system doesn't know which dish uses them, it can't calculate forecasted demand; their Predicted Stock Status therefore appears as “Unassigned”.</span>
                     <span>Go to the Product Management tab and add these ingredients to the recipes of the dishes that use them.</span>
                   </div>
                 )}
@@ -992,12 +881,12 @@ const IngredientManagement = () => {
                 appendTo={() => document.body}
                 zIndex={100000}
               >
-                <span className="inventory-card-info" tabIndex={0} aria-label="Unmapped ingredients information">
+                <span className="inventory-card-info" tabIndex={0} aria-label="Unassigned ingredients information">
                   <FaInfoCircle />
                 </span>
               </Tippy>
             </div>
-            <p className="inventory-stat-card-value">{summaryStats.unmappedIngredients}</p>
+            <p className="inventory-stat-card-value">{summaryStats.unassignedIngredients}</p>
             <p className="inventory-stat-card-change">not in any products</p>
           </div>
         </div>
@@ -1028,7 +917,7 @@ const IngredientManagement = () => {
                   {forecastBasis.hasForecastForDate === false && (
                     <>
                       {' '}The latest forecast has no figures for today (for example, a closed day),
-                      so ingredients show No Forecast until the next run.
+                      so their Predicted Stock Status is Unassigned until the next run.
                     </>
                   )}
                 </div>
@@ -1091,31 +980,20 @@ const IngredientManagement = () => {
           <select 
             className="inventory-sort-select"
             value={statusFilter}
+            aria-label="Filter by current stock status"
             onChange={(e) => {
               setStatusFilter(e.target.value);
               setCurrentPage(1);
             }}
           >
-            <option value="All">All Status</option>
+            <option value="All">All Stock Statuses</option>
+            <option value="Unassigned">Unassigned</option>
+            <option value="Archived">Archived</option>
+            <option value="Excess">Excess</option>
             <option value="Normal Stock">Normal Stock</option>
             <option value="Low Stock">Low Stock</option>
-            <option value="Critical Stock">Critical Stock</option>
-            <option value="Excess Stock">Excess Stock</option>
-            <option value="No Forecast">No Forecast</option>
-            <option value="archived">Archived</option>
+            <option value="Out of Stock">Out of Stock</option>
           </select>
-
-          <input
-            type="date"
-            className="inventory-sort-select inventory-date-filter"
-            value={selectedDate}
-            onChange={(e) => {
-              setSelectedDate(e.target.value);
-              setCurrentPage(1);
-            }}
-            aria-label="Filter inventory by date"
-            title="Filter by date"
-          />
 
           <select 
             className="inventory-sort-select"
@@ -1185,7 +1063,7 @@ const IngredientManagement = () => {
       ) : (
         <>
           <div className="inventory-table-responsive">
-            <table className="inventory-table">
+            <table className="inventory-table ingredient-management-table">
               <thead>
                 <tr>
                   <th className="inventory-checkbox-cell">
@@ -1210,18 +1088,17 @@ const IngredientManagement = () => {
                   <th className="sortable" onClick={() => handleSort('price')}>
                     Unit Cost {sortField === 'price' && (sortDirection === 'asc' ? <FaSortAmountUp /> : <FaSortAmountDown />)}
                   </th>
-                  <th title="How much one purchase pack / sachet holds and what it costs, e.g. 150 Grams (g) for ₱200. The unit cost is derived from this.">Pack / Count</th>
                   <th title="Average of the latest recorded price across all market price sources (Robinson's, SM, Puregold, Wet Market, DA Reference).">Avg Market Price</th>
                   <th className="sortable" onClick={() => handleSort('updated_at')}>
                     Last Updated {sortField === 'updated_at' && (sortDirection === 'asc' ? <FaSortAmountUp /> : <FaSortAmountDown />)}
                   </th>
-                  <th>Status</th>
+                  <th className="ingredient-stock-status-heading">Stock Status</th>
                   <th>Actions</th>
                 </tr>
               </thead>
               <tbody>
                 {inventoryItems.map((item, index) => {
-                  const status = getStockStatus(item);
+                  const statuses = getStockStatuses(item);
                   const displayIndex = (currentPage - 1) * itemsPerPage + index + 1;
                   const isArchived = item.is_archived;
                   return (
@@ -1242,10 +1119,10 @@ const IngredientManagement = () => {
                       </td>
                       <td data-label="Category"><span className="category-badge">{item.category || 'Uncategorized'}</span></td>
                       <td data-label="Current Stock" className={
-                        status.className === 'status-critical' ? 'inventory-critical-stock' : 
-                        status.className === 'status-low' ? 'inventory-low-stock' : 
-                        status.className === 'status-excess' ? 'inventory-excess-stock' : 
-                        status.className === 'status-normal' ? 'inventory-normal-stock' : ''
+                        statuses.current.className === 'status-critical' ? 'inventory-critical-stock' :
+                        statuses.current.className === 'status-low' ? 'inventory-low-stock' :
+                        statuses.current.className === 'status-excess' ? 'inventory-excess-stock' :
+                        statuses.current.className === 'status-normal' ? 'inventory-normal-stock' : ''
                       }>
                         {editingStockId === item.id ? (
                           <div className="inventory-inline-stock">
@@ -1315,32 +1192,40 @@ const IngredientManagement = () => {
                           </div>
                         )}
                       </td>
-                      <td data-label="Unit Cost">{formatCurrency(item.price)}</td>
-                      <td data-label="Pack / Count">
-                        {item.pack_qty && item.pack_unit
-                          ? `${formatStockQty(item.pack_qty, item.pack_unit)} ${item.pack_unit}`
-                          : <span className="market-price-empty">—</span>}
-                        {item.pack_qty && item.pack_unit && item.pack_price
-                          ? ` · ${formatCurrency(item.pack_price)}`
-                          : ''}
-                      </td>
+                      <td data-label="Unit Cost">{formatCurrency(item.price)}/{item.unit || 'pcs'}</td>
                       <td data-label="Avg Market Price">
                         {item.avg_market_price !== null && item.avg_market_price !== undefined
                           ? formatCurrency(item.avg_market_price)
                           : <span className="market-price-empty">—</span>}
                       </td>
                       <td data-label="Last Updated">{formatDate(item.updated_at || item.created_at)}</td>
-                      <td data-label="Status">
-                        <Tippy
-                          content={<div className="inventory-status-tooltip">{status.hint}</div>}
-                          placement="top"
-                          theme="dark"
-                        >
-                          <span className={`inventory-stock-status ${status.className}`}>
-                            <span className="inventory-status-dot" style={{ backgroundColor: status.color }}></span>
-                            {status.label}
-                          </span>
-                        </Tippy>
+                      <td data-label="Stock Status" className="ingredient-stock-status-cell">
+                        <div className="inventory-status-pair">
+                          <div className="inventory-status-entry">
+                            <Tippy
+                              content={<div className="inventory-status-tooltip">{statuses.current.hint}</div>}
+                              placement="top"
+                              theme="dark"
+                            >
+                              <span className={`inventory-stock-status ${statuses.current.className}`}>
+                                <span className="inventory-status-dot" style={{ backgroundColor: statuses.current.color }}></span>
+                                {statuses.current.label}
+                              </span>
+                            </Tippy>
+                          </div>
+                          <div className="inventory-status-entry">
+                            <Tippy
+                              content={<div className="inventory-status-tooltip">{statuses.predicted.hint}</div>}
+                              placement="top"
+                              theme="dark"
+                            >
+                              <span className={`inventory-stock-status ${statuses.predicted.className}`}>
+                                <span className="inventory-status-dot" style={{ backgroundColor: statuses.predicted.color }}></span>
+                                {statuses.predicted.label}
+                              </span>
+                            </Tippy>
+                          </div>
+                        </div>
                       </td>
                       <td data-label="Actions">
                         <div className="inventory-action-buttons">
@@ -1492,7 +1377,7 @@ const IngredientManagement = () => {
       {isDeleteModalOpen && <InventoryConfirmationModal type="delete" item={selectedItem} isSubmitting={isSubmitting} onConfirm={handleDeleteItem} onClose={() => setIsDeleteModalOpen(false)} />}
       {isArchiveModalOpen && <ArchiveModal item={selectedItem} isSubmitting={isSubmitting} onConfirm={handleArchiveItem} onClose={() => setIsArchiveModalOpen(false)} />}
       {isRestoreModalOpen && <InventoryConfirmationModal type="restore" item={selectedItem} isSubmitting={isSubmitting} onConfirm={handleRestoreItem} onClose={() => setIsRestoreModalOpen(false)} />}
-      {isRestockModalOpen && <RestockModal item={selectedItem} data={restockData} isSubmitting={isSubmitting} onChange={setRestockData} onSubmit={handleRestock} onClose={() => { setIsRestockModalOpen(false); setRestockData({ quantity: '', mode: 'stock', reason: '', notes: '' }); }} />}
+      {isRestockModalOpen && <RestockModal item={selectedItem} data={restockData} isSubmitting={isSubmitting} onChange={setRestockData} onSubmit={handleRestock} onClose={() => { setIsRestockModalOpen(false); setRestockData({ quantity: '', reason: '', notes: '' }); }} />}
       {isHistoryModalOpen && <HistoryModal key={selectedItem?.id} item={selectedItem} apiClient={apiClient} onClose={() => setIsHistoryModalOpen(false)} />}
 
       {/* Bulk Archive Modal */}
@@ -1590,13 +1475,19 @@ const IngredientManagement = () => {
                     value={formData.unit}
                     onChange={(e) => setFormData({...formData, unit: e.target.value})}
                   >
-                    <option value="kg">Kilogram (kg)</option>
-                    <option value="g">Gram (g)</option>
-                    <option value="L">Liter (L)</option>
-                    <option value="mL">Milliliter (mL)</option>
-                    <option value="pcs">Pieces (pcs)</option>
-                    <option value="box">Box</option>
-                    <option value="pack">Pack</option>
+                    {RECIPE_EXTRA_UNITS.map((unit) => <option key={unit} value={unit}>{unit}</option>)}
+                  </select>
+                </div>
+
+                <div className="form-group">
+                  <label className="form-label">Material Type</label>
+                  <select
+                    className="form-input"
+                    value={formData.material_type || 'dry'}
+                    onChange={(e) => setFormData({...formData, material_type: e.target.value})}
+                  >
+                    <option value="wet">Wet Raw Materials</option>
+                    <option value="dry">Dry Raw Materials</option>
                   </select>
                 </div>
 
@@ -1628,25 +1519,6 @@ const IngredientManagement = () => {
                   {formErrors.price && <span className="form-error">{formErrors.price}</span>}
                 </div>
 
-                <div className="form-group">
-                  <label className="form-label">Grams per Cup (optional)</label>
-                  <input
-                    type="number"
-                    className="form-input"
-                    value={formData.grams_per_cup}
-                    onChange={(e) => setFormData({...formData, grams_per_cup: e.target.value})}
-                    placeholder="e.g. 125 for all-purpose flour"
-                    min="0"
-                    step="0.1"
-                  />
-                  <span className="form-hint">Weight of 1 cup (~250 mL) of this ingredient in grams, so recipe cups/tbsp/tsp convert to kg/g when pricing. Only needed when the recipe unit differs from the stock unit.</span>
-                </div>
-
-               
-
-                
-
-               
               </div>
             </div>
 
@@ -1733,13 +1605,19 @@ const IngredientManagement = () => {
                     value={formData.unit}
                     onChange={(e) => setFormData({...formData, unit: e.target.value})}
                   >
-                    <option value="kg">Kilogram (kg)</option>
-                    <option value="g">Gram (g)</option>
-                    <option value="L">Liter (L)</option>
-                    <option value="mL">Milliliter (mL)</option>
-                    <option value="pcs">Pieces (pcs)</option>
-                    <option value="box">Box</option>
-                    <option value="pack">Pack</option>
+                    {RECIPE_EXTRA_UNITS.map((unit) => <option key={unit} value={unit}>{unit}</option>)}
+                  </select>
+                </div>
+
+                <div className="form-group">
+                  <label className="form-label">Material Type</label>
+                  <select
+                    className="form-input"
+                    value={formData.material_type || 'dry'}
+                    onChange={(e) => setFormData({...formData, material_type: e.target.value})}
+                  >
+                    <option value="wet">Wet Raw Materials</option>
+                    <option value="dry">Dry Raw Materials</option>
                   </select>
                 </div>
 
@@ -1784,23 +1662,6 @@ const IngredientManagement = () => {
                   />
                 </div>
 
-                <div className="form-group">
-                  <label className="form-label">Grams per Cup (optional)</label>
-                  <input
-                    type="number"
-                    className="form-input"
-                    value={formData.grams_per_cup}
-                    onChange={(e) => setFormData({...formData, grams_per_cup: e.target.value})}
-                    placeholder="e.g. 125 for all-purpose flour"
-                    min="0"
-                    step="0.1"
-                  />
-                  <span className="form-hint">Weight of 1 cup (~250 mL) of this ingredient in grams, so recipe cups/tbsp/tsp convert to kg/g when pricing. Only needed when the recipe unit differs from the stock unit.</span>
-                </div>
-
-                
-
-                
               </div>
             </div>
 
@@ -1982,12 +1843,12 @@ const IngredientManagement = () => {
                   <div className="detail-header">
                     <h3>{selectedItem.name || 'Unnamed'}</h3>
                     <Tippy
-                      content={<div className="inventory-status-tooltip">{getStockStatus(selectedItem).hint}</div>}
+                      content={<div className="inventory-status-tooltip">{getStockStatuses(selectedItem).predicted.hint}</div>}
                       placement="top"
                       theme="dark"
                     >
-                      <span className={`status-badge ${getStockStatus(selectedItem).className}`}>
-                        {getStockStatus(selectedItem).label}
+                      <span className={`status-badge ${getStockStatuses(selectedItem).predicted.className}`}>
+                        {getStockStatuses(selectedItem).predicted.label}
                       </span>
                     </Tippy>
                   </div>

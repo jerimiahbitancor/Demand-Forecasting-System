@@ -21,7 +21,7 @@ const front = await import(pathToFileURL(path.join(here, '..', '..', 'frontend',
 const UNITS = [
   'pcs', 'pc', 'piece', 'pieces', 'Pieces (pcs)', 'PCS', ' pcs ', 'sachet', 'sachets', 'pack', 'packs', 'packet',
   'bottle', 'can', 'box', 'bag', 'tray', 'bunch', 'roll', 'slice', 'slices', 'clove', 'cloves', 'stick', 'head', 'dozen',
-  'kg', 'g', 'gram', 'grams', 'mg', 'L', 'l', 'mL', 'ml', 'liter', 'cup', 'cups', 'tbsp', 'tsp', 'oz', 'lb',
+  'kg', 'g', 'gram', 'grams', 'mg', 'L', 'l', 'mL', 'ml', 'liter', 'tbsp', 'tsp', 'oz', 'lb',
   'Kilogram (kg)', '', null, undefined, 'unknownunit',
 ];
 
@@ -35,7 +35,7 @@ test('toBuyQuantity: count units round UP, others exact, never negative', () => 
   assert.equal(back.toBuyQuantity(60, 12.7, 'pcs'), 48, '47.3 -> 48');
   assert.equal(back.toBuyQuantity(60, 12, 'pcs'), 48, 'whole stays whole');
   assert.equal(back.toBuyQuantity(48.0000000001, 0, 'pcs'), 48, 'float noise does not add one');
-  assert.equal(back.toBuyQuantity(0.2, 0, 'sachet'), 1, 'any part of a sachet -> 1');
+  assert.equal(back.toBuyQuantity(0.2, 0, 'pcs'), 1, 'any part of a piece -> 1');
   assert.equal(back.toBuyQuantity(5, 9, 'pcs'), 0, 'stock covers need');
   assert.equal(Number(back.toBuyQuantity(32.4, 8, 'kg').toFixed(6)), 24.4, 'kg exact');
   assert.equal(Number(back.toBuyQuantity(1.25, 0.5, 'L').toFixed(6)), 0.75, 'L exact');

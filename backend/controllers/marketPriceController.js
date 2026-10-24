@@ -24,6 +24,7 @@
 const { supabaseAdmin } = require('../config/supabase');
 const { logAction } = require('../services/auditService');
 const { createNotification } = require('../services/notificationService');
+const { units: SUPPORTED_UNITS } = require('../../shared/ingredientUnits.json');
 
 // Market sources are stored in the `market_sources` table so staff can add
 // their own stores (e.g. "Gaisano", "Metro", "SNR") without touching code.
@@ -40,7 +41,8 @@ const DEFAULT_SOURCES = [
 // These two are required reference sources and can never be removed.
 const PROTECTED_SOURCE_KEYS = new Set(['wet_market', 'da_reference']);
 
-const ALLOWED_UNITS = ['kg', 'g', 'L', 'mL', 'pcs', 'box', 'pack'];
+const unitShortName = (unit) => unit.name.match(/\(([^)]+)\)\s*$/)?.[1] || unit.name;
+const ALLOWED_UNITS = SUPPORTED_UNITS.map(unitShortName);
 
 let cachedSources = null;
 
@@ -100,15 +102,10 @@ const isKnownSource = async (source) => (await getMarketSources()).some((s) => s
 
 // Ingredient units are stored as free text (e.g. "KG", "Grams", "pcs").
 // Normalize any common spelling to the canonical unit the market_price table uses.
-const UNIT_ALIASES = {
-  kg: 'kg', kilogram: 'kg', kilograms: 'kg', kilo: 'kg', kilos: 'kg', 'kg (kg)': 'kg', 'kilograms (kg)': 'kg',
-  g: 'g', gram: 'g', grams: 'g', gramme: 'g', grammes: 'g', 'g (g)': 'g', 'gram (g)': 'g', 'grams (g)': 'g',
-  l: 'L', litre: 'L', litres: 'L', liter: 'L', liters: 'L', 'l (l)': 'L', 'liter (l)': 'L', 'liters (l)': 'L', 'litre (l)': 'L',
-  ml: 'mL', millilitre: 'mL', millilitres: 'mL', milliliter: 'mL', milliliters: 'mL', 'ml (ml)': 'mL', 'milliliter (ml)': 'mL', 'milliliters (ml)': 'mL',
-  pcs: 'pcs', pc: 'pcs', pce: 'pcs', pces: 'pcs', piece: 'pcs', pieces: 'pcs', 'pcs (pcs)': 'pcs', 'pieces (pcs)': 'pcs',
-  box: 'box', boxes: 'box', 'box (box)': 'box', 'boxes (box)': 'box',
-  pack: 'pack', packs: 'pack', 'pack (pack)': 'pack', 'packs (pack)': 'pack'
-};
+const UNIT_ALIASES = Object.fromEntries(SUPPORTED_UNITS.flatMap((unit) => {
+  const shortName = unitShortName(unit);
+  return [unit.name, ...unit.aliases].map((alias) => [alias.trim().toLowerCase(), shortName]);
+}));
 
 const normalizeUnit = (value) => {
   if (value === undefined || value === null) return null;

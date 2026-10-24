@@ -10,154 +10,50 @@ this service IS allowed to write to).
 """
 import math
 import re
+import json
 from datetime import date
+from pathlib import Path
 import pandas as pd
 from config import supabase
 
-
-# Unit conversion for recipe quantities (kept in sync with
-# frontend/src/utils/recipeUnits.js and backend/utils/recipeUnits.js;
-# tests/fixtures/recipe_unit_cases.json is run against all three).
+# Unit conversion for recipe quantities uses the shared JSON table.
 # A product's recipe can use a different unit than the ingredient's stock
-# unit (e.g. "1 cup" of soy sauce vs an ingredient priced per litre); every
-# quantity is normalised to the ingredient's unit before use.
+# unit; every quantity is normalised to the ingredient's unit before use.
 #
-# Unit facts (family, base factor, aliases, piece weight) live in the
-# ingredient_units table, so a unit added in Settings converts here too.
-# load_unit_metadata() reads them at the start of get_recipe_and_stock(); the
-# static tables below are only the fallback when the table can't be read or a
-# unit isn't in it.
+_UNIT_DATA_PATH = Path(__file__).resolve().parents[2] / "shared" / "ingredientUnits.json"
+with _UNIT_DATA_PATH.open(encoding="utf-8") as unit_file:
+    _UNIT_DATA = json.load(unit_file)
+
+_UNIT_BY_ALIAS = {}
+for _definition in _UNIT_DATA["units"]:
+    for _key in [_definition["name"], *_definition["aliases"]]:
+        _UNIT_BY_ALIAS[str(_key).strip().lower()] = _definition
+
 _RECIPE_UNIT_BASE_FACTOR = {
-    "kg": 1000, "kilogram": 1000, "kilograms": 1000, "kilo": 1000, "kilos": 1000,
-    "kg (kg)": 1000, "kilograms (kg)": 1000, "kilogram (kg)": 1000,
-    "g": 1, "gram": 1, "grams": 1, "gm": 1, "g (g)": 1, "gram (g)": 1, "grams (g)": 1,
-    "mg": 0.001, "milligram": 0.001, "milligrams": 0.001,
-    "lb": 454, "lbs": 454, "pound": 454, "pounds": 454,
-    "oz": 28.35, "ounce": 28.35, "ounces": 28.35,
-    "l": 1000, "litre": 1000, "liter": 1000, "litres": 1000, "liters": 1000,
-    "l (l)": 1000, "liter (l)": 1000, "liters (l)": 1000, "litre (l)": 1000, "litres (l)": 1000,
-    "ml": 1, "millilitre": 1, "milliliter": 1, "millilitres": 1, "milliliters": 1,
-    "ml (ml)": 1, "milliliter (ml)": 1, "milliliters (ml)": 1, "millilitre (ml)": 1,
-    "cup": 240, "cups": 240,
-    "tbsp": 15, "tablespoon": 15, "tablespoons": 15,
-    "tsp": 5, "tps": 5, "teaspoon": 5, "teaspoons": 5,
-    "fl oz": 30, "floz": 30, "fluid ounce": 30, "fluid ounces": 30,
-    "pt": 480, "pint": 480, "pints": 480,
-    "qt": 960, "quart": 960, "quarts": 960,
-    "gal": 3840, "gallon": 3840, "gallons": 3840,
+    key: (None if unit["family"] == "count" else float(unit["baseFactor"]))
+    for key, unit in _UNIT_BY_ALIAS.items()
 }
-
-_MASS_UNITS = {
-    "kg", "kilogram", "kilograms", "kilo", "kilos", "kg (kg)", "kilograms (kg)", "kilogram (kg)",
-    "g", "gram", "grams", "gm", "g (g)", "gram (g)", "grams (g)", "mg", "milligram", "milligrams",
-    "lb", "lbs", "pound", "pounds", "oz", "ounce", "ounces",
-}
-
-_VOLUME_UNITS = {
-    "l", "litre", "liter", "litres", "liters", "l (l)", "liter (l)", "liters (l)", "litre (l)", "litres (l)",
-    "ml", "millilitre", "milliliter", "millilitres", "milliliters",
-    "ml (ml)", "milliliter (ml)", "milliliters (ml)", "millilitre (ml)",
-    "cup", "cups", "tbsp", "tablespoon", "tablespoons", "tsp", "tps", "teaspoon", "teaspoons",
-    "fl oz", "floz", "fluid ounce", "fluid ounces",
-    "pt", "pint", "pints", "qt", "quart", "quarts", "gal", "gallon", "gallons",
-}
-
-# Count/piece units that can convert to weight via a per-piece estimate.
-# Units without a trusted piece weight (packs, bottles, cans, bunches,
-# sachets) stay out of this set so their quantities pass through unchanged.
-_COUNT_PIECE_UNITS = {
-    "pcs", "pc", "piece", "pieces",
-    "pcs (pcs)", "pc (pcs)", "piece (pcs)", "pieces (pcs)",
-    "slice", "slices", "slice (pcs)", "slices (pcs)",
-    "clove", "cloves", "clove (pcs)", "cloves (pcs)",
-    "stick", "sticks", "stick (pcs)", "sticks (pcs)",
-}
-
-# Default per-piece weights (grams) used when a recipe quantity uses a piece
-# unit but the ingredient is priced by weight. A weight set on the unit row
-# (ingredient_units.piece_weight_grams) wins over these.
-_PIECE_WEIGHT_KEYWORDS = [
-    (r"\bpotato(es)?\b", 150),
-    (r"\bonions?\b", 110),
-    (r"\btomato(es)?\b", 120),
-    (r"\bcarrots?\b", 60),
-    (r"\beggs?\b", 50),
-    (r"\blemon", 100),
-    (r"calamansi|kalamansi", 30),
-    (r"\bbananas?\b", 120),
-    (r"\bapples?\b", 180),
-    (r"\bgarlic", 3),
-    (r"\bbreads?\b", 30),
-]
-
-# Common kitchen densities (grams per 240 mL cup), used when a recipe line is
-# in a volume unit but the ingredient is stocked by weight and has no
-# grams_per_cup of its own. Matched loosely against the ingredient name, most
-# specific first (brown sugar before sugar).
-_DENSITY_KEYWORDS = [
-    (r"cake flour", 114),
-    (r"bread flour", 127),
-    (r"all[- ]?purpose|plain flour|flour", 125),
-    (r"brown sugar|demerara|muscovado", 220),
-    (r"powdered sugar|confectioner|icing sugar", 120),
-    (r"sugar", 200),
-    (r"butter", 227),
-    (r"rice", 185),
-    (r"cooking oil|oil", 216),
-    (r"condensed milk", 306),
-    (r"evaporated milk", 240),
-    (r"heavy cream|whipping cream", 240),
-    (r"cream", 240),
-    (r"milk", 240),
-    (r"water", 240),
-    (r"yogurt|yoghurt", 245),
-    (r"oats|oat", 90),
-    (r"cornstarch|corn starch", 128),
-    (r"baking powder", 192),
-    (r"baking soda|bicarbonate", 220),
-    (r"cocoa", 85),
-    (r"honey", 340),
-    (r"chocolate chip|choc chip", 170),
-    (r"nuts?|peanut|cashew|almond", 120),
-    (r"breadcrumb|panko", 108),
-    (r"cheese", 113),
-    (r"mayonnaise|mayo", 220),
-    (r"soy sauce", 255),
-    (r"vinegar", 240),
-    (r"salt", 273),
-]
-
-# lowercased unit name/alias -> {"family", "factor", "is_piece", "piece_weight_grams"}
+_MASS_UNITS = {key for key, unit in _UNIT_BY_ALIAS.items() if unit["family"] == "mass"}
+_VOLUME_UNITS = {key for key, unit in _UNIT_BY_ALIAS.items() if unit["family"] == "volume"}
+_COUNT_UNITS = {key for key, unit in _UNIT_BY_ALIAS.items() if unit["family"] == "count"}
+# Lowercased supported unit names and aliases loaded from the shared definition.
 _UNIT_METADATA = {}
 
 
 def set_unit_metadata(rows):
-    """Rebuild the unit map from ingredient_units rows:
-    {name, family, base_factor, is_piece, piece_weight_grams, aliases, is_active}.
-    Inactive rows and rows without a valid family are skipped, so a bad row can
-    never turn kg into a plain count (those units use the static tables)."""
+    """Refresh supported unit aliases without allowing database factors to drift."""
     _UNIT_METADATA.clear()
     for row in rows or []:
         if row.get("is_active") is False:
             continue
         name = str(row.get("name") or "").strip()
-        family = row.get("family")
-        if not name or family not in ("mass", "volume", "count"):
+        definition = _UNIT_BY_ALIAS.get(name.lower())
+        if not name or not definition:
             continue
-        factor = None
-        if family != "count" and row.get("base_factor") is not None:
-            factor = float(row["base_factor"])
-        weight = row.get("piece_weight_grams")
-        meta = {
-            "family": family,
-            "factor": factor,
-            "is_piece": bool(row.get("is_piece")) and family == "count",
-            "piece_weight_grams": float(weight) if weight is not None else None,
-        }
-        for key in [name, *(row.get("aliases") or [])]:
+        for key in [definition["name"], *definition["aliases"]]:
             clean = str(key or "").strip().lower()
             if clean:
-                _UNIT_METADATA[clean] = meta
+                _UNIT_METADATA[clean] = definition
 
 
 def load_unit_metadata():
@@ -179,62 +75,16 @@ def load_unit_metadata():
 
 
 def _unit_kind(unit):
-    """'mass' | 'volume' | 'piece' | 'count' | None (unknown)."""
+    """'mass' | 'volume' | 'count' | None (unknown)."""
     key = (unit or "").strip().lower()
-    meta = _UNIT_METADATA.get(key)
-    if meta:
-        if meta["family"] in ("mass", "volume"):
-            return meta["family"]
-        return "piece" if meta["is_piece"] else "count"
-    if key in _MASS_UNITS:
-        return "mass"
-    if key in _VOLUME_UNITS:
-        return "volume"
-    if key in _COUNT_PIECE_UNITS:
-        return "piece"
-    return None
+    definition = _UNIT_BY_ALIAS.get(key)
+    return definition["family"] if definition else None
 
 
 def _unit_factor(unit):
     """Grams (mass) or mL (volume) in one `unit`; None for counts / unknown."""
     key = (unit or "").strip().lower()
-    meta = _UNIT_METADATA.get(key)
-    if meta:
-        return None if meta["family"] == "count" else meta["factor"]
     return _RECIPE_UNIT_BASE_FACTOR.get(key)
-
-
-def _density_for(grams_per_cup, ingredient_name):
-    """Grams per 240 mL cup: the ingredient's own value when set, else a
-    name-based estimate, else None."""
-    try:
-        explicit = float(grams_per_cup)
-    except (TypeError, ValueError):
-        explicit = 0.0
-    if math.isfinite(explicit) and explicit > 0:
-        return explicit
-    name = (ingredient_name or "").lower()
-    for pattern, grams in _DENSITY_KEYWORDS:
-        if re.search(pattern, name):
-            return grams
-    return None
-
-
-def _piece_weight_for(ingredient_name, piece_unit=None):
-    """Grams per piece for `piece_unit` pieces of `ingredient_name`, or None
-    when no trusted estimate exists. A weight on the unit row wins, then the
-    butter-stick rule, then a name-based estimate."""
-    unit = (piece_unit or "").strip().lower()
-    meta = _UNIT_METADATA.get(unit)
-    if meta and meta["family"] == "count" and meta["is_piece"] and meta["piece_weight_grams"] is not None:
-        return meta["piece_weight_grams"]
-    if re.match(r"^sticks?(\s\(pcs\))?$", unit) and re.search(r"butter", ingredient_name or "", re.IGNORECASE):
-        return 113
-    name = (ingredient_name or "").lower()
-    for pattern, grams in _PIECE_WEIGHT_KEYWORDS:
-        if re.search(pattern, name):
-            return grams
-    return None
 
 
 def _parse_recipe_quantity(value):
@@ -268,97 +118,26 @@ def _parse_recipe_quantity(value):
         return float("nan")
 
 
-def _normalize_recipe_quantity(quantity, from_unit, to_unit, grams_per_cup=None, ingredient_name=None, pack=None):
+def _normalize_recipe_quantity(quantity, from_unit, to_unit):
     qty = _parse_recipe_quantity(quantity)
-    if not math.isfinite(qty) or qty <= 0:
+    if not math.isfinite(qty):
         return 0.0
+    from_key = str(from_unit or "").strip().lower()
+    to_key = str(to_unit or "").strip().lower()
+    if from_key not in _UNIT_BY_ALIAS or to_key not in _UNIT_BY_ALIAS:
+        raise ValueError(f"Unsupported ingredient unit: {from_unit!r} -> {to_unit!r}")
     from_kind = _unit_kind(from_unit)
     to_kind = _unit_kind(to_unit)
     from_factor = _unit_factor(from_unit)
     to_factor = _unit_factor(to_unit)
 
-    # Volume -> mass via the ingredient's density (grams per 240 mL cup), taken
-    # from grams_per_cup or estimated from the name. With no density,
-    # cross-family units pass through unchanged.
-    density = _density_for(grams_per_cup, ingredient_name)
-    if (
-        from_kind == "volume"
-        and to_kind == "mass"
-        and from_factor is not None
-        and to_factor is not None
-        and density
-    ):
-        grams = (qty * from_factor) * (density / 240)
-        return round(grams / to_factor, 4)
-
-    # Pieces -> mass via the per-piece weight. Without one, cross-family
-    # units pass through unchanged.
-    if from_kind == "piece" and to_kind == "mass" and to_factor is not None:
-        piece_weight_grams = _piece_weight_for(ingredient_name, from_unit)
-        if piece_weight_grams and piece_weight_grams > 0:
-            return round((qty * piece_weight_grams) / to_factor, 4)
-
-    # Purchase pack ({qty, unit} = ingredients.pack_qty/pack_unit),
-    # "one sachet of blue lemonade powder is 150 g": a count unit in the recipe
-    # weighs out in the stock unit, and a measured amount counts out in packs
-    # when the ingredient is stocked by the pack. Mirrors the JS copies.
-    pack_qty = 0.0
-    pack_unit = ""
-    if pack:
-        try:
-            pack_qty = float(pack.get("qty") or 0)
-        except (TypeError, ValueError):
-            pack_qty = 0.0
-        pack_unit = str(pack.get("unit") or "").strip()
-    if pack_qty > 0 and pack_unit:
-        if (
-            from_kind in ("count", None)
-            and from_kind != "piece"
-            and to_kind in ("mass", "volume")
-            and _can_convert_between(pack_unit, to_unit, density)
-        ):
-            one_pack_in_target = _normalize_recipe_quantity(
-                pack_qty, pack_unit, to_unit, grams_per_cup, ingredient_name, None
-            )
-            if one_pack_in_target > 0:
-                return round(qty * one_pack_in_target, 4)
-        if (
-            to_kind in ("count", None)
-            and from_kind in ("mass", "volume")
-            and _can_convert_between(from_unit, pack_unit, density)
-        ):
-            in_pack_unit = _normalize_recipe_quantity(
-                qty, from_unit, pack_unit, grams_per_cup, ingredient_name, None
-            )
-            if in_pack_unit > 0:
-                return round(in_pack_unit / pack_qty, 4)
-
-    same_family = from_kind is not None and from_kind == to_kind and from_kind in ("mass", "volume")
-    if not same_family or from_factor is None or to_factor is None:
-        return qty
-    return round((qty * from_factor) / to_factor, 4)
-
-
-def _can_convert_between(from_unit, to_unit, density):
-    """True when `from_unit` can be expressed in `to_unit` with the rules this
-    module implements: the same unit, the same mass/volume family, or a volume
-    weighed out in mass when a density (already resolved) is known. Mass ->
-    volume and unknown units do not convert, matching the JS copies."""
-    f = (from_unit or "").strip().lower()
-    t = (to_unit or "").strip().lower()
-    if not f or not t:
-        return False
-    if f == t:
-        return True
-    from_kind = _unit_kind(f)
-    to_kind = _unit_kind(t)
-    if from_kind is None or to_kind is None:
-        return False
+    if from_kind == to_kind == "count":
+        return qty if qty > 0 else 0.0
     if from_kind == to_kind and from_kind in ("mass", "volume"):
-        return True
-    if from_kind == "volume" and to_kind == "mass" and density:
-        return True
-    return False
+        if qty <= 0:
+            return 0.0
+        return round((qty * from_factor) / to_factor, 4)
+    raise ValueError(f"Unsupported ingredient unit conversion: {from_unit!r} -> {to_unit!r}")
 
 
 def _fetch_all_rows(build_query) -> list:
@@ -604,11 +383,11 @@ def get_recipe_and_stock() -> pd.DataFrame:
     # Pick up units added / edited in Settings since the last run.
     load_unit_metadata()
 
-    def _fetch(with_unit, with_pack=True):
+    def _fetch(with_unit, with_material_type=True):
         ingredient_cols = (
-            "id, name, unit, price, quantity, grams_per_cup, pack_qty, pack_unit"
-            if with_pack else
-            "id, name, unit, price, quantity, grams_per_cup"
+            "id, name, unit, price, quantity, material_type"
+            if with_material_type else
+            "id, name, unit, price, quantity"
         )
         columns = (
             f"product_id, quantity_per_serving, unit, ingredients!inner({ingredient_cols})"
@@ -617,15 +396,15 @@ def get_recipe_and_stock() -> pd.DataFrame:
         )
         return supabase.table("product_ingredients").select(columns).execute()
 
-    # Column ladder, same as the backend: migration 012 (pack) -> migration 008
-    # (recipe unit) -> oldest schema. A missing column drops that level; any
-    # other error is re-raised.
+    # A missing optional column falls back to the prior schema; other errors
+    # are surfaced so forecast inputs cannot silently become incomplete.
     response = None
     recipe_unit_from_row = True
     last_error = None
-    for with_unit, with_pack in ((True, True), (True, False), (False, False)):
+    has_material_type = True
+    for with_unit, with_material in ((True, True), (True, False), (False, True), (False, False)):
         try:
-            response = _fetch(with_unit, with_pack)
+            response = _fetch(with_unit, with_material)
         except Exception as exc:  # noqa: BLE001 - inspected below
             last_error = exc
             msg = str(exc).lower()
@@ -640,6 +419,7 @@ def get_recipe_and_stock() -> pd.DataFrame:
                 continue
             raise
         recipe_unit_from_row = with_unit
+        has_material_type = with_material
         break
     if response is None:
         raise last_error if last_error else RuntimeError(
@@ -650,18 +430,14 @@ def get_recipe_and_stock() -> pd.DataFrame:
     for r in response.data:
         item = r["ingredients"]
         recipe_unit = r.get("unit") if recipe_unit_from_row else item["unit"]
-        pack = None
-        if item.get("pack_qty") and item.get("pack_unit"):
-            pack = {"qty": item["pack_qty"], "unit": item["pack_unit"]}
+        material_type = item.get("material_type") if has_material_type else "dry"
         rows.append({
             "product_id": r["product_id"],
             "qty_per_serving": _normalize_recipe_quantity(
                 r["quantity_per_serving"],
                 recipe_unit,
                 item["unit"],
-                item.get("grams_per_cup"),
-                item.get("name"),
-                pack,
+                material_type,
             ),
             "ingredient_id": item["id"],
             "ingredient_name": item["name"],

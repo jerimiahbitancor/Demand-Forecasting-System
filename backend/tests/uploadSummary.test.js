@@ -66,7 +66,7 @@ function seed() {
     ingredients: [{ id: EGG, name: 'Egg', unit: 'Pieces (pcs)', quantity: 2, created_at: '2026-01-01T00:00:00Z' }],
     product_ingredients: [{
       product_id: 1, ingredient_id: EGG, quantity_per_serving: 1, unit: 'Pieces (pcs)',
-      ingredients: { name: 'Egg', unit: 'Pieces (pcs)', grams_per_cup: null, created_at: '2026-01-01T00:00:00Z' },
+      ingredients: { name: 'Egg', unit: 'Pieces (pcs)', created_at: '2026-01-01T00:00:00Z' },
     }],
     daily_sales: [],
     inventory_transactions: [],
