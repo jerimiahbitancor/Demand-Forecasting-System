@@ -24,6 +24,15 @@ const field = (row, column) => {
 };
 const day = (v) => (v == null ? v : String(v).slice(0, 10));
 
+// Columns migration 017_remove_legacy_ingredient_pack_units.sql dropped from
+// the live database. A select naming one fails like Postgres does (42703),
+// so code still asking for them fails in tests too, not only in production
+// (Oct 24 2026: every sales upload broke this way while the tests passed).
+// options.droppedColumns overrides the list.
+const DROPPED_COLUMNS = Object.freeze([
+  'pack_qty', 'pack_unit', 'pack_price', 'pack_size', 'grams_per_cup', 'density_g_per_ml',
+]);
+
 function createFakeSupabase(seed = {}, options = {}) {
   const tables = {};
   for (const [name, rows] of Object.entries(seed)) tables[name] = rows.map((r) => ({ ...r }));
@@ -69,8 +78,8 @@ function createFakeSupabase(seed = {}, options = {}) {
       single: null, head: false, count: false, values: null, upsertOpts: null, returning: false,
     };
     const b = {
-      select(_cols, o = {}) {
-        if (st.op === 'select') { st.head = !!o.head; st.count = !!o.count; } else st.returning = true;
+      select(cols, o = {}) {
+        if (st.op === 'select') { st.head = !!o.head; st.count = !!o.count; st.cols = cols; } else st.returning = true;
         return b;
       },
       insert(rows) { st.op = 'insert'; st.values = Array.isArray(rows) ? rows : [rows]; return b; },
@@ -113,6 +122,13 @@ function createFakeSupabase(seed = {}, options = {}) {
           data: null,
           error: { code: 'PGRST205', message: `Could not find the table 'public.${table}' in the schema cache` },
         };
+      }
+      if (st.op === 'select' && typeof st.cols === 'string') {
+        const dropped = (options.droppedColumns || DROPPED_COLUMNS)
+          .find((column) => new RegExp(`\\b${column}\\b`).test(st.cols));
+        if (dropped) {
+          return { data: null, error: { code: '42703', message: `column ingredients_1.${dropped} does not exist` } };
+        }
       }
       const all = rowsOf(table);
       const match = (r) => st.filters.every((f) => f(r));
@@ -177,7 +193,7 @@ function createFakeSupabase(seed = {}, options = {}) {
     return b;
   }
 
-  // Mirrors migrations/017_sales_upload_requires_stock.sql apply_sales_upload():
+  // Mirrors migrations/020_sales_upload_requires_stock.sql apply_sales_upload():
   // check EVERY ingredient first; if any is short, write nothing and return
   // { ok: false, shortfalls }. Otherwise insert daily_sales (unique on
   // product_id + sale_date -> 23505) and deduct each ingredient through the

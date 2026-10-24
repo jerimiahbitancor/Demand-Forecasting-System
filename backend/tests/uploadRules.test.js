@@ -18,7 +18,33 @@ const { createFakeSupabase, installFake } = require('./helpers/fakeSupabase');
 
 process.env.LOG_LEVEL = 'error';
 
-const fake = createFakeSupabase();
+// A plain deduct_ingredient_stock for apply_sales_upload() to call: the
+// amount was already checked against the stock, so it is applied in full and
+// logged once. (tests/stockDeduction.test.js has the exact-decimal version.)
+const fake = createFakeSupabase({}, {
+  rpc: {
+    deduct_ingredient_stock: (args, tables) => {
+      const row = (tables.ingredients || []).find((i) => String(i.id) === String(args.p_ingredient_id));
+      if (!row) return { data: null, error: { message: `Ingredient ${args.p_ingredient_id} does not exist` } };
+      const previous = Number(row.quantity || 0);
+      const applied = Number(args.p_deduction);
+      row.quantity = String(+(previous - applied).toFixed(6));
+      tables.inventory_transactions = tables.inventory_transactions || [];
+      tables.inventory_transactions.push({
+        ingredient_id: row.id, transaction_type: 'sale', quantity: -applied,
+        previous_quantity: previous, new_quantity: Number(row.quantity),
+        reference_type: args.p_reference_type, reference_id: args.p_reference_id,
+      });
+      return {
+        data: [{
+          previous_quantity: previous, new_quantity: Number(row.quantity), requested_quantity: applied,
+          applied_quantity: applied, shortfall_quantity: 0, already_applied: false,
+        }],
+        error: null,
+      };
+    },
+  },
+});
 const OWNER_ID = 7;
 installFake(fake, {
   'middleware/auth.js': (req, res, next) => { req.user = { id: OWNER_ID, user_id: OWNER_ID, name: 'Test Owner' }; next(); },
@@ -261,7 +287,7 @@ function seedAdoboEggStock(quantity) {
   return seed;
 }
 
-test('insufficient ingredient stock blocks the upload before any database write', async () => {
+test('insufficient ingredient stock (wet/dry recipe units) refuses the upload: nothing saved or deducted', async () => {
   fake.reset(seedAdoboEggStock(1));
   const server = await startServer();
   const restore = quiet();
@@ -271,22 +297,46 @@ test('insufficient ingredient stock blocks the upload before any database write'
       csv: csv('Adobo,Rice Meals,2,240,0,0,240'),
     });
     await settle();
-    assert.equal(res.status, 422);
+    assert.equal(res.status, 422, JSON.stringify(res.body));
     assert.equal(res.body.success, false);
-    assert.equal(res.body.error, 'Insufficient stock');
-    assert.match(res.body.message, /No upload record or sales were saved/);
-    assert.deepEqual(res.body.shortages, [{
-      ingredientId: 10,
-      ingredient: 'Egg',
-      requiredAmount: '2',
-      availableAmount: '1',
-      shortAmount: '1',
-      unit: 'pcs',
+    assert.equal(res.body.insufficientStock, true);
+    assert.deepEqual(res.body.shortfalls, [{
+      ingredientId: 10, name: 'Egg', unit: 'Pieces (pcs)', required: '2', available: '1', shortfall: '1',
     }]);
-    assert.equal(fake.tables.uploads.length, 1, 'only the pre-existing upload remains');
     assert.equal(fake.tables.daily_sales.length, 3, 'no sales rows were added');
-    assert.equal(fake.writesTo('uploads').length, 0, 'no upload record was inserted');
-    assert.equal(fake.rpcCalls.length, 0, 'stock was not deducted');
+    assert.equal(fake.tables.ingredients[0].quantity, '1', 'stock untouched');
+    assert.equal(fake.rpcCalls.length, 0, 'nothing was sent to the database to deduct');
+    assert.equal(fake.tables.uploads.find((u) => u.id === res.body.uploadId).status, 'failed',
+      'the upload row is failed, so the same file can be uploaded again after restocking');
+  } finally {
+    restore();
+    server.close();
+  }
+});
+
+test('a recipe unit that cannot be converted refuses the upload: nothing saved or deducted', async () => {
+  const seed = seedAdoboEggStock(10);
+  seed.product_ingredients[0].unit = 'handful';
+  fake.reset(seed);
+  const server = await startServer();
+  const restore = quiet();
+  try {
+    const res = await request(server, 'POST', '/api/upload', {
+      filename: 'item-sales-summary-2026-10-12-2026-10-12.csv',
+      csv: csv('Adobo,Rice Meals,2,240,0,0,240'),
+    });
+    await settle();
+    assert.equal(res.status, 422, JSON.stringify(res.body));
+    assert.equal(res.body.recipeUnitProblem, true);
+    assert.equal(res.body.validationErrors.length, 1);
+    assert.equal(res.body.validationErrors[0].ingredientId, 10);
+    assert.equal(res.body.validationErrors[0].ingredient, 'Egg');
+    assert.ok(res.body.validationErrors[0].reasons.length > 0, JSON.stringify(res.body.validationErrors));
+    assert.match(res.body.message, /was not saved/);
+    assert.equal(fake.tables.daily_sales.length, 3, 'no sales rows were added');
+    assert.equal(fake.tables.ingredients[0].quantity, '10', 'stock untouched');
+    assert.equal(fake.rpcCalls.length, 0, 'nothing was sent to the database to deduct');
+    assert.equal(fake.tables.uploads.find((u) => u.id === res.body.uploadId).status, 'failed');
   } finally {
     restore();
     server.close();
@@ -317,7 +367,7 @@ test('sufficient ingredient stock allows a sales upload', async () => {
   }
 });
 
-// ---------------------------------------------------------------- A8 (migration 017)
+// ---------------------------------------------------------------- A8 (migration 020)
 
 test('A8: not enough stock -> 422, nothing saved, upload failed, one "Unmet condition" notice (no generic one)', async () => {
   const seedData = seedProducts();

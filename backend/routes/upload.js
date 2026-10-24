@@ -12,7 +12,11 @@ const mappingService = require('../services/mappingService');
 const businessDayService = require('../services/businessDayService');
 const { logAction } = require('../services/auditService');
 const { createNotification, createNotificationOnce, queueStockRefresh } = require('../services/notificationService');
-const { isInsufficientStockError, buildInsufficientStockNotice } = require('../utils/insufficientStock');
+const {
+  isInsufficientStockError,
+  buildInsufficientStockNotice,
+  isUnconvertibleRecipeError,
+} = require('../utils/insufficientStock');
 const { parseFilenames, summarizeUploadStatuses } = require('../utils/uploadRecovery');
 const { fetchAllRows } = require('../utils/fetchAllRows');
 
@@ -206,35 +210,9 @@ router.post(
             file.originalname
           );
 
-          if (validation.isValid) {
-            const stockCheck = await uploadService.validateSalesStock(
-              processedData.data,
-              numericId,
-              file.originalname
-            );
-            if (!stockCheck.sufficient) {
-              uploadService.markUploadComplete(file.originalname, numericId);
-              const shortageDetails = stockCheck.shortages.map((shortage) =>
-                `${shortage.ingredient}: requires ${shortage.requiredAmount} ${shortage.unit}, `
-                + `available ${shortage.availableAmount} ${shortage.unit}, `
-                + `short ${shortage.shortAmount} ${shortage.unit}.`
-              );
-              const validationDetails = stockCheck.validationErrors.map((issue) =>
-                `${issue.ingredient}: ${issue.reasons.join('; ') || 'the recipe unit could not be converted'}.`
-              );
-              const details = [...shortageDetails, ...validationDetails];
-              const hasShortages = stockCheck.shortages.length > 0;
-              return res.status(422).json({
-                success: false,
-                error: hasShortages ? 'Insufficient stock' : 'Stock validation failed',
-                message: hasShortages
-                  ? `Sales upload blocked. No upload record or sales were saved because stock is insufficient: ${details.join(' ')}`
-                  : `Sales upload blocked. No upload record or sales were saved because ingredient requirements could not be validated: ${details.join(' ')}`,
-                shortages: stockCheck.shortages,
-                validationErrors: stockCheck.validationErrors,
-              });
-            }
-          }
+          // Stock is checked inside processSalesData() (planStockDeductions +
+          // apply_sales_upload, migration 020): one check, locked in the
+          // database, so two files uploading at once cannot both pass it.
 
           uploadId = await uploadService.saveUploadRecord(
             {
@@ -407,7 +385,7 @@ router.post(
       }
 
       // Unmet condition: the file needs more of an ingredient than is in
-      // stock, so NOTHING was saved (migration 017). 422, not 409: the
+      // stock, so NOTHING was saved (migration 020). 422, not 409: the
       // upload screen reads 409 as "already uploaded, harmless", and this is
       // neither. Not retried by the client either (only 429/5xx are).
       if (isInsufficientStockError(error)) {
@@ -434,6 +412,27 @@ router.post(
           message: notice.message,
           uploadId,
           shortfalls: error.shortfalls,
+        });
+      }
+
+      // The other unmet condition: a recipe unit could not be converted, so
+      // the stock needed is unknown and NOTHING was saved. Same 422 as above;
+      // `validationErrors` is what the upload screen lists per ingredient.
+      if (isUnconvertibleRecipeError(error)) {
+        const filename = req.file?.originalname || null;
+        logAction(
+          'upload_sales_blocked_recipe_unit',
+          `Sales upload "${filename || 'file'}" was not saved: recipe unit could not be converted for `
+            + `${error.items.map((item) => item.ingredient).join(', ')}`,
+          actorOf(req)
+        );
+        return res.status(422).json({
+          success: false,
+          error: 'Recipe unit cannot be converted',
+          recipeUnitProblem: true,
+          message: error.message,
+          uploadId,
+          validationErrors: error.items,
         });
       }
 

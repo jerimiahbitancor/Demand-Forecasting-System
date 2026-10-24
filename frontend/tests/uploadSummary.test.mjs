@@ -76,7 +76,7 @@ check('per-cell errors: file, row, column, message', same(cells, [
 check('no errors array -> []', same(collectCellErrors('x.csv', { error: 'Duplicate upload' }), []) && same(collectCellErrors('x.csv', undefined), []));
 check('formatPlates', formatPlates({ 'NO RICE': 1, 'NO EGG': 5 }) === 'NO EGG 5, NO RICE 1');
 
-// 422 "Not enough stock" (migration 017): one row per short ingredient.
+// 422 "Not enough stock" (migration 020): one row per short ingredient.
 const refusals = collectStockRefusals('day-2.csv', {
   success: false,
   insufficientStock: true,

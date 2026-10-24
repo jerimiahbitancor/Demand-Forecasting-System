@@ -2,7 +2,7 @@
 //
 // The "unmet condition" of a sales upload: the file needs more of one or more
 // ingredients than is in stock, so NOTHING from it is saved (no daily_sales
-// rows, no deductions). See migrations/017_sales_upload_requires_stock.sql.
+// rows, no deductions). See migrations/020_sales_upload_requires_stock.sql.
 //
 // Pure: no I/O. Shared by uploadService (throws it), routes/upload.js
 // (turns it into a 422 + notification) and the tests.
@@ -78,6 +78,37 @@ class InsufficientStockError extends Error {
 
 const isInsufficientStockError = (error) => Boolean(error && error.code === INSUFFICIENT_STOCK_CODE);
 
+// The other unmet condition: a recipe line whose unit cannot be converted to
+// the ingredient's stock unit. The stock needed cannot be known, so the file
+// is refused too (owner's decision, Oct 24 2026), instead of being saved with
+// that ingredient silently left undeducted.
+const UNCONVERTIBLE_RECIPE_CODE = 'RECIPE_UNIT_UNCONVERTIBLE';
+
+class UnconvertibleRecipeError extends Error {
+  /**
+   * @param {object[]} items  [{ ingredientId, ingredient, reasons: string[] }]
+   * @param {object} [options]
+   * @param {string|null} [options.filename]
+   */
+  constructor(items = [], { filename = null } = {}) {
+    const list = (items || []).map((item) => ({
+      ingredientId: item.ingredientId ?? null,
+      ingredient: item.ingredient || `Ingredient #${item.ingredientId ?? '?'}`,
+      reasons: (item.reasons || []).filter(Boolean),
+    }));
+    const details = list
+      .map((item) => `${item.ingredient}: ${item.reasons.join('; ') || 'the recipe unit could not be converted'}.`)
+      .join(' ');
+    super(`The stock needed could not be worked out for ${list.length} ingredient(s), so the sales file was not saved. ${details}`);
+    this.name = 'UnconvertibleRecipeError';
+    this.code = UNCONVERTIBLE_RECIPE_CODE;
+    this.items = list;
+    this.filename = filename;
+  }
+}
+
+const isUnconvertibleRecipeError = (error) => Boolean(error && error.code === UNCONVERTIBLE_RECIPE_CODE);
+
 /**
  * The bell notification (and email) for a refused upload.
  * One per upload; key `upload_blocked_stock:<uploadId>`.
@@ -110,4 +141,7 @@ module.exports = {
   describeInsufficientItem,
   buildInsufficientStockNotice,
   INSUFFICIENT_STOCK_CODE,
+  UnconvertibleRecipeError,
+  isUnconvertibleRecipeError,
+  UNCONVERTIBLE_RECIPE_CODE,
 };

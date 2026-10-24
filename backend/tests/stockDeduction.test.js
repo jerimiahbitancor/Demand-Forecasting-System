@@ -8,8 +8,9 @@
 //   C3  every non-archived product in the file with a recipe deducts,
 //       whatever its status
 //   C4  not enough of ANY ingredient -> the whole file is refused: no sales
-//       rows, no deductions (migration 017, Oct 2026)
-//   H1  units are resolved strictly: no density -> error, no 1:1 fallback
+//       rows, no deductions (migration 020, Oct 2026)
+//   H1  units are resolved strictly: no 1:1 fallback; an unconvertible
+//       recipe unit refuses the whole file (Oct 24 2026)
 //   H2  quantities are exact decimals, rounded ONCE at the end
 //   H3  the deduction is atomic and idempotent per (upload, ingredient)
 // In-memory fake database; no network.
@@ -443,7 +444,7 @@ test('C1/U7: an ingredient created after the day ended is NOT a stock count', as
 
 // ---------------------------------------------------------------- C4 (Oct 2026): not enough stock -> nothing saved
 //
-// The owner's rule since Oct 2026 (migration 017): a sales file that needs
+// The owner's rule since Oct 2026 (migration 020): a sales file that needs
 // more of ANY ingredient than is in stock is not saved at all. No
 // daily_sales rows, no deductions, no partial "floor at 0". This replaced
 // the old C4 (deduct what is there, record the shortfall, keep the sales).
@@ -568,12 +569,12 @@ test('H3: the same file retried is refused as a duplicate and deducts nothing mo
   assert.equal(sales(RICE).length, 1, 'and it did not write a second transaction');
 });
 
-test('migration 017 not run (no apply_sales_upload): the upload is refused, nothing saved, no old fallback', async () => {
+test('migration 020 not run (no apply_sales_upload): the upload is refused, nothing saved, no old fallback', async () => {
   seed();
   fake.reset({ ...JSON.parse(JSON.stringify(fake.tables)) }, { missingFunctions: ['apply_sales_upload'] });
   const error = await uploadExpectingRefusal([['Adobo', 10]], 62, 'item-sales-summary-2026-10-10-2026-10-10.csv');
   assert.equal(error.code, 'STOCK_GUARD_MISSING');
-  assert.match(error.message, /017_sales_upload_requires_stock\.sql/);
+  assert.match(error.message, /020_sales_upload_requires_stock\.sql/);
   assert.equal(salesOfUpload(62).length, 0, 'no sales saved');
   assert.equal(stock(RICE).toString(), '10', 'no stock deducted');
   assert.equal(fake.rpcCalls.filter((c) => c.name === 'deduct_ingredient_stock').length, 0,
@@ -595,18 +596,17 @@ test('H3: a fractional discrete unit is requested exactly and applied whole', as
   assert.equal(stock(EGG).toString(), '3');
 });
 
-test('H1: upload reports an unconvertible recipe and leaves its stock untouched', async () => {
+test('H1: an unconvertible recipe unit refuses the whole file; nothing saved or deducted', async () => {
   seed();
   fake.tables.product_ingredients[0].unit = 'handful';
-  const result = await upload(
-    [['Adobo', 2]],
-    65,
-    'item-sales-summary-2026-10-10-2026-10-10.csv'
-  );
+  const error = await uploadExpectingRefusal([['Adobo', 2]], 65, 'item-sales-summary-2026-10-10-2026-10-10.csv');
 
+  assert.equal(error.code, 'RECIPE_UNIT_UNCONVERTIBLE', String(error));
+  assert.deepEqual(error.items.map((item) => [item.ingredientId, item.ingredient]), [[RICE, 'Rice']]);
+  assert.ok(error.items[0].reasons.length > 0, 'the reason is kept for the owner');
+  assert.match(error.message, /was not saved/);
   assert.ok(stock(RICE).eq('10'));
   assert.equal(sales(RICE).length, 0);
-  assert.equal(result.unconvertibleIngredients[0].ingredientId, RICE);
-  assert.match(result.warnings.join(' '), /Could not convert the recipe unit for Rice/);
-  assert.ok(result.uploadSummary.stockNotDeducted.some((n) => n.ingredientId === RICE && n.reason === 'unit_conversion'));
+  assert.equal(salesOfUpload(65).length, 0, 'no daily_sales rows');
+  assert.equal(fake.rpcCalls.filter((c) => c.name === 'apply_sales_upload').length, 0);
 });

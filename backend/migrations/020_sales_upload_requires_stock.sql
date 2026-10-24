@@ -1,4 +1,4 @@
--- Migration 017: a sales upload is saved only when there is enough stock.
+-- Migration 020: a sales upload is saved only when there is enough stock.
 --
 -- Run this in the Supabase SQL editor. It is idempotent: every statement can
 -- be re-run safely.
@@ -19,7 +19,8 @@
 -- has no fallback to the old path (it refuses the upload if this migration
 -- has not been run).
 --
--- Numbered 017 because the unmerged `fixes` branch already has a 016.
+-- Numbered 020: 016 (lock_down_browser_roles) and 017-019 (ingredient unit
+-- clean-up) were already taken on the `fixes` branch.
 --
 -- WHY A DATABASE FUNCTION, NOT A CHECK IN NODE
 --
