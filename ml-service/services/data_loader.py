@@ -118,7 +118,17 @@ def _parse_recipe_quantity(value):
         return float("nan")
 
 
-def _normalize_recipe_quantity(quantity, from_unit, to_unit):
+def _normalize_recipe_quantity(quantity, from_unit, to_unit, material_type="dry"):
+    """Convert a recipe quantity into the ingredient's stock unit.
+
+    material_type ('wet' | 'dry') is accepted to match the backend's
+    convertRecipeQuantity(quantity, fromUnit, toUnit, { materialType }).
+    Like the backend's unitService.resolve, it does NOT change the result:
+    only same-family conversions (mass<->mass, volume<->volume) and identical
+    count units are allowed; mass<->volume is rejected. Keep the two in sync —
+    tests/fixtures/recipe_unit_cases.json is the shared contract.
+    """
+    del material_type  # accepted for call-site parity; see docstring
     qty = _parse_recipe_quantity(quantity)
     if not math.isfinite(qty):
         return 0.0

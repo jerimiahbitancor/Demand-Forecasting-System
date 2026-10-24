@@ -136,6 +136,48 @@ finally:
     dl.supabase = real_client
     dl.set_unit_metadata([])
 
+
+# ---- get_recipe_and_stock: the real call site ----------------------------
+# Regression: the call passed material_type as a 4th argument while the
+# function took 3, so EVERY /forecast run died with
+#   TypeError: _normalize_recipe_quantity() takes 3 positional arguments but 4 were given
+# The unit checks above call the function directly and could not catch it.
+class _RecipeClient:
+    def __init__(self, recipe_rows):
+        self._recipe_rows = recipe_rows
+
+    def table(self, name):
+        if name == "ingredient_units":
+            return _FakeQuery(FIXTURE["units"], None)
+        assert name == "product_ingredients", name
+        return _FakeQuery(self._recipe_rows, None)
+
+
+print("get_recipe_and_stock")
+try:
+    dl.set_unit_metadata([])
+    dl.supabase = _RecipeClient([
+        {"product_id": 1, "quantity_per_serving": "250", "unit": "g",
+         "ingredients": {"id": 10, "name": "Rice", "unit": "kg", "price": 50,
+                         "quantity": 20, "material_type": "dry"}},
+        {"product_id": 1, "quantity_per_serving": "2", "unit": "tbsp",
+         "ingredients": {"id": 11, "name": "Soy sauce", "unit": "L", "price": 80,
+                         "quantity": 3, "material_type": "wet"}},
+    ])
+    recipe = dl.get_recipe_and_stock()
+    check("reads a recipe whose rows carry material_type", len(recipe) == 2)
+    rice = recipe[recipe["ingredient_id"] == 10]["qty_per_serving"].iloc[0]
+    check("250 g of a kg ingredient -> 0.25", math.isclose(rice, 0.25), f"got {rice}")
+    soy = recipe[recipe["ingredient_id"] == 11]["qty_per_serving"].iloc[0]
+    check("2 tbsp of a L ingredient -> 0.03", math.isclose(soy, 0.03), f"got {soy}")
+    check("wet/dry does not change a same-family result",
+          dl._normalize_recipe_quantity(1, "kg", "g", "wet") == dl._normalize_recipe_quantity(1, "kg", "g", "dry") == 1000)
+except Exception as exc:  # noqa: BLE001
+    check("get_recipe_and_stock runs without raising", False, f"{type(exc).__name__}: {exc}")
+finally:
+    dl.supabase = real_client
+    dl.set_unit_metadata([])
+
 if failures:
     print(f"\n{len(failures)} check(s) FAILED")
     sys.exit(1)
