@@ -866,17 +866,17 @@ const UploadData = ({
           // responses) — expected and harmless, not a real failure. Any
           // other status (or no response at all) is a genuine error.
           const isDuplicate = err?.response?.data?.duplicate === true || err?.response?.status === 409;
-          // 422 "Not enough stock" (migration 017): an ingredient did not
+          // 422 "Not enough stock" (migration 020): an ingredient did not
           // have enough stock, so NOTHING from this file was saved. Not a
           // duplicate and not a crash: its own status, so the owner sees
           // exactly which files to upload again after restocking.
           const isStockRefusal = err?.response?.status === 422 && err?.response?.data?.insufficientStock === true;
           const status = isDuplicate ? 'duplicate' : isStockRefusal ? 'insufficient_stock' : 'error';
           const message = err?.response?.data?.message || err?.response?.data?.error || err?.message || 'Upload failed';
-          const stockShortages = Array.isArray(err?.response?.data?.shortages)
-            ? err.response.data.shortages
-            : [];
-          const stockValidationErrors = Array.isArray(err?.response?.data?.validationErrors)
+          // 422 "Recipe unit cannot be converted": the stock needed for these
+          // ingredients could not be worked out, so nothing was saved either.
+          const stockValidationErrors = err?.response?.data?.recipeUnitProblem === true
+            && Array.isArray(err.response.data.validationErrors)
             ? err.response.data.validationErrors
             : [];
           // 400 "Invalid sales file": the backend lists each bad cell.
@@ -886,13 +886,13 @@ const UploadData = ({
             status,
             message,
             cellErrors,
-            stockShortages,
             stockValidationErrors,
-         , stockRefusals });
-          run.failed.set(i, { status, message, stockShortages, stockValidationErrors });
+            stockRefusals,
+          });
+          run.failed.set(i, { status, message, stockValidationErrors });
           setSalesFailedIndices((prev) => {
             const next = new Map(prev);
-            next.set(i, { status, message, stockShortages, stockValidationErrors });
+            next.set(i, { status, message, stockValidationErrors });
             return next;
           });
           throw err;
@@ -1110,13 +1110,9 @@ const UploadData = ({
         const id = toast.error(`Upload failed: ${underlying.response?.data?.message || 'Duplicate file detected'}`);
         setSalesToastId(id);
       } else if (underlying.response?.status === 422) {
-        const shortages = Array.isArray(underlying.response?.data?.shortages)
-          ? underlying.response.data.shortages
-          : [];
-        const shortageSummary = shortages.map((shortage) =>
-          `${shortage.ingredient}: short ${shortage.shortAmount} ${shortage.unit}`
-        ).join('; ');
-        const id = toast.error(`${underlying.response?.data?.message || errorMsg}${shortageSummary ? ` (${shortageSummary})` : ''}`);
+        // "Recipe unit cannot be converted": the message names each
+        // ingredient; the list under the file list repeats it.
+        const id = toast.error(`Not saved: ${underlying.response?.data?.message || errorMsg}`, { duration: 8000 });
         setSalesToastId(id);
       } else if (underlying.response?.status === 400) {
         const id = toast.error(`Validation error: ${details || errorMsg}`);
@@ -1800,22 +1796,12 @@ const UploadData = ({
                 </div>
               )}
               {[...salesFailedIndices.entries()]
-                .filter(([, failure]) => failure.status === 'error'
-                  && (failure.stockShortages?.length || failure.stockValidationErrors?.length))
+                // Recipe-unit refusals only. Not-enough-stock refusals are
+                // listed in the upload summary (UploadSummaryReport).
+                .filter(([, failure]) => failure.status === 'error' && failure.stockValidationErrors?.length)
                 .map(([index, failure]) => (
                   <div className="stock-shortage-report" key={`stock-shortage-${index}`} role="alert">
                     <strong>{salesFiles[index]?.name || 'Sales file'} was not uploaded.</strong>
-                    {failure.stockShortages?.length > 0 && (
-                      <ul>
-                        {failure.stockShortages.map((shortage) => (
-                          <li key={shortage.ingredientId}>
-                            {shortage.ingredient}: requires {shortage.requiredAmount} {shortage.unit},
-                            {' '}available {shortage.availableAmount} {shortage.unit},
-                            {' '}short {shortage.shortAmount} {shortage.unit}.
-                          </li>
-                        ))}
-                      </ul>
-                    )}
                     {failure.stockValidationErrors?.length > 0 && (
                       <ul>
                         {failure.stockValidationErrors.map((issue) => (
@@ -1825,7 +1811,7 @@ const UploadData = ({
                         ))}
                       </ul>
                     )}
-                    <span>Adjust inventory or the recipe, then upload the file again.</span>
+                    <span>Nothing from this file was saved. Fix the recipe unit, then upload the same file again.</span>
                   </div>
                 ))}
 

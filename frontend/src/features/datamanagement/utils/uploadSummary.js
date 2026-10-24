@@ -107,7 +107,7 @@ export function collectCellErrors(fileName, responseData) {
  * The ingredients that blocked a file, from a 422 "Not enough stock"
  * response ({ insufficientStock: true, shortfalls: [...] }), tagged with the
  * file name. One row per ingredient. Anything else gives [].
- * (Nothing from such a file was saved: see migration 017.)
+ * (Nothing from such a file was saved: see migration 020.)
  */
 export function collectStockRefusals(fileName, responseData) {
   if (!responseData || responseData.insufficientStock !== true) return [];

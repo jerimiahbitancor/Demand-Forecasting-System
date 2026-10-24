@@ -35,9 +35,9 @@ const EMAIL_REMINDER_KINDS = Object.freeze([
   'upload_reminder',   // 4:00 / 7:00 AM: upload yesterday's sales or mark closed
   'unconfirmed_days',  // 4:00 AM summary of other unanswered days
   'stock_shortfall',   // an upload used more of an ingredient than was in stock
-                       // (only possible before migration 017 is run)
+                       // (only possible before migration 020 is run)
   'upload_blocked_stock', // a sales upload was refused: not enough stock
-                          // (migration 017, Oct 2026)
+                          // (migration 020, Oct 2026)
   'restock_summary',   // the daily restock email (ingredient list); only rows
                        // with metadata.emailed === true are sent, see
                        // runStockRefresh. Per-ingredient 'low_stock' alerts

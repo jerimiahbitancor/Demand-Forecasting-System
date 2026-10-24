@@ -30,7 +30,7 @@ const {
 const { loadAliasMap } = require('./productAliasService');
 const { productNameKey } = require('../utils/productNameKey');
 const { buildUploadSummary } = require('../utils/uploadSummary');
-const { InsufficientStockError } = require('../utils/insufficientStock');
+const { InsufficientStockError, UnconvertibleRecipeError } = require('../utils/insufficientStock');
 
 // modifier_rules is read once per minute at most: a 288-file backfill would
 // otherwise query it 288 times for a table of a handful of rows.
@@ -47,7 +47,7 @@ function isMissingTableError(error) {
 }
 
 // PGRST202 = PostgREST cannot find the function; 42883 = Postgres "function
-// does not exist". Either means migration 017 has not been run yet.
+// does not exist". Either means migration 020 has not been run yet.
 function isMissingFunctionError(error) {
   if (!error) return false;
   return error.code === 'PGRST202'
@@ -592,152 +592,6 @@ class UploadService {
     };
   }
 
-  async validateSalesStock(rows = [], userId = null, filename = null) {
-    if (!Array.isArray(rows) || rows.length === 0) {
-      return { sufficient: true, shortages: [], validationErrors: [] };
-    }
-
-    const numericId = userId ? await this.getNumericUserId(userId) : null;
-    if (!numericId || !this.isSupabaseReady()) {
-      throw new Error('Stock validation is unavailable. No sales upload was saved; please try again when inventory data is available.');
-    }
-
-    const modifierRules = await this.getModifierRules();
-    const modifierKeywords = modifierRules.map((rule) => rule.keyword);
-    const ingredientIdByKeyword = new Map(modifierRules.map((rule) => [rule.keyword, rule.ingredient_id]));
-    const { data: products, error: productsError } = await supabaseAdmin
-      .from('products')
-      .select('id, name, created_at, first_sold_date, is_active, inactive_reason, inactive_since, category, status');
-    if (productsError) throw productsError;
-
-    const productIdByName = new Map();
-    for (const product of products || []) {
-      productIdByName.set(productNameKey(product.name), product.id);
-    }
-    const aliasProductIds = await loadAliasMap(supabaseAdmin);
-    for (const [aliasKey, productId] of aliasProductIds) {
-      if (!productIdByName.has(aliasKey)) productIdByName.set(aliasKey, productId);
-    }
-
-    const fallbackDate = this.extractDateFromFilename(filename) || new Date().toISOString().slice(0, 10);
-    const records = rows.map((row) => ({
-      name: this.normalizeProductName(
-        this.getColumnValueByNames(row, ['Item name', 'Item Name', 'Product', 'Product name'])
-      ),
-      sold: this.getColumnValueByNames(row, ['Items sold', 'Items Sold', 'Quantity', 'Units sold']),
-      refunded: this.getColumnValueByNames(row, ['Items refunded', 'Items Refunded']),
-      category: this.getColumnValueByNames(row, ['Category', 'Category Name'])?.toString()?.trim() || 'Uncategorized',
-      saleDate: this.getSaleDateValue(row, fallbackDate),
-    }));
-    const { dailySalesRows, modifierRows } = aggregateSalesRecords(records, {
-      productIdByName,
-      keywords: modifierKeywords,
-      uploadId: null,
-    });
-    const productById = new Map((products || []).map((product) => [product.id, product]));
-    const deductingProductIds = new Set(
-      dailySalesRows
-        .map((sale) => sale.product_id)
-        .filter((id) => {
-          const product = productById.get(id);
-          return product && !isArchivedProduct(product);
-        })
-    );
-    if (deductingProductIds.size === 0) {
-      return { sufficient: true, shortages: [], validationErrors: [] };
-    }
-
-    const { recipeRows, canonicalUnitsAvailable } = await this.loadSalesRecipeRows([...deductingProductIds]);
-    const perServingFor = (recipe) => {
-      const ingredient = recipe.ingredients || {};
-      const fromUnit = recipe.unit || ingredient.unit || null;
-      if (canonicalUnitsAvailable) {
-        return unitService.resolve(recipe.quantity_per_serving, fromUnit, {
-          id: recipe.ingredient_id,
-          name: ingredient.name,
-          unit: ingredient.unit,
-          base_unit: ingredient.base_unit,
-          unit_family: ingredient.unit_family,
-          stock_scale: ingredient.stock_scale,
-          allow_fractional: ingredient.allow_fractional,
-          material_type: ingredient.material_type || 'dry',
-        });
-      }
-      return new Decimal(String(convertRecipeQuantity(
-        recipe.quantity_per_serving,
-        fromUnit,
-        ingredient.unit,
-        { materialType: ingredient.material_type || 'dry' }
-      )));
-    };
-    const deductionsByDate = computeStockDeductionsByDate({
-      dailySalesRows,
-      modifierRows,
-      recipeRows,
-      deductingProductIds,
-      ingredientIdByKeyword,
-      perServingFor,
-    });
-    const ingredientInfo = new Map();
-    for (const recipe of recipeRows) {
-      if (!ingredientInfo.has(recipe.ingredient_id)) ingredientInfo.set(recipe.ingredient_id, recipe.ingredients || {});
-    }
-
-    const ingredientIds = [...deductionsByDate.keys()];
-    const latestAdjustmentAt = new Map();
-    if (ingredientIds.length > 0) {
-      const { data: adjustments, error: adjustmentError } = await fetchAllRows(() => supabaseAdmin
-        .from('inventory_transactions')
-        .select('ingredient_id, created_at')
-        .eq('transaction_type', 'adjustment')
-        .in('ingredient_id', ingredientIds)
-        .order('created_at', { ascending: false })
-        .order('id', { ascending: true }));
-      if (adjustmentError) throw adjustmentError;
-      for (const row of adjustments || []) {
-        if (!latestAdjustmentAt.has(row.ingredient_id)) latestAdjustmentAt.set(row.ingredient_id, row.created_at);
-      }
-    }
-
-    const validationErrors = (deductionsByDate.unconvertible || []).map((entry) => ({
-      ingredientId: entry.ingredient_id,
-      ingredient: ingredientInfo.get(entry.ingredient_id)?.name || `Ingredient #${entry.ingredient_id}`,
-      reasons: (entry.warnings || []).map((warning) => warning.reason),
-    }));
-    if (validationErrors.length > 0) {
-      return { sufficient: false, shortages: [], validationErrors };
-    }
-
-    const shortages = [];
-    for (const [ingredientId, entry] of deductionsByDate) {
-      const ingredient = ingredientInfo.get(ingredientId) || {};
-      const lastCountAt = lastStockCountAt({
-        latestAdjustmentAt: latestAdjustmentAt.get(ingredientId) || null,
-      });
-      let exact = new Decimal(0);
-      for (const [saleDate, amount] of [...entry.byDate].sort((a, b) => a[0].localeCompare(b[0]))) {
-        if (shouldDeduct(saleDate, lastCountAt)) exact = exact.plus(amount);
-      }
-      if (!exact.gt(0)) continue;
-
-      const required = roundQuantity(exact, ingredient);
-      const available = new Decimal(String(ingredient.quantity || 0));
-      if (required.gt(available)) {
-        const short = required.minus(available);
-        shortages.push({
-          ingredientId,
-          ingredient: ingredient.name || `Ingredient #${ingredientId}`,
-          requiredAmount: required.toString(),
-          availableAmount: available.toString(),
-          shortAmount: short.toString(),
-          unit: ingredient.base_unit || ingredient.unit || '',
-        });
-      }
-    }
-
-    return { sufficient: shortages.length === 0, shortages, validationErrors: [] };
-  }
-
   // options.createdProductNames: products the caller's own sync already
   // created for this file (routes/upload.js syncs before calling this), so
   // the upload summary still lists them as new.
@@ -846,7 +700,7 @@ class UploadService {
         newProductNames: createdProductNames,
         unmatchedNames: aggregated.unmatchedNames,
         // Always empty: a short ingredient refuses the whole file instead
-        // (migration 017). Kept so the summary shape does not change.
+        // (migration 020). Kept so the summary shape does not change.
         shortfalls: [],
         modifierKeywords,
         isArchived: isArchivedProduct,
@@ -878,7 +732,7 @@ class UploadService {
       }
 
       // ------------------------------------------------------------------
-      // Stock first, sales second (migration 017, owner's decision Oct 2026).
+      // Stock first, sales second (migration 020, owner's decision Oct 2026).
       //
       // A sales file that needs more of ANY ingredient than is in stock is
       // not saved at all: no daily_sales rows, no deductions. Before, the
@@ -907,6 +761,7 @@ class UploadService {
         deductingProductIds,
         ingredientIdByKeyword,
         warnings,
+        filename,
       });
       unconvertibleSummary = stockPlan.unconvertibleSummary;
       stockNotDeductedSummary = stockPlan.stockNotDeductedSummary;
@@ -1067,7 +922,7 @@ class UploadService {
 
   /**
    * What this sales file would take out of stock, per ingredient, WITHOUT
-   * writing anything (owner's v3 flowchart, page 2; migration 017).
+   * writing anything (owner's v3 flowchart, page 2; migration 020).
    *
    *  - Every product in the file that is NOT archived deducts, whatever its
    *    status: New and Discontinued dishes used real ingredients too. A
@@ -1075,16 +930,17 @@ class UploadService {
    *  - Per ingredient, a day's plates count only if that business day ended
    *    (D+1 03:00 Manila) AFTER the ingredient's last stock count: a count
    *    taken later already includes them (shouldDeduct).
-   *  - An ingredient whose recipe unit cannot be resolved is left out and
-   *    reported, never deducted by a guessed amount.
+   *  - An ingredient whose recipe unit cannot be resolved refuses the whole
+   *    file (UnconvertibleRecipeError): never deducted by a guessed amount,
+   *    never saved with that ingredient left out.
    *  - Each total is rounded ONCE, at the end (roundQuantity).
    *
    * Returns {
    *   items: [{ ingredientId, info, exact: Decimal, deduction: Decimal, skippedDays, notes }],
    *   unconvertibleSummary, stockNotDeductedSummary,
    * }
-   * Throws on a database error: without a plan the stock cannot be checked,
-   * so the upload must not be saved.
+   * Throws UnconvertibleRecipeError (above), or a database error: without a
+   * plan the stock cannot be checked, so the upload must not be saved.
    */
   async planStockDeductions({
     dailySalesRows = [],
@@ -1092,72 +948,23 @@ class UploadService {
     deductingProductIds = new Set(),
     ingredientIdByKeyword = new Map(),
     warnings = [],
+    filename = null,
   } = {}) {
     const empty = { items: [], unconvertibleSummary: [], stockNotDeductedSummary: [] };
     if (deductingProductIds.size === 0 || dailySalesRows.length === 0) return empty;
 
-    // Ingredient columns, most complete first. The canonical ones
-    // (base_unit, unit_family, stock_scale, allow_fractional, pack_size,
-    // density_g_per_ml) only exist once the inventory migration has run;
-    // until then the older columns are used and the legacy conversion
-    // keeps working, so an un-migrated database still uploads fine.
-    const CANONICAL_INGREDIENT_COLS = 'name, unit, base_unit, unit_family, stock_scale, allow_fractional, pack_size, density_g_per_ml, grams_per_cup, pack_qty, pack_unit';
-    const LEGACY_INGREDIENT_COLS = 'name, unit, grams_per_cup, created_at, pack_qty, pack_unit';
-    const MINIMAL_INGREDIENT_COLS = 'name, unit, grams_per_cup, created_at';
-    const buildRecipeColumns = (withUnit, cols) => (withUnit
-      ? `product_id, ingredient_id, quantity_per_serving, unit, ingredients!inner(${cols})`
-      : `product_id, ingredient_id, quantity_per_serving, ingredients!inner(${cols})`);
-
-    const attempts = [
-      { withUnit: true, cols: CANONICAL_INGREDIENT_COLS, canonical: true },
-      { withUnit: true, cols: LEGACY_INGREDIENT_COLS, canonical: false },
-      { withUnit: false, cols: CANONICAL_INGREDIENT_COLS, canonical: true },
-      { withUnit: false, cols: LEGACY_INGREDIENT_COLS, canonical: false },
-      { withUnit: false, cols: MINIMAL_INGREDIENT_COLS, canonical: false },
-    ];
-    let recipeResult = null;
-    let canonicalUnitsAvailable = false;
-    for (const attempt of attempts) {
-      const attemptResult = await supabaseAdmin
-        .from('product_ingredients')
-        .select(buildRecipeColumns(attempt.withUnit, attempt.cols))
-        .in('product_id', [...deductingProductIds]);
-      recipeResult = attemptResult;
-      if (!attemptResult.error) {
-        canonicalUnitsAvailable = attempt.canonical;
-        break;
-      }
-      if (!isMissingColumnError(attemptResult.error)) break; // a real error, not a missing column
-    }
-
-    const { data: recipeRows, error: recipeError } = recipeResult || {};
-    if (recipeError) throw recipeError;
-
-    const recipeIngredientIds = [...new Set((recipeRows || []).map((row) => row.ingredient_id))];
-    const unitConversionsByIngredient = new Map();
-    if (recipeIngredientIds.length > 0) {
-      const { data: conversions, error: conversionsError } = await supabaseAdmin
-        .from('ingredient_unit_conversions')
-        .select('ingredient_id, from_unit, to_unit, factor')
-        .in('ingredient_id', recipeIngredientIds);
-      if (conversionsError && !isMissingTableError(conversionsError)) throw conversionsError;
-      if (conversionsError) {
-        warnings.push('Ingredient-specific unit overrides are unavailable until the inventory stock hardening migration is applied.');
-      }
-      for (const conversion of conversions || []) {
-        const list = unitConversionsByIngredient.get(conversion.ingredient_id) || [];
-        list.push(conversion);
-        unitConversionsByIngredient.set(conversion.ingredient_id, list);
-      }
-    }
+    // Recipes with their ingredients. The pack/cup/density columns were
+    // dropped (migrations 017_remove_legacy_ingredient_pack_units - 019);
+    // conversion now uses the ingredient's wet/dry material_type.
+    const { recipeRows, canonicalUnitsAvailable } = await this.loadSalesRecipeRows([...deductingProductIds]);
 
     // The per-serving amount, in the ingredient's CANONICAL base unit.
     //
-    //   unitService.resolve() throws UnitConversionError when the
-    //   recipe unit cannot be expressed in the base unit (no density, no
-    //   pack size, an unknown unit). There is no 1:1 fallback: a
-    //   guessed amount silently corrupts the stock level. The error is
-    //   caught per recipe below and turned into a warning.
+    //   unitService.resolve() throws UnitConversionError when the recipe
+    //   unit cannot be expressed in the base unit. There is no 1:1
+    //   fallback: a guessed amount silently corrupts the stock level.
+    //   computeStockDeductionsByDate() collects those as "unconvertible",
+    //   and the whole file is refused below.
     const perServingFor = (recipe) => {
       const ingredient = recipe.ingredients || {};
       // A recipe row with no unit of its own is in the ingredient's own
@@ -1172,26 +979,15 @@ class UploadService {
           unit_family: ingredient.unit_family,
           stock_scale: ingredient.stock_scale,
           allow_fractional: ingredient.allow_fractional,
-          pack_size: ingredient.pack_size,
-          density_g_per_ml: ingredient.density_g_per_ml,
-          grams_per_cup: ingredient.grams_per_cup,
-          unitConversions: unitConversionsByIngredient.get(recipe.ingredient_id) || [],
+          material_type: ingredient.material_type || 'dry',
         });
       }
-      // The canonical columns are not in the database yet: the legacy
-      // conversion keeps working (it never throws).
-      const legacy = convertRecipeQuantity(
+      return new Decimal(String(convertRecipeQuantity(
         recipe.quantity_per_serving,
         fromUnit,
         ingredient.unit,
-        {
-          gramsPerCup: ingredient.grams_per_cup,
-          ingredientName: ingredient.name,
-          packQty: ingredient.pack_qty,
-          packUnit: ingredient.pack_unit,
-        }
-      );
-      return new Decimal(String(legacy == null ? 0 : legacy));
+        { materialType: ingredient.material_type || 'dry' }
+      )));
     };
 
     // Full recipe for every plate, except a modifier plate leaves out
@@ -1220,12 +1016,22 @@ class UploadService {
           unit_family: recipe.ingredients?.unit_family || null,
           stock_scale: recipe.ingredients?.stock_scale ?? null,
           allow_fractional: recipe.ingredients?.allow_fractional ?? null,
-          pack_size: recipe.ingredients?.pack_size ?? null,
-          density_g_per_ml: recipe.ingredients?.density_g_per_ml ?? null,
-          grams_per_cup: recipe.ingredients?.grams_per_cup ?? null,
-          unitConversions: unitConversionsByIngredient.get(recipe.ingredient_id) || [],
+          material_type: recipe.ingredients?.material_type || 'dry',
         });
       }
+    }
+
+    // An ingredient whose recipe unit cannot be converted: the stock needed
+    // is unknown, so the file is refused (owner's decision, Oct 24 2026).
+    // Checked before the stock check: "not enough" means nothing for an
+    // amount that cannot be worked out.
+    const unconvertible = deductionsByDate.unconvertible || [];
+    if (unconvertible.length > 0) {
+      throw new UnconvertibleRecipeError(unconvertible.map((item) => ({
+        ingredientId: item.ingredient_id,
+        ingredient: ingredientInfo.get(item.ingredient_id)?.name || `Ingredient #${item.ingredient_id}`,
+        reasons: (item.warnings || []).map((warning) => warning.reason),
+      })), { filename });
     }
 
     // Latest 'adjustment' (an Edit of the stock) per ingredient. A
@@ -1296,23 +1102,6 @@ class UploadService {
       });
     }
 
-    // An ingredient whose recipe unit could not be resolved is NOT
-    // deducted: a warning says so instead of the stock silently going
-    // down by a guessed amount.
-    const unconvertible = deductionsByDate.unconvertible || [];
-    const unconvertibleSummary = unconvertible.map((item) => ({
-      ingredientId: item.ingredient_id,
-      name: ingredientInfo.get(item.ingredient_id)?.name || `ingredient #${item.ingredient_id}`,
-      warnings: item.warnings || [],
-    }));
-    for (const item of unconvertible) {
-      const info = ingredientInfo.get(item.ingredient_id) || {};
-      const reason = (item.warnings || [])[0]?.reason || 'the recipe unit could not be resolved';
-      warnings.push(
-        `Could not convert the recipe unit for ${info.name || `ingredient #${item.ingredient_id}`}: `
-        + `${reason}. Its stock was not deducted.`
-      );
-    }
     if (skippedForCount.length > 0) {
       warnings.push(
         `Stock was not deducted for ${skippedForCount.length} ingredient(s) on days before their last stock count `
@@ -1330,17 +1119,11 @@ class UploadService {
           + `was edited (treated as a stock count) on ${s.lastCountAt || 'a later date'}, `
           + 'after those days ended.',
       })),
-      ...unconvertibleSummary.map((u) => ({
-        ingredientId: u.ingredientId,
-        ingredient: u.name,
-        reason: 'unit_conversion',
-        days: [],
-        lastCountAt: null,
-        message: `${u.name}: not deducted — ${(u.warnings || [])[0]?.reason || 'the recipe unit could not be converted'}.`,
-      })),
     ];
 
-    return { items, unconvertibleSummary, stockNotDeductedSummary };
+    // unconvertibleSummary is always empty now (an unconvertible recipe
+    // refuses the file above); kept so the upload result's shape is unchanged.
+    return { items, unconvertibleSummary: [], stockNotDeductedSummary };
   }
 
   /**
@@ -1348,7 +1131,7 @@ class UploadService {
    * A fast, read-only pre-check so a refused file costs one query and gets a
    * precise message. It is NOT the guarantee: two uploads can both pass it at
    * the same moment. The guarantee is the locked re-check inside
-   * apply_sales_upload() (migration 017).
+   * apply_sales_upload() (migration 020).
    */
   async findInsufficientStock(items = []) {
     if (!items.length) return [];
@@ -1379,7 +1162,7 @@ class UploadService {
 
   /**
    * Saves the file's daily_sales rows AND its deductions, all or nothing,
-   * through apply_sales_upload() (migration 017). It locks the ingredient
+   * through apply_sales_upload() (migration 020). It locks the ingredient
    * rows, re-checks the stock, and inserts + deducts in one transaction. If
    * it reports a shortfall, nothing was written and an
    * InsufficientStockError is thrown.
@@ -1411,7 +1194,7 @@ class UploadService {
 
     if (error && isMissingFunctionError(error)) {
       const missing = new Error(
-        'The database is missing apply_sales_upload(). Run backend/migrations/017_sales_upload_requires_stock.sql '
+        'The database is missing apply_sales_upload(). Run backend/migrations/020_sales_upload_requires_stock.sql '
         + 'in the Supabase SQL editor. Nothing from this file was saved.'
       );
       missing.code = 'STOCK_GUARD_MISSING';
