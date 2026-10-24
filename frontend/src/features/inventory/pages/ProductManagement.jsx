@@ -167,7 +167,7 @@ const ProductManagement = () => {
   });
 
   const [statusFilter, setStatusFilter] = useState(() => {
-    return 'all';
+    return 'active';
   });
 
   // ============ INVENTORY ITEMS FOR INGREDIENTS ============
@@ -1729,7 +1729,6 @@ const ProductManagement = () => {
             <option value="active">Active</option>
             <option value="new">Inactive (Not enough data)</option>
             <option value="discontinued">Inactive (Discontinued)</option>
-            <option value="unmapped">Unmapped</option>
             <option value="high-food-cost">High Food Cost</option>
             <option value="archived">Archived products</option>
           </select>
@@ -1815,12 +1814,10 @@ const ProductManagement = () => {
                   <th>#</th>
                   <th>Item Name</th>
                   <th>Category</th>
-                  <th>Modifier</th>
                   <th>Ingredients</th>
                   <th>Selling Price</th>
-                  <th>Total Ingredient Cost</th>
+                  <th className="total-ingredient-cost-cell">Total Ingredient Cost</th>
                   <th>Status</th>
-                  <th>Date Created</th>
                   <th>Last Updated</th>
                   <th>Actions</th>
                 </tr>
@@ -1845,7 +1842,6 @@ const ProductManagement = () => {
                       <td data-label="#">{startIndex + index + 1}</td>
                       <td data-label="Item Name" className="product-item-name">{item.name}</td>
                       <td data-label="Category"><span className="product-category-badge">{item.category || 'Uncategorized'}</span></td>
-                      <td data-label="Modifier">{item.serving_size_label || '—'}</td>
                       <td data-label="Ingredients" className="ingredients-cell">
                         {item.product_ingredients && item.product_ingredients.length > 0 ? (
                           <Tippy
@@ -1881,7 +1877,9 @@ const ProductManagement = () => {
                         )}
                       </td>
                       <td data-label="Selling Price" className="price-cell">{formatCurrency(item.price)}</td>
-                      <td data-label="Total Ingredient Cost">{totalIngredientCost === null ? 'N/A' : formatCurrency(totalIngredientCost)}</td>
+                      <td data-label="Total Ingredient Cost" className="total-ingredient-cost-cell">
+                        {formatCurrency(totalIngredientCost ?? 0)}
+                      </td>
                       <td data-label="Status">
                         <div className="status-pill-group">
                           <Tippy
@@ -1900,28 +1898,29 @@ const ProductManagement = () => {
                               {status.label}
                             </span>
                           </Tippy>
-                          {status.indicators.map((indicator) => (
-                            <Tippy
-                              key={indicator.key}
-                              content={indicator.tooltip}
-                              placement="top"
-                              animation="scale"
-                              duration={200}
-                              theme="dark"
-                              arrow
-                              trigger="mouseenter focus"
-                              appendTo={() => document.body}
-                              zIndex={100000}
-                            >
-                              <span className={`product-status-badge product-status-indicator ${indicator.className}`} tabIndex={0} style={{ cursor: 'help' }}>
-                                <span className="product-status-dot" style={{ backgroundColor: indicator.dotColor }}></span>
-                                {indicator.label}
-                              </span>
-                            </Tippy>
-                          ))}
+                          {status.indicators
+                            .filter((indicator) => indicator.key !== 'unmapped' && indicator.key !== 'no-price')
+                            .map((indicator) => (
+                              <Tippy
+                                key={indicator.key}
+                                content={indicator.tooltip}
+                                placement="top"
+                                animation="scale"
+                                duration={200}
+                                theme="dark"
+                                arrow
+                                trigger="mouseenter focus"
+                                appendTo={() => document.body}
+                                zIndex={100000}
+                              >
+                                <span className={`product-status-badge product-status-indicator ${indicator.className}`} tabIndex={0} style={{ cursor: 'help' }}>
+                                  <span className="product-status-dot" style={{ backgroundColor: indicator.dotColor }}></span>
+                                  {indicator.label}
+                                </span>
+                              </Tippy>
+                            ))}
                         </div>
                       </td>
-                      <td data-label="Date Created">{formatDate(item.created_at)}</td>
                       <td data-label="Last Updated">{formatDate(item.updated_at)}</td>
                       <td data-label="Actions">
                         <div className="product-action-buttons">

@@ -279,19 +279,21 @@
   padding-right: 8px;
 }
 
+.product-table th:nth-child(8),
+.product-table td:nth-child(8) { width: 220px; }
+
 .product-table th:nth-child(9),
-.product-table td:nth-child(9) { width: 220px; }
+.product-table td:nth-child(9) { width: 112px; }
 
 .product-table th:nth-child(10),
-.product-table td:nth-child(10),
-.product-table th:nth-child(11),
-.product-table td:nth-child(11) { width: 112px; }
-
-.product-table th:nth-child(12),
-.product-table td:nth-child(12) {
+.product-table td:nth-child(10) {
   width: 176px;
   padding-left: 8px;
   padding-right: 8px;
+}
+
+.product-table .total-ingredient-cost-cell {
+  text-align: center;
 }
 
 .product-table tbody tr:hover {
@@ -2522,4 +2524,3 @@ display: flex;
     border-left-width: 4px;
   }
 }
-
