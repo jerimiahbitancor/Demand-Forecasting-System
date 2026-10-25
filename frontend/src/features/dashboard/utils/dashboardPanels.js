@@ -1,3 +1,4 @@
+import { fmt2 } from "../../../utils/formatNumber.js";
 // Pure helpers for the three Dashboard panels (FullyOperational.jsx):
 // Demand Overview chart, Top Best Sellers, Top Ingredients to Prepare.
 // The data comes from the same endpoints the Analytics pages use, so the
@@ -55,7 +56,7 @@ export function pickBestSellers(rows, limit = 5) {
     .map((r) => ({
       name: r.product,
       sold: r.quantitySold,
-      ratio: Number(r.performanceRatio).toFixed(2),
+      ratio: fmt2(r.performanceRatio),
     }));
 }
 

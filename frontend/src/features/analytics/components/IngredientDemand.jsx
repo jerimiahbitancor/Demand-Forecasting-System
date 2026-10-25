@@ -99,6 +99,10 @@ function buildGroceryList(apiAllItems) {
     category: item.category,
     usedIn: item.usedIn || "—",
     unit: item.unit,
+    // Daily: that day's Forecasted Need; Weekly: the 7 daily needs added up.
+    // To Buy = need − stock, so the list can be checked by hand.
+    need: item.forecastedNeed ?? null,
+    onStock: item.onStock ?? null,
     status: item.status,
     predictedStatus: item.predictedStatus || item.status,
     toBuy: item.toBuy,
@@ -157,140 +161,58 @@ const GROCERY_GROUPS = [...GROCERY_CATEGORIES, GROCERY_OTHER];
 // ---------------------------------------------------------------------
 // Tooltips
 // ---------------------------------------------------------------------
+const tipTitle = { color: '#FEB161', display: 'block', marginBottom: '6px' };
+const tipBox = { padding: '4px 0', fontSize: '13px', lineHeight: '1.6' };
+const tipNote = { color: '#94a3b8', fontSize: '12px' };
+const swatch = (bg) => ({ display: 'inline-block', width: '14px', height: '14px', background: bg, borderRadius: '3px', marginRight: '8px', verticalAlign: '-2px' });
+
+// Tooltips (updated Oct 26 2026 to match the formulas on the page).
 const tooltips = {
   weeklyPlanner: (
-    <div style={{ padding: '4px 0', fontSize: '13px', lineHeight: '1.6' }}>
-      <strong style={{ color: '#FEB161', display: 'block', marginBottom: '6px' }}>
-        Weekly Ingredient Planner
-      </strong>
-      This shows which ingredients need the most attention across the week. Darker colors mean higher-than-usual demand — often on paydays or before holidays.
+    <div style={tipBox}>
+      <strong style={tipTitle}>Weekly Ingredient Demand</strong>
+      Each cell = predicted items sold that day × the recipe amount (with the NO EGG / NO RICE share left out), in the ingredient&apos;s own unit. <strong>No safety buffer</strong> is added here.
       <br/><br/>
-      <div style={{ margin: '8px 0' }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '4px' }}>
-          <span style={{ display: 'inline-block', width: '16px', height: '16px', background: '#93c5fd', borderRadius: '4px' }}></span>
-          <span><strong>Light Blue</strong> — Normal. Typical amount needed.</span>
-        </div>
-        <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '4px' }}>
-          <span style={{ display: 'inline-block', width: '16px', height: '16px', background: '#fbbf24', borderRadius: '4px' }}></span>
-          <span><strong>Amber</strong> — Above normal. More than usual.</span>
-        </div>
-        <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-          <span style={{ display: 'inline-block', width: '16px', height: '16px', background: '#ef4444', borderRadius: '4px' }}></span>
-          <span><strong>Red</strong> — High demand day. Significantly above typical.</span>
-        </div>
+      Colours compare each day with that ingredient&apos;s own average for the week:
+      <div style={{ margin: '6px 0' }}>
+        <div><span style={swatch('#dcf5df')} /><strong>Normal</strong> — up to 1.15 × its average</div>
+        <div><span style={swatch('#fdf0d5')} /><strong>Above Normal</strong> — more than 1.15 × its average</div>
+        <div><span style={swatch('#fde2e2')} /><strong>High Demand Day</strong> — more than 1.5 × its average</div>
       </div>
-      <br/>
-      Scan across a row to see when one ingredient spikes, or down a column to see how heavy a single day will be overall.
-      <br/><br/>
-      <span style={{ color: '#94a3b8', fontSize: '12px' }}>
-        Weekly demand = Σ(Forecasted Servings × Recipe Qty); no safety buffer is applied.
-      </span>
-    </div>
-  ),
-  
-  dailyShoppingList: (
-    <div style={{ padding: '4px 0', fontSize: '13px', lineHeight: '1.6' }}>
-      <strong style={{ color: '#FEB161', display: 'block', marginBottom: '6px' }}>
-        Daily Ingredient Shopping List
-      </strong>
-      This is your shopping list for the day shown, based on predicted sales and your recipe amounts.
-      <br/><br/>
-      A safety buffer has already been added to cover unexpected orders or staff meals.
-      <br/><br/>
-      <div style={{ margin: '8px 0', background: 'rgba(254, 177, 97, 0.05)', padding: '10px 12px', borderRadius: '8px', border: '1px solid rgba(254, 177, 97, 0.1)' }}>
-        <strong style={{ color: '#fbbf24' }}>More than usual</strong>
-        <br/>
-        <span style={{ fontSize: '12px', color: '#94a3b8' }}>
-          Badge appears when today's value is above that ingredient's typical range.
-        </span>
-      </div>
-      <br/>
-      <span style={{ color: '#94a3b8', fontSize: '12px' }}>
-        Check your actual stock before buying — the system estimates what you'll need, not what you currently have.
-      </span>
-    </div>
-  ),
-  
-  calculationNote: (
-    <div style={{ padding: '4px 0', fontSize: '13px', lineHeight: '1.6' }}>
-      <strong style={{ color: '#FEB161', display: 'block', marginBottom: '6px' }}>
-        How is this calculated?
-      </strong>
-      For each dish: forecast quantity × ingredient amount per serving.
-      <br/><br/>
-      All results are added up across dishes that share an ingredient (like pork in both Adobo and Menudo), then a safety buffer is added.
-      <br/><br/>
-      <div style={{ margin: '8px 0' }}>
-        <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '4px', borderBottom: '1px solid rgba(255,255,255,0.05)', paddingBottom: '4px' }}>
-          <span><strong>Basic Qty. Needed</strong></span>
-          <span style={{ color: '#94a3b8' }}>Σ(Forecasted Servings × Recipe Qty)</span>
-        </div>
-        <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '4px', borderBottom: '1px solid rgba(255,255,255,0.05)', paddingBottom: '4px' }}>
-          <span><strong>+ Buffer</strong></span>
-          <span style={{ color: '#94a3b8' }}>Basic Qty. × Safety Buffer%</span>
-        </div>
-        <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-          <span><strong>Total to Buy</strong></span>
-          <span style={{ color: '#22c55e' }}>Basic Qty. + Buffer</span>
-        </div>
-      </div>
-      <br/>
-      <span style={{ color: '#94a3b8', fontSize: '12px' }}>
-        You can change the buffer percentage in Settings.
-      </span>
+      <span style={tipNote}>Use the filter to show only ingredients with a busy day.</span>
     </div>
   ),
 
   dailyIngredientDemand: (
-    <div style={{ padding: '4px 0', fontSize: '13px', lineHeight: '1.6' }}>
-      <strong style={{ color: '#FEB161', display: 'block', marginBottom: '6px' }}>
-        Daily Ingredient Demand
-      </strong>
-      This shows what the system estimates you'll need to buy based on the predicted sales for the day shown.
+    <div style={tipBox}>
+      <strong style={tipTitle}>Daily Ingredient Demand</strong>
+      <strong>Raw Forecast</strong> = predicted items sold × recipe amount, added up over every product that uses the ingredient.
+      <br/><strong>Safety Buffer</strong> = Raw Forecast × the buffer % from Settings.
+      <br/><strong>Forecasted Need</strong> = Raw Forecast + Safety Buffer.
+      <br/><strong>To Buy</strong> = Forecasted Need − On Stock (pieces round up).
+      <br/><strong>Est. Cost</strong> = To Buy × the ingredient&apos;s Unit Cost in Ingredient Management.
       <br/><br/>
-      <div style={{ margin: '8px 0' }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '4px' }}>
-          <span style={{ color: '#e05555', fontWeight: 'bold' }}>●</span>
-          <span><strong>Critical Shortage</strong> — stock covers less than half of the forecasted need. Order now.</span>
-        </div>
-        <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '4px' }}>
-          <span style={{ color: '#FFB800', fontWeight: 'bold' }}>●</span>
-          <span><strong>Insufficient Supply</strong> — stock is below the forecasted need. Order soon.</span>
-        </div>
-        <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '4px' }}>
-          <span style={{ color: '#0F9918', fontWeight: 'bold' }}>●</span>
-          <span><strong>Sufficient Supply</strong> — stock covers 100–200% of the need. No action needed.</span>
-        </div>
-        <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-          <span style={{ color: '#3354BA', fontWeight: 'bold' }}>●</span>
-          <span><strong>Above Forecast Limit</strong> — more than double the need. Delay restocking.</span>
-        </div>
+      <strong>Predicted Stock Level Status</strong> = On Stock ÷ Forecasted Need:
+      <div style={{ margin: '6px 0' }}>
+        <div><span style={{ color: '#e05555', fontWeight: 'bold' }}>●</span> Critical Shortage — below 50%: order now</div>
+        <div><span style={{ color: '#FFB800', fontWeight: 'bold' }}>●</span> Insufficient Supply — 50% to below 100%: order soon</div>
+        <div><span style={{ color: '#0F9918', fontWeight: 'bold' }}>●</span> Sufficient Supply — 100% to 200%: no action needed</div>
+        <div><span style={{ color: '#3354BA', fontWeight: 'bold' }}>●</span> Above Forecast Limit — above 200%: delay restocking</div>
       </div>
-      <br/>
-      <span style={{ color: '#94a3b8', fontSize: '12px' }}>
-        Predicted Stock Level Status = current stock ÷ forecasted need (safety buffer included).
-        Est. Cost = To Buy × the ingredient's price in Ingredient Management. Thresholds are in Settings.
-      </span>
+      <span style={tipNote}>The percentages above are the defaults; change them in Settings &gt; Stock Level Thresholds. Use ‹ › to move one day.</span>
     </div>
   ),
 
   groceryList: (
-    <div style={{ padding: '4px 0', fontSize: '13px', lineHeight: '1.6' }}>
-      <strong style={{ color: '#FEB161', display: 'block', marginBottom: '6px' }}>
-        Grocery List
-      </strong>
-      This is your ready-to-buy ingredient list based on the forecast for the day shown (Daily)
-      or the full week's forecast (Weekly).
+    <div style={tipBox}>
+      <strong style={tipTitle}>Grocery List</strong>
+      The ingredients marked Critical Shortage or Insufficient Supply, grouped like the palengke.
       <br/><br/>
-      Quantities shown are what the system estimates you need to purchase after
-      accounting for your current stock.
+      <strong>Daily</strong>: Qty to Buy = that day&apos;s Forecasted Need − On Stock.
+      <br/><strong>Weekly</strong>: Qty to Buy = the 7 daily Forecasted Need values added up − On Stock.
+      <br/>Est. Cost = Qty to Buy × Unit Cost.
       <br/><br/>
-      Tap "View Full List" to see the complete categorized list, or "Download"
-      to print it and bring it to the market.
-      <br/><br/>
-      <span style={{ color: '#94a3b8', fontSize: '12px' }}>
-        Categories follow the palengke and grocery store layout so you can shop in order.
-      </span>
+      <span style={tipNote}>Open the full view (↗) to see Need and On Stock next to each item, or Download to print it.</span>
     </div>
   ),
 };
@@ -310,6 +232,10 @@ function IngredientDemand() {
   const [dailyPage, setDailyPage] = useState(1);
   const [weeklyQuery, setWeeklyQuery] = useState('');
   const [dailyQuery, setDailyQuery] = useState('');
+  // Demand filters (Oct 26 2026): daily = Predicted Stock Level Status,
+  // weekly = rows with an Above Normal / High Demand day.
+  const [dailyStatusFilter, setDailyStatusFilter] = useState('All');
+  const [weeklyLevelFilter, setWeeklyLevelFilter] = useState('All');
   const [groceryMode, setGroceryMode] = useState("daily");
   const [isWeeklyOpen, setIsWeeklyOpen] = useState(false);
   const [isDailyOpen, setIsDailyOpen] = useState(false);
@@ -369,6 +295,11 @@ function IngredientDemand() {
   const handleDailyDateChange = (date) => {
     const ymd = toYmd(date);
     setQuery({ date: ymd, weekStart: shownWeekStart || mondayOf(ymd) });
+  };
+  // Previous / next day (Oct 26 2026). The heatmap follows to the day's week.
+  const shiftDay = (days) => {
+    const ymd = addDays(shownDaily || manilaToday(), days);
+    setQuery({ date: ymd, weekStart: mondayOf(ymd) });
   };
   // While the default is in use: "Closed today. Showing Monday, Oct 19."
   // when today's rows are all closed-day rows, "No forecast for today yet.
@@ -483,9 +414,34 @@ function IngredientDemand() {
   // handler rather than an effect, so a stale page > 1 can't show empty.
   const filteredDemandGrid = demandGrid.filter((row) =>
     (row.ingredient || "").toLowerCase().includes(weeklyQuery.trim().toLowerCase())
+    && (weeklyLevelFilter === 'All'
+      || (weeklyLevelFilter === 'high' && (row.levels || []).includes('high'))
+      || (weeklyLevelFilter === 'above' && (row.levels || []).some((l) => l === 'high' || l === 'above_normal'))
+      || (weeklyLevelFilter === 'normal' && (row.levels || []).every((l) => l === 'normal')))
   );
   const filteredDailyIngredients = dailyIngredients.filter((row) =>
     (row.name || "").toLowerCase().includes(dailyQuery.trim().toLowerCase())
+    && (dailyStatusFilter === 'All' || row.predictedStatus === dailyStatusFilter)
+  );
+  const onFilter = (setter, resetPages) => (e) => { setter(e.target.value); resetPages(); };
+  const resetWeeklyPages = () => { setWeeklyPage(1); setModalWeeklyPage(1); };
+  const resetDailyPages = () => { setDailyPage(1); setModalDailyPage(1); };
+  const weeklyFilterSelect = (
+    <select className="filter-pill filter-pill--mode" value={weeklyLevelFilter} onChange={onFilter(setWeeklyLevelFilter, resetWeeklyPages)} aria-label="Show ingredients by demand level">
+      <option value="All">All demand levels</option>
+      <option value="high">Has a High Demand Day</option>
+      <option value="above">Above Normal or higher</option>
+      <option value="normal">Normal all week</option>
+    </select>
+  );
+  const dailyFilterSelect = (
+    <select className="filter-pill filter-pill--mode" value={dailyStatusFilter} onChange={onFilter(setDailyStatusFilter, resetDailyPages)} aria-label="Show ingredients by predicted stock level status">
+      <option value="All">All statuses</option>
+      <option value="Critical Shortage">Critical Shortage</option>
+      <option value="Insufficient Supply">Insufficient Supply</option>
+      <option value="Sufficient Supply">Sufficient Supply</option>
+      <option value="Above Forecast Limit">Above Forecast Limit</option>
+    </select>
   );
 
   const handleWeeklyQueryChange = (value) => {
@@ -583,17 +539,20 @@ function IngredientDemand() {
     // snapshot from the range end.
     // Local calendar dates: toISOString() would shift them a day back in Manila.
     const [from, to] = dateRange.map((d) => toYmd(d));
-    let reportDemandGrid, reportDailyIngredients, reportDailyDate;
+    let reportDemandGrid, reportDailyIngredients, reportDailyDate, reportWeekDays;
     try {
       const headers = await authService.getAuthHeaders();
       const response = await axios.get(`${API_URL}/analytics/ingredient-demand`, {
         headers,
-        params: { date: to, weekStart: from },
+        // The weekly table is the week of the shopping day (the report's end
+        // date), not the week 6 days back, which usually has no forecast yet.
+        params: { date: to, weekStart: mondayOf(to) },
       });
       const data = response.data?.data;
       reportDemandGrid = buildDemandGrid(data?.weekly?.rows);
       reportDailyIngredients = buildDailyIngredients(data?.daily?.rows);
       reportDailyDate = data?.daily?.date || to;
+      reportWeekDays = data?.weekly?.days || [];
     } catch (err) {
       console.error("Error fetching report data:", err);
       toast.error("Failed to load data for the selected date range.");
@@ -614,6 +573,10 @@ function IngredientDemand() {
           baseQty: formatIngredientDemandQty(item.rawForecasted, item.unit),
           buffer: formatIngredientDemandQty(item.safetyBuffer, item.unit),
           total: formatIngredientDemandQty(item.forecasted, item.unit),
+          onStock: formatIngredientDemandQty(item.onStock, item.unit),
+          toBuy: formatIngredientDemandQty(item.toBuy, item.unit),
+          price: formatUnitPrice(item.marketPrice, item.unit),
+          estCost: formatIngredientDemandMoney(item.estCost),
         };
       });
 
@@ -640,6 +603,18 @@ function IngredientDemand() {
             })),
           disclaimer: "Disclaimer — Ingredient estimates are based on forecasted demand and should still be checked against actual stock before purchasing.",
           shoppingDateLabel: fromYmd(reportDailyDate).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" }),
+          // Weekly Ingredient Demand (Oct 26 2026): raw demand per day, no buffer.
+          weeklyTable: {
+            title: reportWeekDays.length
+              ? `Weekly ingredient demand \u2014 ${shortDateLabel(reportWeekDays[0])} to ${shortDateLabel(reportWeekDays[6])} (no safety buffer)`
+              : "Weekly ingredient demand (no safety buffer)",
+            days: weekDays.map((d, i) => (reportWeekDays[i] ? `${d} ${fromYmd(reportWeekDays[i]).getDate()}` : d)),
+            rows: reportDemandGrid.map((row) => [
+              row.ingredient,
+              ...row.values.map((v) => formatIngredientDemandQty(v, row.unit)),
+              formatIngredientDemandQty(row.values.reduce((sum, v) => sum + (Number(v) || 0), 0), row.unit),
+            ]),
+          },
         });
         doc.save("ingredient-demand-report.pdf");
       } else {
@@ -740,6 +715,7 @@ function IngredientDemand() {
                 placeholder="Search Ingredient"
                 aria-label="Search ingredients in the weekly demand heatmap"
               />
+            {weeklyFilterSelect}
           </div>
 
           {closedTodayNote && <p className="section-note value--muted">{closedTodayNote}</p>}
@@ -815,7 +791,11 @@ function IngredientDemand() {
           </div>
 
           <div className="analytics-filter-row">
-            <DatePicker value={fromYmd(shownDaily || manilaToday())} onChange={handleDailyDateChange} mode="single" />
+            <div className="week-stepper" role="group" aria-label="Choose the day">
+              <button type="button" className="filter-pill" onClick={() => shiftDay(-1)} aria-label="Previous day"><FiChevronLeft size={14} /></button>
+              <DatePicker value={fromYmd(shownDaily || manilaToday())} onChange={handleDailyDateChange} mode="single" />
+              <button type="button" className="filter-pill" onClick={() => shiftDay(1)} aria-label="Next day"><FiChevronRight size={14} /></button>
+            </div>
             <input
               className="filter-search"
               type="search"
@@ -824,6 +804,7 @@ function IngredientDemand() {
               placeholder="Search Ingredient"
               aria-label="Search ingredients in daily demand"
             />
+            {dailyFilterSelect}
           </div>
 
           {closedTodayNote && <p className="section-note value--muted">{closedTodayNote}</p>}
@@ -894,6 +875,11 @@ function IngredientDemand() {
           <p className="grocery-date-label">
             {groceryDateLabel}
           </p>
+          <p className="grocery-mode-note">
+            {groceryMode === "weekly"
+              ? "Weekly: the 7 daily Forecasted Need values (buffer included) added up, minus current stock."
+              : "Daily: that day's Forecasted Need (buffer included) minus current stock."}
+          </p>
           <InfoBanner variant="info">
             Order quantities are based on forecasted demand plus a {safetyBufferPercentage}% safety buffer, minus current stock.{" "}
             <a href="/inventory-management" style={{color:'inherit', fontWeight:600, textDecoration:'underline'}}>See Inventory Management.</a>
@@ -916,7 +902,6 @@ function IngredientDemand() {
             {groceryPreview.length > 5 && <li className="grocery-preview-more">… and {groceryPreview.length - 5} more items</li>}
           </ul>
           <div className="grocery-action-row">
-            <button type="button" className="btn-grocery-view" onClick={() => setIsGroceryOpen(true)}><FiExternalLink size={14} /> View Full List</button>
             <button type="button" className="btn-grocery-download" onClick={handleDownloadGroceryList}><FiDownload size={14} /> Download</button>
           </div>
         </section>
@@ -985,7 +970,9 @@ function IngredientDemand() {
                 <thead>
                   <tr>
                     <th>Item</th>
-                    <th>Qty to Buy</th>
+                    <th title={groceryMode === "weekly" ? "The 7 daily Forecasted Need values added up" : "Forecasted Need for the day"}>{groceryMode === "weekly" ? "Week's Need" : "Forecasted Need"}</th>
+                    <th>On Stock</th>
+                    <th title="Need − On Stock">Qty to Buy</th>
                     <th>Price / Unit</th>
                     <th>Est. Cost</th>
                     <th>Used in</th>
@@ -995,7 +982,9 @@ function IngredientDemand() {
                   {items.map((item) => (
                     <tr key={item.name}>
                       <td data-label="Item">{item.name}</td>
-                      <td data-label="Qty to Buy"><Qty value={item.toBuy} unit={item.unit} /></td>
+                      <td data-label={groceryMode === "weekly" ? "Week's Need" : "Forecasted Need"}><Qty value={item.need} unit={item.unit} /></td>
+                      <td data-label="On Stock"><Qty value={item.onStock} unit={item.unit} /></td>
+                      <td data-label="Qty to Buy" title={item.need != null && item.onStock != null ? "Need − On Stock" : undefined}><Qty value={item.toBuy} unit={item.unit} /></td>
                       <td data-label="Price / Unit">{formatUnitPrice(item.marketPrice, item.unit)}</td>
                       <td data-label="Est. Cost" title={estCostFormula(item.toBuy, item.unit, item.marketPrice, item.estCost) || undefined}>{formatIngredientDemandMoney(item.estCost)}</td>
                       <td data-label="Used in" className="grocery-used-in">{item.usedIn}</td>

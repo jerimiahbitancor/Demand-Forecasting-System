@@ -435,3 +435,34 @@
 .analytics-table th[aria-sort="descending"] .th-sort-arrow {
   opacity: 1;
 }
+
+/* Sales and Demand Prediction table (Oct 26 2026): every column gets room
+   (no squeezed product names), the table pans sideways inside its card, and
+   the header stays visible while scrolling. */
+.table-scroll > .analytics-table.forecast-table {
+  min-width: 960px;
+  table-layout: auto;
+}
+.forecast-table th,
+.forecast-table td {
+  padding: 12px 16px;
+  white-space: nowrap;
+}
+.forecast-table td[data-label="Product"] {
+  white-space: normal;
+  min-width: 180px;
+}
+.forecast-table thead th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: var(--color-bg-white, #fff);
+}
+.forecast-table td[data-label="Actual Qty."],
+.forecast-table td[data-label="Forecast Qty."],
+.forecast-table td[data-label="Actual Revenue"],
+.forecast-table td[data-label="Forecast Revenue"],
+.forecast-table td[data-label="Est. Total Cost"] {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}

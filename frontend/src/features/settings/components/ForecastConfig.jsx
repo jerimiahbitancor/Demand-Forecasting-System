@@ -39,7 +39,7 @@ function ForecastConfig() {
   const [thresholds, setThresholds] = useState(DEFAULT_THRESHOLDS);
   const [thresholdsSaved, setThresholdsSaved] = useState(true);
   const [isSavingThresholds, setIsSavingThresholds] = useState(false);
-  // false until migration 022 adds current_excess_pct (Excess Stock threshold).
+  // false until migration 025 adds current_excess_pct (Excess Stock threshold).
   const [excessSaved, setExcessSaved] = useState(true);
   const [categoryTab, setCategoryTab] = useState('ingredient');
   const [unitTab, setUnitTab] = useState('ingredient');
@@ -594,7 +594,7 @@ function ForecastConfig() {
             </tbody>
           </table>
           {!excessSaved && (
-            <p className="fc-subtitle" role="status">The Excess Stock % stays at 100% until migration 022 is run in Supabase.</p>
+            <p className="fc-subtitle" role="status">The Excess Stock % stays at 100% until migration 025 is run in Supabase.</p>
           )}
 
           <div className="fc-desc-card" style={{ marginTop: 14 }}>

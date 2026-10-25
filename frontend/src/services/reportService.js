@@ -10,6 +10,8 @@ import * as XLSX from 'xlsx';
 import { getStoredBusinessLogo } from '../context/BusinessProfileContext';
 import { formatItemsSold } from '../utils/formatItemsSold.js';
 import { formatIngredientDemandQty, formatIngredientDemandMoney, formatUnitPrice } from '../utils/formatIngredientDemand.js';
+import { fmt2 } from '../utils/formatNumber.js';
+import { authService } from './authService.js';
 
 // ---------------------------------------------------------------------
 // Palette — pulled directly from the app's CSS variables so the PDF
@@ -62,6 +64,44 @@ export async function loadLogoBase64(url = getStoredBusinessLogo()) {
 // subset font (ASCII + U+20B1 only, generated with pyftsubset) on demand
 // and use it for currency text only, leaving everything else as-is.
 // ---------------------------------------------------------------------
+
+// ---------------------------------------------------------------------
+// Business details for every report header (Oct 26 2026). Before, most
+// reports were built with business: null and printed "Address not set in
+// Settings" even when Settings > Business Profile was filled in. Every
+// builder now calls this: a caller's object is used as given, otherwise the
+// profile is read from the API (GET /settings/business-profile). Accepts
+// both the page shape { name, address, email, contact } and the API shape
+// { business_name, business_address, business_email, business_contact_number }.
+// Never throws: a failed read prints the "not set" lines, as before.
+// ---------------------------------------------------------------------
+const REPORT_API_URL = (import.meta.env && import.meta.env.VITE_API_URL) || 'http://localhost:5000/api';
+
+export function normalizeReportBusiness(raw) {
+  if (!raw) return null;
+  const pick = (...values) => values.find((v) => typeof v === 'string' && v.trim())?.trim() || '';
+  return {
+    name: pick(raw.name, raw.business_name) || 'ChefDuo',
+    address: pick(raw.address, raw.business_address),
+    email: pick(raw.email, raw.business_email),
+    contact: pick(raw.contact, raw.business_contact_number, raw.contact_number),
+  };
+}
+
+export async function resolveReportBusiness(business) {
+  const given = normalizeReportBusiness(business);
+  if (given && (given.address || given.email || given.contact)) return given;
+  try {
+    const headers = await authService.getAuthHeaders();
+    const res = await fetch(`${REPORT_API_URL}/settings/business-profile`, { headers });
+    if (!res.ok) return given;
+    const body = await res.json();
+    return normalizeReportBusiness(body?.data) || given;
+  } catch {
+    return given;
+  }
+}
+
 const PESO = '\u20B1';
 const PESO_FONT = 'PesoFont';
 const PESO_FONT_FILE = 'Roboto-Regular.ttf';
@@ -182,9 +222,23 @@ function drawMetricCards(doc, y, cards) {
 
     doc.setTextColor(...(card.valueColor || COLOR.textPrimary));
     // valueFont: a registered font for values courier cannot draw (₱).
-    doc.setFont(card.valueFont || 'courier', card.valueFont ? 'normal' : 'bold');
-    doc.setFontSize(14);
-    doc.text(String(card.value), x + cardWidth / 2, y + 14, { align: 'center' });
+    // A word value (an ingredient name) uses Helvetica and shrinks until it
+    // fits inside its card, then ends in "…" (Oct 26 2026: "Pampanga's Best
+    // Tocino" ran over the next card).
+    const raw = String(card.value);
+    const isWord = !card.valueFont && /[A-Za-z]{3,}/.test(raw);
+    doc.setFont(card.valueFont || (isWord ? 'helvetica' : 'courier'), card.valueFont ? 'normal' : 'bold');
+    const maxWidth = cardWidth - 6;
+    let size = 14;
+    doc.setFontSize(size);
+    while (size > 8 && doc.getTextWidth(raw) > maxWidth) {
+      size -= 1;
+      doc.setFontSize(size);
+    }
+    let shown = raw;
+    while (shown.length > 1 && doc.getTextWidth(shown) > maxWidth) shown = shown.slice(0, -1);
+    if (shown !== raw) shown = `${shown.slice(0, -1).trimEnd()}\u2026`;
+    doc.text(shown, x + cardWidth / 2, y + 14, { align: 'center' });
 
     if (card.caption) {
       doc.setTextColor(...COLOR.textLight);
@@ -268,6 +322,7 @@ function generatedLabelNow() {
 export async function buildSalesForecastPDF({
   dateRange, business, metrics, summaryText, salesTable = null, demandTable = null, disclaimer,
 }) {
+  business = await resolveReportBusiness(business);
   const doc = new jsPDF({ unit: 'mm', format: 'a4' });
   const [logoDataUrl, pesoFontBase64] = await Promise.all([loadLogoBase64(), loadPesoFontBase64()]);
   // ₱ needs a font that has it; without the font file, print "PHP " instead.
@@ -301,12 +356,14 @@ export async function buildSalesForecastPDF({
       body: [...salesTable.body, salesTable.totals].map((row) => row.map(money)),
       columnStyles: { 2: { halign: 'right' }, 3: { halign: 'right' }, 4: { halign: 'right' } },
       didParseCell: (data) => {
-        pesoCell(data);
-        // Totals row (last body row) in bold.
+        // Totals row (last body row) in bold. The ₱ font has no bold face:
+        // a bold ₱ cell fell back to Helvetica, which printed ₱ as "±".
+        // So the peso cell is set AFTER the bold, and keeps its own font.
         if (data.section === 'body' && data.row.index === salesTable.body.length) {
           data.cell.styles.fontStyle = 'bold';
           data.cell.styles.fillColor = COLOR.bgPrimary;
         }
+        pesoCell(data);
       },
     });
   }
@@ -335,10 +392,14 @@ export async function buildSalesForecastPDF({
 // ---------------------------------------------------------------------
 // Report 2: Product Performance
 // ---------------------------------------------------------------------
+// ratioTable (Oct 26 2026): { note, rows: [[rank, product, sold, openDays,
+// avg/day, store avg/day, ratio, what to do]] } — every product, ranked, with
+// the numbers the ratio is made of. Replaces the old 2 best + 2 worst lines.
 export async function buildProductPerformancePDF({
   dateRange, business, metrics, statusBullets, narrativeText,
-  topPerformers, needsReview, demandRows, disclaimer,
+  ratioTable = null, demandRows, disclaimer,
 }) {
+  business = await resolveReportBusiness(business);
   const doc = new jsPDF({ unit: 'mm', format: 'a4' });
   const logoDataUrl = await loadLogoBase64();
 
@@ -381,21 +442,21 @@ export async function buildProductPerformancePDF({
 
   y = boxY + boxHeight + 8;
 
-  // Ranked ratios with each product's action signal. A table (not free
-  // text) so long "What to do" lines wrap instead of running off the page.
-  y = drawSectionTitle(doc, y, 'Performance ratio — ranked');
-  const ratioBody = [
-    ...topPerformers.map((row) => ['Top performer', row.product, row.ratio == null ? '—' : Number(row.ratio).toFixed(2), row.actionSignal || '—']),
-    ...needsReview.map((row) => ['Needs review', row.product, row.ratio == null ? '—' : Number(row.ratio).toFixed(2), row.actionSignal || '—']),
-  ];
+  // Every product, ranked by ratio, with its breakdown:
+  //   Avg / day = items sold ÷ open days;  Ratio = Avg / day ÷ Store avg / day
+  y = drawSectionTitle(doc, y, 'Performance ratio \u2014 ranked');
+  if (ratioTable?.note) y = drawTextBox(doc, y, ratioTable.note, { fontSize: 8 });
   y = drawTable(doc, y, {
-    head: ['', 'Product', 'Performance vs Average', 'What to do'],
-    body: ratioBody.length ? ratioBody : [['—', 'No products with a ratio in this range', '—', '—']],
-    columnStyles: { 0: { cellWidth: 26 }, 2: { cellWidth: 26, halign: 'right' } },
+    head: ['Rank', 'Product', 'Items sold', 'Open days', 'Avg / day', 'Store avg / day', 'Ratio', 'What to do'],
+    body: ratioTable?.rows?.length ? ratioTable.rows : [['\u2014', 'No sales in this range', '', '', '', '', '\u2014', '\u2014']],
+    columnStyles: {
+      0: { cellWidth: 10 }, 2: { halign: 'right' }, 3: { halign: 'right' }, 4: { halign: 'right' }, 5: { halign: 'right' }, 6: { halign: 'right' },
+    },
+    tableStyles: { fontSize: 7, cellPadding: 1.5 },
     didParseCell: (data) => {
-      if (data.section === 'body' && data.column.index === 0) {
-        if (data.cell.raw === 'Top performer') data.cell.styles.textColor = COLOR.success;
-        else if (data.cell.raw === 'Needs review') data.cell.styles.textColor = COLOR.pillHighText;
+      if (data.section === 'body' && data.column.index === 6) {
+        const ratio = Number(data.cell.raw);
+        if (Number.isFinite(ratio)) data.cell.styles.textColor = ratio >= 1 ? COLOR.success : COLOR.pillHighText;
       }
     },
   });
@@ -433,11 +494,15 @@ export async function buildProductPerformancePDF({
 // ---------------------------------------------------------------------
 // shoppingDateLabel: the day the shopping list is for ("Oct 18, 2026"), from
 // the API's own daily.date.
+// weeklyTable (Oct 26 2026): { title, days: ['Mon 10/20', ...], rows: [[ingredient, 7 cells..., total]] }
 export async function buildIngredientDemandPDF({
   dateRange, business, metrics, insightText, shoppingListRows, highDemandRows, disclaimer, shoppingDateLabel,
+  weeklyTable = null,
 }) {
+  business = await resolveReportBusiness(business);
   const doc = new jsPDF({ unit: 'mm', format: 'a4' });
-  const logoDataUrl = await loadLogoBase64();
+  const [logoDataUrl, pesoFontBase64] = await Promise.all([loadLogoBase64(), loadPesoFontBase64()]);
+  const pesoFontReady = registerPesoFont(doc, pesoFontBase64);
 
   let y = drawHeader(doc, {
     reportTitle: 'Ingredient Demand Report',
@@ -450,21 +515,51 @@ export async function buildIngredientDemandPDF({
   y = drawMetricCards(doc, y, metrics);
   y = drawTextBox(doc, y, insightText);
 
+  // Oct 26 2026: the shopping list carries the numbers that decide it
+  // (need, stock, to buy, price, cost) in a compact type so no column
+  // overlaps; "Used in" stays on the page.
   y = drawSectionTitle(doc, y, `Shopping list \u2014 ${shoppingDateLabel || 'selected day'}`);
   y = drawTable(doc, y, {
-    head: ['No.', 'Ingredient', 'Used in', 'Raw Forecast', 'Safety Buffer', 'Forecasted Need'],
-    body: shoppingListRows.map((r, i) => [
-      i + 1, r.ingredient, r.linkedDishes, r.baseQty, `+ ${r.buffer}`, r.total,
-    ]),
-    columnStyles: { 0: { cellWidth: 10 } },
+    head: ['No.', 'Ingredient', 'Raw Forecast', 'Safety Buffer', 'Forecasted Need', 'On Stock', 'To Buy', 'Price / Unit', 'Est. Cost'],
+    body: shoppingListRows.length
+      ? shoppingListRows.map((r, i) => [
+        i + 1, r.ingredient, r.baseQty, `+${r.buffer}`, r.total, r.onStock ?? '\u2014', r.toBuy ?? '\u2014', r.price ?? '\u2014', r.estCost ?? '\u2014',
+      ])
+      : [['\u2014', 'Nothing to buy: stock covers the forecast for this day.', '', '', '', '', '', '', '']],
+    columnStyles: { 0: { cellWidth: 8 }, 1: { cellWidth: 34 }, 2: { halign: 'right' }, 3: { halign: 'right' }, 4: { halign: 'right' }, 5: { halign: 'right' }, 6: { halign: 'right' }, 7: { halign: 'right' }, 8: { halign: 'right' } },
+    tableStyles: { fontSize: 7, cellPadding: 1.5 },
+    didParseCell: (data) => {
+      if (pesoFontReady && typeof data.cell.raw === 'string' && data.cell.raw.includes(PESO)) {
+        data.cell.styles.font = PESO_FONT;
+        data.cell.styles.fontStyle = 'normal';
+      }
+    },
   });
+
+  if (weeklyTable) {
+    if (y > doc.internal.pageSize.getHeight() - 60) {
+      doc.addPage();
+      y = 20;
+    }
+    y = drawSectionTitle(doc, y, weeklyTable.title || 'Weekly ingredient demand');
+    y = drawTable(doc, y, {
+      head: ['Ingredient', ...weeklyTable.days, 'Week total'],
+      body: weeklyTable.rows.length ? weeklyTable.rows : [['No forecast for this week yet', '', '', '', '', '', '', '', '']],
+      columnStyles: { 0: { cellWidth: 34 }, ...Object.fromEntries(Array.from({ length: 8 }, (_, i) => [i + 1, { halign: 'right' }])) },
+      tableStyles: { fontSize: 7, cellPadding: 1.5 },
+    });
+  }
 
   y = drawSectionTitle(doc, y, 'High-demand day alert');
   y = drawTable(doc, y, {
     head: ['Day', 'Reason', 'Most Affected Ingredients'],
-    body: highDemandRows.map((r) => [r.day, r.reason, r.affected]),
+    body: highDemandRows.length ? highDemandRows.map((r) => [r.day, r.reason, r.affected]) : [['\u2014', 'No High Demand Day this week', '\u2014']],
   });
 
+  if (y > doc.internal.pageSize.getHeight() - 35) {
+    doc.addPage();
+    y = 20;
+  }
   drawTextBox(doc, y, disclaimer, { fontSize: 8 });
   addFooterToAllPages(doc);
   return doc;
@@ -496,6 +591,7 @@ export async function buildGroceryListPDF({
   GROCERY_CATEGORIES,
   estTotalCost,
 }) {
+  business = await resolveReportBusiness(business);
   const doc = new jsPDF({ unit: 'mm', format: 'a5', orientation: 'portrait' });
   const [logoDataUrl, pesoFontBase64] = await Promise.all([
     loadLogoBase64(),
@@ -565,7 +661,7 @@ export async function buildGroceryListPDF({
   doc.setTextColor(28, 38, 50);
   doc.setFont(pesoFontReady ? PESO_FONT : 'courier', pesoFontReady ? 'normal' : 'bold');
   doc.setFontSize(13);
-  doc.text(`${peso} ${totalCost.toLocaleString('en-PH', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`, MARGIN + cardW / 2, y + 13, { align: 'center' });
+  doc.text(`${peso} ${fmt2(totalCost)}`, MARGIN + cardW / 2, y + 13, { align: 'center' });
 
   const card2X = MARGIN + cardW + 6;
   doc.setFillColor(237, 233, 222);
@@ -737,6 +833,7 @@ function tidyAuditDetails(text) {
 }
 
 export async function buildAuditLogsPDF({ dateRangeLabel, business, rows }) {
+  business = await resolveReportBusiness(business);
   const doc = new jsPDF({ unit: 'mm', format: 'a4' });
   const logoDataUrl = await loadLogoBase64();
 

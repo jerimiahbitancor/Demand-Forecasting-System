@@ -29,13 +29,15 @@ check('grocery table prints the price with formatUnitPrice', source.includes('fo
 check('forecast PDF has no gross profit column', !source.includes("'Est. gross profit'"));
 check('2.3 kg prints 2.30 kg (short unit)', formatIngredientDemandQty(2.3, 'Kilograms (kg)') === '2.30 kg');
 check('17.4 pcs prints 17 pcs', formatIngredientDemandQty(17.4, 'Pieces (pcs)') === '17 pcs');
-check('price prints per short unit', formatUnitPrice(50, 'Kilograms (kg)') === '₱50.00/kg');
+check('price prints per short unit', formatUnitPrice(50, 'Kilograms (kg)') === '₱50/kg');
 check('a tiny per-gram price keeps its digits', formatUnitPrice(0.0035, 'Grams (g)') === '₱0.0035/g');
-check('est. cost formula reads like the math', estCostFormula(2.31, 'kg', 50, 115.5) === '2.31 kg × ₱50.00/kg = ₱115.50');
+check('est. cost formula reads like the math', estCostFormula(2.31, 'kg', 50, 115.5) === '2.31 kg × ₱50/kg = ₱115.50');
 check('no toBuy.toFixed left in reportService', !/toBuy\??\.toFixed/.test(source));
 check('IngredientDemand no longer fakes a toFixed for the PDF', !/toFixed:\s*\(\)/.test(page));
 check('IngredientDemand no longer borrows units from daily rows', !page.includes('unitByIngredient'));
-check('null ratio prints a dash, not a crash', source.includes("row.ratio == null ? '—'"));
+// Oct 26 2026: the PDF ratio rows are built in ProductPerformance.jsx.
+const perfPage = readFileSync(new URL('../src/features/analytics/components/ProductPerformance.jsx', import.meta.url), 'utf8');
+check('null ratio prints a dash, not a crash', perfPage.includes('r.ratio == null ? "—" : fmt2(r.ratio)'));
 
 // What the grocery PDF prints for typical rows.
 check('4.0999999999 kg prints 4.1', formatStockQty(4.0999999999, 'kg') === '4.1');

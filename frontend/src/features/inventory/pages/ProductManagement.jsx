@@ -31,6 +31,7 @@ import { buildPageItems, ELLIPSIS } from "../../../utils/pagination";
 import { formatStockQty } from "../../../utils/formatStockQty.js";
 import ProductMergeModal from '../product modals/ProductMergeModal';
 import PossibleDuplicates from '../components/PossibleDuplicates';
+import { peso } from "../../../utils/formatNumber.js";
 
 const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:5000/api';
 
@@ -1346,7 +1347,7 @@ const ProductManagement = () => {
   // Format currency
   const formatCurrency = (amount) => {
     if (amount === undefined || amount === null) return '₱0.00';
-    return `₱${parseFloat(amount).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+    return peso(amount);
   };
 
   // Format date
@@ -1512,7 +1513,7 @@ const ProductManagement = () => {
                 </span>
               </Tippy>
             </div>
-            <p className="product-stat-card-value">₱ {productStats.avg_cogs.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</p>
+            <p className="product-stat-card-value">{peso(productStats.avg_cogs, { space: true })}</p>
             <p className="product-stat-card-change">Cost of Goods Sold</p>
           </div>
         </div>
@@ -2306,7 +2307,7 @@ const ProductManagement = () => {
                     {costPreview.stockUnit.toLowerCase() !== String(costPreview.unit).toLowerCase()
                       ? ` = ${formatStockQty(costPreview.converted, costPreview.stockUnit)} ${costPreview.stockUnit}`
                       : ''}
-                    {' '}× ₱{Number(costPreview.unitPrice).toFixed(2)}/{costPreview.stockUnit} ≈ <strong>₱{Number(costPreview.cost).toFixed(2)}</strong> per serving
+                    {' '}× {peso(costPreview.unitPrice)}/{costPreview.stockUnit} ≈ <strong>{peso(costPreview.cost)}</strong> per serving
                   </div>
                 )}
 

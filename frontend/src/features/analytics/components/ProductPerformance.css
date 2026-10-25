@@ -340,3 +340,8 @@
   font-size: 12px;
   color: var(--color-text-secondary);
 }
+
+/* Performance ratio breakdown (Oct 26 2026). */
+.ratio-breakdown { margin: 8px 0 12px; padding: 10px 12px; border: 1px solid var(--color-border, #e5e7eb); border-radius: 8px; background: var(--color-bg-primary, #f8f7f4); font-size: 12px; line-height: 1.5; }
+.ratio-breakdown-title { margin: 0 0 4px; font-weight: 600; }
+.ratio-breakdown ol { margin: 0; padding-left: 18px; }

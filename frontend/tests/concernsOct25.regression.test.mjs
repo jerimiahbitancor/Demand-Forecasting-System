@@ -35,7 +35,8 @@ check('ID1: 2 decimals with the short unit', formatIngredientDemandQty(2.3, 'Kil
 check('ID1: pieces are whole numbers', formatIngredientDemandQty(17.6, 'Pieces (pcs)') === '18 pcs');
 check('ID2: Safety Buffer column shows its %', demand.includes('Safety Buffer (+{safetyBufferPercentage}%)'));
 check('ID3/ID7: value and unit drawn together in one cell', demand.includes('className="qty-unit"') && demand.includes('<Qty value={v} unit={row.unit} />'));
-check('ID4: price per unit and cost formula', formatUnitPrice(55, 'Kilograms (kg)') === '₱55.00/kg' && estCostFormula(4.38, 'kg', 55, 240.9) === '4.38 kg × ₱55.00/kg = ₱240.90' && formatIngredientDemandMoney(0) === '₱0.00');
+// Oct 26 2026: ".00" is dropped (owner rule G2), so ₱55.00 now prints ₱55.
+check('ID4: price per unit and cost formula', formatUnitPrice(55, 'Kilograms (kg)') === '₱55/kg' && estCostFormula(4.38, 'kg', 55, 240.9) === '4.38 kg × ₱55/kg = ₱240.90' && formatIngredientDemandMoney(0) === '₱0');
 check('ID6: legend uses the Predicted Stock Level Status words only', demand.includes('● Critical Shortage') && !demand.includes('● Critical —') && !demand.includes('● Low —'));
 check('ID8: grocery PDF uses the smaller font', /fontSize: 6\.5/.test(report));
 

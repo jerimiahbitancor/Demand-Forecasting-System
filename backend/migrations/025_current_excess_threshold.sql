@@ -1,4 +1,4 @@
--- Migration 022: owner-configurable Excess Stock threshold (Oct 25 2026).
+-- Migration 025 (first numbered 022): owner-configurable Excess Stock threshold (Oct 25 2026).
 --
 -- Run in the Supabase SQL editor after 021. Idempotent. Nothing breaks before
 -- it is run: the backend uses 100% until this column exists, and Settings

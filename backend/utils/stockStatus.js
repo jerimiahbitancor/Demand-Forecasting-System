@@ -16,7 +16,7 @@
 //      Low Stock      0% < Stock % <  low threshold   (wet 50%, dry 20%)
 //      Normal Stock   low threshold <= Stock % <= excess threshold (default 100%)
 //      Excess Stock   Stock % > excess threshold
-//    The excess threshold is configurable since Oct 25 2026 (migration 022).
+//    The excess threshold is configurable since Oct 25 2026 (migration 025).
 //
 // 2. PREDICTED STOCK LEVEL STATUS — after a forecast, stock vs forecasted demand.
 //    Coverage % = current stock / forecasted demand x 100
