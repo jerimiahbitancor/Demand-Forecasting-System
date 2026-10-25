@@ -99,6 +99,8 @@ check("another dish using rice keeps its full recipe (2,080 + 1,200 g)", close(n
 
 legacy = estimate_ingredient_demand({PORK: 20}, recipe, 15)
 check("no shares passed -> original formula (egg 23)", close(need(legacy, EGG), 23), str(need(legacy, EGG)))
+check("no stock status from ml-service: the backend (utils/stockStatus.js) is the only place it is decided",
+      "stock_status" not in legacy.columns, str(list(legacy.columns)))
 
 print()
 if _failures:

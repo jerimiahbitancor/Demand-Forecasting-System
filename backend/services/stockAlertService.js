@@ -9,9 +9,14 @@
 //   classifyStock()   the status of one ingredient (page label included)
 //   alertGroupOf()    which alert group it belongs to, if any:
 //                       out       quantity 0
-//                       critical  stock < 50% of the forecast need
-//                       low       stock < 100% of the forecast need, or
-//                                 (no forecast for it) quantity <= min_stock
+//                       critical  Critical Shortage (stock < 50% of the forecast need)
+//                       low       Insufficient Supply (stock < 100% of the need), or
+//                                 (no forecast for it) Current Stock Level Status
+//                                 is Low Stock: below the wet/dry threshold of
+//                                 the ideal stock level (Oct 25 2026; it used to
+//                                 be quantity <= min_stock, a third rule that
+//                                 matched neither status)
+//   Both statuses come from utils/stockStatus.js with the owner's thresholds.
 //   buildRestockItems() / summarizeRestock()   the restock list (pure)
 //   loadRestockList() reads everything and returns that list
 //
@@ -29,6 +34,8 @@ const { supabaseAdmin } = require('../config/supabase');
 const { fetchAllRows } = require('../utils/fetchAllRows');
 const analyticsService = require('./analyticsService');
 const { toBuyQuantity } = require('../utils/recipeUnits');
+const { currentStockStatus, DEFAULT_STOCK_THRESHOLDS } = require('../utils/stockStatus');
+const { getStockThresholds } = require('./stockThresholdService');
 
 dayjs.extend(utc);
 dayjs.extend(timezone);
@@ -43,23 +50,24 @@ const MAX_USED_IN = 3;
  * `pageLabel` (unchanged from before: out of stock reads "Critical Stock").
  * level: 'archived' | 'out' | 'critical' | 'low' | 'normal' | 'excess' | 'no_forecast'
  */
-function classifyStock({ quantity, isArchived = false, need }) {
+function classifyStock({ quantity, isArchived = false, need, thresholds = DEFAULT_STOCK_THRESHOLDS }) {
   if (isArchived) return { level: 'archived', pageLabel: 'Archived' };
   const qty = Number(quantity) || 0;
   // Out of stock is always urgent, whether or not a forecast exists.
-  if (qty === 0) return { level: 'out', pageLabel: 'Critical Stock' };
-  const status = analyticsService.computeStockStatus(qty, Number(need) || 0);
+  if (qty <= 0) return { level: 'out', pageLabel: 'Critical Stock' };
+  const status = analyticsService.computeStockStatus(qty, Number(need) || 0, thresholds);
   if (status === 'No Forecast') return { level: 'no_forecast', pageLabel: 'No Forecast' };
   return { level: status.toLowerCase(), pageLabel: `${status} Stock` };
 }
 
-// 'out' | 'critical' | 'low' | null. No Forecast keeps the min_stock rule.
-function alertGroupOf(classification, { quantity, minStock }) {
+// 'out' | 'critical' | 'low' | null. With no forecast, the Current Stock
+// Level Status decides: Low Stock alerts as 'low'.
+function alertGroupOf(classification, { quantity, minStock, materialType, thresholds = DEFAULT_STOCK_THRESHOLDS }) {
   const { level } = classification;
   if (level === 'out' || level === 'critical' || level === 'low') return level;
   if (level === 'no_forecast') {
-    const qty = Number(quantity) || 0;
-    return qty <= (Number(minStock) || 0) ? 'low' : null;
+    const current = currentStockStatus({ quantity, idealLevel: minStock, materialType }, thresholds);
+    return current.level === 'out' || current.level === 'low' ? 'low' : null;
   }
   return null;
 }
@@ -84,20 +92,20 @@ function compareItems(a, b) {
 
 /**
  * The restock list. Pure.
- * @param ingredients  [{ id, name, quantity, min_stock, unit, is_archived }]
+ * @param ingredients  [{ id, name, quantity, min_stock, material_type, unit, is_archived }]
  * @param needs        Map ingredientId -> { need, byProduct: Map productId -> part }
  * @param prices       Map ingredientId -> { price }   (latest market price)
  * @param productNames Map productId -> name
  */
-function buildRestockItems({ ingredients = [], needs = new Map(), prices = new Map(), productNames = new Map() }) {
+function buildRestockItems({ ingredients = [], needs = new Map(), prices = new Map(), productNames = new Map(), thresholds = DEFAULT_STOCK_THRESHOLDS }) {
   const items = [];
   for (const ing of ingredients) {
     const entry = needs.get(ing.id);
     const need = entry ? Number(entry.need) || 0 : 0;
     const stock = Number(ing.quantity) || 0;
     const minStock = Number(ing.min_stock) || 0;
-    const classification = classifyStock({ quantity: stock, isArchived: ing.is_archived, need });
-    const group = alertGroupOf(classification, { quantity: stock, minStock });
+    const classification = classifyStock({ quantity: stock, isArchived: ing.is_archived, need, thresholds });
+    const group = alertGroupOf(classification, { quantity: stock, minStock, materialType: ing.material_type, thresholds });
     if (!group) continue;
 
     // min_stock rule: no forecast need, so nothing to compute a "to buy" from.
@@ -153,14 +161,15 @@ function summarizeRestock(items) {
  */
 async function loadRestockList({ client = supabaseAdmin, now = new Date(), date = null } = {}) {
   const forDate = date || dayjs(now).tz(PH_TZ).format('YYYY-MM-DD');
-  const [details, priceMap, ingredientsRes, productsRes] = await Promise.all([
+  const [details, priceMap, ingredientsRes, productsRes, thresholds] = await Promise.all([
     analyticsService.getIngredientDailyNeedDetails(forDate),
     analyticsService.getLatestMarketPriceMap(),
     fetchAllRows(() => client.from('ingredients')
-      .select('id, name, quantity, min_stock, unit, is_archived')
+      .select('id, name, quantity, min_stock, material_type, unit, is_archived')
       .eq('is_archived', false)
       .order('id')),
     fetchAllRows(() => client.from('products').select('id, name').order('id')),
+    getStockThresholds(),
   ]);
   if (ingredientsRes.error) throw ingredientsRes.error;
   if (productsRes.error) throw productsRes.error;
@@ -171,6 +180,7 @@ async function loadRestockList({ client = supabaseAdmin, now = new Date(), date 
     needs: details.entries,
     prices: priceMap,
     productNames,
+    thresholds,
   });
   return {
     forDate,

@@ -1,31 +1,50 @@
 // backend/controllers/forecastConfigController.js
 //
 // Single-row config table, same shape as businessProfileController.js.
-// Currently owns two owner-configurable values:
-//   - safety_buffer_percentage (0-50, default 15) — already read by
-//     both ml-service (get_safety_buffer_percentage) and
-//     analyticsService.js (getSafetyBufferPercentage), but the Settings
-//     UI could never actually save it — handleSaveConfig() was a stub
-//     that just showed a toast.
-//   - food_cost_warning_threshold (default 35) — new column (migration
-//     006), replaces the hardcoded `warningThreshold = 30` that used to
-//     live directly in ProductManagement.jsx.
-//
-// Deliberately NOT including the Stock Level Thresholds (critical/low/
-// excess) card here — those would need the same three numbers read on
-// the ml-service (Python) side too (business_logic.py's
-// _stock_status_row currently hardcodes 0.5/1.0/2.0), which is a larger
-// change than this pass. That card's Save button stays a stub for now.
+// Owner-configurable values:
+//   - safety_buffer_percentage (0-50, default 15) — read by ml-service
+//     (get_safety_buffer_percentage) and analyticsService.js.
+//   - food_cost_warning_threshold (default 35) — migration 006.
+//   - the five STOCK LEVEL THRESHOLDS (migration 021, Oct 25 2026):
+//       current_low_wet_pct (50), current_low_dry_pct (20)      Current Stock Level Status
+//       predicted_critical_pct (50), predicted_sufficient_pct (100),
+//       predicted_above_pct (200)                                Predicted Stock Level Status
+//     Validated by utils/stockStatus.js validateThresholds(); every status
+//     is computed by that same module (services/stockThresholdService.js
+//     reads the saved values). ml-service no longer computes a status at
+//     all, so there is no second copy of these numbers to keep in sync.
 const { supabaseAdmin } = require('../config/supabase');
 const { queueStockRefresh } = require('../services/notificationService');
+const {
+  normalizeThresholds,
+  validateThresholds,
+  THRESHOLD_KEYS,
+} = require('../utils/stockStatus');
+const { invalidateStockThresholds } = require('../services/stockThresholdService');
+
+// True when the error means a threshold column does not exist yet (migration
+// 021 not run): Postgres 42703 or PostgREST PGRST204.
+function isMissingThresholdColumn(error) {
+  const message = String((error && error.message) || '');
+  return Boolean(error && (
+    error.code === '42703'
+    || error.code === 'PGRST204'
+    || (/does not exist|schema cache/i.test(message) && /_pct/.test(message))
+  ));
+}
 
 function toApiShape(row) {
+  const thresholds = normalizeThresholds(row || {});
   if (!row) {
-    return { safety_buffer_percentage: 15, food_cost_warning_threshold: 35 };
+    return { safety_buffer_percentage: 15, food_cost_warning_threshold: 35, ...thresholds };
   }
   return {
     safety_buffer_percentage: row.safety_buffer_percentage != null ? Number(row.safety_buffer_percentage) : 15,
     food_cost_warning_threshold: row.food_cost_warning_threshold != null ? Number(row.food_cost_warning_threshold) : 35,
+    ...thresholds,
+    // false until migration 021 has been run: the thresholds shown are the
+    // defaults and cannot be saved yet.
+    stock_thresholds_saved: THRESHOLD_KEYS.every((key) => row[key] !== undefined),
     updated_at: row.updated_at,
   };
 }
@@ -75,10 +94,16 @@ class ForecastConfigController {
       }
     }
 
+    const thresholdInput = {};
+    for (const key of THRESHOLD_KEYS) {
+      if (req.body[key] !== undefined) thresholdInput[key] = req.body[key];
+    }
+    const changesThresholds = Object.keys(thresholdInput).length > 0;
+
     try {
       const { data: existingRow, error: existingError } = await supabaseAdmin
         .from('forecast_config')
-        .select('id')
+        .select('*')
         .limit(1)
         .maybeSingle();
 
@@ -87,6 +112,16 @@ class ForecastConfigController {
       const row = { updated_at: new Date() };
       if (safety_buffer_percentage !== undefined) row.safety_buffer_percentage = Number(safety_buffer_percentage);
       if (food_cost_warning_threshold !== undefined) row.food_cost_warning_threshold = Number(food_cost_warning_threshold);
+
+      if (changesThresholds) {
+        // Checked against what is saved now, so "critical < sufficient <
+        // above" holds for the row as it will be after this save.
+        const checked = validateThresholds(thresholdInput, existingRow || {});
+        if (!checked.ok) {
+          return res.status(400).json({ success: false, error: checked.error });
+        }
+        for (const key of THRESHOLD_KEYS) row[key] = checked.values[key];
+      }
 
       let result;
       if (existingRow?.id) {
@@ -104,11 +139,22 @@ class ForecastConfigController {
           .single();
       }
 
-      if (result.error) throw result.error;
+      if (result.error) {
+        if (changesThresholds && isMissingThresholdColumn(result.error)) {
+          return res.status(409).json({
+            success: false,
+            error: 'Stock level thresholds cannot be saved yet: run migration 021_stock_level_thresholds.sql in Supabase first. The default thresholds are in use until then.',
+          });
+        }
+        throw result.error;
+      }
 
-      // The safety buffer changes every ingredient need. Not awaited,
+      if (changesThresholds) invalidateStockThresholds();
+
+      // The safety buffer changes every ingredient need, and the thresholds
+      // change every status, so the stock alerts are refreshed. Not awaited,
       // never throws (see queueStockRefresh).
-      queueStockRefresh('safety_buffer');
+      queueStockRefresh(changesThresholds ? 'stock_thresholds' : 'safety_buffer');
 
       res.json({
         success: true,

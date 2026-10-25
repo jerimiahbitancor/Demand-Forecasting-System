@@ -3,6 +3,8 @@ const { supabaseAdmin } = require('../config/supabase');
 const { logAction } = require('../services/auditService');
 const analyticsService = require('../services/analyticsService');
 const { queueStockRefresh } = require('../services/notificationService');
+const { currentStockStatus, predictedStockStatus } = require('../utils/stockStatus');
+const { getStockThresholds } = require('../services/stockThresholdService');
 const {
   parseRecipeQuantityDecimal,
   isMissingColumnError,
@@ -159,8 +161,10 @@ const getInventoryItems = async (req, res) => {
         showArchived = false,
         statusField = 'predicted',
         archived,
-        status
+        status: rawStatus
     } = req.query;
+    // 'Excess' is the old label of 'Excess Stock' (bookmarked filters).
+    const status = rawStatus === 'Excess' ? 'Excess Stock' : rawStatus;
 
     const pageNumber = Math.max(parseInt(page, 10) || 1, 1);
     const pageLimit = Math.max(parseInt(limit, 10) || 10, 1);
@@ -171,7 +175,7 @@ const getInventoryItems = async (req, res) => {
     // Get all items for summary stats (without pagination)
     let summaryQuery = supabaseAdmin
       .from('ingredients')
-      .select('id, quantity, price, min_stock, category, is_archived');
+      .select('id, quantity, price, min_stock, material_type, category, is_archived');
 
     if (includeArchived) {
       summaryQuery = summaryQuery.eq('is_archived', true);
@@ -190,34 +194,24 @@ const getInventoryItems = async (req, res) => {
     const { data: summaryData, error: summaryError } = await summaryQuery;
     if (summaryError) throw summaryError;
 
-    // Current stock uses min_stock as the ideal/reorder quantity. Predicted
-    // stock compares the same on-hand quantity with the forecasted need.
-    const dailyNeeds = await analyticsService.getIngredientDailyNeeds();
-    const currentStatusFor = (item) => {
-      const quantity = Number(item.quantity) || 0;
-      const ideal = Number(item.min_stock) || 0;
-      if (quantity <= 0) return 'Out of Stock';
-      if (ideal <= 0) return 'Normal Stock';
-      const ratio = quantity / ideal;
-      if (ratio < 0.5) return 'Low Stock';
-      if (ratio <= 1) return 'Normal Stock';
-      return 'Excess';
-    };
-    const predictedStatusFor = (item) => {
-      if (!dailyNeeds.has(item.id)) return 'Unassigned';
-      const need = Number(dailyNeeds.get(item.id)) || 0;
-      if (need <= 0) return 'Unassigned';
-      const quantity = Number(item.quantity) || 0;
-      if (quantity <= 0) return 'Critical Shortage';
-      const ratio = quantity / need;
-      const materialType = String(item.material_type || '').trim().toLowerCase();
-      const isWet = materialType
-        ? materialType === 'wet'
-        : /wet|liquid|meat|poultry|seafood|fish|dairy|vegetable|fruit|egg/i.test(String(item.category || ''));
-      if (ratio < (isWet ? 0.5 : 0.2)) return 'Insufficient Supply';
-      if (ratio <= 1) return 'Sufficient Supply';
-      return 'Above Forecast Limit';
-    };
+    // The two stock level statuses, both from utils/stockStatus.js with the
+    // owner's thresholds (Settings > Stock Level Thresholds):
+    //   current   = stock vs ideal stock level (min_stock), wet/dry threshold
+    //   predicted = stock vs the forecasted need (getIngredientDailyNeeds)
+    const [dailyNeeds, stockThresholds] = await Promise.all([
+      analyticsService.getIngredientDailyNeeds(),
+      getStockThresholds(),
+    ]);
+    const currentStatusFor = (item) => currentStockStatus({
+      quantity: item.quantity,
+      idealLevel: item.min_stock,
+      materialType: item.material_type,
+    }, stockThresholds).status;
+    const predictedDetailFor = (item) => predictedStockStatus({
+      quantity: item.quantity,
+      need: dailyNeeds.has(item.id) ? dailyNeeds.get(item.id) : 0,
+    }, stockThresholds);
+    const predictedStatusFor = (item) => predictedDetailFor(item).status;
     const statusFor = (item) => {
       if (statusField === 'current') {
         return status === 'Unassigned'
@@ -237,12 +231,12 @@ const getInventoryItems = async (req, res) => {
       const s = currentStatusFor(item);
       return s === 'Low Stock' || s === 'Out of Stock';
     }).length;
-    const outOfStockItems = (summaryData || []).filter((item) => (Number(item.quantity) || 0) === 0).length;
+    const outOfStockItems = (summaryData || []).filter((item) => currentStatusFor(item) === 'Out of Stock').length;
     const stockCounts = (summaryData || []).reduce((counts, item) => {
       const s = currentStatusFor(item);
       if (s === 'Out of Stock') counts.criticalStock++;
       else if (s === 'Low Stock') counts.lowStock++;
-      else if (s === 'Excess') counts.excessStock++;
+      else if (s === 'Excess Stock') counts.excessStock++;
       else if (s === 'Normal Stock') counts.normalStock++;
       return counts;
     }, { excessStock: 0, normalStock: 0, lowStock: 0, criticalStock: 0 });
@@ -356,15 +350,30 @@ const getInventoryItems = async (req, res) => {
       console.warn('Could not load the forecast basis for Ingredient Management:', basisError.message);
     }
 
-    const data = (paginatedData || []).map((item) => ({
+    const data = (paginatedData || []).map((item) => {
+      const current = currentStockStatus({
+        quantity: item.quantity,
+        idealLevel: item.min_stock,
+        materialType: item.material_type,
+      }, stockThresholds);
+      const predicted = predictedDetailFor(item);
+      return {
       ...withoutLegacyPurchaseFields(item),
       forecasted_need: dailyNeeds.get(item.id) || 0,
-      current_stock_status: currentStatusFor(item),
-      predicted_stock_status: predictedStatusFor(item),
+      current_stock_status: current.status,
+      // Stock % of the ideal level and the low threshold that applied (wet
+      // or dry), so the screen can show how the status was reached.
+      current_stock_pct: current.stockPct,
+      current_low_threshold_pct: current.lowThresholdPct,
+      ideal_level_set: current.idealLevelSet,
+      predicted_stock_status: predicted.status,
+      predicted_coverage_pct: predicted.coveragePct,
+      predicted_action: predicted.action,
       avg_market_price: avgMap[item.id] !== undefined ? avgMap[item.id] : null,
       open_shortfall: openShortfalls.get(item.id)?.total || 0,
       open_shortfall_sales: openShortfalls.get(item.id)?.sales || 0
-    }));
+      };
+    });
 
     res.json({
       success: true,
@@ -376,13 +385,15 @@ const getInventoryItems = async (req, res) => {
       summary: {
         totalItems,
         totalStockValue,
-        lowStockAlerts: stockCounts.lowStock,
+        // Low Stock + Out of Stock, as the card's tooltip says.
+        lowStockAlerts,
         outOfStockItems,
         excessStock: stockCounts.excessStock,
         normalStock: stockCounts.normalStock,
         criticalStock: stockCounts.criticalStock,
         unassignedIngredients
       },
+      stockThresholds,
       forecastBasis
     });
   } catch (error) {
@@ -465,7 +476,13 @@ const createInventoryItem = async (req, res) => {
     const userId = getUserIdFromAuth(req);
     console.log('👤 User ID:', userId);
 
+    // Ideal stock level (min_stock): the 100% of the Current Stock Level
+    // Status. Optional here (0 = not set), but never negative or junk.
     const parsedMinStock = parseRecipeQuantityDecimal(min_stock);
+    if (min_stock !== undefined && min_stock !== null && min_stock !== ''
+      && (!parsedMinStock?.isFinite() || parsedMinStock.lt(0))) {
+      return res.status(400).json({ success: false, error: 'Ideal stock level must be a valid number greater than or equal to 0' });
+    }
     const materialType = req.body.material_type || 'dry';
     if (!['dry', 'wet'].includes(materialType)) {
       return res.status(400).json({ success: false, error: 'Material type must be dry or wet' });
@@ -601,7 +618,7 @@ const updateInventoryItem = async (req, res) => {
     if (min_stock !== undefined && min_stock !== null) {
       const parsedMin = parseRecipeQuantityDecimal(min_stock);
       if (!parsedMin?.isFinite() || parsedMin.lt(0)) {
-        return res.status(400).json({ success: false, error: 'Minimum stock must be a valid number greater than or equal to 0' });
+        return res.status(400).json({ success: false, error: 'Ideal stock level must be a valid number greater than or equal to 0' });
       }
       updateData.min_stock = parsedMin.toDecimalPlaces(6, Decimal.ROUND_HALF_UP).toString();
     }

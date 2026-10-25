@@ -95,7 +95,7 @@ function costLabel(item) {
 
 function detailLine(item) {
   if (item.rule === 'min_stock') {
-    return `Have ${withUnit(item.stock, item.unit)}, minimum ${withUnit(item.minStock, item.unit)}`;
+    return `Have ${withUnit(item.stock, item.unit)}, ideal stock level ${withUnit(item.minStock, item.unit)}`;
   }
   const used = item.usedIn && item.usedIn.length ? `. For ${item.usedIn.join(', ')}` : '.';
   return `Have ${withUnit(item.stock, item.unit)} of ${withUnit(item.need, item.unit)} needed${used}`;

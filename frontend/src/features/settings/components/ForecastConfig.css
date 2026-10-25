@@ -145,6 +145,7 @@
 .fc-status-dot.critical { background: var(--color-error); }
 .fc-status-dot.low { background: var(--color-warning); }
 .fc-status-dot.excess { background: var(--color-uploading); }
+.fc-status-dot.normal { background: var(--color-success, #16a34a); }
 
 .fc-management-card { min-height: 310px; }
 .fc-management-header { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; margin-bottom: 16px; }
@@ -200,3 +201,9 @@
   .fc-right { order: 2; }
   .fc-left { order: 1; }
 }
+
+/* Stock Level Thresholds holds two groups (current + predicted, five rows):
+   let the card grow with its content so the Save button never overlaps the
+   last row. */
+.fc-card.fc-right { height: auto; }
+.fc-card.fc-right .fc-save { margin-top: 20px; }

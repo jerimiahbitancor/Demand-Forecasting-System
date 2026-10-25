@@ -6,6 +6,7 @@ import "tippy.js/animations/scale.css";
 import InventoryModal from "../InventoryModal";
 import "./HistoryModal.css";
 import { formatStockQty } from "../../../../utils/formatStockQty.js";
+import { currentStockBadge } from "../../../../utils/stockStatusBadge.js";
 import { stockSourceLabel } from "../../../../utils/stockSourceLabel.js";
 import { stockMovementDetail } from "../../../../utils/stockMovementDetail.js";
 import { buildPageItems, ELLIPSIS } from "../../../../utils/pagination";
@@ -49,23 +50,9 @@ const HistoryModal = ({ item, apiClient, onClose }) => {
 
   if (!item) return null;
 
-  // Get stock status
-  const getStockStatus = (item) => {
-    if (!item) return { label: "Unknown", color: "#9ca3af", bgColor: "#f3f4f6" };
-    if (item.quantity === 0) {
-      return { label: "Critical", color: "#dc2626", bgColor: "#fee2e2" };
-    } else if (item.quantity <= (item.min_stock || 0) * 0.5) {
-      return { label: "Critical", color: "#dc2626", bgColor: "#fee2e2" };
-    } else if (item.quantity <= (item.min_stock || 0)) {
-      return { label: "Low", color: "#f59e0b", bgColor: "#fef3c7" };
-    } else if (item.quantity >= (item.min_stock || 0) * 3) {
-      return { label: "Excess", color: "#3b82f6", bgColor: "#dbeafe" };
-    } else {
-      return { label: "Normal", color: "#16a34a", bgColor: "#dcfce7" };
-    }
-  };
-
-  const status = getStockStatus(item);
+  // The Current Stock Level Status as the backend computed it (wet/dry
+  // threshold of the ideal stock level). No second formula here.
+  const status = currentStockBadge(item);
 
   return (
     <InventoryModal className="modal-lg inventory-history-modal" onClose={onClose}>

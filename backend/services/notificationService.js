@@ -289,7 +289,8 @@ const createNotificationOnce = async (notification) => {
 // Every ingredient's status comes from services/stockAlertService.js, the
 // SAME rule as the Ingredient Management page: out of stock (quantity 0),
 // Critical (< 50% of the forecast need), Low (< 100%), and for ingredients
-// with no forecast need the old rule, quantity <= min_stock.
+// with no forecast need the Current Stock Level Status Low Stock (below the
+// wet/dry threshold of the ideal stock level). Rule: utils/stockStatus.js.
 //
 // Bell, per user ("dynamic" both ways, as before):
 //   - one alert per ingredient, key out_<id> / critical_<id> / low_<id>
@@ -338,7 +339,7 @@ function stockAlertFor(item, weekday) {
     key: `low_${item.ingredientId}`,
     title: `Low stock: ${name}`,
     message: item.rule === 'min_stock'
-      ? `${name} is down to ${qtyText(item.stock, unit)} (minimum ${fmtNum(item.minStock)}). Consider restocking soon.`
+      ? `${name} is down to ${qtyText(item.stock, unit)} (ideal stock level ${fmtNum(item.minStock)}). Consider restocking soon.`
       : `${name} is down to ${qtyText(item.stock, unit)}${needText}.`,
   };
 }

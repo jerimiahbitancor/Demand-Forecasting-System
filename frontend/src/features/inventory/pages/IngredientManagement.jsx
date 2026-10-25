@@ -176,6 +176,7 @@ const IngredientManagement = () => {
       'Out of Stock': ['status-critical', '#dc2626'],
       'Low Stock': ['status-low', '#f59e0b'],
       'Normal Stock': ['status-normal', '#16a34a'],
+      'Excess Stock': ['status-excess', '#3b82f6'],
       Excess: ['status-excess', '#3b82f6'],
       'Critical Shortage': ['status-critical', '#dc2626'],
       'Insufficient Supply': ['status-low', '#f59e0b'],
@@ -199,12 +200,13 @@ const IngredientManagement = () => {
       ? getStatusPresentation('Archived', 'This ingredient is archived.')
       : getStatusPresentation(
         item.current_stock_status || 'Unassigned',
-        `Current stock is compared with the ideal stock requirement (${formatStockQty(item.min_stock || 0, item.unit)} ${item.unit || ''}).`
+        item.ideal_level_set === false
+          ? 'No ideal stock level is set for this ingredient, so the stock cannot be measured as a percentage. Edit the ingredient to set one.'
+          : `${item.current_stock_pct ?? 0}% of the ideal stock level (${formatStockQty(item.min_stock || 0, item.unit)} ${item.unit || ''}). ${item.material_type === 'wet' ? 'Wet' : 'Dry'} raw material: Low Stock below ${item.current_low_threshold_pct ?? (item.material_type === 'wet' ? 50 : 20)}%.`
       );
-    const materialType = item.material_type === 'wet' ? 'wet' : 'dry';
     const predictedHint = item.predicted_stock_status === 'Unassigned'
-      ? 'No forecast data is assigned to this ingredient.'
-      : `Forecasted stock status for ${materialType} raw materials, based on ${formatStockQty(item.forecasted_need || 0, item.unit)} ${item.unit || ''} expected demand.`;
+      ? 'No forecasted demand for this ingredient yet (not in a recipe, or no forecast generated).'
+      : `Stock covers ${item.predicted_coverage_pct ?? 0}% of the forecasted demand (${formatStockQty(item.forecasted_need || 0, item.unit)} ${item.unit || ''}). ${item.predicted_action || ''}`.trim();
     const predicted = item.is_archived
       ? getStatusPresentation('Archived', 'This ingredient is archived.')
       : getStatusPresentation(item.predicted_stock_status || 'Unassigned', predictedHint);
@@ -615,6 +617,14 @@ const IngredientManagement = () => {
     } else if (!Number.isFinite(parseRecipeQuantity(formData.quantity)) || parseRecipeQuantity(formData.quantity) < 0) {
       errors.quantity = 'Quantity must be a valid number';
     }
+    // Ideal stock level: the 100% of the Current Stock Level Status. Without
+    // it there is nothing to take a percentage of, so it is required.
+    const idealLevel = parseRecipeQuantity(formData.min_stock);
+    if (formData.min_stock === undefined || formData.min_stock === null || String(formData.min_stock).trim() === '') {
+      errors.min_stock = 'Ideal stock level is required';
+    } else if (!Number.isFinite(idealLevel) || idealLevel <= 0) {
+      errors.min_stock = 'Ideal stock level must be greater than 0';
+    }
     if (!formData.price || formData.price === '') {
       errors.price = 'Price is required';
     } else if (!Number.isFinite(Number(formData.price)) || Number(formData.price) <= 0) {
@@ -714,7 +724,7 @@ const IngredientManagement = () => {
   const stockLegend = [
     { label: 'Unassigned', color: '#9ca3af', className: 'legend-no-forecast' },
     { label: 'Archived', color: '#6b7280', className: 'legend-archived' },
-    { label: 'Excess', color: '#3b82f6', className: 'legend-excess' },
+    { label: 'Excess Stock', color: '#3b82f6', className: 'legend-excess' },
     { label: 'Normal Stock', color: '#16a34a', className: 'legend-normal' },
     { label: 'Low Stock', color: '#f59e0b', className: 'legend-low' },
     { label: 'Out of Stock', color: '#dc2626', className: 'legend-critical' }
@@ -816,8 +826,8 @@ const IngredientManagement = () => {
                 content={(
                   <div className="inventory-card-tooltip">
                     <strong>Low Stock Alerts</strong>
-                    <span>This counts ingredients whose current stock is at or below 50% of their ideal stock requirement. Out of Stock items are included.</span>
-                    <span>Current Stock Status compares on-hand quantity with ideal stock. Predicted Stock Status is calculated separately from forecasted demand and the ingredient's wet/dry material type.</span>
+                    <span>This counts ingredients that are Low Stock or Out of Stock: stock below 50% of the ideal stock level for wet raw materials, or below 20% for dry raw materials (changeable in Settings).</span>
+                    <span>Current Stock Status compares the stock on hand with the ideal stock level. Predicted Stock Status is separate: it compares the stock with the forecasted demand after each forecast.</span>
                     <span>Click to view the Shopping List to see which ingredients need restocking right away.</span>
                   </div>
                 )}
@@ -989,7 +999,7 @@ const IngredientManagement = () => {
             <option value="All">All Stock Statuses</option>
             <option value="Unassigned">Unassigned</option>
             <option value="Archived">Archived</option>
-            <option value="Excess">Excess</option>
+            <option value="Excess Stock">Excess Stock</option>
             <option value="Normal Stock">Normal Stock</option>
             <option value="Low Stock">Low Stock</option>
             <option value="Out of Stock">Out of Stock</option>
@@ -1492,6 +1502,24 @@ const IngredientManagement = () => {
                 </div>
 
                 <div className="form-group">
+                  <label className="form-label">Ideal Stock Level <span className="required-star">*</span></label>
+                  <input
+                    type="number"
+                    className={`form-input ${formErrors.min_stock ? 'error' : ''}`}
+                    value={formData.min_stock ?? ''}
+                    onChange={(e) => setFormData({...formData, min_stock: e.target.value})}
+                    placeholder="e.g. 40"
+                    min="0"
+                    step="any"
+                  />
+                  <small className="form-hint">
+                    The amount you normally want on hand, in the stock unit. Low Stock below{' '}
+                    {formData.material_type === 'wet' ? '50% (wet)' : '20% (dry)'} of this by default.
+                  </small>
+                  {formErrors.min_stock && <span className="form-error">{formErrors.min_stock}</span>}
+                </div>
+
+                <div className="form-group">
                   <label className="form-label">Initial Quantity <span className="required-star">*</span></label>
                   <input
                     type="number"
@@ -1619,6 +1647,24 @@ const IngredientManagement = () => {
                     <option value="wet">Wet Raw Materials</option>
                     <option value="dry">Dry Raw Materials</option>
                   </select>
+                </div>
+
+                <div className="form-group">
+                  <label className="form-label">Ideal Stock Level <span className="required-star">*</span></label>
+                  <input
+                    type="number"
+                    className={`form-input ${formErrors.min_stock ? 'error' : ''}`}
+                    value={formData.min_stock ?? ''}
+                    onChange={(e) => setFormData({...formData, min_stock: e.target.value})}
+                    placeholder="e.g. 40"
+                    min="0"
+                    step="any"
+                  />
+                  <small className="form-hint">
+                    The amount you normally want on hand, in the stock unit. Low Stock below{' '}
+                    {formData.material_type === 'wet' ? '50% (wet)' : '20% (dry)'} of this by default.
+                  </small>
+                  {formErrors.min_stock && <span className="form-error">{formErrors.min_stock}</span>}
                 </div>
 
                 <div className="form-group">
@@ -1871,7 +1917,7 @@ const IngredientManagement = () => {
                       <p>{formatCurrency(selectedItem.market_price || selectedItem.price)}</p>
                     </div>
                     <div className="detail-item">
-                      <label>Minimum Stock</label>
+                      <label>Ideal Stock Level</label>
                       <p>{formatStockQty(selectedItem.min_stock ?? 0, selectedItem.unit)}</p>
                     </div>
                     <div className="detail-item">

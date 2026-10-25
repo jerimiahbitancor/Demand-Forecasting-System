@@ -165,6 +165,29 @@ const EditIngredientModal = ({
 							<option value="dry">Dry Raw Materials</option>
 						</select>
 					</div>
+
+					<div className="form-group">
+						<label className="form-label">
+							Ideal Stock Level ({unitShortLabel(formData.unit)})
+							<span className="required-star">*</span>
+							<InfoTip>
+								The amount you normally want on hand. Current Stock Level Status is
+								{" "}stock ÷ ideal stock level: Low Stock below{" "}
+								{formData.material_type === "wet" ? "50% (wet raw materials)" : "20% (dry raw materials)"} by
+								{" "}default, Normal up to 100%, Excess above 100%. The percentages can be changed in Settings.
+							</InfoTip>
+						</label>
+						<input
+							type="number"
+							className={`form-input ${formErrors.min_stock ? "error" : ""}`}
+							value={formData.min_stock ?? ""}
+							onChange={(event) => update("min_stock", event.target.value)}
+							placeholder="e.g. 40"
+							min="0"
+							step="any"
+						/>
+						{formErrors.min_stock && <span className="form-error">{formErrors.min_stock}</span>}
+					</div>
 					<div className="inventory-recipes-panel">
 						<div className="inventory-recipes-title">Used in recipes</div>
 						<div className="inventory-recipes-hint">

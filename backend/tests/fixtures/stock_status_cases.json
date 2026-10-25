@@ -1,0 +1,39 @@
+{
+  "_about": "Hand-worked examples for the two stock level statuses (shared/stockStatusRules.json). Each line can be checked with a calculator: Stock % = stock / ideal level x 100; Coverage % = stock / forecasted demand x 100. Default thresholds: wet low 50%, dry low 20%; predicted critical 50%, sufficient 100%, above 200%. Checked by backend/tests/stockStatus.test.js.",
+  "current": [
+    { "label": "Rice (dry), 0 of 40 kg: no stock", "quantity": 0, "idealLevel": 40, "materialType": "dry", "expected": "Out of Stock", "stockPct": 0 },
+    { "label": "Rice (dry), 6 of 40 kg = 15% < 20%", "quantity": 6, "idealLevel": 40, "materialType": "dry", "expected": "Low Stock", "stockPct": 15 },
+    { "label": "Rice (dry), 7.99 of 40 kg = 19.975% < 20%", "quantity": 7.99, "idealLevel": 40, "materialType": "dry", "expected": "Low Stock", "stockPct": 19.98 },
+    { "label": "Rice (dry), 8 of 40 kg = exactly 20%: Normal starts AT the threshold", "quantity": 8, "idealLevel": 40, "materialType": "dry", "expected": "Normal Stock", "stockPct": 20 },
+    { "label": "Rice (dry), 8.04 of 40.2 kg = exactly 20% (a float would say 19.999999999999996)", "quantity": 8.04, "idealLevel": 40.2, "materialType": "dry", "expected": "Normal Stock", "stockPct": 20 },
+    { "label": "Rice (dry), 12 of 40 kg = 30%", "quantity": 12, "idealLevel": 40, "materialType": "dry", "expected": "Normal Stock", "stockPct": 30 },
+    { "label": "Rice (dry), 40 of 40 kg = exactly 100%: still Normal", "quantity": 40, "idealLevel": 40, "materialType": "dry", "expected": "Normal Stock", "stockPct": 100 },
+    { "label": "Rice (dry), 40.01 of 40 kg = 100.025% > 100%", "quantity": 40.01, "idealLevel": 40, "materialType": "dry", "expected": "Excess Stock", "stockPct": 100.03 },
+    { "label": "Soy Sauce (wet), 3 of 10 L = 30% < 50%: same % as the rice above, but wet", "quantity": 3, "idealLevel": 10, "materialType": "wet", "expected": "Low Stock", "stockPct": 30 },
+    { "label": "Pork (wet), 4.99 of 10 kg = 49.9% < 50%", "quantity": 4.99, "idealLevel": 10, "materialType": "wet", "expected": "Low Stock", "stockPct": 49.9 },
+    { "label": "Pork (wet), 5 of 10 kg = exactly 50%", "quantity": 5, "idealLevel": 10, "materialType": "wet", "expected": "Normal Stock", "stockPct": 50 },
+    { "label": "Pork (wet), 15 of 10 kg = 150%", "quantity": 15, "idealLevel": 10, "materialType": "wet", "expected": "Excess Stock", "stockPct": 150 },
+    { "label": "Egg (wet), 4 of 30 pcs = 13.33%", "quantity": 4, "idealLevel": 30, "materialType": "wet", "expected": "Low Stock", "stockPct": 13.33 },
+    { "label": "Stock stored as text by Postgres ('30.000000' of '40')", "quantity": "30.000000", "idealLevel": "40", "materialType": "dry", "expected": "Normal Stock", "stockPct": 75 },
+    { "label": "Material type missing: treated as dry (the column default)", "quantity": 3, "idealLevel": 10, "materialType": null, "expected": "Normal Stock", "stockPct": 30 },
+    { "label": "Ideal level not set: Normal Stock, flagged as not measured", "quantity": 5, "idealLevel": 0, "materialType": "dry", "expected": "Normal Stock", "stockPct": null, "idealLevelSet": false },
+    { "label": "Ideal level not set and no stock: Out of Stock", "quantity": 0, "idealLevel": 0, "materialType": "wet", "expected": "Out of Stock", "stockPct": null, "idealLevelSet": false },
+    { "label": "Negative stock (should never happen with the hard stop): Out of Stock", "quantity": -1, "idealLevel": 10, "materialType": "dry", "expected": "Out of Stock", "stockPct": -10 },
+    { "label": "Owner set wet low threshold to 40%: 45% is now Normal", "quantity": 4.5, "idealLevel": 10, "materialType": "wet", "thresholds": { "current_low_wet_pct": 40 }, "expected": "Normal Stock", "stockPct": 45 }
+  ],
+  "predicted": [
+    { "label": "No forecasted demand (0): Unassigned", "quantity": 10, "need": 0, "expected": "Unassigned", "coveragePct": null },
+    { "label": "No forecasted demand (missing): Unassigned", "quantity": 10, "need": null, "expected": "Unassigned", "coveragePct": null },
+    { "label": "No stock, demand 10: Critical Shortage", "quantity": 0, "need": 10, "expected": "Critical Shortage", "coveragePct": 0 },
+    { "label": "4.99 for demand 10 = 49.9% < 50%", "quantity": 4.99, "need": 10, "expected": "Critical Shortage", "coveragePct": 49.9 },
+    { "label": "5 for demand 10 = exactly 50%: Insufficient starts AT 50%", "quantity": 5, "need": 10, "expected": "Insufficient Supply", "coveragePct": 50 },
+    { "label": "9.99 for demand 10 = 99.9% < 100%", "quantity": 9.99, "need": 10, "expected": "Insufficient Supply", "coveragePct": 99.9 },
+    { "label": "10 for demand 10 = exactly 100%", "quantity": 10, "need": 10, "expected": "Sufficient Supply", "coveragePct": 100 },
+    { "label": "20 for demand 10 = exactly 200%: still Sufficient", "quantity": 20, "need": 10, "expected": "Sufficient Supply", "coveragePct": 200 },
+    { "label": "20.01 for demand 10 = 200.1% > 200%", "quantity": 20.01, "need": 10, "expected": "Above Forecast Limit", "coveragePct": 200.1 },
+    { "label": "Rice: 30 plates x 0.25 kg x 1.15 buffer = 8.625 kg demand; 6 kg on hand = 69.57%", "quantity": 6, "need": 8.625, "expected": "Insufficient Supply", "coveragePct": 69.57 },
+    { "label": "Rice: 18 kg on hand for 8.625 kg demand = 208.7%", "quantity": 18, "need": 8.625, "expected": "Above Forecast Limit", "coveragePct": 208.7 },
+    { "label": "Wet or dry does not matter for the predicted status (demand already says how much is needed)", "quantity": 3, "need": 10, "materialType": "wet", "expected": "Critical Shortage", "coveragePct": 30 },
+    { "label": "Owner set Above Forecast Limit to 150%: 160% is now Above", "quantity": 16, "need": 10, "thresholds": { "predicted_above_pct": 150 }, "expected": "Above Forecast Limit", "coveragePct": 160 }
+  ]
+}

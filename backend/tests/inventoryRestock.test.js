@@ -138,19 +138,34 @@ test('creating stock rejects unsupported material types', async () => {
   assert.equal(fake.writesTo('ingredients').length, 0);
 });
 
+test('creating stock rejects a negative or junk ideal stock level', async () => {
+  for (const min_stock of ['-5', 'abc']) {
+    const result = await callController(createInventoryItem, {
+      body: { name: `Bad Ideal ${min_stock}`, category: 'Ingredients', unit: 'Grams (g)', quantity: '1', price: '1', min_stock },
+    });
+    assert.equal(result.status, 400, min_stock);
+    assert.equal(result.body.error, 'Ideal stock level must be a valid number greater than or equal to 0');
+    assert.equal((fake.tables.ingredients || []).some((row) => row.name === `Bad Ideal ${min_stock}`), false);
+  }
+});
+
 test('ingredient list exposes separate stock statuses and omits removed purchase fields', async () => {
+  // Current Stock Level Status: stock vs ideal level (min_stock), wet 50% /
+  // dry 20%. Predicted: stock vs forecast need, 50 / 100 / 200% for wet AND
+  // dry (the wet/dry split belongs to the current status only; it used to be
+  // applied to the predicted one).
   const statusRows = [
     ['Out of Stock', 0, 10, 'dry'],
-    ['Low Stock', 2, 10, 'dry'],
-    ['Normal Stock', 5, 10, 'dry'],
-    ['Excess', 11, 10, 'dry'],
-    ['Critical Shortage', 0, 10, 'dry'],
-    ['Insufficient Supply', 1, 10, 'dry'],
-    ['Sufficient Supply', 2, 10, 'dry'],
-    ['Above Forecast Limit', 11, 10, 'dry'],
-    ['Wet Insufficient Supply', 4, 10, 'wet'],
-    ['Wet Sufficient Supply', 5, 10, 'wet'],
-    ['Unassigned', 5, 0, 'dry'],
+    ['Low Stock', 1, 10, 'dry'],              // 10% < 20%
+    ['Normal Stock', 2, 10, 'dry'],           // exactly 20%: Normal for dry
+    ['Wet Low Stock', 3, 10, 'wet'],          // 30% < 50%: Low for wet
+    ['Excess Stock', 11, 10, 'dry'],          // 110% > 100%
+    ['Critical Shortage', 0, 10, 'dry'],      // need 1, no stock
+    ['Critical Shortage 40%', 4, 10, 'wet'],  // 4 of need 10 = 40%
+    ['Insufficient Supply', 5, 10, 'dry'],    // 5 of need 10 = exactly 50%
+    ['Sufficient Supply', 10, 10, 'dry'],     // 10 of need 10 = 100%
+    ['Above Forecast Limit', 21, 10, 'wet'],  // 21 of need 10 = 210%
+    ['Unassigned', 5, 0, 'dry'],              // no need
   ];
   const ingredients = statusRows.map(([name, quantity, minStock, materialType], index) => ({
     id: index + 1,
@@ -176,8 +191,8 @@ test('ingredient list exposes separate stock statuses and omits removed purchase
     [2, 10],
     [3, 10],
     [4, 10],
-    [5, 1],
-    [6, 10],
+    [5, 10],
+    [6, 1],
     [7, 10],
     [8, 10],
     [9, 10],
@@ -197,14 +212,28 @@ test('ingredient list exposes separate stock statuses and omits removed purchase
   assert.equal(byName.get('Out of Stock').current_stock_status, 'Out of Stock');
   assert.equal(byName.get('Low Stock').current_stock_status, 'Low Stock');
   assert.equal(byName.get('Normal Stock').current_stock_status, 'Normal Stock');
-  assert.equal(byName.get('Excess').current_stock_status, 'Excess');
+  assert.equal(byName.get('Wet Low Stock').current_stock_status, 'Low Stock');
+  assert.equal(byName.get('Excess Stock').current_stock_status, 'Excess Stock');
+  assert.equal(byName.get('Low Stock').current_low_threshold_pct, 20, 'dry threshold applied');
+  assert.equal(byName.get('Wet Low Stock').current_low_threshold_pct, 50, 'wet threshold applied');
+  assert.equal(byName.get('Wet Low Stock').current_stock_pct, 30);
   assert.equal(byName.get('Critical Shortage').predicted_stock_status, 'Critical Shortage');
+  assert.equal(byName.get('Critical Shortage 40%').predicted_stock_status, 'Critical Shortage');
   assert.equal(byName.get('Insufficient Supply').predicted_stock_status, 'Insufficient Supply');
   assert.equal(byName.get('Sufficient Supply').predicted_stock_status, 'Sufficient Supply');
   assert.equal(byName.get('Above Forecast Limit').predicted_stock_status, 'Above Forecast Limit');
-  assert.equal(byName.get('Wet Insufficient Supply').predicted_stock_status, 'Insufficient Supply');
-  assert.equal(byName.get('Wet Sufficient Supply').predicted_stock_status, 'Sufficient Supply');
+  assert.equal(byName.get('Above Forecast Limit').predicted_coverage_pct, 210);
+  assert.equal(byName.get('Above Forecast Limit').predicted_action, 'Delay restocking — overstock detected');
   assert.equal(byName.get('Unassigned').predicted_stock_status, 'Unassigned');
+  // KPI cards count the CURRENT status; Low Stock Alerts = Low + Out.
+  assert.equal(response.payload.summary.criticalStock, 2, 'two rows have 0 stock');
+  // Low Stock: 'Low Stock' (dry 10%), 'Wet Low Stock' (30%) and the wet
+  // 'Critical Shortage 40%' row (4 of ideal 10 = 40% < 50%). Out: two rows.
+  assert.equal(response.payload.summary.lowStockAlerts, 5, '3 Low Stock + 2 Out of Stock');
+  assert.deepEqual(response.payload.stockThresholds, {
+    current_low_wet_pct: 50, current_low_dry_pct: 20,
+    predicted_critical_pct: 50, predicted_sufficient_pct: 100, predicted_above_pct: 200,
+  }, 'no saved thresholds: the defaults are used and returned');
   for (const item of response.payload.data) {
     assert.equal('pack_qty' in item, false);
     assert.equal('pack_unit' in item, false);
