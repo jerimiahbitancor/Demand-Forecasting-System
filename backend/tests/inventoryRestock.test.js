@@ -81,6 +81,7 @@ installFake(fake, {
 const {
   createInventoryItem,
   getInventoryItems,
+  updateInventoryItem,
   restockInventoryItem,
 } = require('../controllers/inventoryController');
 
@@ -122,6 +123,187 @@ test('creating stock saves the supported unit and entered per-unit cost', async 
   assert.equal(result.body.data.base_unit, 'g');
   assert.equal(result.body.data.unit_family, 'mass');
   assert.equal(result.body.data.material_type, 'dry');
+});
+
+test('creating stock saves the pack price and computes the price per piece', async () => {
+  const result = await callController(createInventoryItem, {
+    body: {
+      name: 'Egg Tray',
+      category: 'Meat & Poultry',
+      unit: 'Pieces (pcs)',
+      quantity: '30',
+      price: '999',
+      pieces_per_pack: '30',
+      pack_price: '255',
+    },
+  });
+
+  assert.equal(result.status, 200);
+  assert.equal(result.body.data.pieces_per_pack, '30');
+  assert.equal(result.body.data.pack_price, '255');
+  assert.equal(result.body.data.price, '8.5');
+});
+
+test('creating stock rejects a pack price that is not greater than 0', async () => {
+  for (const pack_price of ['0', '-5', 'abc']) {
+    const result = await callController(createInventoryItem, {
+      body: { name: `Bad Pack Price ${pack_price}`, category: 'Ingredients', unit: 'Pieces (pcs)', quantity: '1', price: '1', pack_price },
+    });
+    assert.equal(result.status, 400, pack_price);
+    assert.equal(result.body.error, 'Pack price must be a valid number greater than 0');
+  }
+});
+
+test('creating stock saves optional grams per pack and computes the price per gram', async () => {
+  const result = await callController(createInventoryItem, {
+    body: {
+      name: 'Bagged Sugar',
+      category: 'Ingredients',
+      unit: 'Grams (g)',
+      quantity: '1000',
+      price: '999',
+      grams_per_pack: '250',
+      pack_price: '500',
+    },
+  });
+
+  assert.equal(result.status, 200);
+  assert.equal(result.body.data.grams_per_pack, '250');
+  assert.equal(result.body.data.pack_price, '500');
+  assert.equal(result.body.data.price, '2');
+});
+
+test('grams per pack does not price a kilogram stock unit', async () => {
+  const result = await callController(createInventoryItem, {
+    body: {
+      name: 'Bagged Flour',
+      category: 'Ingredients',
+      unit: 'Kilograms (kg)',
+      quantity: '1',
+      price: '999',
+      grams_per_pack: '500',
+      pack_price: '100',
+    },
+  });
+
+  assert.equal(result.status, 200);
+  assert.equal(result.body.data.grams_per_pack, '500');
+  assert.equal(result.body.data.price, '999');
+});
+
+test('creating stock rejects a grams per pack that is not greater than 0', async () => {
+  for (const grams_per_pack of ['0', '-5', 'abc']) {
+    const result = await callController(createInventoryItem, {
+      body: { name: `Bad Pack Grams ${grams_per_pack}`, category: 'Ingredients', unit: 'Grams (g)', quantity: '1', price: '1', grams_per_pack },
+    });
+    assert.equal(result.status, 400, grams_per_pack);
+    assert.equal(result.body.error, 'Grams per pack must be a valid number greater than 0');
+  }
+});
+
+test('creating stock rejects a pieces per pack that is not greater than 0', async () => {
+  for (const pieces_per_pack of ['0', '-5', 'abc']) {
+    const result = await callController(createInventoryItem, {
+      body: { name: `Bad Pack ${pieces_per_pack}`, category: 'Ingredients', unit: 'Pieces (pcs)', quantity: '1', price: '1', pieces_per_pack },
+    });
+    assert.equal(result.status, 400, pieces_per_pack);
+    assert.equal(result.body.error, 'Pieces per pack must be a valid number greater than 0');
+  }
+});
+
+test('editing stock can set and clear the pieces per pack', async () => {
+  fake.reset({
+    ingredients: [{
+      id: 1,
+      name: 'Egg',
+      unit: 'Pieces (pcs)',
+      base_unit: 'pcs',
+      quantity: '30',
+      price: '8.5',
+      updated_by: null,
+    }],
+    inventory_transactions: [],
+    inventory_shortfall_balances: [],
+  });
+
+  const set = await callController(updateInventoryItem, {
+    id: 1,
+    body: { pieces_per_pack: '30' },
+  });
+  assert.equal(set.status, 200);
+  assert.equal(set.body.data.pieces_per_pack, '30');
+
+  const cleared = await callController(updateInventoryItem, {
+    id: 1,
+    body: { pieces_per_pack: '' },
+  });
+  assert.equal(cleared.status, 200);
+  assert.equal(cleared.body.data.pieces_per_pack, null);
+});
+
+test('editing stock can set the pack price and recomputes the price per piece', async () => {
+  fake.reset({
+    ingredients: [{
+      id: 1,
+      name: 'Egg',
+      unit: 'Pieces (pcs)',
+      base_unit: 'pcs',
+      quantity: '30',
+      price: '8.5',
+      pieces_per_pack: '30',
+      updated_by: null,
+    }],
+    inventory_transactions: [],
+    inventory_shortfall_balances: [],
+  });
+
+  const set = await callController(updateInventoryItem, {
+    id: 1,
+    body: { pack_price: '255' },
+  });
+  assert.equal(set.status, 200);
+  assert.equal(set.body.data.pack_price, '255');
+  assert.equal(set.body.data.price, '8.5');
+
+  const cleared = await callController(updateInventoryItem, {
+    id: 1,
+    body: { pack_price: '' },
+  });
+  assert.equal(cleared.status, 200);
+  assert.equal(cleared.body.data.pack_price, null);
+  assert.equal(cleared.body.data.price, '8.5', 'clearing the pack price leaves the per-piece cost');
+});
+
+test('editing stock can set the optional grams per pack and recomputes the price per gram', async () => {
+  fake.reset({
+    ingredients: [{
+      id: 1,
+      name: 'Bagged Sugar',
+      unit: 'Grams (g)',
+      base_unit: 'g',
+      quantity: '1000',
+      price: '1.5',
+      updated_by: null,
+    }],
+    inventory_transactions: [],
+    inventory_shortfall_balances: [],
+  });
+
+  const set = await callController(updateInventoryItem, {
+    id: 1,
+    body: { grams_per_pack: '250', pack_price: '500' },
+  });
+  assert.equal(set.status, 200);
+  assert.equal(set.body.data.grams_per_pack, '250');
+  assert.equal(set.body.data.price, '2');
+
+  const cleared = await callController(updateInventoryItem, {
+    id: 1,
+    body: { grams_per_pack: '', pack_price: '' },
+  });
+  assert.equal(cleared.status, 200);
+  assert.equal(cleared.body.data.grams_per_pack, null);
+  assert.equal(cleared.body.data.price, '2', 'clearing the pack data leaves the per-gram cost');
 });
 
 test('creating stock rejects unsupported material types', async () => {
@@ -239,9 +421,10 @@ test('ingredient list exposes separate stock statuses and omits removed purchase
   for (const item of response.payload.data) {
     assert.equal('pack_qty' in item, false);
     assert.equal('pack_unit' in item, false);
-    assert.equal('pack_price' in item, false);
+    assert.equal('pack_size' in item, false);
     assert.equal('grams_per_cup' in item, false);
   }
+  assert.equal(byName.get('Out of Stock').pack_price, 10, 'pack price is no longer a removed legacy field');
   ingredientDailyNeeds = new Map();
   fake.reset({
     ingredients: [{

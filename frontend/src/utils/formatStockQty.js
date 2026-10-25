@@ -2,9 +2,7 @@
 // the database keeps the full value; the screen shows up to 3 decimals and
 // hides insignificant trailing zeros.
 //   4.0999999999 kg -> "4.1"     0.706999999 L -> "0.707"
-// Count units (pcs) -> a whole number when whole,
-// otherwise up to 3 decimals without trailing zeros: 36 pcs -> "36",
-// 0.5 pcs -> "0.5".
+// Count units (pcs) -> a whole number: 36.4 pcs -> "36".
 // Display only: never round a value before it is saved or used in math.
 
 import { unitKindOf } from './recipeUnits.js';
@@ -35,8 +33,7 @@ export function formatStockQty(value, unit) {
   const n = Number(value);
   if (!Number.isFinite(n)) return '—';
   if (isCountUnit(unit)) {
-    // Up to 3 decimals, trailing zeros dropped: 36 -> "36", 0.5 -> "0.5".
-    return String(Number(n.toFixed(3)));
+    return String(Math.round(n));
   }
   return n.toFixed(3).replace(/(?:\.0+|(\.\d*?[1-9])0+)$/, '$1');
 }

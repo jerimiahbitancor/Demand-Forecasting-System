@@ -4,14 +4,26 @@
   gap: 0.75rem 1rem;
 }
 
-/* Wide screens: three columns so the 10 fields fit in 4 rows instead of 5,
-   keeping the dialog short. Scoped with an extra class so it outranks the
-   generic .inventory-modal-body .form-grid rule regardless of stylesheet
-   order. */
+/* Wide screens: three columns keep the dialog short even with the pack
+   fields. Scoped with an extra class so it outranks the generic
+   .inventory-modal-body .form-grid rule regardless of stylesheet order. */
 @media (min-width: 993px) {
+  .inventory-modal-content.inventory-edit-modal {
+    max-height: 82vh;
+  }
+
   .inventory-modal-content.inventory-edit-modal .inventory-edit-form-grid {
     grid-template-columns: repeat(3, 1fr);
     gap: 0.5rem 0.875rem;
+  }
+
+  .inventory-modal-content.inventory-edit-modal .inventory-modal-body {
+    padding-top: 0.25rem;
+    padding-bottom: 0.75rem;
+  }
+
+  .inventory-modal-content.inventory-edit-modal .form-group {
+    gap: 0.25rem;
   }
 
   .inventory-modal-content.inventory-edit-modal .inventory-modal-header {
@@ -19,7 +31,7 @@
   }
 
   .inventory-modal-content.inventory-edit-modal .inventory-modal-footer {
-    padding: 0.75rem 1.5rem;
+    padding: 0.65rem 1.5rem;
   }
 }
 
@@ -30,7 +42,7 @@
 }
 
 /* Where the recipe portions of this item live. Read only: the portion
-   belongs to the dish, so it is edited in the Menu Builder. */
+   belongs to the dish, so it is edited in the Product Builder. */
 .inventory-modal-content.inventory-edit-modal .inventory-recipes-panel {
   grid-column: 1 / -1;
   margin-top: 0.25rem;
