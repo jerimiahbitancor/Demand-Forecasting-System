@@ -5,8 +5,9 @@
 //   - safety_buffer_percentage (0-50, default 15) — read by ml-service
 //     (get_safety_buffer_percentage) and analyticsService.js.
 //   - food_cost_warning_threshold (default 35) — migration 006.
-//   - the five STOCK LEVEL THRESHOLDS (migration 021, Oct 25 2026):
-//       current_low_wet_pct (50), current_low_dry_pct (20)      Current Stock Level Status
+//   - the six STOCK LEVEL THRESHOLDS (migrations 021 + 022, Oct 25 2026):
+//       current_low_wet_pct (50), current_low_dry_pct (20),
+//       current_excess_pct (100)                                Current Stock Level Status
 //       predicted_critical_pct (50), predicted_sufficient_pct (100),
 //       predicted_above_pct (200)                                Predicted Stock Level Status
 //     Validated by utils/stockStatus.js validateThresholds(); every status
@@ -18,6 +19,7 @@ const { queueStockRefresh } = require('../services/notificationService');
 const {
   normalizeThresholds,
   validateThresholds,
+  DEFAULT_STOCK_THRESHOLDS,
   THRESHOLD_KEYS,
 } = require('../utils/stockStatus');
 const { invalidateStockThresholds } = require('../services/stockThresholdService');
@@ -43,8 +45,9 @@ function toApiShape(row) {
     food_cost_warning_threshold: row.food_cost_warning_threshold != null ? Number(row.food_cost_warning_threshold) : 35,
     ...thresholds,
     // false until migration 021 has been run: the thresholds shown are the
-    // defaults and cannot be saved yet.
-    stock_thresholds_saved: THRESHOLD_KEYS.every((key) => row[key] !== undefined),
+    // defaults and cannot be saved yet. excess_threshold_saved: migration 022.
+    stock_thresholds_saved: THRESHOLD_KEYS.filter((key) => key !== 'current_excess_pct').every((key) => row[key] !== undefined),
+    excess_threshold_saved: row.current_excess_pct !== undefined,
     updated_at: row.updated_at,
   };
 }
@@ -121,6 +124,18 @@ class ForecastConfigController {
           return res.status(400).json({ success: false, error: checked.error });
         }
         for (const key of THRESHOLD_KEYS) row[key] = checked.values[key];
+        // current_excess_pct arrives with migration 022. Until it is run the
+        // column does not exist: keep saving the other thresholds, and refuse
+        // only a CHANGED Excess value, naming the migration.
+        if (existingRow && existingRow.current_excess_pct === undefined) {
+          if (Number(row.current_excess_pct) !== DEFAULT_STOCK_THRESHOLDS.current_excess_pct) {
+            return res.status(400).json({
+              success: false,
+              error: 'Run migration 022_current_excess_threshold.sql in Supabase before changing the Excess Stock threshold.',
+            });
+          }
+          delete row.current_excess_pct;
+        }
       }
 
       let result;

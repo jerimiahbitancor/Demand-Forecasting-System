@@ -159,15 +159,15 @@ const USER_MANUAL = {
     </ul>
     <h4>Ingredient Demand</h4>
     <ul>
-      <li><strong>Weekly Ingredient Demand</strong> is a heatmap of how much of each ingredient you need, Monday to Sunday. Darker cells mean higher demand than that ingredient's usual amount (Normal, Above Normal, or High Demand Day).</li>
-      <li><strong>Daily Ingredient Demand</strong> shows today's needs based on predicted sales and current stock: <strong>Forecasted Need</strong>, <strong>On Stock</strong>, <strong>Status</strong>, <strong>To Buy</strong>, <strong>Unit</strong>, <strong>Market Price</strong>, and <strong>Est. Cost</strong>. Status runs from <strong>Excess</strong> (delay restock) through <strong>Normal</strong> and <strong>Low</strong> (order soon) to <strong>Critical</strong> (order now).</li>
+      <li><strong>Weekly Ingredient Demand</strong> is an unbuffered heatmap of each ingredient's predicted requirement, Monday to Sunday. Quantities include their units. Darker cells mean higher demand than that ingredient's usual amount (Normal, Above Normal, or High Demand Day).</li>
+      <li><strong>Daily Ingredient Demand</strong> shows the raw predicted requirement, safety buffer, and forecasted need including that buffer, along with stock, quantity to buy, configured price per unit, estimated cost, and <strong>Predicted Stock Level Status</strong>. Ingredient quantities use two decimal places; count units are whole numbers. Estimated cost uses the ingredient's configured price per stock unit.</li>
     </ul>
 
     <h3>7. The Grocery List</h3>
     <p>The <strong>Grocery List</strong> card on the Ingredient Demand tab turns the forecast into a shopping list.</p>
     <ul>
       <li>Toggle between <strong>Weekly</strong> and <strong>Daily</strong>; the date label updates accordingly.</li>
-      <li>Quantities are the forecasted demand (plus a safety buffer) minus your current stock, so you only buy what you still need.</li>
+      <li>Daily and weekly grocery order quantities include the safety buffer and subtract current stock, so you only buy what you still need. The weekly demand heatmap itself remains unbuffered.</li>
       <li>Cards show the <strong>Est. Total Cost</strong> and the <strong>Total Items to Buy</strong>, and the first few items are previewed.</li>
       <li>Select <strong>View Full List</strong> to see everything grouped by category (Item, Qty, Unit, Market Price, Notes), or <strong>Download</strong> to save the list as a PDF for printing.</li>
     </ul>

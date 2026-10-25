@@ -207,3 +207,19 @@
    last row. */
 .fc-card.fc-right { height: auto; }
 .fc-card.fc-right .fc-save { margin-top: 20px; }
+
+/* Stock Level Thresholds as two status tables (Oct 25 2026). */
+.fc-status-table { width: 100%; border-collapse: collapse; margin-top: 6px; font-size: 11px; }
+.fc-status-table th { text-align: left; font-size: 10px; font-weight: 600; color: var(--color-text-secondary); padding: 4px 6px; border-bottom: 1px solid var(--color-border); }
+.fc-status-table td { padding: 7px 6px; border-bottom: 1px solid var(--color-border); vertical-align: middle; color: var(--color-text-primary); }
+.fc-status-table td:first-child { font-weight: 600; white-space: nowrap; }
+.fc-status-fixed { color: var(--color-text-secondary); font-size: 10px; }
+.fc-status-inputs { display: flex; flex-wrap: wrap; gap: 6px; }
+.fc-status-input { display: inline-flex; align-items: center; gap: 4px; }
+.fc-status-input small { color: var(--color-text-secondary); font-size: 10px; }
+.fc-status-input input { width: 58px; height: 32px; padding: 4px; text-align: center; font-size: 13px; font-weight: 600; color: var(--color-text-primary); background: var(--color-bg-white); border: 1px solid var(--color-border); border-radius: 6px; }
+@media (max-width: 520px) {
+  .fc-status-table thead { display: none; }
+  .fc-status-table tr { display: grid; grid-template-columns: 1fr; padding: 6px 0; border-bottom: 1px solid var(--color-border); }
+  .fc-status-table td { border: 0; padding: 2px 4px; }
+}

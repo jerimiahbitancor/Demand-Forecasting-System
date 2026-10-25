@@ -415,7 +415,7 @@ test('ingredient list exposes separate stock statuses and omits removed purchase
   // 'Critical Shortage 40%' row (4 of ideal 10 = 40% < 50%). Out: two rows.
   assert.equal(response.payload.summary.lowStockAlerts, 5, '3 Low Stock + 2 Out of Stock');
   assert.deepEqual(response.payload.stockThresholds, {
-    current_low_wet_pct: 50, current_low_dry_pct: 20,
+    current_low_wet_pct: 50, current_low_dry_pct: 20, current_excess_pct: 100,
     predicted_critical_pct: 50, predicted_sufficient_pct: 100, predicted_above_pct: 200,
   }, 'no saved thresholds: the defaults are used and returned');
   for (const item of response.payload.data) {

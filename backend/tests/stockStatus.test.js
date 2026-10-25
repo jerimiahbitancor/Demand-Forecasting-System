@@ -26,6 +26,7 @@ test('defaults are the agreed table: wet 50%, dry 20%; predicted 50 / 100 / 200%
   assert.deepEqual(DEFAULT_STOCK_THRESHOLDS, {
     current_low_wet_pct: 50,
     current_low_dry_pct: 20,
+    current_excess_pct: 100,
     predicted_critical_pct: 50,
     predicted_sufficient_pct: 100,
     predicted_above_pct: 200,
@@ -116,4 +117,22 @@ test('validateThresholds: refuses out-of-range and badly ordered values with a c
     assert.equal(r.ok, false, JSON.stringify(input));
     assert.match(r.error, message);
   }
+});
+
+// ------------------------------------------- Oct 25 2026: Excess threshold
+test('Excess Stock threshold is configurable; 100% stays the default', () => {
+  const t = { ...DEFAULT_STOCK_THRESHOLDS, current_excess_pct: 150 };
+  // 12 of an ideal 10 = 120%: Excess at the default, Normal when Excess starts above 150%.
+  assert.equal(currentStockStatus({ quantity: 12, idealLevel: 10, materialType: 'dry' }).status, 'Excess Stock');
+  assert.equal(currentStockStatus({ quantity: 12, idealLevel: 10, materialType: 'dry' }, t).status, 'Normal Stock');
+  assert.equal(currentStockStatus({ quantity: 15, idealLevel: 10, materialType: 'dry' }, t).status, 'Normal Stock', 'exactly 150% is still Normal');
+  assert.equal(currentStockStatus({ quantity: 15.01, idealLevel: 10, materialType: 'dry' }, t).status, 'Excess Stock');
+});
+
+test('Excess threshold must be above both Low thresholds', () => {
+  const bad = validateThresholds({ current_excess_pct: 100, current_low_wet_pct: 99 }, DEFAULT_STOCK_THRESHOLDS);
+  assert.equal(bad.ok, true, '99 < 100 is allowed');
+  const r = validateThresholds({ current_excess_pct: 99 }, DEFAULT_STOCK_THRESHOLDS);
+  assert.equal(r.ok, false);
+  assert.equal(normalizeThresholds({ ...DEFAULT_STOCK_THRESHOLDS, current_excess_pct: 40, current_low_wet_pct: 50 }).current_excess_pct, 100, 'a broken stored row falls back to 100');
 });

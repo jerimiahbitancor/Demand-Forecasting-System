@@ -1,0 +1,20 @@
+{
+  "_about": "Tests that were ALREADY failing when CI was added (Oct 25 2026): the old pack/cup tests that migrations 017-019 made obsolete. CI fails only on a failure NOT listed here. Remove a line when that test is fixed or deleted; never add one to make CI pass without the owner's OK.",
+  "backend-tests": {
+    "code": 1,
+    "failed": [
+      "creating stock rejects unsupported material types"
+    ]
+  },
+  "frontend-tests": {
+    "code": 1,
+    "failed": [
+      "tests/ingredientPurchase.test.mjs",
+      "restock by pack keeps the note of the owner and the number of packs"
+    ]
+  },
+  "frontend-build": {
+    "code": 0,
+    "failed": []
+  }
+}
