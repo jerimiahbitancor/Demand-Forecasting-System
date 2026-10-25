@@ -8,8 +8,8 @@ import jsPDF from 'jspdf';
 import autoTable from 'jspdf-autotable';
 import * as XLSX from 'xlsx';
 import { getStoredBusinessLogo } from '../context/BusinessProfileContext';
-import { formatStockQty } from '../utils/formatStockQty.js';
 import { formatItemsSold } from '../utils/formatItemsSold.js';
+import { formatIngredientDemandQty, formatIngredientDemandMoney } from '../utils/formatIngredientDemand.js';
 
 // ---------------------------------------------------------------------
 // Palette — pulled directly from the app's CSS variables so the PDF
@@ -452,9 +452,9 @@ export async function buildIngredientDemandPDF({
 
   y = drawSectionTitle(doc, y, `Shopping list \u2014 ${shoppingDateLabel || 'selected day'}`);
   y = drawTable(doc, y, {
-    head: ['No.', 'Ingredient', 'Used in', 'Base Qty Needed', '+ Buffer', 'Total to Buy', 'Unit'],
+    head: ['No.', 'Ingredient', 'Used in', 'Raw Forecast', 'Safety Buffer', 'Forecasted Need'],
     body: shoppingListRows.map((r, i) => [
-      i + 1, r.ingredient, r.linkedDishes, r.baseQty, `+ ${r.buffer}`, r.total, r.unit,
+      i + 1, r.ingredient, r.linkedDishes, r.baseQty, `+ ${r.buffer}`, r.total,
     ]),
     columnStyles: { 0: { cellWidth: 10 } },
   });
@@ -494,6 +494,7 @@ export async function buildGroceryListPDF({
   groceryMode,
   itemsToDownload,
   GROCERY_CATEGORIES,
+  estTotalCost,
 }) {
   const doc = new jsPDF({ unit: 'mm', format: 'a5', orientation: 'portrait' });
   const [logoDataUrl, pesoFontBase64] = await Promise.all([
@@ -543,13 +544,13 @@ export async function buildGroceryListPDF({
   const now = new Date();
   const generatedLabel = `Generated ${now.toLocaleDateString('en-PH', { month: 'short', day: 'numeric', year: 'numeric' })}, ${now.toLocaleTimeString('en-PH', { hour: 'numeric', minute: '2-digit' })}`;
   doc.text(generatedLabel, rightX, headY + 13.5, { align: 'right' });
-  doc.text('Market Price Source: Department of Agriculture, Puregold, etc.', rightX, headY + 17, { align: 'right' });
+  doc.text('Price basis: configured ingredient price per stock unit', rightX, headY + 17, { align: 'right' });
   doc.setDrawColor(122, 1, 1);
   doc.setLineWidth(0.6);
   doc.line(MARGIN, headY + 20, MARGIN + CONTENT_W, headY + 20);
 
   let y = headY + 26;
-  const totalCost = itemsToDownload.reduce((sum, i) => sum + (i.estCost || 0), 0);
+  const totalCost = Number(estTotalCost ?? 0);
   const cardW = (CONTENT_W - 6) / 2;
   const cardH = 18;
 
@@ -564,7 +565,7 @@ export async function buildGroceryListPDF({
   doc.setTextColor(28, 38, 50);
   doc.setFont(pesoFontReady ? PESO_FONT : 'courier', pesoFontReady ? 'normal' : 'bold');
   doc.setFontSize(13);
-  doc.text(`${peso} ${totalCost.toLocaleString()}`, MARGIN + cardW / 2, y + 13, { align: 'center' });
+  doc.text(`${peso} ${totalCost.toLocaleString('en-PH', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`, MARGIN + cardW / 2, y + 13, { align: 'center' });
 
   const card2X = MARGIN + cardW + 6;
   doc.setFillColor(237, 233, 222);
@@ -594,14 +595,13 @@ export async function buildGroceryListPDF({
   const filledCats = GROCERY_CATEGORIES
     .map((cat) => ({ cat, items: itemsToDownload.filter((i) => i.category === cat) }))
     .filter(({ items }) => items.length > 0);
-  const TABLE_HEAD = [['', 'Item', 'Qty', 'Unit', 'Market Price', 'Notes']];
+  const TABLE_HEAD = [['', 'Item', 'Qty to Buy', 'Price / Unit', 'Notes']];
   const COLUMN_STYLES = {
     0: { cellWidth: 8, halign: 'center' },
     1: { cellWidth: 'auto' },
-    2: { cellWidth: 14, halign: 'right' },
-    3: { cellWidth: 14 },
-    4: { cellWidth: 34, halign: 'right' },
-    5: { cellWidth: 24 },
+    2: { cellWidth: 22, halign: 'right' },
+    3: { cellWidth: 30, halign: 'right' },
+    4: { cellWidth: 28 },
   };
   const drawCheckbox = (data) => {
     if (data.section === 'body' && data.column.index === 0) {
@@ -647,10 +647,8 @@ export async function buildGroceryListPDF({
       body: items.map((item) => [
         '',
         item.name,
-        // Stock amounts: 3 decimals (whole number for count units).
-        formatStockQty(item.toBuy, item.unit),
-        item.unit,
-        `${peso}${item.marketPrice}/${item.unit}`,
+        formatIngredientDemandQty(item.toBuy, item.unit),
+        item.marketPrice == null ? '—' : `${formatIngredientDemandMoney(item.marketPrice)}/${item.unit}`,
         '',
       ]),
       margin: { left: MARGIN, right: MARGIN },

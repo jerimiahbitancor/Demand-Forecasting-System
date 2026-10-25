@@ -291,7 +291,7 @@ const ingredientRow = (id, name, quantity, unit = 'kg', min_stock = 0) => ({ id,
 // salesUploaded: Fri 16 and Sat 17 are answered in business_days.
 function seedWorld({ riceQty = 8, eggQty = 50, users = [{ id: 7 }], forecastRan = true, salesUploaded = true } = {}) {
   const ingredients = [
-    ingredientRow(1, 'Rice', riceQty),
+    { ...ingredientRow(1, 'Rice', riceQty), price: 40 },
     ingredientRow(2, 'Egg', eggQty, 'pcs'),
     ingredientRow(3, 'Salt', 0.5, 'kg', 3), // no recipe -> No Forecast; 0.5 of ideal 3 = 16.7% < 20% -> Low Stock
   ];
@@ -523,9 +523,16 @@ test('to buy: the Grocery List (getIngredientDemandAnalytics) rounds count units
   }
   const egg = out.groceryList.all.find((r) => r.name === 'Egg');
   const rice = out.groceryList.all.find((r) => r.name === 'Rice');
+  assert.equal(rice.rawForecastedNeed, 20);
+  assert.equal(rice.safetyBuffer, 3);
+  assert.equal(rice.forecastedNeed, 23);
   assert.equal(egg.toBuy, 65);
   assert.equal(Number(rice.toBuy.toFixed(6)), 15);
-  assert.equal(Number(rice.estCost.toFixed(6)), 750);
+  assert.equal(Number(rice.estCost.toFixed(6)), 600, '15 kg × configured ingredient price ₱40/kg, not external market price ₱50/kg');
+
+  const weeklyRice = out.weekly.rows.find((r) => r.ingredient === 'Rice');
+  assert.deepEqual(weeklyRice.values, [0, 0, 0, 0, 0, 20, 20], 'heatmap values show predicted need without the daily safety buffer');
+  assert.equal(out.groceryListWeekly.all.find((r) => r.name === 'Rice').toBuy, 38, 'weekly grocery retains its safety buffer independently of the unbuffered heatmap');
 });
 
 test("first email of the day waits for today's 9:00 forecast; bell is updated meanwhile", async () => {

@@ -14,14 +14,15 @@ const {
   loadStatusInputs, NEW_UNTIL_SALES_DAYS, DISCONTINUED_AFTER_OPEN_DAYS,
 } = require('./productStatusService');
 const { supabaseAdmin } = require('../config/supabase');
+const Decimal = require('decimal.js');
 const dayjs = require('dayjs');
 const utc = require('dayjs/plugin/utc');
 const timezone = require('dayjs/plugin/timezone');
 dayjs.extend(utc);
 dayjs.extend(timezone);
 const PH_TZ = 'Asia/Manila';
-const { convertRecipeQuantity, parseRecipeQuantity, isMissingColumnError, toBuyQuantity } = require('../utils/recipeUnits');
-const { legacyPredictedLabel, DEFAULT_STOCK_THRESHOLDS } = require('../utils/stockStatus');
+const { convertRecipeQuantity, parseRecipeQuantity, isMissingColumnError, isCountUnit } = require('../utils/recipeUnits');
+const { legacyPredictedLabel, predictedStockStatus, DEFAULT_STOCK_THRESHOLDS } = require('../utils/stockStatus');
 const { getStockThresholds } = require('./stockThresholdService');
 
 // The PREDICTED STOCK LEVEL STATUS (stock vs forecasted demand), in the
@@ -35,6 +36,35 @@ function computeStockStatus(onStock, forecastedNeed, thresholds = DEFAULT_STOCK_
   return legacyPredictedLabel(onStock, forecastedNeed, thresholds);
 }
 
+function decimalValue(value) {
+  const result = new Decimal(value == null || value === '' ? 0 : String(value));
+  if (!result.isFinite()) throw new TypeError(`Invalid ingredient quantity or price: ${value}`);
+  return result;
+}
+
+function roundIngredientQuantity(value, unit, countRounding = Decimal.ROUND_CEIL) {
+  const amount = decimalValue(value);
+  return amount.toDecimalPlaces(isCountUnit(unit) ? 0 : 2, isCountUnit(unit) ? countRounding : Decimal.ROUND_HALF_UP).toNumber();
+}
+
+function amountToBuy(need, stock, unit) {
+  const shortfall = Decimal.max(0, decimalValue(need).minus(decimalValue(stock)));
+  return roundIngredientQuantity(shortfall, unit, Decimal.ROUND_CEIL);
+}
+
+function costForQuantity(quantity, unitPrice) {
+  if (unitPrice === null || unitPrice === undefined) return null;
+  return decimalValue(quantity).mul(decimalValue(unitPrice)).toDecimalPlaces(2, Decimal.ROUND_HALF_UP).toNumber();
+}
+
+function roundMoney(value) {
+  return decimalValue(value).toDecimalPlaces(2, Decimal.ROUND_HALF_UP).toNumber();
+}
+
+function safetyBufferMultiplier(percentage) {
+  return new Decimal(1).plus(decimalValue(percentage).div(100));
+}
+
 // Worse-status-wins ranking, used to find a product's "bottleneck"
 // ingredient (Product Performance > Demand Classification) and to rank
 // items for the Grocery List preview.
@@ -44,21 +74,24 @@ function worseStockStatus(a, b) {
   return (STOCK_SEVERITY[a] ?? -1) >= (STOCK_SEVERITY[b] ?? -1) ? a : b;
 }
 
-// Weekly Grocery List: the same rules as the daily list, applied to the
-// WEEK's need. rows: [{ ingredientId, name, category, unit, currentStock,
-// usedIn, values: number[7] }] where values are the heatmap's daily needs
-// (safety buffer already included). priceOf(ingredientId) -> price or null.
+// Weekly Grocery List consumes the seven daily needs supplied by its caller.
+// The analytics endpoint supplies buffered values here while keeping the
+// weekly heatmap unbuffered. priceOf is retained for helper callers; the
+// endpoint uses ingredients.price directly.
 //   weekly need = sum of the 7 values
 //   status      = computeStockStatus(stock, weekly need); Critical + Low only
-//   toBuy       = toBuyQuantity(weekly need, stock, unit) (count units round up)
-//   estCost     = toBuy × latest market price, null without a price
+//   toBuy       = weekly need - stock (count units round up)
+//   estCost     = toBuy × configured ingredient unit price, null without a price
 function buildWeeklyGroceryList(rows = [], priceOf = () => null, thresholds = DEFAULT_STOCK_THRESHOLDS) {
   const all = rows
     .map((row) => {
-      const weeklyNeed = (row.values || []).reduce((sum, v) => sum + (Number(v) || 0), 0);
+      const weeklyNeed = roundIngredientQuantity(
+        (row.values || []).reduce((sum, value) => sum.plus(decimalValue(value)), new Decimal(0)),
+        row.unit,
+      );
       const status = computeStockStatus(row.currentStock, weeklyNeed, thresholds);
-      const toBuy = toBuyQuantity(weeklyNeed, row.currentStock, row.unit);
-      const marketPrice = priceOf(row.ingredientId) ?? null;
+      const toBuy = amountToBuy(weeklyNeed, row.currentStock, row.unit);
+      const marketPrice = row.unitPrice ?? priceOf(row.ingredientId) ?? null;
       return {
         ingredientId: row.ingredientId,
         name: row.name,
@@ -68,9 +101,10 @@ function buildWeeklyGroceryList(rows = [], priceOf = () => null, thresholds = DE
         onStock: row.currentStock,
         unit: row.unit,
         status,
+        predictedStatus: predictedStockStatus({ quantity: row.currentStock, need: weeklyNeed }, thresholds).status,
         toBuy,
         marketPrice,
-        estCost: toBuy > 0 && marketPrice !== null ? toBuy * marketPrice : null,
+        estCost: toBuy > 0 ? costForQuantity(toBuy, marketPrice) : null,
       };
     })
     .filter((item) => item.status === 'Critical' || item.status === 'Low')
@@ -78,7 +112,7 @@ function buildWeeklyGroceryList(rows = [], priceOf = () => null, thresholds = DE
   return {
     all,
     totals: {
-      estTotalCost: all.reduce((sum, i) => sum + (i.estCost || 0), 0),
+      estTotalCost: roundMoney(all.reduce((sum, item) => sum.plus(item.estCost || 0), new Decimal(0))),
       totalItemsToBuy: all.length,
     },
   };
@@ -565,8 +599,9 @@ async function getRecipeMap() {
       category: ingredient.category,
       unit: ingredient.unit,
       unitCost: Number(ingredient.price) || 0,
-      currentStock: Number(ingredient.quantity) || 0,
-      qtyPerServing: Number(normalizedPerServing) || 0,
+      unitPrice: ingredient.price == null ? null : String(ingredient.price),
+      currentStock: ingredient.quantity == null ? '0' : String(ingredient.quantity),
+      qtyPerServing: normalizedPerServing == null ? '0' : String(normalizedPerServing),
     };
 if (!map.has(row.product_id)) map.set(row.product_id, []);
     map.get(row.product_id).push(entry);
@@ -585,18 +620,49 @@ if (!map.has(row.product_id)) map.set(row.product_id, []);
 // ingredient (restock email "For ..."); it never changes `need`.
 function sumIngredientNeeds(forecastRows, recipeMap, bufferMultiplier) {
   const byIngredient = new Map();
+  const multiplier = decimalValue(bufferMultiplier);
   for (const f of forecastRows || []) {
     for (const item of recipeMap.get(f.product_id) || []) {
       let entry = byIngredient.get(item.ingredientId);
       if (!entry) {
-        entry = { ingredientId: item.ingredientId, item, need: 0, productIds: new Set(), byProduct: new Map() };
+        entry = {
+          ingredientId: item.ingredientId,
+          item,
+          need: new Decimal(0),
+          rawNeed: new Decimal(0),
+          productIds: new Set(),
+          byProduct: new Map(),
+        };
         byIngredient.set(item.ingredientId, entry);
       }
-      const part = Number(f.predicted_quantity) * item.qtyPerServing * bufferMultiplier;
-      entry.need += part;
+      const rawPart = decimalValue(f.predicted_quantity).mul(decimalValue(item.qtyPerServing));
+      const part = rawPart.mul(multiplier);
+      entry.rawNeed = entry.rawNeed.plus(rawPart);
+      entry.need = entry.need.plus(part);
       entry.productIds.add(f.product_id);
-      entry.byProduct.set(f.product_id, (entry.byProduct.get(f.product_id) || 0) + part);
+      entry.byProduct.set(f.product_id, (entry.byProduct.get(f.product_id) || new Decimal(0)).plus(part));
     }
+  }
+  for (const entry of byIngredient.values()) {
+    const rawNeed = roundIngredientQuantity(entry.rawNeed, entry.item.unit);
+    const need = isCountUnit(entry.item.unit)
+      ? roundIngredientQuantity(entry.need, entry.item.unit)
+      : roundIngredientQuantity(
+        decimalValue(rawNeed).plus(
+          roundIngredientQuantity(
+            decimalValue(rawNeed).mul(multiplier.minus(1)),
+            entry.item.unit,
+          ),
+        ),
+        entry.item.unit,
+      );
+    entry.need = need;
+    entry.rawNeed = rawNeed;
+    entry.safetyBuffer = roundIngredientQuantity(decimalValue(need).minus(rawNeed), entry.item.unit);
+    entry.byProduct = new Map([...entry.byProduct].map(([productId, quantity]) => [
+      productId,
+      roundIngredientQuantity(quantity, entry.item.unit),
+    ]));
   }
   return byIngredient;
 }
@@ -849,7 +915,7 @@ async function getProductPerformanceAnalytics({ from, to, demandFrom, demandTo }
   }
   const stockThresholds = await getStockThresholds();
   const safetyBufferPct = await getSafetyBufferPercentage();
-  const bufferMultiplier = 1 + safetyBufferPct / 100;
+  const bufferMultiplier = safetyBufferMultiplier(safetyBufferPct);
 
   const { data: products, error: productsError } = await supabaseAdmin
     .from('products')
@@ -910,7 +976,10 @@ async function getProductPerformanceAnalytics({ from, to, demandFrom, demandTo }
       let bottleneckStatus = null;
       let bottleneckIngredient = null;
       for (const item of recipeItems) {
-        const need = Number(f.predicted_quantity) * item.qtyPerServing * bufferMultiplier;
+        const need = roundIngredientQuantity(
+          decimalValue(f.predicted_quantity).mul(decimalValue(item.qtyPerServing)).mul(bufferMultiplier),
+          item.unit,
+        );
         const status = computeStockStatus(item.currentStock, need, stockThresholds);
         if (bottleneckStatus === null || worseStockStatus(status, bottleneckStatus) === status) {
           bottleneckStatus = status;
@@ -1153,7 +1222,7 @@ async function getIngredientDailyNeeds(date) {
 // three read the same number.
 async function getIngredientDailyNeedDetails(date) {
   const safetyBufferPct = await getSafetyBufferPercentage();
-  const bufferMultiplier = 1 + safetyBufferPct / 100;
+  const bufferMultiplier = safetyBufferMultiplier(safetyBufferPct);
   const targetDate = date || defaultDateRange().today;
 
   const { data: forecastRows, error } = await supabaseAdmin
@@ -1189,7 +1258,7 @@ async function getMappedIngredientIds() {
 async function getIngredientDemandAnalytics({ date, weekStart } = {}) {
   const stockThresholds = await getStockThresholds();
   const safetyBufferPct = await getSafetyBufferPercentage();
-  const bufferMultiplier = 1 + safetyBufferPct / 100;
+  const bufferMultiplier = safetyBufferMultiplier(safetyBufferPct);
   let targetDate = date || defaultDateRange().today;
   // No date or week asked for, and today has no open forecast (a closed
   // day): show the next open forecast date, and its week. Explicit params
@@ -1218,8 +1287,6 @@ async function getIngredientDemandAnalytics({ date, weekStart } = {}) {
   if (forecastError) throw forecastError;
 
   const recipeMap = await getRecipeMap();
-  const marketPriceMap = await getLatestMarketPriceMap();
-
   // ingredient name -> { values: number[7], ingredientId }
   const heatmap = new Map();
   // ingredientId -> { category, currentStock, productIds } for the weekly grocery list
@@ -1236,19 +1303,33 @@ async function getIngredientDemandAnalytics({ date, weekStart } = {}) {
           ingredient: item.name,
           ingredientId: item.ingredientId,
           unit: item.unit || null,
-          values: [0, 0, 0, 0, 0, 0, 0],
+          unitPrice: item.unitPrice,
+          values: Array.from({ length: 7 }, () => new Decimal(0)),
         });
-        weekInfo.set(item.ingredientId, { category: item.category, currentStock: item.currentStock, productIds: new Set() });
+        weekInfo.set(item.ingredientId, {
+          category: item.category,
+          currentStock: item.currentStock,
+          unitPrice: item.unitPrice,
+          bufferedValues: Array.from({ length: 7 }, () => new Decimal(0)),
+          productIds: new Set(),
+        });
       }
       const entry = heatmap.get(item.ingredientId);
-      entry.values[dayIndex] += Number(f.predicted_quantity) * item.qtyPerServing * bufferMultiplier;
-      weekInfo.get(item.ingredientId).productIds.add(f.product_id);
+      const rawNeed = decimalValue(f.predicted_quantity).mul(decimalValue(item.qtyPerServing));
+      entry.values[dayIndex] = entry.values[dayIndex].plus(rawNeed);
+      const info = weekInfo.get(item.ingredientId);
+      info.bufferedValues[dayIndex] = info.bufferedValues[dayIndex].plus(rawNeed.mul(bufferMultiplier));
+      info.productIds.add(f.product_id);
     }
   }
 
   const weeklyDemand = Array.from(heatmap.values()).map((row) => {
-    const total = row.values.reduce((s, v) => s + v, 0);
-    const avg = total / 7;
+    row.values = row.values.map((value) => roundIngredientQuantity(value, row.unit));
+    const total = roundIngredientQuantity(
+      row.values.reduce((sum, value) => sum.plus(decimalValue(value)), new Decimal(0)),
+      row.unit,
+    );
+    const avg = roundIngredientQuantity(decimalValue(total).div(7), row.unit);
     const highDay = row.values.indexOf(Math.max(...row.values));
     // "Typical" baseline = this ingredient's own weekly average — a cell
     // well above its own average signals a spike (e.g. payday, holiday),
@@ -1258,8 +1339,8 @@ async function getIngredientDemandAnalytics({ date, weekStart } = {}) {
     // worth confirming with the project owner if it should change.
     const levels = row.values.map((v) => {
       if (avg <= 0) return 'normal';
-      if (v > avg * 1.5) return 'high';
-      if (v > avg * 1.15) return 'above_normal';
+      if (decimalValue(v).gt(decimalValue(avg).mul('1.5'))) return 'high';
+      if (decimalValue(v).gt(decimalValue(avg).mul('1.15'))) return 'above_normal';
       return 'normal';
     });
     return { ...row, total, average: avg, highDay, levels };
@@ -1279,13 +1360,16 @@ async function getIngredientDemandAnalytics({ date, weekStart } = {}) {
   }
   // Same summing rule as the Dashboard's stock alerts (sumIngredientNeeds).
   const dailyByIngredient = new Map();
-  for (const { ingredientId, item, need, productIds } of sumIngredientNeeds(dayForecasts, recipeMap, bufferMultiplier).values()) {
+  for (const { ingredientId, item, need, rawNeed, safetyBuffer, productIds } of sumIngredientNeeds(dayForecasts, recipeMap, bufferMultiplier).values()) {
     dailyByIngredient.set(ingredientId, {
       ingredientId,
       name: item.name,
       category: item.category,
       unit: item.unit,
+      unitPrice: item.unitPrice,
       forecastedNeed: need,
+      rawForecastedNeed: rawNeed,
+      safetyBuffer,
       usedIn: productIds,
       currentStock: item.currentStock,
     });
@@ -1299,23 +1383,24 @@ async function getIngredientDemandAnalytics({ date, weekStart } = {}) {
 
   const dailyIngredients = Array.from(dailyByIngredient.values())
     .map((entry) => {
-      const marketPrice = marketPriceMap.get(entry.ingredientId)?.price ?? null;
+      const marketPrice = entry.unitPrice;
       const status = computeStockStatus(entry.currentStock, entry.forecastedNeed, stockThresholds);
-      // Count units round UP (utils/recipeUnits.js toBuyQuantity); est.
-      // cost is for what is actually bought.
-      const toBuy = toBuyQuantity(entry.forecastedNeed, entry.currentStock, entry.unit);
+      const toBuy = amountToBuy(entry.forecastedNeed, entry.currentStock, entry.unit);
       return {
         ingredientId: entry.ingredientId,
         name: entry.name,
         category: entry.category,
         usedIn: Array.from(entry.usedIn).map((pid) => productNamesById.get(pid)).filter(Boolean).join(', '),
+        rawForecastedNeed: entry.rawForecastedNeed,
+        safetyBuffer: entry.safetyBuffer,
         forecastedNeed: entry.forecastedNeed,
         onStock: entry.currentStock,
         unit: entry.unit,
         status,
+        predictedStatus: predictedStockStatus({ quantity: entry.currentStock, need: entry.forecastedNeed }, stockThresholds).status,
         toBuy: status === 'Normal' || status === 'Excess' ? null : toBuy,
         marketPrice,
-        estCost: toBuy > 0 && marketPrice !== null ? toBuy * marketPrice : null,
+        estCost: toBuy > 0 ? costForQuantity(toBuy, marketPrice) : null,
       };
     })
     .sort((a, b) => (STOCK_SEVERITY[b.status] ?? -1) - (STOCK_SEVERITY[a.status] ?? -1));
@@ -1326,7 +1411,7 @@ async function getIngredientDemandAnalytics({ date, weekStart } = {}) {
     .sort((a, b) => (b.estCost || 0) - (a.estCost || 0))
     .slice(0, 5);
   const groceryTotals = {
-    estTotalCost: groceryEligible.reduce((sum, i) => sum + (i.estCost || 0), 0),
+    estTotalCost: roundMoney(groceryEligible.reduce((sum, item) => sum.plus(item.estCost || 0), new Decimal(0))),
     totalItemsToBuy: groceryEligible.length,
   };
 
@@ -1339,12 +1424,13 @@ async function getIngredientDemandAnalytics({ date, weekStart } = {}) {
         name: row.ingredient,
         category: info.category,
         unit: row.unit,
+        unitPrice: info.unitPrice,
         currentStock: info.currentStock,
         usedIn: Array.from(info.productIds).map((pid) => productNamesById.get(pid)).filter(Boolean).join(', '),
-        values: row.values,
+        values: info.bufferedValues,
       };
     }),
-    (ingredientId) => marketPriceMap.get(ingredientId)?.price ?? null,
+    () => null,
     stockThresholds,
   );
 
@@ -1371,7 +1457,7 @@ async function getForecastSummary() {
   const today = defaultDateRange().today;
   const yesterday = dayjs().tz(PH_TZ).subtract(1, 'day').format('YYYY-MM-DD');
   const safetyBufferPct = await getSafetyBufferPercentage();
-  const bufferMultiplier = 1 + safetyBufferPct / 100;
+  const bufferMultiplier = safetyBufferMultiplier(safetyBufferPct);
 
   const { data: products, error: productsError } = await supabaseAdmin
     .from('products')
@@ -1508,6 +1594,8 @@ async function getForecastBasis(date) {
 
 module.exports = {
   computeStockStatus,
+  sumIngredientNeeds,
+  roundIngredientQuantity,
   getIngredientDailyNeeds,
   getIngredientDailyNeedDetails,
   getSafetyBufferPercentage,

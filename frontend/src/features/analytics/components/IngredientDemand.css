@@ -205,6 +205,11 @@
 .status-badge--low { background: #fdf0d5; color: #9a6b0a; }
 .status-badge--normal { background: #dcf5df; color: #0f7a16; }
 .status-badge--excess { background: #e8edf8; color: #3354BA; }
+.status-badge--critical-shortage { background: #fde2e2; color: #b42318; }
+.status-badge--insufficient-supply { background: #fdf0d5; color: #9a6b0a; }
+.status-badge--sufficient-supply { background: #dcf5df; color: #0f7a16; }
+.status-badge--above-forecast-limit { background: #e8edf8; color: #3354BA; }
+.status-badge--unassigned { background: #f3f4f6; color: #6b7280; }
 
 .value--muted { color: var(--color-text-light); font-style: italic; }
 
@@ -337,7 +342,7 @@
 .grocery-preview-row:last-child { border-bottom: none; }
 .grocery-preview-name { font-size: 13px; font-weight: 600; min-width: 0; color: var(--color-text-primary); }
 .grocery-preview-sub { font-size: 11px; color: var(--color-text-light); margin-top: 2px; }
-.grocery-preview-qty { font-size: 13px; font-weight: 700; color: var(--color-red-primary); white-space: nowrap; }
+.grocery-preview-qty { font-size: 12px; font-weight: 700; color: var(--color-red-primary); white-space: nowrap; }
 .grocery-preview-more { font-size: 12px; color: var(--color-text-light); text-align: center; padding: 8px 0; }
 .grocery-action-row {
   display: flex;
@@ -405,6 +410,31 @@
 
 .grocery-category:last-of-type {
   margin-bottom: 0;
+}
+
+.grocery-list-full-view {
+  font-size: 11px;
+}
+
+.grocery-list-full-view .grocery-kpi-value {
+  font-size: 16px;
+}
+
+.grocery-list-full-view .grocery-category {
+  margin-bottom: 12px;
+}
+
+.grocery-list-full-view .status-group-title {
+  font-size: 12px;
+}
+
+.grocery-list-table {
+  font-size: 11px;
+}
+
+.grocery-list-table th,
+.grocery-list-table td {
+  padding: 6px 8px;
 }
 
 .heatmap-wrapper {

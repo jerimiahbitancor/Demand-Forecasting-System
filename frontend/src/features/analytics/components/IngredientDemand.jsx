@@ -14,7 +14,7 @@ import 'tippy.js/dist/tippy.css';
 import 'tippy.js/animations/scale.css';
 import InfoBanner from "./shared/InfoBanner.jsx";
 import EmptyState from "./shared/EmptyState.jsx";
-import { formatStockQty } from "../../../utils/formatStockQty.js";
+import { formatIngredientDemandQty, formatIngredientDemandMoney } from "../../../utils/formatIngredientDemand.js";
 import { useNavigate } from "react-router-dom";
 import { authService } from "../../../services/authService.js";
 import { toYmd, fromYmd, mondayOf } from "../../../utils/localDate.js";
@@ -60,9 +60,12 @@ function buildDailyIngredients(apiRows) {
     category: r.category,
     usedIn: r.usedIn || "—",
     forecasted: r.forecastedNeed,
+    rawForecasted: r.rawForecastedNeed,
+    safetyBuffer: r.safetyBuffer,
     onStock: r.onStock,
     unit: r.unit,
     status: r.status,
+    predictedStatus: r.predictedStatus || r.status,
     toBuy: r.toBuy,
     marketPrice: r.marketPrice,
     estCost: r.estCost,
@@ -76,6 +79,7 @@ function buildGroceryList(apiAllItems) {
     usedIn: item.usedIn || "—",
     unit: item.unit,
     status: item.status,
+    predictedStatus: item.predictedStatus || item.status,
     toBuy: item.toBuy,
     marketPrice: item.marketPrice,
     estCost: item.estCost,
@@ -158,7 +162,7 @@ const tooltips = {
       Scan across a row to see when one ingredient spikes, or down a column to see how heavy a single day will be overall.
       <br/><br/>
       <span style={{ color: '#94a3b8', fontSize: '12px' }}>
-        Ingredient Needed = Σ(Forecasted Servings × Recipe Qty) × (1 + Safety Buffer%)
+        Weekly demand = Σ(Forecasted Servings × Recipe Qty); no safety buffer is applied.
       </span>
     </div>
   ),
@@ -502,6 +506,7 @@ function IngredientDemand() {
         business: biz,
         groceryMode,
         itemsToDownload,
+        estTotalCost: groceryApi?.totals?.estTotalCost,
         GROCERY_CATEGORIES: GROCERY_GROUPS,
       });
 
@@ -531,7 +536,7 @@ function IngredientDemand() {
     // snapshot from the range end.
     // Local calendar dates: toISOString() would shift them a day back in Manila.
     const [from, to] = dateRange.map((d) => toYmd(d));
-    let reportDemandGrid, reportDailyIngredients, reportBufferPct, reportDailyDate;
+    let reportDemandGrid, reportDailyIngredients, reportDailyDate;
     try {
       const headers = await authService.getAuthHeaders();
       const response = await axios.get(`${API_URL}/analytics/ingredient-demand`, {
@@ -541,7 +546,6 @@ function IngredientDemand() {
       const data = response.data?.data;
       reportDemandGrid = buildDemandGrid(data?.weekly?.rows);
       reportDailyIngredients = buildDailyIngredients(data?.daily?.rows);
-      reportBufferPct = data?.safetyBufferPercentage ?? 15;
       reportDailyDate = data?.daily?.date || to;
     } catch (err) {
       console.error("Error fetching report data:", err);
@@ -554,23 +558,15 @@ function IngredientDemand() {
       return;
     }
 
-    const bufferMultiplier = 1 + reportBufferPct / 100;
-    // buildIngredientDemandPDF's Shopping List table wants the need
-    // broken into Base Qty (pre-buffer) + Buffer + Total — the API only
-    // returns the post-buffer forecastedNeed, so back it out here rather
-    // than changing what the live Daily Ingredient Demand table shows.
     const shoppingListRows = reportDailyIngredients
       .filter((item) => item.status === "Critical" || item.status === "Low")
       .map((item) => {
-        const total = item.forecasted;
-        const baseQty = bufferMultiplier > 0 ? total / bufferMultiplier : total;
         return {
           ingredient: item.name,
           linkedDishes: item.usedIn,
-          baseQty: formatStockQty(baseQty, item.unit),
-          buffer: formatStockQty(total - baseQty, item.unit),
-          total: formatStockQty(total, item.unit),
-          unit: item.unit,
+          baseQty: formatIngredientDemandQty(item.rawForecasted, item.unit),
+          buffer: formatIngredientDemandQty(item.safetyBuffer, item.unit),
+          total: formatIngredientDemandQty(item.forecasted, item.unit),
         };
       });
 
@@ -605,16 +601,22 @@ function IngredientDemand() {
           sheetName: "Weekly Ingredient Demand",
           rows: reportDemandGrid.map((row) => ({
             ingredient: row.ingredient,
-            ...Object.fromEntries(weekDays.map((d, i) => [d, formatStockQty(row.values[i], row.unit)])),
+            ...Object.fromEntries(weekDays.map((d, i) => [d, formatIngredientDemandQty(row.values[i], row.unit)])),
           })),
         },
         daily: {
           sheetName: "Daily Ingredient Demand",
           rows: reportDailyIngredients.map((row) => ({
-            ...row,
-            forecasted: formatStockQty(row.forecasted, row.unit),
-            onStock: formatStockQty(row.onStock, row.unit),
-            toBuy: row.toBuy == null ? "—" : formatStockQty(row.toBuy, row.unit),
+            ingredient: row.name,
+            usedIn: row.usedIn,
+            rawForecast: formatIngredientDemandQty(row.rawForecasted, row.unit),
+            safetyBuffer: formatIngredientDemandQty(row.safetyBuffer, row.unit),
+            forecastedNeed: formatIngredientDemandQty(row.forecasted, row.unit),
+            onStock: formatIngredientDemandQty(row.onStock, row.unit),
+            predictedStockLevelStatus: row.predictedStatus,
+            toBuy: row.toBuy == null ? "—" : formatIngredientDemandQty(row.toBuy, row.unit),
+            pricePerUnit: row.marketPrice == null ? "—" : `${formatIngredientDemandMoney(row.marketPrice)}/${row.unit}`,
+            estimatedCost: formatIngredientDemandMoney(row.estCost),
           })),
         },
       };
@@ -695,8 +697,8 @@ function IngredientDemand() {
 
           {closedTodayNote && <p className="section-note value--muted">{closedTodayNote}</p>}
           <p className="section-note">
-            Ingredient demand for the week of {weekLabel}. Color shows demand level relative to each
-            ingredient's typical amount. Darker = more than usual.
+            Ingredient demand for the week of {weekLabel}. Quantities are unbuffered predicted demand.
+                Color shows demand level relative to each ingredient's typical amount. Darker = more than usual.
           </p>
 
           {weeklyEmpty ? weeklyEmptyState : (
@@ -728,7 +730,7 @@ function IngredientDemand() {
                       <td>{row.ingredient}</td>
                       {row.values.map((v, di) => (
                         <td key={di} className={`heatmap-cell heatmap-cell--${cellLevel(row, di)}`}>
-                          {formatStockQty(v, row.unit)}
+                          {formatIngredientDemandQty(v, row.unit)}
                         </td>
                       ))}
                     </tr>
@@ -779,7 +781,7 @@ function IngredientDemand() {
 
           {closedTodayNote && <p className="section-note value--muted">{closedTodayNote}</p>}
           <p className="section-note">
-            Ingredient demand for {dailyDateLabel}. This shows what the system estimates you'll need based on predicted sales and your current stock.
+            Ingredient demand for {dailyDateLabel}. Daily forecasted need includes the safety buffer; weekly demand is unbuffered.
             <a href="/inventory-management" style={{color:'var(--color-red-primary)', fontWeight:600}}> View Inventory Management</a>
           </p>
 
@@ -801,20 +803,21 @@ function IngredientDemand() {
             aria-label="Daily ingredient demand: need, stock, status, quantity to buy and cost by ingredient"
           >
           <table className="analytics-table daily-demand-table">
-            <thead><tr><th>No.</th><th>Ingredient</th><th>Used in</th><th>Forecasted Need</th><th>On Stock</th><th>Status</th><th>To Buy</th><th>Unit</th><th>Market Price</th><th>Est. Cost</th></tr></thead>
+            <thead><tr><th>No.</th><th>Ingredient</th><th>Used in</th><th>Raw Forecast</th><th>Safety Buffer</th><th>Forecasted Need</th><th>On Stock</th><th>Predicted Stock Level Status</th><th>To Buy</th><th>Price / Unit</th><th>Est. Cost</th></tr></thead>
             <tbody>
               {paginatedDaily.map((row, i) => (
                 <tr key={row.name}>
                   <td data-label="No.">{(dailyPage - 1) * ROWS_PER_PAGE + i + 1}</td>
                   <td data-label="Ingredient">{row.name}</td>
                   <td data-label="Used in" className="used-in-col"><UsedInCell value={row.usedIn} /></td>
-                  <td data-label="Forecasted Need">{formatStockQty(row.forecasted, row.unit)}</td>
-                  <td data-label="On Stock">{formatStockQty(row.onStock, row.unit)}</td>
-                  <td data-label="Status"><span className={`status-badge status-badge--${row.status.toLowerCase()}`}>{row.status}</span></td>
-                  <td data-label="To Buy">{row.toBuy === null ? <span className="value--muted">{row.status === "Normal" ? "— no order" : "— delay restock"}</span> : formatStockQty(row.toBuy, row.unit)}</td>
-                  <td data-label="Unit">{row.unit}</td>
-                  <td data-label="Market Price">{row.marketPrice === null ? "—" : `₱${row.marketPrice}`}</td>
-                  <td data-label="Est. Cost">{row.estCost === null ? "—" : `₱${row.estCost.toLocaleString()}`}</td>
+                  <td data-label="Raw Forecast">{formatIngredientDemandQty(row.rawForecasted, row.unit)}</td>
+                  <td data-label="Safety Buffer">{formatIngredientDemandQty(row.safetyBuffer, row.unit)}</td>
+                  <td data-label="Forecasted Need">{formatIngredientDemandQty(row.forecasted, row.unit)}</td>
+                  <td data-label="On Stock">{formatIngredientDemandQty(row.onStock, row.unit)}</td>
+                  <td data-label="Predicted Stock Level Status"><span className={`status-badge status-badge--${row.predictedStatus.toLowerCase().replace(/\s+/g, "-")}`}>{row.predictedStatus}</span></td>
+                  <td data-label="To Buy">{row.toBuy === null ? <span className="value--muted">{row.status === "Normal" ? "— no order" : "— delay restock"}</span> : formatIngredientDemandQty(row.toBuy, row.unit)}</td>
+                  <td data-label="Price / Unit">{row.marketPrice === null ? "—" : `${formatIngredientDemandMoney(row.marketPrice)}/${row.unit}`}</td>
+                  <td data-label="Est. Cost">{formatIngredientDemandMoney(row.estCost)}</td>
                 </tr>
               ))}
             </tbody>
@@ -852,11 +855,11 @@ function IngredientDemand() {
             {groceryDateLabel}
           </p>
           <InfoBanner variant="info">
-            Order quantities are based on forecasted demand (plus a {safetyBufferPercentage}% safety buffer) minus current stock.{" "}
+            Order quantities are based on forecasted demand plus a {safetyBufferPercentage}% safety buffer, minus current stock.{" "}
             <a href="/inventory-management" style={{color:'inherit', fontWeight:600, textDecoration:'underline'}}>See Inventory Management.</a>
           </InfoBanner>
           <div className="grocery-kpi-row">
-            <div className="grocery-kpi-card"><p className="grocery-kpi-label">Est. Total Cost</p><p className="grocery-kpi-value">₱{groceryPreview.reduce((sum, i) => sum + (i.estCost || 0), 0).toLocaleString()}</p></div>
+            <div className="grocery-kpi-card"><p className="grocery-kpi-label">Est. Total Cost</p><p className="grocery-kpi-value">{formatIngredientDemandMoney(groceryApi?.totals?.estTotalCost)}</p></div>
             <div className="grocery-kpi-card"><p className="grocery-kpi-label">Total Items to Buy</p><p className="grocery-kpi-value">{groceryPreview.length}</p></div>
           </div>
           {loaded && groceryPreview.length === 0 && (
@@ -867,7 +870,7 @@ function IngredientDemand() {
             {groceryPreview.slice(0, 5).map((item) => (
               <li key={item.name} className="grocery-preview-row">
                 <div><p className="grocery-preview-name">{item.name}</p><p className="grocery-preview-sub">Used in: {item.usedIn}</p></div>
-                <div style={{ display:'flex', alignItems:'center', gap:8 }}><span className={`status-badge status-badge--${item.status.toLowerCase()}`}>{item.status}</span><span className="grocery-preview-qty">{formatStockQty(item.toBuy, item.unit)} {item.unit}</span></div>
+                <div style={{ display:'flex', alignItems:'center', gap:8 }}><span className={`status-badge status-badge--${item.predictedStatus.toLowerCase().replace(/\s+/g, "-")}`}>{item.predictedStatus}</span><span className="grocery-preview-qty">{formatIngredientDemandQty(item.toBuy, item.unit)}</span></div>
               </li>
             ))}
             {groceryPreview.length > 5 && <li className="grocery-preview-more">… and {groceryPreview.length - 5} more items</li>}
@@ -891,7 +894,7 @@ function IngredientDemand() {
           <table className="analytics-table heatmap-table">
             <thead><tr><th>No.</th><th>Ingredient</th>{weekDays.map((day) => <th key={day}>{day}</th>)}</tr></thead>
             <tbody>{filteredDemandGrid.slice((modalWeeklyPage - 1) * 10, modalWeeklyPage * 10).map((row, i) => (
-              <tr key={row.ingredient}><td>{(modalWeeklyPage - 1) * 10 + i + 1}</td><td>{row.ingredient}</td>{row.values.map((value, dayIndex) => <td key={dayIndex} className={`heatmap-cell heatmap-cell--${cellLevel(row, dayIndex)}`}>{formatStockQty(value, row.unit)}</td>)}</tr>
+              <tr key={row.ingredient}><td>{(modalWeeklyPage - 1) * 10 + i + 1}</td><td>{row.ingredient}</td>{row.values.map((value, dayIndex) => <td key={dayIndex} className={`heatmap-cell heatmap-cell--${cellLevel(row, dayIndex)}`}>{formatIngredientDemandQty(value, row.unit)}</td>)}</tr>
             ))}</tbody>
           </table>
         </div>
@@ -906,9 +909,9 @@ function IngredientDemand() {
           aria-label="Daily ingredient demand, full view"
         >
         <table className="analytics-table daily-demand-table">
-          <thead><tr><th>No.</th><th>Ingredient</th><th>Used in</th><th>Forecasted Need</th><th>On Stock</th><th>Status</th><th>To Buy</th><th>Unit</th><th>Market Price</th><th>Est. Cost</th></tr></thead>
+          <thead><tr><th>No.</th><th>Ingredient</th><th>Used in</th><th>Raw Forecast</th><th>Safety Buffer</th><th>Forecasted Need</th><th>On Stock</th><th>Predicted Stock Level Status</th><th>To Buy</th><th>Price / Unit</th><th>Est. Cost</th></tr></thead>
           <tbody>{filteredDailyIngredients.slice((modalDailyPage - 1) * 10, modalDailyPage * 10).map((row, i) => (
-            <tr key={row.name}><td data-label="No.">{(modalDailyPage - 1) * 10 + i + 1}</td><td data-label="Ingredient">{row.name}</td><td data-label="Used in" className="used-in-col"><UsedInCell value={row.usedIn} /></td><td data-label="Forecasted Need">{formatStockQty(row.forecasted, row.unit)}</td><td data-label="On Stock">{formatStockQty(row.onStock, row.unit)}</td><td data-label="Status"><span className={`status-badge status-badge--${row.status.toLowerCase()}`}>{row.status}</span></td><td data-label="To Buy">{row.toBuy === null ? <span className="value--muted">{row.status === "Normal" ? "— no order" : "— delay restock"}</span> : formatStockQty(row.toBuy, row.unit)}</td><td data-label="Unit">{row.unit}</td><td data-label="Market Price">{row.marketPrice === null ? "—" : `₱${row.marketPrice}`}</td><td data-label="Est. Cost">{row.estCost === null ? "—" : `₱${row.estCost.toLocaleString()}`}</td></tr>
+            <tr key={row.name}><td data-label="No.">{(modalDailyPage - 1) * 10 + i + 1}</td><td data-label="Ingredient">{row.name}</td><td data-label="Used in" className="used-in-col"><UsedInCell value={row.usedIn} /></td><td data-label="Raw Forecast">{formatIngredientDemandQty(row.rawForecasted, row.unit)}</td><td data-label="Safety Buffer">{formatIngredientDemandQty(row.safetyBuffer, row.unit)}</td><td data-label="Forecasted Need">{formatIngredientDemandQty(row.forecasted, row.unit)}</td><td data-label="On Stock">{formatIngredientDemandQty(row.onStock, row.unit)}</td><td data-label="Predicted Stock Level Status"><span className={`status-badge status-badge--${row.predictedStatus.toLowerCase().replace(/\s+/g, "-")}`}>{row.predictedStatus}</span></td><td data-label="To Buy">{row.toBuy === null ? <span className="value--muted">{row.status === "Normal" ? "— no order" : "— delay restock"}</span> : formatIngredientDemandQty(row.toBuy, row.unit)}</td><td data-label="Price / Unit">{row.marketPrice === null ? "—" : `${formatIngredientDemandMoney(row.marketPrice)}/${row.unit}`}</td><td data-label="Est. Cost">{formatIngredientDemandMoney(row.estCost)}</td></tr>
           ))}</tbody>
         </table>
         </div>
@@ -916,13 +919,14 @@ function IngredientDemand() {
       </ExpandableModal>
 
       <ExpandableModal isOpen={isGroceryOpen} onClose={() => setIsGroceryOpen(false)} title="Grocery List — Full View">
+        <div className="grocery-list-full-view">
         <div className="grocery-toggle">
           <button type="button" className={`grocery-toggle-btn ${groceryMode === 'weekly' ? 'active' : ''}`} onClick={() => setGroceryMode('weekly')}>Weekly</button>
           <button type="button" className={`grocery-toggle-btn ${groceryMode === 'daily' ? 'active' : ''}`} onClick={() => setGroceryMode('daily')}>Daily</button>
         </div>
         <p className="grocery-date-label">{groceryDateLabel}</p>
         <div className="grocery-kpi-row">
-          <div className="grocery-kpi-card"><p className="grocery-kpi-label">Est. Total Cost</p><p className="grocery-kpi-value">₱{groceryPreview.reduce((sum, item) => sum + (item.estCost || 0), 0).toLocaleString()}</p></div>
+          <div className="grocery-kpi-card"><p className="grocery-kpi-label">Est. Total Cost</p><p className="grocery-kpi-value">{formatIngredientDemandMoney(groceryApi?.totals?.estTotalCost)}</p></div>
           <div className="grocery-kpi-card"><p className="grocery-kpi-label">Total Items to Buy</p><p className="grocery-kpi-value">{groceryPreview.length}</p></div>
         </div>
         {GROCERY_GROUPS.map((category) => {
@@ -937,13 +941,12 @@ function IngredientDemand() {
                 role="region"
                 aria-label={`Grocery list: ${category}`}
               >
-              <table className="analytics-table analytics-table--compact">
+              <table className="analytics-table analytics-table--compact grocery-list-table">
                 <thead>
                   <tr>
                     <th>Item</th>
-                    <th>Qty</th>
-                    <th>Unit</th>
-                    <th>Market Price</th>
+                    <th>Qty to Buy</th>
+                    <th>Price / Unit</th>
                     <th>Notes</th>
                   </tr>
                 </thead>
@@ -951,9 +954,8 @@ function IngredientDemand() {
                   {items.map((item) => (
                     <tr key={item.name}>
                       <td data-label="Item">{item.name}</td>
-                      <td data-label="Qty">{formatStockQty(item.toBuy, item.unit)}</td>
-                      <td data-label="Unit">{item.unit}</td>
-                      <td data-label="Market Price">{item.marketPrice === null ? "—" : `₱${item.marketPrice}/${item.unit}`}</td>
+                      <td data-label="Qty to Buy">{formatIngredientDemandQty(item.toBuy, item.unit)}</td>
+                      <td data-label="Price / Unit">{item.marketPrice === null ? "—" : `${formatIngredientDemandMoney(item.marketPrice)}/${item.unit}`}</td>
                       <td data-label="Notes">{item.usedIn}</td>
                     </tr>
                   ))}
@@ -964,6 +966,7 @@ function IngredientDemand() {
           );
         })}
         <button type="button" className="btn-grocery-download" onClick={handleDownloadGroceryList}><FiDownload size={14} /> Download</button>
+        </div>
       </ExpandableModal>
     </>
   );

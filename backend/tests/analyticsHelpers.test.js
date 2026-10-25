@@ -551,3 +551,16 @@ test('productDemandTier: no thresholds -> stored tier; no classification -> not 
   assert.equal(svc.productDemandTier(30, { demand_tier: 'Low', basis: 'p40=45.6, p80=57.3' }).basisText, 'Low for this product (normal range 46–57 items/day)');
   assert.equal(svc.productDemandTier(2, { demand_tier: 'Low', basis: 'p40=0.6, p80=1.4' }).basisText, 'High for this product (normal range 1 item/day)');
 });
+
+test('Ingredient Demand uses exact decimal math and exposes raw demand separately from buffer', () => {
+  const ingredient = { ingredientId: 7, unit: 'kg', qtyPerServing: '0.333' };
+  const [entry] = svc.sumIngredientNeeds(
+    [{ product_id: 1, predicted_quantity: '3' }],
+    new Map([[1, [ingredient]]]),
+    '1.15',
+  ).values();
+  assert.equal(entry.rawNeed, 1);
+  assert.equal(entry.need, 1.15);
+  assert.equal(svc.roundIngredientQuantity('1.005', 'kg'), 1.01);
+  assert.equal(svc.roundIngredientQuantity('0.25', 'pcs'), 1);
+});

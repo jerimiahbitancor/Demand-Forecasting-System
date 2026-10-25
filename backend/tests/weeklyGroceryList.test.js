@@ -1,7 +1,7 @@
 // tests/weeklyGroceryList.test.js — run: node --test tests/weeklyGroceryList.test.js
 //
 // Weekly Grocery List (Analytics > Ingredient Demand, "Weekly"): the daily
-// list's rules applied to the week's need = the sum of the 7 heatmap values.
+// list's rules applied to unbuffered predicted demand = the sum of the 7 heatmap values.
 // No network: the fake Supabase client is installed before the service loads.
 const test = require('node:test');
 const assert = require('node:assert/strict');
@@ -59,4 +59,25 @@ test('no market price -> estCost null (never ₱0), and it adds nothing to the t
   assert.equal(all[0].estCost, null);
   assert.equal(all[0].toBuy, 9);
   assert.deepEqual(totals, { estTotalCost: 0, totalItemsToBuy: 1 });
+});
+
+test('configured ingredient unit price overrides external price and cost rounds to cents', () => {
+  const { all, totals } = buildWeeklyGroceryList([
+    row({ values: [1.25, 0, 0, 0, 0, 0, 0], currentStock: 0, unitPrice: '2.335' }),
+  ], () => 99);
+  assert.equal(all[0].marketPrice, '2.335');
+  assert.equal(all[0].toBuy, 1.25);
+  assert.equal(all[0].estCost, 2.92);
+  assert.equal(totals.estTotalCost, 2.92);
+});
+
+test('weekly quantity and purchase amount use two decimals; piece purchases stay whole', () => {
+  const { all } = buildWeeklyGroceryList([
+    row({ values: [0.105, 0.105, 0, 0, 0, 0, 0], currentStock: 0, unitPrice: '10' }),
+    row({ ingredientId: 2, unit: 'pcs', values: [0.4, 0, 0, 0, 0, 0, 0], currentStock: 0, unitPrice: '3' }),
+  ]);
+  assert.deepEqual(all.map((item) => [item.forecastedNeed, item.toBuy, item.estCost]), [
+    [0.21, 0.21, 2.1],
+    [1, 1, 3],
+  ]);
 });
