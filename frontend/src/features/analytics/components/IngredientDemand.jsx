@@ -143,20 +143,7 @@ function UsedInCell({ value }) {
   );
 }
 
-const GROCERY_CATEGORIES = [
-  "Meat & Poultry",
-  "Seafood",
-  "Vegetables & Fruits",
-  "Grains & Starches",
-  "Dairy & Milk Products",
-  "Condiments & Sauces",
-  "Herbs & Spices",
-  "Beverages & Syrups",
-  "Baking & Dry Goods",
-  "Packaging & Supplies",
-];
 const GROCERY_OTHER = "Other";
-const GROCERY_GROUPS = [...GROCERY_CATEGORIES, GROCERY_OTHER];
 
 // ---------------------------------------------------------------------
 // Tooltips
@@ -320,12 +307,16 @@ function IngredientDemand() {
   // heatmap's week).
   const groceryApi = groceryMode === "weekly" ? apiData?.groceryListWeekly : apiData?.groceryList;
   const groceryPreview = buildGroceryList(groceryApi?.all);
-  // The full view and the PDF group by category. An ingredient whose
-  // category is not one of the groups goes under "Other" instead of
-  // silently dropping out (the KPI cards count it).
-  const groceryGrouped = groceryPreview.map((item) => (
-    GROCERY_CATEGORIES.includes(item.category) ? item : { ...item, category: GROCERY_OTHER }
-  ));
+  // Use the ingredient-management category labels directly, including
+  // categories created by the owner; uncategorized items remain visible.
+  const groceryGrouped = groceryPreview.map((item) => ({
+    ...item,
+    category: typeof item.category === "string" && item.category.trim()
+      ? item.category.trim()
+      : GROCERY_OTHER,
+  }));
+  const groceryGroups = [...new Set(groceryGrouped.map((item) => item.category))]
+    .sort((a, b) => (a === GROCERY_OTHER ? 1 : b === GROCERY_OTHER ? -1 : a.localeCompare(b)));
   const safetyBufferPercentage = apiData?.safetyBufferPercentage ?? 15;
 
   // Daily table: Raw Forecast + Safety Buffer = Forecasted Need, side by side,
@@ -510,7 +501,7 @@ function IngredientDemand() {
         groceryMode,
         itemsToDownload,
         estTotalCost: groceryApi?.totals?.estTotalCost,
-        GROCERY_CATEGORIES: GROCERY_GROUPS,
+        GROCERY_CATEGORIES: groceryGroups,
       });
 
       const filename = `grocery-list-chefduo-${groceryMode}${groceryFileDate ? `-${groceryFileDate}` : ""}.pdf`;
@@ -725,16 +716,6 @@ function IngredientDemand() {
           </p>
 
           {weeklyEmpty ? weeklyEmptyState : (
-          <Tippy
-            content={tooltips.weeklyPlanner}
-            placement="top"
-            animation="scale"
-            duration={200}
-            theme="dark"
-            arrow={true}
-            maxWidth={380}
-            interactive={true}
-          >
             <div className="heatmap-wrapper">
               <table className="analytics-table heatmap-table">
                 <thead>
@@ -761,7 +742,6 @@ function IngredientDemand() {
                 </tbody>
               </table>
             </div>
-          </Tippy>
           )}
 
           <div className="chart-legend">
@@ -954,7 +934,7 @@ function IngredientDemand() {
           <div className="grocery-kpi-card"><p className="grocery-kpi-label">Est. Total Cost</p><p className="grocery-kpi-value">{formatIngredientDemandMoney(groceryApi?.totals?.estTotalCost)}</p></div>
           <div className="grocery-kpi-card"><p className="grocery-kpi-label">Total Items to Buy</p><p className="grocery-kpi-value">{groceryPreview.length}</p></div>
         </div>
-        {GROCERY_GROUPS.map((category) => {
+        {groceryGroups.map((category) => {
           const items = groceryGrouped.filter((item) => item.category === category);
           if (items.length === 0) return null;
           return (

@@ -85,12 +85,6 @@ function buildPerformanceRows(apiRows) {
   }));
 }
 
-// "12.40 ÷ 8.10 = 1.53": how one product's ratio is made.
-function ratioMath(row, storeAvg) {
-  if (row.ratio == null || row.avgDaily == null || !storeAvg) return null;
-  return `${fmt2(row.avgDaily)} ÷ ${fmt2(storeAvg)} = ${fmt2(row.ratio)}`;
-}
-
 const DEMAND_FILTERS = ["All", "High Demand", "Medium Demand", "Low Demand", "Not enough data"];
 
 function ratioText(ratio) {
@@ -242,7 +236,7 @@ function DemandBar({ label, qty, maxQty, zone }) {
 // when the bar is wide, just past its end when it is short.
 const RATIO_LABEL_INSIDE_MIN_PCT = 30;
 
-function RatioBar({ label, ratio, maxRatio }) {
+function RatioBar({ label, ratio, maxRatio, breakdown }) {
   const geometry = ratioBarGeometry(ratio, maxRatio);
   if (!geometry) return null;
   const { isAbove, leftPct, widthPct } = geometry;
@@ -252,7 +246,7 @@ function RatioBar({ label, ratio, maxRatio }) {
     ? (inside ? { right: `${100 - endPct}%` } : { left: `${endPct}%` })
     : (inside ? { left: `${endPct}%` } : { right: `${100 - endPct}%` });
 
-  return (
+  const bar = (
     <div className="ratio-bar-row">
       <span className="ratio-bar-label">{label}</span>
       <div className="ratio-bar-track">
@@ -270,6 +264,18 @@ function RatioBar({ label, ratio, maxRatio }) {
       </div>
     </div>
   );
+  return breakdown ? (
+    <Tippy content={breakdown} placement="top" animation="scale" duration={200} theme="dark" arrow maxWidth={360}>
+      <div tabIndex={0}>{bar}</div>
+    </Tippy>
+  ) : bar;
+}
+
+function ratioBreakdownText(row, storeAvg) {
+  if (row.ratio == null || row.avgDaily == null || !storeAvg) return "No performance ratio is available for this product.";
+  return `${row.product}: ${row.qtySold} items sold ÷ ${row.openDays} open days = ${fmt2(row.avgDaily)} items/day. `
+    + `${fmt2(row.avgDaily)} ÷ store average ${fmt2(storeAvg)} = ${fmt2(row.ratio)}. `
+    + (row.ratio >= 1 ? "Above the store average." : "Below the store average.");
 }
 
 const ACTION_SIGNAL_MATRIX = {
@@ -563,7 +569,7 @@ function ProductPerformance() {
         narrativeText,
         ratioTable: {
           note: rStoreAvg == null ? null
-            : `Avg / day = items sold ÷ ${reportRatio.openDays} open days. Store avg / day = the average over ${reportRatio.activeProductCount ?? counts.active} active products = ${fmt2(rStoreAvg)} items. Ratio = Avg / day ÷ ${fmt2(rStoreAvg)}.`,
+            : `Avg / day = items sold ÷ open days. Store avg / day = the average over ${reportRatio.activeProductCount ?? counts.active} active products = ${fmt2(rStoreAvg)} items. Ratio = Avg / day ÷ ${fmt2(rStoreAvg)}. Green/right = above average; red/left = below average; center = 1.0.`,
           rows: ratioRows,
         },
         demandRows: reportDemandRows,
@@ -667,21 +673,10 @@ function ProductPerformance() {
     </select>
   );
   const storeAvg = apiData?.performanceRatio?.storeAverageDaily ?? null;
-  const ratioOpenDays = apiData?.performanceRatio?.openDays ?? 0;
   const ratioShift = apiData?.performanceRatio?.ratioShift || null;
   const ratioRangeUsed = apiData?.performanceRatio?.range || null;
   const shortDate = (ymd) => fromYmd(ymd).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
   // How the ratio is worked out, with this range's own numbers.
-  const ratioBreakdown = storeAvg ? (
-    <div className="ratio-breakdown" role="note">
-      <p className="ratio-breakdown-title">How the ratio is calculated</p>
-      <ol>
-        <li><strong>Avg / day</strong> = a product&apos;s items sold ÷ {ratioOpenDays} open day{ratioOpenDays === 1 ? "" : "s"} in these dates.</li>
-        <li><strong>Store avg / day</strong> = the average of Avg / day over all {apiData?.performanceRatio?.activeProductCount ?? "active"} active products = <strong>{fmt2(storeAvg)} items</strong>.</li>
-        <li><strong>Ratio</strong> = Avg / day ÷ {fmt2(storeAvg)}. Above 1 sells more than the average product; below 1 sells less.</li>
-      </ol>
-    </div>
-  ) : null;
   const ratioShiftNote = ratioShift && ratioRangeUsed ? (
     <InfoBanner variant="info">
       No sales were uploaded for {shortDate(ratioShift.requested.from)} – {shortDate(ratioShift.requested.to)}, so this uses the latest 7 days with sales: {shortDate(ratioRangeUsed.from)} – {shortDate(ratioRangeUsed.to)}.
@@ -928,8 +923,6 @@ function ProductPerformance() {
           </p>
 
           {ratioShiftNote}
-          {ratioBreakdown}
-
           {!isLoading && !hasSalesInRange && (
             <EmptyState
               title="No sales in this date range"
@@ -941,7 +934,7 @@ function ProductPerformance() {
 
           <div className="ratio-bar-chart">
             {paginatedRatioChartRows.map((row) => (
-              <RatioBar key={row.product} label={row.product} ratio={row.ratio} maxRatio={pageRatioMax} />
+              <RatioBar key={row.product} label={row.product} ratio={row.ratio} maxRatio={pageRatioMax} breakdown={ratioBreakdownText(row, storeAvg)} />
             ))}
             <div className="ratio-bar-axis">
               <span>← Below Average</span>
@@ -976,9 +969,12 @@ function ProductPerformance() {
                     <td data-label="Product">{row.product}</td>
                     <td data-label="Items Sold">{row.qtySold}</td>
                     <td data-label="Avg / Day" title={row.avgDaily == null ? undefined : `${row.qtySold} ÷ ${row.openDays} open days`}>{row.avgDaily == null ? "—" : fmt2(row.avgDaily)}</td>
-                    <td data-label="Performance Ratio" className={ratioClass(row.ratio)} title={ratioMath(row, storeAvg) || undefined}>
-                      {ratioText(row.ratio)}
-                      {ratioMath(row, storeAvg) && <span className="demand-basis">{ratioMath(row, storeAvg)}</span>}
+                    <td data-label="Performance Ratio" className={ratioClass(row.ratio)}>
+                      <Tippy content={ratioBreakdownText(row, storeAvg)} placement="top" animation="scale" duration={200} theme="dark" arrow maxWidth={360}>
+                        <span tabIndex={0}>
+                          {ratioText(row.ratio)}
+                        </span>
+                      </Tippy>
                     </td>
                     <td data-label="Action Signal" className="action-signal">{row.actionSignal}</td>
                   </tr>
@@ -1216,10 +1212,9 @@ function ProductPerformance() {
         title="Product Performance Ratio Analysis — Full View"
       >
         {ratioShiftNote}
-        {ratioBreakdown}
         <div className="ratio-bar-chart">
           {modalRatioChartRows.map((row) => (
-            <RatioBar key={row.product} label={row.product} ratio={row.ratio} maxRatio={modalRatioMax} />
+            <RatioBar key={row.product} label={row.product} ratio={row.ratio} maxRatio={modalRatioMax} breakdown={ratioBreakdownText(row, storeAvg)} />
           ))}
           <div className="ratio-bar-axis">
             <span>← Below Average</span>
@@ -1251,8 +1246,11 @@ function ProductPerformance() {
                   <td>{row.qtySold}</td>
                   <td>{row.avgDaily == null ? "—" : fmt2(row.avgDaily)}</td>
                   <td className={ratioClass(row.ratio)}>
-                    {ratioText(row.ratio)}
-                    {ratioMath(row, storeAvg) && <span className="demand-basis">{ratioMath(row, storeAvg)}</span>}
+                    <Tippy content={ratioBreakdownText(row, storeAvg)} placement="top" animation="scale" duration={200} theme="dark" arrow maxWidth={360}>
+                      <span tabIndex={0}>
+                        {ratioText(row.ratio)}
+                      </span>
+                    </Tippy>
                   </td>
                   <td className="action-signal">{row.actionSignal}</td>
                 </tr>

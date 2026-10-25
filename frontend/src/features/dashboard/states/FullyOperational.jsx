@@ -343,7 +343,7 @@ const FullyOperational = ({ initialState, onRefreshState }) => {
     ),
     chart: (
       <div style={{ padding: "4px 0", fontSize: "13px", lineHeight: "1.6" }}>
-        Track your historical sales, how accurately the system predicted them, and what demand is expected in the coming days — all in one view.<br /><br />
+        This chart shows product demand as servings (items), not sales revenue. It compares recorded sales with the forecast for the same dates and shows the upcoming forecast.<br /><br />
         <div style={{ margin: "8px 0" }}>
           <div style={{ display: "flex", alignItems: "center", gap: "8px", marginBottom: "4px" }}>
             <span style={{ display: "inline-block", width: "20px", height: "3px", background: "#22c55e", borderRadius: "2px" }}></span>
@@ -600,7 +600,7 @@ const FullyOperational = ({ initialState, onRefreshState }) => {
                   </Tippy>
                 </h2>
                 <p className="chart-description">
-                  Track your historical sales, how accurately the system predicted them, and what demand is expected in the coming days — all in one view.
+                  Daily servings sold and expected: compare recorded sales with the forecast, then see predicted demand for upcoming days. This chart shows item quantities, not peso revenue; gaps indicate closed or unreported days.
                 </p>
               </div>
               <div className="chart-controls">

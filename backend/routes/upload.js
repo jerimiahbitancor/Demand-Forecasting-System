@@ -34,7 +34,7 @@ const notifyUploadOutcome = (req, res, next) => {
   res.on('finish', () => {
     if (req.method !== 'POST' || res.statusCode < 400) return;
     // A refusal that already sent its own, more specific notification
-    // (e.g. "Unmet condition: not enough stock") must not get a second,
+    // (e.g. "File not saved: not enough stock") must not get a second,
     // generic "Upload failed" one.
     if (res.locals.failureNoticeSent) return;
     const userId = req.user?.user_id || req.user?.id || null;
