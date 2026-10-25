@@ -120,7 +120,7 @@ function buildInsufficientStockNotice({ shortfalls = [], filename = null, upload
   const key = `upload_blocked_stock:${uploadId ?? 'unknown'}`;
   return {
     type: 'error',
-    title: `Unmet condition: not enough stock (${items.length} ingredient${items.length === 1 ? '' : 's'})`,
+    title: 'File not saved: not enough stock',
     message: `${file} was not saved because these ingredients do not have enough stock: `
       + `${lines.join(' ')} Restock or correct the stock count, then upload the same file again.`,
     link: '/ingredient-management',

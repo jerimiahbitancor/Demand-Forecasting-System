@@ -412,7 +412,7 @@ test('A8: not enough stock -> 422, nothing saved, upload failed, one "Unmet cond
 
     const notes = fake.tables.notifications;
     assert.equal(notes.length, 1, JSON.stringify(notes.map((n) => n.title)));
-    assert.equal(notes[0].title, 'Unmet condition: not enough stock (1 ingredient)');
+    assert.equal(notes[0].title, 'File not saved: not enough stock');
     assert.equal(notes[0].type, 'error');
     assert.equal(notes[0].link, '/ingredient-management');
     assert.equal(notes[0].metadata.kind, 'upload_blocked_stock');

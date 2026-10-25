@@ -25,7 +25,7 @@ const UploadStockShortfallSummary = ({ notification, onClose }) => {
       >
         <header className="upload-shortfall-header">
           <div>
-            <h2 id="upload-shortfall-title">{notification.title || 'Upload blocked: not enough stock'}</h2>
+            <h2 id="upload-shortfall-title">{notification.title || 'File not saved: not enough stock'}</h2>
             {metadata.filename && <p>{metadata.filename}</p>}
           </div>
           <button type="button" onClick={onClose} aria-label="Close upload summary">

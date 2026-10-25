@@ -58,7 +58,7 @@ const UploadSummaryReport = ({ report, onClose }) => {
 
       {stockRefusals.length > 0 && (
         <Section
-          title={`Not saved: not enough stock (${refusedFiles} file${refusedFiles === 1 ? "" : "s"})`}
+          title={`File not saved: not enough stock (${refusedFiles} file${refusedFiles === 1 ? "" : "s"})`}
           count={stockRefusals.length}
           tone="error"
         >

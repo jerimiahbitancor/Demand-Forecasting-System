@@ -108,7 +108,7 @@ test('blocked sales upload email includes a readable ingredient shortfall table'
   await create({
     userId: 7,
     type: 'error',
-    title: 'Unmet condition: not enough stock (2 ingredients)',
+    title: 'File not saved: not enough stock',
     message: '"sales.csv" was not saved because ingredients do not have enough stock.',
     link: '/ingredient-management',
     metadata: {
@@ -123,6 +123,7 @@ test('blocked sales upload email includes a readable ingredient shortfall table'
   });
 
   const email = brevoCalls[0].body;
+  assert.equal(email.subject, 'ChefDuo: File not saved: not enough stock');
   assert.match(email.htmlContent, /<table/);
   assert.match(email.htmlContent, /Egg/);
   assert.match(email.htmlContent, /19 pcs/);
@@ -232,7 +233,7 @@ test('no key -> kind + title + Manila date; shortfalls grouped per ingredient pe
 
   // A refused upload (not enough stock) is emailed, once per Manila day.
   const blocked = (uploadId) => ({
-    userId: 7, type: 'error', title: 'Unmet condition: not enough stock (1 ingredient)',
+    userId: 7, type: 'error', title: 'File not saved: not enough stock',
     message: '"a.csv" was not saved because these ingredients do not have enough stock: Rice: needs 2 kg, 1 kg in stock (1 kg short).',
     link: '/ingredient-management',
     metadata: { kind: 'upload_blocked_stock', key: `upload_blocked_stock:${uploadId}`, upload_id: uploadId },

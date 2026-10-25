@@ -111,11 +111,13 @@ test('K4: revenue series skips unknown prices', () => {
 
 test('K4: totals add known values only and count missing price/recipe products (no gross profit)', () => {
   const totals = svc.summarizePredictionTotals([
-    { productId: 1, hasPrice: true, hasRecipe: true, actualRevenue: 100, forecastRevenue: 120, estCost: 40 },
-    { productId: 2, hasPrice: false, hasRecipe: true, actualRevenue: null, forecastRevenue: null, estCost: 10 },
-    { productId: 2, hasPrice: false, hasRecipe: true, actualRevenue: null, forecastRevenue: null, estCost: 10 },
-    { productId: 3, hasPrice: true, hasRecipe: false, actualRevenue: null, forecastRevenue: 50, estCost: null },
+    { productId: 1, hasPrice: true, hasRecipe: true, actualQty: 2, forecastQty: 3, actualRevenue: 100, forecastRevenue: 120, estCost: 40 },
+    { productId: 2, hasPrice: false, hasRecipe: true, actualQty: 1, forecastQty: null, actualRevenue: null, forecastRevenue: null, estCost: 10 },
+    { productId: 2, hasPrice: false, hasRecipe: true, actualQty: null, forecastQty: 4, actualRevenue: null, forecastRevenue: null, estCost: 10 },
+    { productId: 3, hasPrice: true, hasRecipe: false, actualQty: null, forecastQty: 2, closed: true, actualRevenue: null, forecastRevenue: 50, estCost: null },
   ]);
+  assert.equal(totals.actualQty, 3);
+  assert.equal(totals.forecastQty, 7, 'closed-day quantities are not forecast totals');
   assert.equal(totals.forecastRevenue, 170);
   assert.equal(totals.actualRevenue, 100);
   assert.equal(totals.estCost, 60);
