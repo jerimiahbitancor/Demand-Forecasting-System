@@ -25,15 +25,8 @@ const NAME_LABELS = {
 // backend uses (shared/stockStatusRules.json); the backend validates again.
 const DEFAULT_THRESHOLDS = STOCK_RULES.defaults;
 const THRESHOLD_LIMITS = STOCK_RULES.limits;
-const CURRENT_THRESHOLD_FIELDS = [
-  ['current_low_wet_pct', 'Wet raw materials', 'Fast turnover, 1–2 days shelf life'],
-  ['current_low_dry_pct', 'Dry raw materials', 'Slow turnover, 1–4 weeks shelf life'],
-];
-const PREDICTED_THRESHOLD_FIELDS = [
-  ['predicted_critical_pct', 'Critical Shortage below', 'critical'],
-  ['predicted_sufficient_pct', 'Sufficient Supply from', 'normal'],
-  ['predicted_above_pct', 'Above Forecast Limit above', 'excess'],
-];
+const STATUS_LABELS = STOCK_RULES.current.labels;
+const PREDICTED_LABELS = STOCK_RULES.predicted.labels;
 
 // A new unit must say what kind it is so recipe costing can convert it.
 const EMPTY_UNIT_FORM = { family: '', baseFactor: '', isPiece: false, pieceWeight: '', aliases: '' };
@@ -46,6 +39,8 @@ function ForecastConfig() {
   const [thresholds, setThresholds] = useState(DEFAULT_THRESHOLDS);
   const [thresholdsSaved, setThresholdsSaved] = useState(true);
   const [isSavingThresholds, setIsSavingThresholds] = useState(false);
+  // false until migration 022 adds current_excess_pct (Excess Stock threshold).
+  const [excessSaved, setExcessSaved] = useState(true);
   const [categoryTab, setCategoryTab] = useState('ingredient');
   const [unitTab, setUnitTab] = useState('ingredient');
   const [categoryData, setCategoryData] = useState({ ingredient: [], product: [] });
@@ -112,6 +107,7 @@ function ForecastConfig() {
         }
         setThresholds(loaded);
         setThresholdsSaved(config.stock_thresholds_saved !== false);
+        setExcessSaved(config.excess_threshold_saved !== false);
       }
     } catch (error) {
       console.error('Error fetching forecast config:', error);
@@ -153,6 +149,9 @@ function ForecastConfig() {
         return `Each threshold must be a number from ${min} to ${max}.`;
       }
     }
+    if (!(values.current_excess_pct > values.current_low_wet_pct && values.current_excess_pct > values.current_low_dry_pct)) {
+      return 'Excess Stock must start above both Low Stock thresholds.';
+    }
     if (!(values.predicted_critical_pct < values.predicted_sufficient_pct)) {
       return 'Critical Shortage must be lower than Sufficient Supply.';
     }
@@ -187,6 +186,23 @@ function ForecastConfig() {
   const setThreshold = (key, raw) => {
     setThresholds((current) => ({ ...current, [key]: raw === '' ? '' : Number(raw) }));
   };
+
+  // A labelled % box for one threshold ("Wet [50] %").
+  const pctInput = (key, label, aria) => (
+    <label className="fc-status-input">
+      <small>{label}</small>
+      <input
+        type="number"
+        min={THRESHOLD_LIMITS[key].min}
+        max={THRESHOLD_LIMITS[key].max}
+        step="1"
+        value={thresholds[key]}
+        onChange={(e) => setThreshold(key, e.target.value)}
+        aria-label={`${aria} (%)`}
+      />
+      <span aria-hidden="true">%</span>
+    </label>
+  );
 
   const openManagementDialog = (type, mode, item = '') => {
     const activeTab = type === 'category' ? categoryTab : unitTab;
@@ -514,7 +530,7 @@ function ForecastConfig() {
                   <section>
                     <strong>Current Stock Level Status (real time)</strong>
                     <p>Stock % = current stock ÷ ideal stock level × 100.</p>
-                    <p>Out of Stock: stock is 0. Low Stock: below the low threshold. Normal Stock: from the low threshold up to 100%. Excess Stock: above 100%.</p>
+                    <p>Out of Stock: stock is 0. Low Stock: below the low threshold. Normal Stock: from the low threshold up to the Excess %. Excess Stock: above the Excess % (default 100%).</p>
                     <p>Wet raw materials spoil in 1–2 days, so they need a higher low threshold (default 50%) than dry raw materials (default 20%).</p>
                   </section>
                   <section>
@@ -542,54 +558,73 @@ function ForecastConfig() {
               </button>
             </Tippy>
           </div>
+          {/* Oct 25 2026: one row per status, the editable % on the status it
+              sets. Same rules as backend/utils/stockStatus.js. */}
           <div className="fc-desc-card">
-            <strong>Current Stock Level Status:</strong> compares the stock on hand with each ingredient&apos;s ideal stock level. An ingredient is <strong>Low Stock</strong> below this percentage.
+            <strong>Current Stock Level Status</strong> (Ingredient Management): stock on hand ÷ the ingredient&apos;s Ideal Stock Level × 100.
           </div>
-          <div className="fc-threshold-list">
-            {CURRENT_THRESHOLD_FIELDS.map(([key, label, note]) => (
-              <label className="fc-threshold-row" key={key}>
-                <input
-                  type="number"
-                  min={THRESHOLD_LIMITS[key].min}
-                  max={THRESHOLD_LIMITS[key].max}
-                  step="1"
-                  value={thresholds[key]}
-                  onChange={(e) => setThreshold(key, e.target.value)}
-                  aria-label={`${label} low stock threshold (%)`}
-                />
-                <span>
-                  <strong>{label}: Low Stock below {thresholds[key]}%</strong>
-                  <small>Normal Stock from {thresholds[key]}% to 100% · Excess above 100% · {note}</small>
-                </span>
-              </label>
-            ))}
-          </div>
+          <table className="fc-status-table">
+            <thead><tr><th>Status</th><th>When</th><th>Setting</th></tr></thead>
+            <tbody>
+              <tr>
+                <td><i className="fc-status-dot critical"></i>{STATUS_LABELS.out}</td>
+                <td>Stock is 0</td>
+                <td className="fc-status-fixed">Fixed</td>
+              </tr>
+              <tr>
+                <td><i className="fc-status-dot low"></i>{STATUS_LABELS.low}</td>
+                <td>Below {thresholds.current_low_wet_pct}% (wet) or {thresholds.current_low_dry_pct}% (dry)</td>
+                <td>
+                  <span className="fc-status-inputs">
+                    {pctInput('current_low_wet_pct', 'Wet', 'Low Stock threshold for wet raw materials (1–2 days shelf life)')}
+                    {pctInput('current_low_dry_pct', 'Dry', 'Low Stock threshold for dry raw materials (1–4 weeks shelf life)')}
+                  </span>
+                </td>
+              </tr>
+              <tr>
+                <td><i className="fc-status-dot normal"></i>{STATUS_LABELS.normal}</td>
+                <td>From the Low Stock % up to {thresholds.current_excess_pct}%</td>
+                <td className="fc-status-fixed">Set by Low and Excess</td>
+              </tr>
+              <tr>
+                <td><i className="fc-status-dot excess"></i>{STATUS_LABELS.excess}</td>
+                <td>Above {thresholds.current_excess_pct}%</td>
+                <td>{pctInput('current_excess_pct', 'Above', 'Excess Stock starts above this % of the ideal stock level')}</td>
+              </tr>
+            </tbody>
+          </table>
+          {!excessSaved && (
+            <p className="fc-subtitle" role="status">The Excess Stock % stays at 100% until migration 022 is run in Supabase.</p>
+          )}
+
           <div className="fc-desc-card" style={{ marginTop: 14 }}>
-            <strong>Predicted Stock Level Status:</strong> after each forecast, compares the stock on hand with the forecasted demand.
+            <strong>Forecast (Predicted) Stock Level Status</strong> (Ingredient Demand): stock on hand ÷ forecasted need (safety buffer included) × 100.
           </div>
-          <div className="fc-threshold-list">
-            {PREDICTED_THRESHOLD_FIELDS.map(([key, label, dot]) => (
-              <label className="fc-threshold-row" key={key}>
-                <input
-                  type="number"
-                  min={THRESHOLD_LIMITS[key].min}
-                  max={THRESHOLD_LIMITS[key].max}
-                  step="1"
-                  value={thresholds[key]}
-                  onChange={(e) => setThreshold(key, e.target.value)}
-                  aria-label={`${label} (% of forecasted demand)`}
-                />
-                <span>
-                  <strong><i className={`fc-status-dot ${dot}`}></i>{label} {thresholds[key]}% of demand</strong>
-                  <small>
-                    {key === 'predicted_critical_pct' && 'Order now — emergency shortage'}
-                    {key === 'predicted_sufficient_pct' && `Insufficient Supply (order soon) from ${thresholds.predicted_critical_pct}% up to here; Sufficient Supply (no action) from here`}
-                    {key === 'predicted_above_pct' && 'Delay restocking — overstock detected'}
-                  </small>
-                </span>
-              </label>
-            ))}
-          </div>
+          <table className="fc-status-table">
+            <thead><tr><th>Status</th><th>When</th><th>Setting</th></tr></thead>
+            <tbody>
+              <tr>
+                <td><i className="fc-status-dot critical"></i>{PREDICTED_LABELS.critical}</td>
+                <td>Below {thresholds.predicted_critical_pct}% · Order now</td>
+                <td>{pctInput('predicted_critical_pct', 'Below', 'Critical Shortage below this % of the forecasted need')}</td>
+              </tr>
+              <tr>
+                <td><i className="fc-status-dot low"></i>{PREDICTED_LABELS.insufficient}</td>
+                <td>{thresholds.predicted_critical_pct}% to below {thresholds.predicted_sufficient_pct}% · Order soon</td>
+                <td className="fc-status-fixed">Set by the rows above and below</td>
+              </tr>
+              <tr>
+                <td><i className="fc-status-dot normal"></i>{PREDICTED_LABELS.sufficient}</td>
+                <td>{thresholds.predicted_sufficient_pct}% to {thresholds.predicted_above_pct}% · No action needed</td>
+                <td>{pctInput('predicted_sufficient_pct', 'From', 'Sufficient Supply from this % of the forecasted need')}</td>
+              </tr>
+              <tr>
+                <td><i className="fc-status-dot excess"></i>{PREDICTED_LABELS.above}</td>
+                <td>Above {thresholds.predicted_above_pct}% · Delay restocking</td>
+                <td>{pctInput('predicted_above_pct', 'Above', 'Above Forecast Limit above this % of the forecasted need')}</td>
+              </tr>
+            </tbody>
+          </table>
           {!thresholdsSaved && (
             <p className="fc-subtitle" role="status" style={{ marginTop: 10 }}>
               Showing the default thresholds. They can be saved once the database update (migration 021) has been run.

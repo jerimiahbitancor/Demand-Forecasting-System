@@ -1034,21 +1034,24 @@ class UploadService {
       })), { filename });
     }
 
-    // Latest 'adjustment' (an Edit of the stock) per ingredient. A
-    // 'restock' is a delivery, not a count, so it is not read here.
+    // Latest 'adjustment' (an Edit of the stock) AND latest 'restock' per
+    // ingredient: the cutoff is whichever is newer (owner decision, Oct 25
+    // 2026, see lastStockCountAt in utils/salesModifiers.js).
     const ingredientIds = [...deductionsByDate.keys()];
     const latestAdjustmentAt = new Map();
+    const latestRestockAt = new Map();
     if (ingredientIds.length > 0) {
       const { data: adjustments, error: adjustmentError } = await fetchAllRows(() => supabaseAdmin
         .from('inventory_transactions')
-        .select('ingredient_id, created_at')
-        .eq('transaction_type', 'adjustment')
+        .select('ingredient_id, transaction_type, created_at')
+        .in('transaction_type', ['adjustment', 'restock'])
         .in('ingredient_id', ingredientIds)
         .order('created_at', { ascending: false })
         .order('id', { ascending: true }));
       if (adjustmentError) throw adjustmentError;
       for (const row of adjustments || []) {
-        if (!latestAdjustmentAt.has(row.ingredient_id)) latestAdjustmentAt.set(row.ingredient_id, row.created_at);
+        const target = row.transaction_type === 'restock' ? latestRestockAt : latestAdjustmentAt;
+        if (!target.has(row.ingredient_id)) target.set(row.ingredient_id, row.created_at);
       }
     }
 
@@ -1056,10 +1059,11 @@ class UploadService {
     const skippedForCount = [];
     for (const [ingredientId, entry] of deductionsByDate) {
       const info = ingredientInfo.get(ingredientId) || {};
-      // The last COUNT only: the newest adjustment transaction. The
-      // ingredient's own created_at is not a count (U7).
+      // The newer of the last stock edit and the last restock. The
+      // ingredient's own created_at is not a cutoff (U7).
       const lastCountAt = lastStockCountAt({
         latestAdjustmentAt: latestAdjustmentAt.get(ingredientId) || null,
+        latestRestockAt: latestRestockAt.get(ingredientId) || null,
       });
 
       // Exact total, in the ingredient's base unit, over the days that
@@ -1097,15 +1101,15 @@ class UploadService {
         deduction,
         skippedDays,
         notes: skippedDays.length
-          ? `Not deducted for ${skippedDays.join(', ')}: counted after that day ended.`
+          ? `Not deducted for ${skippedDays.join(', ')}: stock was restocked or updated after that day ended.`
           : null,
       });
     }
 
     if (skippedForCount.length > 0) {
       warnings.push(
-        `Stock was not deducted for ${skippedForCount.length} ingredient(s) on days before their last stock count `
-        + `(the count already includes those plates): ${skippedForCount.map((s) => s.name).join(', ')}.`
+        `Stock was not deducted for ${skippedForCount.length} ingredient(s) on days before their last restock or stock update `
+        + `(the stock set then already reflects those plates): ${skippedForCount.map((s) => s.name).join(', ')}.`
       );
     }
     const stockNotDeductedSummary = [
@@ -1116,7 +1120,7 @@ class UploadService {
         days: s.days,
         lastCountAt: s.lastCountAt,
         message: `${s.name}: sales on ${s.days.join(', ')} were not deducted because the stock `
-          + `was edited (treated as a stock count) on ${s.lastCountAt || 'a later date'}, `
+          + `was restocked or updated on ${s.lastCountAt || 'a later date'}, `
           + 'after those days ended.',
       })),
     ];

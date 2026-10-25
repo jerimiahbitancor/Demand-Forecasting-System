@@ -409,3 +409,29 @@
   border-top: 2px solid #e5dede;
 }
 
+
+/* Sortable column headers (Oct 25 2026): click = highest first, again =
+   lowest first, again = back to date order. */
+.analytics-table th .th-sort-btn {
+  all: unset;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  font: inherit;
+  color: inherit;
+  white-space: nowrap;
+}
+.analytics-table th .th-sort-btn:focus-visible {
+  outline: 2px solid var(--color-red-primary, #7a0101);
+  outline-offset: 2px;
+  border-radius: 3px;
+}
+.analytics-table th .th-sort-arrow {
+  font-size: 0.75em;
+  opacity: 0.6;
+}
+.analytics-table th[aria-sort="ascending"] .th-sort-arrow,
+.analytics-table th[aria-sort="descending"] .th-sort-arrow {
+  opacity: 1;
+}

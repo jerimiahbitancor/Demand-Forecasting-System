@@ -65,6 +65,122 @@ function safetyBufferMultiplier(percentage) {
   return new Decimal(1).plus(decimalValue(percentage).div(100));
 }
 
+// PREDICTED ITEMS SOLD ARE WHOLE PLATES (owner decision, Oct 25 2026).
+// The model's forecast is an expected value (12.25 plates). The owner cooks
+// whole plates and must be able to redo every number on screen by hand
+// ("12 plates × ₱45.50 = ₱546.00"), so the forecast is rounded to the
+// nearest whole plate ONCE, here, and that whole number is what every
+// downstream figure uses: revenue, estimated cost, demand level, ingredient
+// demand, grocery list and stock status. Half rounds up (2.5 -> 3).
+// Trade-off (documented in the Business Logic doc): a product forecast
+// below 0.5 plate a day counts as 0 plates that day.
+function wholeItems(value) {
+  if (value === null || value === undefined || value === '') return 0;
+  const n = decimalValue(value);
+  return n.lte(0) ? 0 : n.toDecimalPlaces(0, Decimal.ROUND_HALF_UP).toNumber();
+}
+
+// ---------------------------------------------------------------------
+// POS modifier share (NO EGG, NO RICE ...) — the same rule as
+// ml-service business_logic.compute_modifier_shares():
+//   share(product, ingredient) = modifier plates mapped to that ingredient
+//                                ÷ all plates of the product,
+//   over the store's last 28 CONFIRMED-OPEN days; capped at 1.
+// daily_sales.quantity_sold already includes the modifier plates.
+// Until Oct 25 2026 the backend skipped this step, so every page here
+// (Ingredient Demand, Ingredient Management, stock alerts) used full
+// recipes while the Business Logic doc said "× (1 − modifier share)".
+// ---------------------------------------------------------------------
+const MODIFIER_SHARE_WINDOW_OPEN_DAYS = 28;
+
+function normalizeModifierKeyword(keyword) {
+  return String(keyword || '').trim().replace(/\s+/g, ' ').toUpperCase();
+}
+
+// -> Map "productId:ingredientId" -> Decimal share (pairs not listed = 0)
+function computeModifierShares({ sales = [], modifiers = [], rules = [], windowDates = null } = {}) {
+  const shares = new Map();
+  if (!sales.length || !modifiers.length || !rules.length) return shares;
+  const window = windowDates ? new Set(windowDates.map((d) => String(d).slice(0, 10))) : null;
+  const inWindow = (row) => !window || window.has(String(row.sale_date).slice(0, 10));
+  const ingredientByKeyword = new Map(rules.map((r) => [normalizeModifierKeyword(r.keyword), r.ingredient_id]));
+
+  const plates = new Map();
+  for (const r of sales) {
+    if (!inWindow(r)) continue;
+    plates.set(r.product_id, (plates.get(r.product_id) || new Decimal(0)).plus(Decimal.max(0, decimalValue(r.quantity_sold))));
+  }
+  const without = new Map();
+  for (const r of modifiers) {
+    if (!inWindow(r)) continue;
+    const ingredientId = ingredientByKeyword.get(normalizeModifierKeyword(r.keyword));
+    if (ingredientId === undefined || ingredientId === null) continue;
+    const key = `${r.product_id}:${ingredientId}`;
+    without.set(key, (without.get(key) || new Decimal(0)).plus(Decimal.max(0, decimalValue(r.quantity))));
+  }
+  for (const [key, count] of without) {
+    const total = plates.get(Number(key.split(':')[0])) || plates.get(key.split(':')[0]);
+    if (!total || total.lte(0) || count.lte(0)) continue;
+    shares.set(key, Decimal.min(1, count.div(total)));
+  }
+  return shares;
+}
+
+function modifierShareOf(shares, productId, ingredientId) {
+  if (!shares || shares.size === 0) return new Decimal(0);
+  return shares.get(`${productId}:${ingredientId}`) || new Decimal(0);
+}
+
+function isMissingTableError(error) {
+  return Boolean(error && (error.code === '42P01' || error.code === 'PGRST205'
+    || /does not exist|could not find the table/i.test(String(error.message || ''))));
+}
+
+// Reads the inputs and returns computeModifierShares(). Never throws: no
+// modifier tables (migration 010 not run) or any read error -> no shares,
+// i.e. full recipes, exactly as before.
+async function loadModifierShares(client = supabaseAdmin) {
+  try {
+    const { data: days, error: daysError } = await client
+      .from('business_days')
+      .select('business_date')
+      .eq('status', 'confirmed_open')
+      .order('business_date', { ascending: false })
+      .limit(MODIFIER_SHARE_WINDOW_OPEN_DAYS);
+    if (daysError) throw daysError;
+    const windowDates = (days || []).map((d) => String(d.business_date).slice(0, 10)).sort();
+    if (!windowDates.length) return new Map();
+    const start = windowDates[0];
+    const end = windowDates[windowDates.length - 1];
+    const { data: rules, error: rulesError } = await client.from('modifier_rules').select('keyword, ingredient_id');
+    if (rulesError) throw rulesError;
+    if (!rules || !rules.length) return new Map();
+    const { data: modifiers, error: modError } = await fetchAllRows(() => client
+      .from('daily_sales_modifiers')
+      .select('product_id, sale_date, keyword, quantity')
+      .gte('sale_date', start)
+      .lte('sale_date', end)
+      .order('sale_date')
+      .order('product_id'));
+    if (modError) throw modError;
+    if (!modifiers || !modifiers.length) return new Map();
+    const { data: sales, error: salesError } = await fetchAllRows(() => client
+      .from('daily_sales')
+      .select('product_id, sale_date, quantity_sold')
+      .gte('sale_date', start)
+      .lte('sale_date', end)
+      .order('sale_date')
+      .order('product_id'));
+    if (salesError) throw salesError;
+    return computeModifierShares({ sales: sales || [], modifiers, rules, windowDates });
+  } catch (error) {
+    if (!isMissingTableError(error)) {
+      console.warn('[MODIFIERS] modifier share not applied (full recipes used):', error.message);
+    }
+    return new Map();
+  }
+}
+
 // Worse-status-wins ranking, used to find a product's "bottleneck"
 // ingredient (Product Performance > Demand Classification) and to rank
 // items for the Grocery List preview.
@@ -402,26 +518,99 @@ function buildPredictionSeries({ salesRows = [], forecastRows = [], today, price
     });
 }
 
-// Table totals add only known values. Products with no price add nothing to
-// revenue; no recipe adds nothing to cost; gross profit needs both.
-function summarizePredictionTotals(rows = []) {
-  const totals = {
-    actualRevenue: 0, forecastRevenue: 0, estCost: 0, estGrossProfit: 0,
-    noPriceCount: 0, noRecipeCount: 0,
+// Sales and Demand Prediction table (Oct 25 2026 rules):
+//   - one row per (product, date) that has a forecast OR actual sales up to
+//     today. Before, rows came from forecasts only, so a day with sales but
+//     no forecast row (every past day once the model was retrained and the
+//     product ids changed) never showed its Actual Qty.
+//   - only products WITH an ingredient recipe (mapped products).
+//   - actualQty = all of that product's daily_sales rows for the date, summed.
+//   - forecastQty = whole plates (wholeItems); revenue and cost use it:
+//       forecastRevenue = forecastQty × price
+//       estCost         = forecastQty × COGS per plate (Product Management's COGS)
+//   - Gross profit was removed (owner decision, Oct 25 2026).
+function buildForecastTableRows({
+  forecastRows = [], salesRows = [], productById = new Map(), cogsPerUnitByProduct = new Map(),
+  priceOf = () => null, today = null,
+}) {
+  const byKey = new Map();
+  const keyOf = (pid, date) => `${pid}|${String(date).slice(0, 10)}`;
+  const entry = (pid, date) => {
+    const k = keyOf(pid, date);
+    let e = byKey.get(k);
+    if (!e) {
+      e = { productId: pid, date: String(date).slice(0, 10), forecast: null, closed: false, actual: null };
+      byKey.set(k, e);
+    }
+    return e;
   };
+  for (const f of forecastRows) {
+    if (!cogsPerUnitByProduct.has(f.product_id)) continue;
+    const e = entry(f.product_id, f.forecast_date);
+    if (isClosedForecastRow(f)) {
+      e.closed = true;
+      continue;
+    }
+    e.forecast = (e.forecast || 0) + Number(f.predicted_quantity || 0);
+  }
+  for (const s of salesRows) {
+    if (!cogsPerUnitByProduct.has(s.product_id)) continue;
+    const date = String(s.sale_date).slice(0, 10);
+    if (today && date > today) continue;
+    const e = entry(s.product_id, date);
+    e.actual = (e.actual || 0) + (Number(s.quantity_sold) || 0);
+  }
+  return Array.from(byKey.values())
+    .map((e) => {
+      const product = productById.get(e.productId);
+      const price = priceOf(e.productId);
+      const hasPrice = price !== null;
+      const cogs = cogsPerUnitByProduct.get(e.productId);
+      const hasForecast = e.forecast !== null;
+      const closed = e.closed && !hasForecast;
+      const forecastQty = hasForecast ? wholeItems(e.forecast) : (closed ? 0 : null);
+      const counted = hasForecast ? forecastQty : null;
+      return {
+        date: e.date,
+        productId: e.productId,
+        product: product?.name || `Product ${e.productId}`,
+        closed,
+        hasPrice,
+        hasRecipe: true,
+        hasForecast,
+        actualQty: e.actual,
+        forecastQty,
+        forecastQtyRaw: hasForecast ? Number(e.forecast.toFixed(2)) : null,
+        price: hasPrice ? price : null,
+        cogsPerUnit: cogs,
+        actualRevenue: e.actual !== null && hasPrice ? roundMoney(decimalValue(e.actual).mul(decimalValue(price))) : null,
+        forecastRevenue: counted !== null && hasPrice ? roundMoney(decimalValue(counted).mul(decimalValue(price))) : null,
+        estCost: counted !== null ? roundMoney(decimalValue(counted).mul(decimalValue(cogs))) : null,
+      };
+    })
+    .sort((a, b) => a.date.localeCompare(b.date) || a.product.localeCompare(b.product));
+}
+
+// Table totals add only known values. Products with no price add nothing to
+// revenue; no recipe adds nothing to cost. Exact decimals, then centavos.
+function summarizePredictionTotals(rows = []) {
+  const sums = { actualRevenue: new Decimal(0), forecastRevenue: new Decimal(0), estCost: new Decimal(0) };
   const noPrice = new Set();
   const noRecipe = new Set();
   for (const r of rows) {
     if (!r.hasPrice) noPrice.add(r.productId);
     if (!r.hasRecipe) noRecipe.add(r.productId);
-    if (r.actualRevenue != null) totals.actualRevenue += r.actualRevenue;
-    if (r.forecastRevenue != null) totals.forecastRevenue += r.forecastRevenue;
-    if (r.estCost != null) totals.estCost += r.estCost;
-    if (r.estGrossProfit != null) totals.estGrossProfit += r.estGrossProfit;
+    for (const key of Object.keys(sums)) {
+      if (r[key] != null) sums[key] = sums[key].plus(decimalValue(r[key]));
+    }
   }
-  totals.noPriceCount = noPrice.size;
-  totals.noRecipeCount = noRecipe.size;
-  return totals;
+  return {
+    actualRevenue: roundMoney(sums.actualRevenue),
+    forecastRevenue: roundMoney(sums.forecastRevenue),
+    estCost: roundMoney(sums.estCost),
+    noPriceCount: noPrice.size,
+    noRecipeCount: noRecipe.size,
+  };
 }
 
 // Performance Ratio from ACTUAL SALES in the chosen range (owner decisions,
@@ -577,14 +766,25 @@ async function getRecipeMap() {
     // stock unit (ingredient.unit). Normalise to the ingredient's unit so
     // every downstream quantity (demand, stock deduction, COGS) is in the
     // same unit the price and stock are quoted in.
-    const normalizedPerServing = 'unit' in row
-      ? convertRecipeQuantity(
-          row.quantity_per_serving,
-          row.unit || ingredient.unit,
-          ingredient.unit,
-          { materialType: ingredient.material_type || 'dry' }
-        )
-      : parseRecipeQuantity(row.quantity_per_serving) || 0;
+    //
+    // One recipe line whose unit cannot be converted (kg recipe, mL stock)
+    // used to throw here and take down EVERY page that reads the recipe map
+    // (Ingredient Management included). It is now skipped and logged; the
+    // sales upload still refuses such a file on its own (UnconvertibleRecipeError).
+    let normalizedPerServing;
+    try {
+      normalizedPerServing = 'unit' in row
+        ? convertRecipeQuantity(
+            row.quantity_per_serving,
+            row.unit || ingredient.unit,
+            ingredient.unit,
+            { materialType: ingredient.material_type || 'dry' }
+          )
+        : parseRecipeQuantity(row.quantity_per_serving) || 0;
+    } catch (conversionError) {
+      console.warn(`[RECIPES] skipped recipe line (product ${row.product_id}, ${ingredient?.name}): ${conversionError.message}`);
+      continue;
+    }
     const entry = {
       ingredientId: ingredient.id,
       name: ingredient.name,
@@ -618,10 +818,15 @@ if (!map.has(row.product_id)) map.set(row.product_id, []);
 //                          byProduct: Map productId -> that product's part of need }
 // byProduct lets a caller name the products that use the most of an
 // ingredient (restock email "For ..."); it never changes `need`.
-function sumIngredientNeeds(forecastRows, recipeMap, bufferMultiplier) {
+//
+// Oct 25 2026: forecastQty is the WHOLE number of plates (wholeItems), and
+// each product's part is × (1 − modifier share) when shares are passed:
+//   need_i = (1 + buffer) × Σ_p wholePlates_p × qtyPerServing_p,i × (1 − share_p,i)
+function sumIngredientNeeds(forecastRows, recipeMap, bufferMultiplier, modifierShares = null) {
   const byIngredient = new Map();
   const multiplier = decimalValue(bufferMultiplier);
   for (const f of forecastRows || []) {
+    const plates = wholeItems(f.predicted_quantity);
     for (const item of recipeMap.get(f.product_id) || []) {
       let entry = byIngredient.get(item.ingredientId);
       if (!entry) {
@@ -635,7 +840,9 @@ function sumIngredientNeeds(forecastRows, recipeMap, bufferMultiplier) {
         };
         byIngredient.set(item.ingredientId, entry);
       }
-      const rawPart = decimalValue(f.predicted_quantity).mul(decimalValue(item.qtyPerServing));
+      const rawPart = new Decimal(plates)
+        .mul(decimalValue(item.qtyPerServing))
+        .mul(new Decimal(1).minus(modifierShareOf(modifierShares, f.product_id, item.ingredientId)));
       const part = rawPart.mul(multiplier);
       entry.rawNeed = entry.rawNeed.plus(rawPart);
       entry.need = entry.need.plus(part);
@@ -667,8 +874,17 @@ function sumIngredientNeeds(forecastRows, recipeMap, bufferMultiplier) {
   return byIngredient;
 }
 
+// COGS per plate = Σ (qty per serving, in the stock unit × ingredient price),
+// rounded to centavos — the SAME number Product Management shows for the
+// product (its calculateProductCogs), so Forecast "Est. Total Cost" is
+// exactly  whole plates × that COGS  and the owner can check it by hand.
+// Exact decimals (the old version multiplied floats and strings).
 function cogsPerUnit(recipeItems) {
-  return (recipeItems || []).reduce((sum, item) => sum + item.qtyPerServing * item.unitCost, 0);
+  const total = (recipeItems || []).reduce(
+    (sum, item) => sum.plus(decimalValue(item.qtyPerServing).mul(decimalValue(item.unitPrice ?? item.unitCost ?? 0))),
+    new Decimal(0),
+  );
+  return roundMoney(total);
 }
 
 // ---------------------------------------------------------------------
@@ -765,56 +981,30 @@ async function getForecastingAnalytics({ productId, from, to } = {}) {
     cogsPerUnitByProduct.set(pid, cogsPerUnit(items));
   }
 
-  const actualByKey = new Map();
-  for (const row of salesRows || []) {
-    actualByKey.set(`${row.product_id}_${row.sale_date}`, row.quantity_sold);
-  }
-
-  // Price 0 = "No price"; no recipe rows = "No recipe". Unknown money
-  // values stay null (shown as a label), never as ₱0.
+  // Price 0 = "No price". Unknown money values stay null (shown as a
+  // label), never as ₱0.
   const priceOf = (pid) => {
     const p = Number(productById.get(pid)?.price);
     return p > 0 ? p : null;
   };
 
-  const rows = (forecastRows || [])
-    .map((f) => {
-      const product = productById.get(f.product_id);
-      const price = priceOf(f.product_id);
-      const hasPrice = price !== null;
-      const hasRecipe = recipeMap.has(f.product_id);
-      const closed = isClosedForecastRow(f);
-      const actualQty = actualByKey.has(`${f.product_id}_${f.forecast_date}`)
-        ? actualByKey.get(`${f.product_id}_${f.forecast_date}`)
-        : null;
-      const forecastQty = Number(f.predicted_quantity);
-      const forecastRevenue = hasPrice ? forecastQty * price : null;
-      const estCost = hasRecipe ? forecastQty * (cogsPerUnitByProduct.get(f.product_id) || 0) : null;
-      return {
-        date: f.forecast_date,
-        productId: f.product_id,
-        product: product?.name || `Product ${f.product_id}`,
-        closed,
-        hasPrice,
-        hasRecipe,
-        actualQty,
-        forecastQty,
-        actualRevenue: actualQty !== null && hasPrice ? actualQty * price : null,
-        forecastRevenue,
-        estCost,
-        estGrossProfit: forecastRevenue !== null && estCost !== null ? forecastRevenue - estCost : null,
-      };
-    })
-    .sort((a, b) => a.date.localeCompare(b.date) || a.product.localeCompare(b.product));
-
-  // Chart actuals: active products only (or the one selected product), so
-  // the line compares like with like against the forecast.
-  const countedSales = productId
-    ? (salesRows || [])
-    : (salesRows || []).filter((s) => productById.get(s.product_id)?.status === 'active');
-  const series = buildPredictionSeries({
-    salesRows: countedSales,
+  const rows = buildForecastTableRows({
     forecastRows: forecastRows || [],
+    salesRows: salesRows || [],
+    productById,
+    cogsPerUnitByProduct,
+    priceOf,
+    today: range.today,
+  });
+
+  // Chart = the same products as the table (products WITH a recipe), and
+  // the same whole plates, so the line and the table always add up alike.
+  // The page rebuilds it from the rows when a product is searched.
+  const series = buildPredictionSeries({
+    salesRows: (salesRows || []).filter((s) => recipeMap.has(s.product_id)),
+    forecastRows: (forecastRows || [])
+      .filter((f) => recipeMap.has(f.product_id))
+      .map((f) => ({ ...f, predicted_quantity: wholeItems(f.predicted_quantity) })),
     today: range.today,
     priceOf,
   });
@@ -923,7 +1113,7 @@ async function getProductPerformanceAnalytics({ from, to, demandFrom, demandTo }
   if (productsError) throw productsError;
   const productById = new Map(products.map((p) => [p.id, p]));
 
-  const recipeMap = await getRecipeMap();
+  const [recipeMap, modifierShares] = await Promise.all([getRecipeMap(), loadModifierShares()]);
 
   // --- Demand Classification: each day's forecast, tier PER PRODUCT
   // (each product vs its own past sales: productDemandTier()). Closed-day
@@ -967,7 +1157,11 @@ async function getProductPerformanceAnalytics({ from, to, demandFrom, demandTo }
     .map((f) => {
       const product = productById.get(f.product_id);
       if (!product) return null;
-      const { tier, basisText } = productDemandTier(f.predicted_quantity, latestClassificationByProduct.get(f.product_id));
+      // Whole plates: the number shown is the number classified and used
+      // for the bottleneck, so "2 items sold — Low (normal range 2–4)"
+      // can no longer happen (1.93 used to be classified as 1.93).
+      const plates = wholeItems(f.predicted_quantity);
+      const { tier, basisText } = productDemandTier(plates, latestClassificationByProduct.get(f.product_id));
       const recipeItems = recipeMap.get(f.product_id) || [];
 
       // Bottleneck ingredient: worst stock status among this product's
@@ -977,7 +1171,10 @@ async function getProductPerformanceAnalytics({ from, to, demandFrom, demandTo }
       let bottleneckIngredient = null;
       for (const item of recipeItems) {
         const need = roundIngredientQuantity(
-          decimalValue(f.predicted_quantity).mul(decimalValue(item.qtyPerServing)).mul(bufferMultiplier),
+          new Decimal(plates)
+            .mul(decimalValue(item.qtyPerServing))
+            .mul(new Decimal(1).minus(modifierShareOf(modifierShares, f.product_id, item.ingredientId)))
+            .mul(bufferMultiplier),
           item.unit,
         );
         const status = computeStockStatus(item.currentStock, need, stockThresholds);
@@ -991,7 +1188,8 @@ async function getProductPerformanceAnalytics({ from, to, demandFrom, demandTo }
         date: f.forecast_date,
         productId: f.product_id,
         product: product.name,
-        forecastQty: Number(f.predicted_quantity),
+        forecastQty: plates,
+        forecastQtyRaw: Number(f.predicted_quantity),
         // 'High Demand' | 'Medium Demand' | 'Low Demand' | 'Not enough data'
         demandLevel: tier ? `${tier} Demand` : 'Not enough data',
         // "High for this product (normal range 46–57 items/day)"
@@ -1231,11 +1429,11 @@ async function getIngredientDailyNeedDetails(date) {
     .eq('forecast_date', targetDate);
   if (error) throw error;
 
-  const recipeMap = await getRecipeMap();
+  const [recipeMap, modifierShares] = await Promise.all([getRecipeMap(), loadModifierShares()]);
   return {
     date: targetDate,
     safetyBufferPct,
-    entries: sumIngredientNeeds(forecastRows, recipeMap, bufferMultiplier),
+    entries: sumIngredientNeeds(forecastRows, recipeMap, bufferMultiplier, modifierShares),
   };
 }
 
@@ -1286,7 +1484,7 @@ async function getIngredientDemandAnalytics({ date, weekStart } = {}) {
     .lte('forecast_date', weekDates[6]);
   if (forecastError) throw forecastError;
 
-  const recipeMap = await getRecipeMap();
+  const [recipeMap, modifierShares] = await Promise.all([getRecipeMap(), loadModifierShares()]);
   // ingredient name -> { values: number[7], ingredientId }
   const heatmap = new Map();
   // ingredientId -> { category, currentStock, productIds } for the weekly grocery list
@@ -1315,7 +1513,12 @@ async function getIngredientDemandAnalytics({ date, weekStart } = {}) {
         });
       }
       const entry = heatmap.get(item.ingredientId);
-      const rawNeed = decimalValue(f.predicted_quantity).mul(decimalValue(item.qtyPerServing));
+      // Weekly heatmap = RAW demand: whole plates × recipe × (1 − modifier
+      // share), NO safety buffer (owner decision, Oct 25 2026). The buffered
+      // copy below feeds only the Weekly Grocery List.
+      const rawNeed = new Decimal(wholeItems(f.predicted_quantity))
+        .mul(decimalValue(item.qtyPerServing))
+        .mul(new Decimal(1).minus(modifierShareOf(modifierShares, f.product_id, item.ingredientId)));
       entry.values[dayIndex] = entry.values[dayIndex].plus(rawNeed);
       const info = weekInfo.get(item.ingredientId);
       info.bufferedValues[dayIndex] = info.bufferedValues[dayIndex].plus(rawNeed.mul(bufferMultiplier));
@@ -1360,7 +1563,7 @@ async function getIngredientDemandAnalytics({ date, weekStart } = {}) {
   }
   // Same summing rule as the Dashboard's stock alerts (sumIngredientNeeds).
   const dailyByIngredient = new Map();
-  for (const { ingredientId, item, need, rawNeed, safetyBuffer, productIds } of sumIngredientNeeds(dayForecasts, recipeMap, bufferMultiplier).values()) {
+  for (const { ingredientId, item, need, rawNeed, safetyBuffer, productIds } of sumIngredientNeeds(dayForecasts, recipeMap, bufferMultiplier, modifierShares).values()) {
     dailyByIngredient.set(ingredientId, {
       ingredientId,
       name: item.name,
@@ -1383,7 +1586,13 @@ async function getIngredientDemandAnalytics({ date, weekStart } = {}) {
 
   const dailyIngredients = Array.from(dailyByIngredient.values())
     .map((entry) => {
+      // Price/Unit = the ingredient's own price from Ingredient Management
+      // (ingredients.price, per its stock unit). Est. Cost = To Buy (as
+      // shown: 2 decimals, whole pieces) × that price, rounded to centavos,
+      // so "2.31 kg × ₱50.00/kg = ₱115.50" can be checked by hand. Nothing
+      // to buy -> ₱0.00 (not blank) when the price is known.
       const marketPrice = entry.unitPrice;
+      const predicted = predictedStockStatus({ quantity: entry.currentStock, need: entry.forecastedNeed }, stockThresholds);
       const status = computeStockStatus(entry.currentStock, entry.forecastedNeed, stockThresholds);
       const toBuy = amountToBuy(entry.forecastedNeed, entry.currentStock, entry.unit);
       return {
@@ -1397,10 +1606,13 @@ async function getIngredientDemandAnalytics({ date, weekStart } = {}) {
         onStock: entry.currentStock,
         unit: entry.unit,
         status,
-        predictedStatus: predictedStockStatus({ quantity: entry.currentStock, need: entry.forecastedNeed }, stockThresholds).status,
+        predictedStatus: predicted.status,
+        predictedLevel: predicted.level,
+        predictedAction: predicted.action,
+        coveragePct: predicted.coveragePct,
         toBuy: status === 'Normal' || status === 'Excess' ? null : toBuy,
         marketPrice,
-        estCost: toBuy > 0 ? costForQuantity(toBuy, marketPrice) : null,
+        estCost: marketPrice == null ? null : (toBuy > 0 && status !== 'Normal' && status !== 'Excess' ? costForQuantity(toBuy, marketPrice) : 0),
       };
     })
     .sort((a, b) => (STOCK_SEVERITY[b.status] ?? -1) - (STOCK_SEVERITY[a.status] ?? -1));
@@ -1523,9 +1735,9 @@ async function getForecastSummary() {
   // across every product that uses it (sumIngredientNeeds). The old code
   // judged each product-ingredient pair on its own and kept the worst, so
   // two "Low" dishes sharing rice never added up to "Critical".
-  const [recipeMap, stockThresholds] = await Promise.all([getRecipeMap(), getStockThresholds()]);
+  const [recipeMap, stockThresholds, modifierShares] = await Promise.all([getRecipeMap(), getStockThresholds(), loadModifierShares()]);
   const stockCounts = { Critical: 0, Low: 0, Normal: 0, Excess: 0 };
-  for (const { item, need } of sumIngredientNeeds(todayForecasts, recipeMap, bufferMultiplier).values()) {
+  for (const { item, need } of sumIngredientNeeds(todayForecasts, recipeMap, bufferMultiplier, modifierShares).values()) {
     const status = computeStockStatus(item.currentStock, need, stockThresholds);
     if (stockCounts[status] !== undefined) stockCounts[status] += 1;
   }
@@ -1596,6 +1808,12 @@ module.exports = {
   computeStockStatus,
   sumIngredientNeeds,
   roundIngredientQuantity,
+  wholeItems,
+  computeModifierShares,
+  loadModifierShares,
+  buildForecastTableRows,
+  cogsPerUnit,
+  getRecipeMap,
   getIngredientDailyNeeds,
   getIngredientDailyNeedDetails,
   getSafetyBufferPercentage,

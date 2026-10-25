@@ -109,19 +109,98 @@ test('K4: revenue series skips unknown prices', () => {
   assert.equal(p.forecastRevenue, 300);
 });
 
-test('K4: totals add known values only and count missing price/recipe products', () => {
+test('K4: totals add known values only and count missing price/recipe products (no gross profit)', () => {
   const totals = svc.summarizePredictionTotals([
-    { productId: 1, hasPrice: true, hasRecipe: true, actualRevenue: 100, forecastRevenue: 120, estCost: 40, estGrossProfit: 80 },
-    { productId: 2, hasPrice: false, hasRecipe: true, actualRevenue: null, forecastRevenue: null, estCost: 10, estGrossProfit: null },
-    { productId: 2, hasPrice: false, hasRecipe: true, actualRevenue: null, forecastRevenue: null, estCost: 10, estGrossProfit: null },
-    { productId: 3, hasPrice: true, hasRecipe: false, actualRevenue: null, forecastRevenue: 50, estCost: null, estGrossProfit: null },
+    { productId: 1, hasPrice: true, hasRecipe: true, actualRevenue: 100, forecastRevenue: 120, estCost: 40 },
+    { productId: 2, hasPrice: false, hasRecipe: true, actualRevenue: null, forecastRevenue: null, estCost: 10 },
+    { productId: 2, hasPrice: false, hasRecipe: true, actualRevenue: null, forecastRevenue: null, estCost: 10 },
+    { productId: 3, hasPrice: true, hasRecipe: false, actualRevenue: null, forecastRevenue: 50, estCost: null },
   ]);
   assert.equal(totals.forecastRevenue, 170);
   assert.equal(totals.actualRevenue, 100);
   assert.equal(totals.estCost, 60);
-  assert.equal(totals.estGrossProfit, 80);
+  assert.equal(totals.estGrossProfit, undefined, 'gross profit removed (Oct 25 2026)');
   assert.equal(totals.noPriceCount, 1); // distinct products, not rows
   assert.equal(totals.noRecipeCount, 1);
+});
+
+// ------------------------------------------------ Oct 25 2026 concern fixes
+test('wholeItems: nearest whole plate, half up, never negative', () => {
+  assert.equal(svc.wholeItems(12.25), 12);
+  assert.equal(svc.wholeItems('2.5'), 3);
+  assert.equal(svc.wholeItems(0.46), 0);
+  assert.equal(svc.wholeItems(-1), 0);
+  assert.equal(svc.wholeItems(null), 0);
+});
+
+test('Forecast table: a sales day WITHOUT a forecast still shows its Actual Qty; unmapped products are left out', () => {
+  const productById = new Map([[1, { id: 1, name: 'Porksilog', price: 120 }], [2, { id: 2, name: 'Water', price: 20 }]]);
+  const rows = svc.buildForecastTableRows({
+    today: '2026-10-25',
+    productById,
+    cogsPerUnitByProduct: new Map([[1, 45.5]]), // product 2 has no recipe
+    priceOf: (id) => Number(productById.get(id)?.price) || null,
+    salesRows: [
+      { product_id: 1, sale_date: '2026-09-30', quantity_sold: 10 },
+      { product_id: 1, sale_date: '2026-09-30', quantity_sold: 2 }, // a second row the same day is ADDED
+      { product_id: 2, sale_date: '2026-09-30', quantity_sold: 5 },
+    ],
+    forecastRows: [{ product_id: 1, forecast_date: '2026-10-26', predicted_quantity: 12.25, model_version: 'm' }],
+  });
+  assert.equal(rows.length, 2, JSON.stringify(rows));
+  const past = rows.find((r) => r.date === '2026-09-30');
+  assert.equal(past.actualQty, 12);
+  assert.equal(past.forecastQty, null);
+  assert.equal(past.actualRevenue, 1440);
+  assert.equal(past.estCost, null);
+  const future = rows.find((r) => r.date === '2026-10-26');
+  assert.equal(future.forecastQty, 12, 'whole plates');
+  assert.equal(future.forecastQtyRaw, 12.25);
+  assert.equal(future.forecastRevenue, 1440, '12 × ₱120');
+  assert.equal(future.estCost, 546, '12 × ₱45.50 COGS, the Product Management number');
+  assert.equal('estGrossProfit' in future, false);
+});
+
+test('COGS per plate = Σ qty × price in exact decimals, rounded to centavos (Product Management rule)', () => {
+  assert.equal(svc.cogsPerUnit([
+    { qtyPerServing: '0.06', unitPrice: '350' },  // 60 g pork at ₱350/kg = 21.00
+    { qtyPerServing: '1', unitPrice: '8.5' },     // 1 egg = 8.50
+    { qtyPerServing: '0.2', unitPrice: '55.555' }, // rice = 11.111
+  ]), 40.61);
+});
+
+test('Modifier share: NO EGG plates leave out egg; capped at 1; outside the window ignored', () => {
+  const shares = svc.computeModifierShares({
+    windowDates: ['2026-09-29', '2026-09-30'],
+    rules: [{ keyword: 'no egg', ingredient_id: 10 }],
+    sales: [
+      { product_id: 1, sale_date: '2026-09-29', quantity_sold: 300 },
+      { product_id: 1, sale_date: '2026-09-30', quantity_sold: 100 },
+      { product_id: 1, sale_date: '2026-08-01', quantity_sold: 999 },
+    ],
+    modifiers: [
+      { product_id: 1, sale_date: '2026-09-30', keyword: 'NO  EGG', quantity: 40 },
+      { product_id: 1, sale_date: '2026-08-01', keyword: 'NO EGG', quantity: 500 },
+    ],
+  });
+  assert.equal(shares.get('1:10').toString(), '0.1');
+  const egg = { ingredientId: 10, unit: 'pcs', qtyPerServing: '1' };
+  const [entry] = svc.sumIngredientNeeds([{ product_id: 1, predicted_quantity: 20.4 }], new Map([[1, [egg]]]), '1', shares).values();
+  assert.equal(entry.rawNeed, 18, '20 plates × 1 egg × (1 − 10%)');
+});
+
+test('Recipe map: one unconvertible recipe line is skipped, not a crash for every page', async () => {
+  fake.reset({
+    product_ingredients: [
+      { product_id: 1, unit: 'kg', quantity_per_serving: 0.1, ingredients: { id: 10, name: 'Soy', unit: 'mL', price: 1, quantity: 1000 } },
+      { product_id: 1, unit: 'pcs', quantity_per_serving: 1, ingredients: { id: 11, name: 'Egg', unit: 'pcs', price: 8, quantity: 30 } },
+    ],
+  });
+  const restore = console.warn; console.warn = () => {};
+  try {
+    const map = await svc.getRecipeMap();
+    assert.deepEqual(map.get(1).map((i) => i.name), ['Egg']);
+  } finally { console.warn = restore; }
 });
 
 // ---------------------------------------------------------------- K5 ratio
