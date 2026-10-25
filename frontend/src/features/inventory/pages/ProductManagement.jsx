@@ -1261,7 +1261,7 @@ const ProductManagement = () => {
     }
 
     if (statusFilter === 'active' || statusFilter === 'new' || statusFilter === 'discontinued'
-      || statusFilter === 'unmapped' || statusFilter === 'high-food-cost') {
+      || statusFilter === 'mapped' || statusFilter === 'unmapped' || statusFilter === 'high-food-cost') {
       filtered = filtered.filter((item) => {
         const st = getStatusDetails(item);
         if (st.isArchived) return false;
@@ -1269,6 +1269,7 @@ const ProductManagement = () => {
           case 'active': return st.isActive;
           case 'new': return st.isNew;
           case 'discontinued': return st.isDiscontinued;
+          case 'mapped': return st.isMapped;
           case 'unmapped': return st.isUnmapped;
           case 'high-food-cost': return st.isHighFoodCost;
           default: return true;
@@ -1729,6 +1730,7 @@ const ProductManagement = () => {
             <option value="active">Active</option>
             <option value="new">Inactive (Not enough data)</option>
             <option value="discontinued">Inactive (Discontinued)</option>
+            <option value="mapped">Mapped Products</option>
             <option value="high-food-cost">High Food Cost</option>
             <option value="archived">Archived products</option>
           </select>

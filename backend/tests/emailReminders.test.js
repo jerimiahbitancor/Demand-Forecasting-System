@@ -102,6 +102,37 @@ test('reminder kind + flag on -> one email: subject, button link, footer, plain 
   assert.match(call.body.textContent, /You get this email because reminders are on\. Change the email in Settings > Business Profile\./);
 });
 
+test('blocked sales upload email includes a readable ingredient shortfall table', async () => {
+  seed();
+  setEnv({ ...CONFIGURED, EMAIL_REMINDERS_ENABLED: 'true' });
+  await create({
+    userId: 7,
+    type: 'error',
+    title: 'Unmet condition: not enough stock (2 ingredients)',
+    message: '"sales.csv" was not saved because ingredients do not have enough stock.',
+    link: '/ingredient-management',
+    metadata: {
+      kind: 'upload_blocked_stock',
+      key: 'upload_blocked_stock:902',
+      filename: 'sales.csv',
+      shortfalls: [
+        { name: 'Egg', unit: 'Pieces (pcs)', required: '19', available: '4', shortfall: '15' },
+        { name: 'Strawberry Powder', unit: 'Grams (g)', required: '16', available: '3', shortfall: '13' },
+      ],
+    },
+  });
+
+  const email = brevoCalls[0].body;
+  assert.match(email.htmlContent, /<table/);
+  assert.match(email.htmlContent, /Egg/);
+  assert.match(email.htmlContent, /19 pcs/);
+  assert.match(email.htmlContent, /4 pcs/);
+  assert.match(email.htmlContent, /15 pcs/);
+  assert.match(email.htmlContent, /Strawberry Powder/);
+  assert.match(email.textContent, /Ingredient \| Needed \| In stock \| Short/);
+  assert.match(email.textContent, /Strawberry Powder \| 16 g \| 3 g \| 13 g/);
+});
+
 test('flag off (the default) -> no email, notification still created', async () => {
   seed();
   setEnv({ ...CONFIGURED });

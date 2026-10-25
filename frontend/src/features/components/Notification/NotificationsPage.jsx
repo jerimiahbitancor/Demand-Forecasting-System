@@ -1,7 +1,6 @@
 // pages/NotificationsPage.jsx
 import { useState, useEffect, useCallback, useMemo } from 'react';
 import {
-  FaRegBell,
   FaCheckCircle,
   FaExclamationCircle,
   FaInfoCircle,
@@ -14,11 +13,12 @@ import {
   FaChevronRight,
   FaInbox,
 } from 'react-icons/fa';
-import { useNavigate } from 'react-router-dom';
+import { useLocation, useNavigate } from 'react-router-dom';
 import axios from 'axios';
 import toast from 'react-hot-toast';
 import './NotificationsPage.css';
 import { resolveNotificationLink } from './notificationLinks';
+import UploadStockShortfallSummary from './UploadStockShortfallSummary';
 import { buildPageItems, ELLIPSIS } from '../../../utils/pagination';
 
 const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:5000/api';
@@ -34,8 +34,14 @@ const NotificationsPage = () => {
   const [totalPages, setTotalPages] = useState(1);
   const [unreadCount, setUnreadCount] = useState(0);
   const [readFilter, setReadFilter] = useState('all');
+  const [selectedUploadSummary, setSelectedUploadSummary] = useState(null);
 
   const navigate = useNavigate();
+  const location = useLocation();
+  const uploadSummaryFromNavigation = location.state?.uploadStockSummary?.metadata?.kind === 'upload_blocked_stock'
+    ? location.state.uploadStockSummary
+    : null;
+  const activeUploadSummary = selectedUploadSummary || uploadSummaryFromNavigation;
 
   const getAuthToken = useCallback(() => {
     return sessionStorage.getItem('token') || sessionStorage.getItem('access_token');
@@ -105,6 +111,10 @@ const NotificationsPage = () => {
       } catch (error) {
         console.error('Error marking notification as read:', error);
       }
+    }
+    if (notification.metadata?.kind === 'upload_blocked_stock') {
+      setSelectedUploadSummary(notification);
+      return;
     }
     const target = resolveNotificationLink(notification);
     if (target) {
@@ -222,6 +232,17 @@ const NotificationsPage = () => {
             Refresh
           </button>
         </div>
+        {activeUploadSummary && (
+          <UploadStockShortfallSummary
+            notification={activeUploadSummary}
+            onClose={() => {
+              setSelectedUploadSummary(null);
+              if (uploadSummaryFromNavigation) {
+                navigate(`${location.pathname}${location.search}`, { replace: true, state: null });
+              }
+            }}
+          />
+        )}
       </div>
 
       {total > 0 && (
@@ -320,6 +341,12 @@ const NotificationsPage = () => {
           </>
         )}
       </div>
+      {selectedUploadSummary && (
+        <UploadStockShortfallSummary
+          notification={selectedUploadSummary}
+          onClose={() => setSelectedUploadSummary(null)}
+        />
+      )}
     </div>
   );
 };

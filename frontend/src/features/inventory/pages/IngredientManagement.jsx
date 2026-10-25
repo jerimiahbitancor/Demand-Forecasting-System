@@ -55,10 +55,6 @@ const IngredientManagement = () => {
   const [units, setUnits] = useState([]);
   const [selectedCategory, setSelectedCategory] = useState("All");
   const [statusFilter, setStatusFilter] = useState("All");
-  // Which forecast the stock statuses are measured against (GET
-  // /inventory/items -> forecastBasis; analyticsService.getForecastBasis).
-  // null = no forecast has run yet, or it could not be loaded.
-  const [forecastBasis, setForecastBasis] = useState(null);
   const [summaryStats, setSummaryStats] = useState({
     totalStockValue: 0,
     totalItems: 0,
@@ -178,10 +174,6 @@ const IngredientManagement = () => {
       'Normal Stock': ['status-normal', '#16a34a'],
       'Excess Stock': ['status-excess', '#3b82f6'],
       Excess: ['status-excess', '#3b82f6'],
-      'Critical Shortage': ['status-critical', '#dc2626'],
-      'Insufficient Supply': ['status-low', '#f59e0b'],
-      'Sufficient Supply': ['status-normal', '#16a34a'],
-      'Above Forecast Limit': ['status-excess', '#3b82f6'],
       Unassigned: ['status-no-forecast', '#9ca3af'],
       Archived: ['status-archived', '#6b7280'],
     };
@@ -193,7 +185,7 @@ const IngredientManagement = () => {
     if (!item) {
       return {
         current: getStatusPresentation('Unassigned', ''),
-        predicted: getStatusPresentation('Unassigned', ''),
+        unassigned: false,
       };
     }
     const current = item.is_archived
@@ -204,13 +196,7 @@ const IngredientManagement = () => {
           ? 'No ideal stock level is set for this ingredient, so the stock cannot be measured as a percentage. Edit the ingredient to set one.'
           : `${item.current_stock_pct ?? 0}% of the ideal stock level (${formatStockQty(item.min_stock || 0, item.unit)} ${item.unit || ''}). ${item.material_type === 'wet' ? 'Wet' : 'Dry'} raw material: Low Stock below ${item.current_low_threshold_pct ?? (item.material_type === 'wet' ? 50 : 20)}%.`
       );
-    const predictedHint = item.predicted_stock_status === 'Unassigned'
-      ? 'No forecasted demand for this ingredient yet (not in a recipe, or no forecast generated).'
-      : `Stock covers ${item.predicted_coverage_pct ?? 0}% of the forecasted demand (${formatStockQty(item.forecasted_need || 0, item.unit)} ${item.unit || ''}). ${item.predicted_action || ''}`.trim();
-    const predicted = item.is_archived
-      ? getStatusPresentation('Archived', 'This ingredient is archived.')
-      : getStatusPresentation(item.predicted_stock_status || 'Unassigned', predictedHint);
-    return { current, predicted };
+    return { current, unassigned: !item.is_mapped_to_product && !item.is_archived };
   }, [getStatusPresentation]);
 
   // ============ FETCH DATA ============
@@ -251,7 +237,6 @@ const IngredientManagement = () => {
         const summary = response.data.summary || {};
         const data = response.data.data || [];
         setInventoryItems(data);
-        setForecastBasis(response.data.forecastBasis || null);
         setTotalItems(summary.totalItems ?? response.data.total ?? 0);
 
         const totalStockValue = summary.totalStockValue ?? 0;
@@ -827,7 +812,7 @@ const IngredientManagement = () => {
                   <div className="inventory-card-tooltip">
                     <strong>Low Stock Alerts</strong>
                     <span>This counts ingredients that are Low Stock or Out of Stock: stock below 50% of the ideal stock level for wet raw materials, or below 20% for dry raw materials (changeable in Settings).</span>
-                    <span>Current Stock Status compares the stock on hand with the ideal stock level. Predicted Stock Status is separate: it compares the stock with the forecasted demand after each forecast.</span>
+                    <span>Stock Status compares the stock on hand with the ideal stock level. Ingredients not mapped to any product are also marked Unassigned.</span>
                     <span>Click to view the Shopping List to see which ingredients need restocking right away.</span>
                   </div>
                 )}
@@ -875,7 +860,7 @@ const IngredientManagement = () => {
                   <div className="inventory-card-tooltip">
                     <strong>Unassigned Ingredients</strong>
                     <span>These are ingredients that exist in your inventory but aren't connected to any product recipe yet.</span>
-                    <span>Because the system doesn't know which dish uses them, it can't calculate forecasted demand; their Predicted Stock Status therefore appears as “Unassigned”.</span>
+                    <span>This count is based on product-recipe mapping, not stock level or forecast availability. An ingredient is removed from Unassigned as soon as it is mapped to a product, and its current stock status stays based on its quantity and ideal stock level.</span>
                     <span>Go to the Product Management tab and add these ingredients to the recipes of the dishes that use them.</span>
                   </div>
                 )}
@@ -904,51 +889,6 @@ const IngredientManagement = () => {
 
       {/* Stock Legend */}
       <div className="inventory-legend-container">
-        {/* Every status is measured against a forecast, so name which one.
-            margin-right: auto keeps the legend items on the right. Styled
-            only through forecast-basis-* (inventory-legend-container is
-            also defined in ProductManagement.css). */}
-        {forecastBasis?.runAtLabel && (
-          <div className="forecast-basis-note">
-            <FaClock className="forecast-basis-clock" aria-hidden="true" />
-            <span className="forecast-basis-label">
-              As of Latest Forecast ({forecastBasis.runAtLabel})
-            </span>
-            {forecastBasis.hasForecastForDate === false && (
-              <span className="forecast-basis-missing">· No forecast for today</span>
-            )}
-            <Tippy
-              content={
-                <div className="forecast-basis-tip">
-                  Each status compares the ingredient's current stock with what today's forecast
-                  needs{forecastBasis.forecastDateLabel ? ` (${forecastBasis.forecastDateLabel})` : ''}.
-                  {' '}Statuses update when a new forecast is generated, and right away when you
-                  restock or edit an ingredient's stock.
-                  {forecastBasis.hasForecastForDate === false && (
-                    <>
-                      {' '}The latest forecast has no figures for today (for example, a closed day),
-                      so their Predicted Stock Status is Unassigned until the next run.
-                    </>
-                  )}
-                </div>
-              }
-              placement="bottom"
-              animation="scale"
-              duration={200}
-              theme="dark"
-              arrow={true}
-              maxWidth={320}
-            >
-              <span
-                className="forecast-basis-info"
-                tabIndex={0}
-                aria-label="How the stock statuses are measured"
-              >
-                <FaInfoCircle />
-              </span>
-            </Tippy>
-          </div>
-        )}
         {stockLegend.map((legend, index) => (
           <div key={index} className="inventory-legend-item">
             <span className="legend-dot" style={{ backgroundColor: legend.color }}></span>
@@ -999,7 +939,7 @@ const IngredientManagement = () => {
             <option value="All">All Stock Statuses</option>
             <option value="Unassigned">Unassigned</option>
             <option value="Archived">Archived</option>
-            <option value="Excess Stock">Excess Stock</option>
+            <option value="Excess">Excess</option>
             <option value="Normal Stock">Normal Stock</option>
             <option value="Low Stock">Low Stock</option>
             <option value="Out of Stock">Out of Stock</option>
@@ -1223,18 +1163,20 @@ const IngredientManagement = () => {
                               </span>
                             </Tippy>
                           </div>
-                          <div className="inventory-status-entry">
-                            <Tippy
-                              content={<div className="inventory-status-tooltip">{statuses.predicted.hint}</div>}
-                              placement="top"
-                              theme="dark"
-                            >
-                              <span className={`inventory-stock-status ${statuses.predicted.className}`}>
-                                <span className="inventory-status-dot" style={{ backgroundColor: statuses.predicted.color }}></span>
-                                {statuses.predicted.label}
-                              </span>
-                            </Tippy>
-                          </div>
+                          {statuses.unassigned && (
+                            <div className="inventory-status-entry">
+                              <Tippy
+                                content={<div className="inventory-status-tooltip">This ingredient is not mapped to any product.</div>}
+                                placement="top"
+                                theme="dark"
+                              >
+                                <span className={`inventory-stock-status ${getStatusPresentation('Unassigned').className}`}>
+                                  <span className="inventory-status-dot" style={{ backgroundColor: getStatusPresentation('Unassigned').color }}></span>
+                                  Unassigned
+                                </span>
+                              </Tippy>
+                            </div>
+                          )}
                         </div>
                       </td>
                       <td data-label="Actions">
@@ -1889,14 +1831,17 @@ const IngredientManagement = () => {
                   <div className="detail-header">
                     <h3>{selectedItem.name || 'Unnamed'}</h3>
                     <Tippy
-                      content={<div className="inventory-status-tooltip">{getStockStatuses(selectedItem).predicted.hint}</div>}
+                      content={<div className="inventory-status-tooltip">{getStockStatuses(selectedItem).current.hint}</div>}
                       placement="top"
                       theme="dark"
                     >
-                      <span className={`status-badge ${getStockStatuses(selectedItem).predicted.className}`}>
-                        {getStockStatuses(selectedItem).predicted.label}
+                      <span className={`status-badge ${getStockStatuses(selectedItem).current.className}`}>
+                        {getStockStatuses(selectedItem).current.label}
                       </span>
                     </Tippy>
+                    {getStockStatuses(selectedItem).unassigned && (
+                      <span className="status-badge status-no-forecast">Unassigned</span>
+                    )}
                   </div>
 
                   <div className="detail-grid">

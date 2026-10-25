@@ -68,11 +68,12 @@ const fake = createFakeSupabase({
 });
 
 let ingredientDailyNeeds = new Map();
+const productMappedIngredientIds = new Set();
 installFake(fake, {
   'services/auditService.js': { logAction: async () => {} },
   'services/analyticsService.js': {
     getIngredientDailyNeeds: async () => ingredientDailyNeeds,
-    getMappedIngredientIds: async () => new Set(),
+    getMappedIngredientIds: async () => productMappedIngredientIds,
     getForecastBasis: async () => null,
   },
 });
@@ -83,7 +84,7 @@ const {
   restockInventoryItem,
 } = require('../controllers/inventoryController');
 
-function callController(handler, { body, id } = {}) {
+function callController(handler, { body, id, query } = {}) {
   return new Promise((resolve, reject) => {
     const response = {
       statusCode: 200,
@@ -98,6 +99,7 @@ function callController(handler, { body, id } = {}) {
     Promise.resolve(handler({
       params: id == null ? {} : { id: String(id) },
       body: body || {},
+      query: query || {},
       user: { id: 7, name: 'Test User' },
     }, response)).catch(reject);
   });
@@ -241,6 +243,69 @@ test('ingredient list exposes separate stock statuses and omits removed purchase
     assert.equal('grams_per_cup' in item, false);
   }
   ingredientDailyNeeds = new Map();
+  fake.reset({
+    ingredients: [{
+      id: 1,
+      name: 'Strawberry Powder',
+      unit: 'Grams (g)',
+      quantity: '0.1',
+      updated_by: null,
+    }],
+    inventory_transactions: [],
+    inventory_shortfall_balances: [],
+  });
+});
+
+test('Unassigned follows product mapping without changing current stock statuses', async () => {
+  fake.reset({
+    ingredients: [
+      {
+        id: 101,
+        name: 'Mapped ingredient',
+        quantity: 1,
+        min_stock: 10,
+        material_type: 'dry',
+        is_archived: false,
+      },
+      {
+        id: 102,
+        name: 'Unmapped ingredient',
+        quantity: 0,
+        min_stock: 10,
+        material_type: 'dry',
+        is_archived: false,
+      },
+    ],
+  });
+  ingredientDailyNeeds = new Map();
+  productMappedIngredientIds.clear();
+  productMappedIngredientIds.add('101');
+
+  const unassignedResponse = await callController(getInventoryItems, {
+    query: { statusField: 'current', status: 'Unassigned', limit: '1' },
+  });
+  assert.equal(unassignedResponse.body.total, 1);
+  assert.equal(unassignedResponse.body.data[0].id, 102);
+  assert.equal(unassignedResponse.body.data[0].is_mapped_to_product, false);
+  assert.equal(unassignedResponse.body.summary.unassignedIngredients, 1);
+
+  productMappedIngredientIds.add(102);
+  const newlyMappedResponse = await callController(getInventoryItems, {
+    query: { statusField: 'current', status: 'Unassigned', limit: '1' },
+  });
+  assert.equal(newlyMappedResponse.body.total, 0);
+  assert.deepEqual(newlyMappedResponse.body.data, []);
+  assert.equal(newlyMappedResponse.body.summary.unassignedIngredients, 0);
+
+  const stockStatusResponse = await callController(getInventoryItems, {
+    query: { statusField: 'current', limit: '10' },
+  });
+  const statusById = new Map(stockStatusResponse.body.data.map((item) => [item.id, item.current_stock_status]));
+  assert.equal(statusById.get(101), 'Low Stock');
+  assert.equal(statusById.get(102), 'Out of Stock');
+  assert.equal(stockStatusResponse.body.data.find((item) => item.id === 102).is_mapped_to_product, true);
+
+  productMappedIngredientIds.clear();
   fake.reset({
     ingredients: [{
       id: 1,

@@ -212,11 +212,19 @@ const getInventoryItems = async (req, res) => {
       need: dailyNeeds.has(item.id) ? dailyNeeds.get(item.id) : 0,
     }, stockThresholds);
     const predictedStatusFor = (item) => predictedDetailFor(item).status;
+    // Mapping is independent of forecast availability: recipe-linked
+    // ingredients remain assigned even when today's forecast has no demand.
+    const mappedIngredientIds = new Set(
+      Array.from(await analyticsService.getMappedIngredientIds(), String)
+    );
+    const isMappedToProduct = (item) => mappedIngredientIds.has(String(item.id));
     const statusFor = (item) => {
+      if (status === 'Archived' && item.is_archived) return 'Archived';
       if (statusField === 'current') {
-        return status === 'Unassigned'
-          ? predictedStatusFor(item)
-          : currentStatusFor(item);
+        if (status === 'Unassigned' || status === 'No Forecast') {
+          return isMappedToProduct(item) ? currentStatusFor(item) : 'Unassigned';
+        }
+        return currentStatusFor(item);
       }
       return predictedStatusFor(item);
     };
@@ -248,10 +256,9 @@ const getInventoryItems = async (req, res) => {
     // treating that as unmapped would flag healthy ingredients. Archived rows
     // are excluded unless the caller asked for them, so the card agrees with
     // the "Active inventory items" framing of the Total Items card.
-    const mappedIngredientIds = await analyticsService.getMappedIngredientIds();
     const unassignedIngredients = (summaryData || []).filter((item) => {
       if (item.is_archived) return false;
-      return !mappedIngredientIds.has(item.id);
+      return !isMappedToProduct(item);
     }).length;
 
     // Main query with pagination
@@ -290,6 +297,9 @@ const getInventoryItems = async (req, res) => {
 
     const filteredData = status && status !== 'All'
       ? (queriedData || []).filter((item) => {
+          if (statusField === 'current' && status === 'Unassigned') {
+            return !isMappedToProduct(item);
+          }
           const itemStatus = statusFor(item);
           return itemStatus === status;
         })
@@ -360,6 +370,7 @@ const getInventoryItems = async (req, res) => {
       return {
       ...withoutLegacyPurchaseFields(item),
       forecasted_need: dailyNeeds.get(item.id) || 0,
+      is_mapped_to_product: isMappedToProduct(item),
       current_stock_status: current.status,
       // Stock % of the ideal level and the low threshold that applied (wet
       // or dry), so the screen can show how the status was reached.
