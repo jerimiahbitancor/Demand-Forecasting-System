@@ -11,6 +11,8 @@ const { buildRestockEmail, restockListFromMetadata, fmtNum, urgentCountsText } =
 const { forecastSlotFor, forecastRanSince } = require('../utils/forecastSlot');
 const { loadReminderInputs, todayManila } = require('./uploadReminderService');
 const { findUnresolvedOperatingDays, addDays } = require('../utils/uploadReminders');
+const { normalizeShortfall } = require('../utils/insufficientStock');
+const { formatAmount, unitLabel } = require('../utils/salesModifiers');
 // Required lazily in runStockRefresh: stockAlertService -> analyticsService
 // is a heavy require chain that most callers of this file never need.
 const loadRestockListLazy = (...args) => require('./stockAlertService').loadRestockList(...args);
@@ -106,6 +108,42 @@ ${button}
   return { subject, html, text, url };
 }
 
+function buildUploadBlockedStockEmail(notification, env = process.env) {
+  const email = buildReminderEmail(notification, env);
+  const shortfalls = Array.isArray(notification?.metadata?.shortfalls)
+    ? notification.metadata.shortfalls.map(normalizeShortfall)
+    : [];
+  if (!shortfalls.length) return email;
+
+  const amount = (value, unit) => {
+    const quantity = formatAmount(value);
+    const label = unitLabel(unit);
+    return label ? `${quantity} ${label}` : quantity;
+  };
+  const rows = shortfalls.map((item) => {
+    const unit = item.unit || '';
+    const row = [
+      item.name,
+      amount(item.required, unit),
+      amount(item.available, unit),
+      amount(item.shortfall, unit),
+    ];
+    return {
+      html: `<tr>${row.map((value) => `<td style="padding:8px;border:1px solid #e5e7eb">${escapeHtml(value)}</td>`).join('')}</tr>`,
+      text: row.join(' | '),
+    };
+  });
+  const table = `<table style="border-collapse:collapse;width:100%;margin:16px 0">
+<thead><tr>${['Ingredient', 'Needed', 'In stock', 'Short'].map((label) => `<th style="padding:8px;border:1px solid #e5e7eb;text-align:left;background:#f8f9fa">${label}</th>`).join('')}</tr></thead>
+<tbody>${rows.map((row) => row.html).join('')}</tbody></table>`;
+  const textTable = ['Ingredient | Needed | In stock | Short', ...rows.map((row) => row.text)].join('\n');
+  return {
+    ...email,
+    html: email.html.replace('</p>\n', `</p>\n${table}\n`),
+    text: `${email.text}\n\n${textTable}`,
+  };
+}
+
 async function loadBusinessEmail(client = supabaseAdmin) {
   const { data, error } = await client.from('business_profile').select('business_email').limit(1);
   if (error) throw error;
@@ -155,7 +193,9 @@ async function emailReminder(notification, {
     const md = notification.metadata || {};
     const email = kind === 'restock_summary' && Array.isArray(md.items)
       ? buildRestockEmail(restockListFromMetadata(md), { baseUrl: frontendBaseUrl(env) })
-      : buildReminderEmail(notification, env);
+      : kind === 'upload_blocked_stock'
+        ? buildUploadBlockedStockEmail(notification, env)
+        : buildReminderEmail(notification, env);
     await send({ to, subject: email.subject, html: email.html, text: email.text });
     logger.info('reminder_email_sent', { kind, to: maskEmail(to) });
     return { sent: true, reason: null, to: maskEmail(to) };

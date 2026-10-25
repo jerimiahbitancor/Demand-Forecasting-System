@@ -383,6 +383,12 @@ const NotificationDropdown = () => {
       }
     }
     
+    if (notification.metadata?.kind === 'upload_blocked_stock') {
+      navigate('/notifications', { state: { uploadStockSummary: notification } });
+      setIsOpen(false);
+      return;
+    }
+
     const target = resolveNotificationLink(notification);
     if (target) {
       navigate(target);

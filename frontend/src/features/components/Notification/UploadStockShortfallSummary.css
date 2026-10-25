@@ -1,0 +1,95 @@
+.upload-shortfall-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 120000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 20px;
+  background: rgba(17, 24, 39, 0.58);
+}
+
+.upload-shortfall-dialog {
+  width: min(760px, 100%);
+  max-height: min(85vh, 720px);
+  overflow: auto;
+  border-radius: 14px;
+  padding: 24px;
+  background: #fff;
+  color: #1c2632;
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.24);
+}
+
+.upload-shortfall-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.upload-shortfall-header h2 {
+  margin: 0;
+  font-size: 20px;
+}
+
+.upload-shortfall-header p {
+  margin: 6px 0 0;
+  color: #6b7280;
+  font-size: 13px;
+  overflow-wrap: anywhere;
+}
+
+.upload-shortfall-header button {
+  display: grid;
+  width: 34px;
+  height: 34px;
+  flex: 0 0 auto;
+  place-items: center;
+  border: 1px solid #e5e7eb;
+  border-radius: 8px;
+  background: #fff;
+  color: #4b5563;
+  cursor: pointer;
+}
+
+.upload-shortfall-message {
+  margin: 20px 0;
+  line-height: 1.55;
+  overflow-wrap: anywhere;
+}
+
+.upload-shortfall-table-wrap {
+  overflow-x: auto;
+}
+
+.upload-shortfall-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 14px;
+}
+
+.upload-shortfall-table th,
+.upload-shortfall-table td {
+  padding: 11px 12px;
+  border: 1px solid #e5e7eb;
+  text-align: left;
+}
+
+.upload-shortfall-table th {
+  background: #f8f9fa;
+  font-weight: 600;
+}
+
+.upload-shortfall-empty {
+  color: #6b7280;
+}
+
+@media (max-width: 540px) {
+  .upload-shortfall-dialog {
+    padding: 18px;
+  }
+
+  .upload-shortfall-table {
+    min-width: 560px;
+  }
+}

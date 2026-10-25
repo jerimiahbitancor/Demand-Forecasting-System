@@ -417,6 +417,8 @@ test('A8: not enough stock -> 422, nothing saved, upload failed, one "Unmet cond
     assert.equal(notes[0].link, '/ingredient-management');
     assert.equal(notes[0].metadata.kind, 'upload_blocked_stock');
     assert.equal(notes[0].metadata.key, `upload_blocked_stock:${res.body.uploadId}`);
+    assert.equal(notes[0].metadata.filename, 'item-sales-summary-2026-10-12-2026-10-12.csv');
+    assert.deepEqual(notes[0].metadata.shortfalls, res.body.shortfalls);
     assert.match(notes[0].message, /Rice: needs 2 kg, 1 kg in stock \(1 kg short\)\./);
   } finally {
     restore();
