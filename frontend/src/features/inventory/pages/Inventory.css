@@ -190,8 +190,8 @@
       min-width: 180px;
     }
 
-    .ingredient-management-table th:nth-child(9),
-    .ingredient-management-table td:nth-child(9) {
+    .ingredient-management-table th:nth-child(10),
+    .ingredient-management-table td:nth-child(10) {
       min-width: 235px;
     }
 
@@ -640,8 +640,8 @@
 
     .ingredient-management-table th:nth-child(3),
     .ingredient-management-table td:nth-child(3),
-    .ingredient-management-table th:nth-child(9),
-    .ingredient-management-table td:nth-child(9),
+    .ingredient-management-table th:nth-child(10),
+    .ingredient-management-table td:nth-child(10),
     .ingredient-management-table th:last-child,
     .ingredient-management-table td:last-child {
       min-width: 0;
@@ -1555,6 +1555,19 @@
     border-radius: 4px;
     font-size: 0.7rem;
     font-weight: 500;
+  }
+
+  /* Pieces per pack: a small read-only indicator in the ingredient list. */
+  .ingredient-pack-badge {
+    display: inline-block;
+    padding: 0.125rem 0.5rem;
+    background: #ecfdf5;
+    color: #047857;
+    border: 1px solid #a7f3d0;
+    border-radius: 4px;
+    font-size: 0.7rem;
+    font-weight: 500;
+    white-space: nowrap;
   }
 
   /* Responsive */

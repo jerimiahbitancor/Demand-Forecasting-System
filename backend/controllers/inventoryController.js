@@ -9,17 +9,73 @@ const {
   parseRecipeQuantityDecimal,
   isMissingColumnError,
   inventoryUnitMetadata,
+  normalizeRecipeQuantityToUnit,
+  canonicalOf,
   Decimal,
   UnitConversionError,
 } = require('../utils/recipeUnits');
 
 const actorOf = (req) => req.user?.name || req.user?.email || null;
+
+// Optional "pieces per pack": how many pieces one purchase pack holds. Empty
+// means no pack size is recorded; anything else has to be greater than 0.
+const parsePositiveOptional = (value) => {
+  if (value === undefined || value === null || String(value).trim() === '') {
+    return { provided: false, value: null };
+  }
+  const parsed = parseRecipeQuantityDecimal(value);
+  if (!parsed?.isFinite() || parsed.lte(0)) {
+    return { provided: true, invalid: true, value: null };
+  }
+  return {
+    provided: true,
+    invalid: false,
+    value: parsed.toDecimalPlaces(6, Decimal.ROUND_HALF_UP).toString(),
+  };
+};
+
+const parsePiecesPerPack = parsePositiveOptional;
+const parsePackPrice = parsePositiveOptional;
+const parseGramsPerPack = parsePositiveOptional;
+
+// The per-stock-unit cost implied by a purchase pack. Pieces are already in
+// the stock unit; grams are used only for gram ingredients (kilograms are
+// entered per kg and do not use a grams-per-pack calculation). Returns null
+// when the pack data is incomplete.
+const priceFromPack = ({
+  unitFamily,
+  stockUnit,
+  materialType = 'dry',
+  piecesPerPack,
+  gramsPerPack,
+  packPrice,
+}) => {
+  if (!packPrice) return null;
+  let packQuantity = null;
+  if (unitFamily === 'count' && piecesPerPack) {
+    packQuantity = new Decimal(String(piecesPerPack));
+  } else if (unitFamily === 'mass' && gramsPerPack && canonicalOf(stockUnit) === 'g') {
+    const converted = Number(normalizeRecipeQuantityToUnit(
+      gramsPerPack,
+      'Grams (g)',
+      stockUnit,
+      materialType,
+    ));
+    if (Number.isFinite(converted) && converted > 0) {
+      packQuantity = new Decimal(String(converted));
+    }
+  }
+  if (!packQuantity || packQuantity.lte(0)) return null;
+  return new Decimal(String(packPrice))
+    .div(packQuantity)
+    .toDecimalPlaces(6, Decimal.ROUND_HALF_UP);
+};
+
 const withoutLegacyPurchaseFields = (item) => {
   const ingredient = { ...(item || {}) };
   for (const field of [
     'pack_qty',
     'pack_unit',
-    'pack_price',
     'pack_size',
     'grams_per_cup',
     'density_g_per_ml',
@@ -494,6 +550,18 @@ const createInventoryItem = async (req, res) => {
       && (!parsedMinStock?.isFinite() || parsedMinStock.lt(0))) {
       return res.status(400).json({ success: false, error: 'Ideal stock level must be a valid number greater than or equal to 0' });
     }
+    const piecesPerPack = parsePiecesPerPack(req.body.pieces_per_pack);
+    if (piecesPerPack.invalid) {
+      return res.status(400).json({ success: false, error: 'Pieces per pack must be a valid number greater than 0' });
+    }
+    const packPrice = parsePackPrice(req.body.pack_price);
+    if (packPrice.invalid) {
+      return res.status(400).json({ success: false, error: 'Pack price must be a valid number greater than 0' });
+    }
+    const gramsPerPack = parseGramsPerPack(req.body.grams_per_pack);
+    if (gramsPerPack.invalid) {
+      return res.status(400).json({ success: false, error: 'Grams per pack must be a valid number greater than 0' });
+    }
     const materialType = req.body.material_type || 'dry';
     if (!['dry', 'wet'].includes(materialType)) {
       return res.status(400).json({ success: false, error: 'Material type must be dry or wet' });
@@ -508,12 +576,20 @@ const createInventoryItem = async (req, res) => {
       if (!(error instanceof UnitConversionError)) throw error;
       return res.status(400).json({ success: false, error: error.message });
     }
+    const derivedPrice = priceFromPack({
+      unitFamily: canonicalFields.unit_family,
+      stockUnit,
+      materialType,
+      piecesPerPack: piecesPerPack.value,
+      gramsPerPack: gramsPerPack.value,
+      packPrice: packPrice.value,
+    });
     const insertData = {
       name: name.trim(),
       category: category.trim(),
       unit: stockUnit,
       quantity: parsedQuantity.toDecimalPlaces(6, Decimal.ROUND_HALF_UP).toString(),
-      price: parsedPrice.toDecimalPlaces(6, Decimal.ROUND_HALF_UP).toString(),
+      price: (derivedPrice || parsedPrice).toDecimalPlaces(6, Decimal.ROUND_HALF_UP).toString(),
       min_stock: parsedMinStock?.isFinite()
         ? parsedMinStock.toDecimalPlaces(6, Decimal.ROUND_HALF_UP).toString()
         : '0',
@@ -522,6 +598,15 @@ const createInventoryItem = async (req, res) => {
       created_by: userId,
       updated_by: userId
     };
+    if (piecesPerPack.provided) {
+      insertData.pieces_per_pack = piecesPerPack.value;
+    }
+    if (packPrice.provided) {
+      insertData.pack_price = packPrice.value;
+    }
+    if (gramsPerPack.provided) {
+      insertData.grams_per_pack = gramsPerPack.value;
+    }
 
 
     console.log('📦 Insert data:', insertData);
@@ -532,11 +617,17 @@ const createInventoryItem = async (req, res) => {
       .select()
       .single();
 
-    // Older databases may not have the canonical-unit columns yet.
+    // Older databases may not have the canonical-unit columns yet. The pack
+    // columns arrived with migrations 022-024, so they are dropped from the
+    // retry as well: an older database must still be able to add an ingredient.
     if (insertResult.error && isMissingColumnError(insertResult.error)) {
+      const fallbackData = { ...insertData };
+      delete fallbackData.pieces_per_pack;
+      delete fallbackData.pack_price;
+      delete fallbackData.grams_per_pack;
       insertResult = await supabaseAdmin
         .from('ingredients')
-        .insert([insertData])
+        .insert([fallbackData])
         .select()
         .single();
     }
@@ -633,6 +724,28 @@ const updateInventoryItem = async (req, res) => {
       }
       updateData.min_stock = parsedMin.toDecimalPlaces(6, Decimal.ROUND_HALF_UP).toString();
     }
+    // Cleared with an empty value, so a pack size can be removed again.
+    if (Object.prototype.hasOwnProperty.call(req.body, 'pieces_per_pack')) {
+      const piecesPerPack = parsePiecesPerPack(req.body.pieces_per_pack);
+      if (piecesPerPack.invalid) {
+        return res.status(400).json({ success: false, error: 'Pieces per pack must be a valid number greater than 0' });
+      }
+      updateData.pieces_per_pack = piecesPerPack.value;
+    }
+    if (Object.prototype.hasOwnProperty.call(req.body, 'pack_price')) {
+      const packPrice = parsePackPrice(req.body.pack_price);
+      if (packPrice.invalid) {
+        return res.status(400).json({ success: false, error: 'Pack price must be a valid number greater than 0' });
+      }
+      updateData.pack_price = packPrice.value;
+    }
+    if (Object.prototype.hasOwnProperty.call(req.body, 'grams_per_pack')) {
+      const gramsPerPack = parseGramsPerPack(req.body.grams_per_pack);
+      if (gramsPerPack.invalid) {
+        return res.status(400).json({ success: false, error: 'Grams per pack must be a valid number greater than 0' });
+      }
+      updateData.grams_per_pack = gramsPerPack.value;
+    }
     if (req.body.material_type !== undefined) {
       const materialType = String(req.body.material_type).trim().toLowerCase();
       if (!['wet', 'dry'].includes(materialType)) {
@@ -653,6 +766,33 @@ const updateInventoryItem = async (req, res) => {
       if (!(error instanceof UnitConversionError)) throw error;
       return res.status(400).json({ success: false, error: error.message });
     }
+
+    // A pack price plus its pack size is enough to know the per-unit cost.
+    // Recompute it only when one of those fields changed, so a stock count
+    // (which sends quantity alone) never rewrites the saved price.
+    const packFieldsTouched = Object.prototype.hasOwnProperty.call(req.body, 'pieces_per_pack')
+      || Object.prototype.hasOwnProperty.call(req.body, 'grams_per_pack')
+      || Object.prototype.hasOwnProperty.call(req.body, 'pack_price');
+    if (packFieldsTouched) {
+      const nextPieces = Object.prototype.hasOwnProperty.call(updateData, 'pieces_per_pack')
+        ? updateData.pieces_per_pack
+        : currentItem.pieces_per_pack;
+      const nextGrams = Object.prototype.hasOwnProperty.call(updateData, 'grams_per_pack')
+        ? updateData.grams_per_pack
+        : currentItem.grams_per_pack;
+      const nextPackPrice = Object.prototype.hasOwnProperty.call(updateData, 'pack_price')
+        ? updateData.pack_price
+        : currentItem.pack_price;
+      const derivedPrice = priceFromPack({
+        unitFamily: updateData.unit_family,
+        stockUnit: nextStockUnit,
+        materialType: updateData.material_type || currentItem.material_type,
+        piecesPerPack: nextPieces,
+        gramsPerPack: nextGrams,
+        packPrice: nextPackPrice,
+      });
+      if (derivedPrice !== null) updateData.price = derivedPrice.toString();
+    }
     console.log('📦 Update data:', updateData);
 
     // Update item
@@ -663,11 +803,18 @@ const updateInventoryItem = async (req, res) => {
       .select()
       .single();
 
-    // Older databases may not have the canonical-unit columns yet.
+    // Older databases may not have the canonical-unit columns yet. The pack
+    // columns arrived with migrations 022-024, so they are dropped from the
+    // retry as well: an older database must still be able to update an
+    // ingredient.
     if (updateResult.error && isMissingColumnError(updateResult.error)) {
+      const fallbackData = { ...updateData };
+      delete fallbackData.pieces_per_pack;
+      delete fallbackData.pack_price;
+      delete fallbackData.grams_per_pack;
       updateResult = await supabaseAdmin
         .from('ingredients')
-        .update(updateData)
+        .update(fallbackData)
         .eq('id', id)
         .select()
         .single();
