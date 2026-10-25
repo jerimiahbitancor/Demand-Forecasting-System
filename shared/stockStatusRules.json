@@ -1,14 +1,13 @@
 {
   "_about": "The ONE definition of the two stock level statuses. backend/utils/stockStatus.js reads this file; the owner can change the percentages in Settings > Stock Level Thresholds (table forecast_config). Hand-worked examples live in backend/tests/fixtures/stock_status_cases.json.",
   "current": {
-    "_about": "Current Stock Level Status: a real-time check of the stock on hand against the ingredient's ideal stock level (ingredients.min_stock). Stock % = current stock / ideal stock level x 100. Out of Stock: stock <= 0. Low Stock: 0% < Stock % < low threshold (wet or dry). Normal Stock: low threshold <= Stock % <= 100%. Excess Stock: Stock % > 100%.",
+    "_about": "Current Stock Level Status: a real-time check of the stock on hand against the ingredient's ideal stock level (ingredients.min_stock). Stock % = current stock / ideal stock level x 100. Out of Stock: stock <= 0. Low Stock: 0% < Stock % < low threshold (wet or dry). Normal Stock: low threshold <= Stock % <= excess threshold (default 100%). Excess Stock: Stock % > excess threshold.",
     "labels": {
       "out": "Out of Stock",
       "low": "Low Stock",
       "normal": "Normal Stock",
       "excess": "Excess Stock"
-    },
-    "normalUpperPct": 100
+    }
   },
   "predicted": {
     "_about": "Predicted Stock Level Status: after a forecast is generated, the stock on hand is compared against the forecasted demand. Coverage % = current stock / forecasted demand x 100. Critical Shortage: Coverage % < critical threshold. Insufficient Supply: Coverage % < sufficient threshold. Sufficient Supply: sufficient threshold <= Coverage % <= above threshold. Above Forecast Limit: Coverage % > above threshold. Unassigned: no forecasted demand (not in any recipe, or no forecast yet).",
@@ -30,15 +29,35 @@
   "defaults": {
     "current_low_wet_pct": 50,
     "current_low_dry_pct": 20,
+    "current_excess_pct": 100,
     "predicted_critical_pct": 50,
     "predicted_sufficient_pct": 100,
     "predicted_above_pct": 200
   },
   "limits": {
-    "current_low_wet_pct": { "min": 1, "max": 99 },
-    "current_low_dry_pct": { "min": 1, "max": 99 },
-    "predicted_critical_pct": { "min": 1, "max": 999 },
-    "predicted_sufficient_pct": { "min": 1, "max": 999 },
-    "predicted_above_pct": { "min": 1, "max": 1000 }
+    "current_low_wet_pct": {
+      "min": 1,
+      "max": 99
+    },
+    "current_low_dry_pct": {
+      "min": 1,
+      "max": 99
+    },
+    "current_excess_pct": {
+      "min": 100,
+      "max": 1000
+    },
+    "predicted_critical_pct": {
+      "min": 1,
+      "max": 999
+    },
+    "predicted_sufficient_pct": {
+      "min": 1,
+      "max": 999
+    },
+    "predicted_above_pct": {
+      "min": 1,
+      "max": 1000
+    }
   }
 }

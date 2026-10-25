@@ -198,10 +198,19 @@ const getInventoryItems = async (req, res) => {
     // owner's thresholds (Settings > Stock Level Thresholds):
     //   current   = stock vs ideal stock level (min_stock), wet/dry threshold
     //   predicted = stock vs the forecasted need (getIngredientDailyNeeds)
-    const [dailyNeeds, stockThresholds] = await Promise.all([
-      analyticsService.getIngredientDailyNeeds(),
-      getStockThresholds(),
-    ]);
+    //
+    // The CURRENT status (the one this page shows) needs only stock, ideal
+    // level and material type, so it is worked out for EVERY ingredient,
+    // mapped or not. The forecast-based need is read separately and a
+    // failure there (no forecast, a broken recipe line, a read error) can
+    // no longer stop the page or the current status from calculating.
+    const stockThresholds = await getStockThresholds();
+    let dailyNeeds = new Map();
+    try {
+      dailyNeeds = await analyticsService.getIngredientDailyNeeds();
+    } catch (needsError) {
+      console.warn('Ingredient Management: forecast need unavailable, current status still shown:', needsError.message);
+    }
     const currentStatusFor = (item) => currentStockStatus({
       quantity: item.quantity,
       idealLevel: item.min_stock,
@@ -214,9 +223,12 @@ const getInventoryItems = async (req, res) => {
     const predictedStatusFor = (item) => predictedDetailFor(item).status;
     // Mapping is independent of forecast availability: recipe-linked
     // ingredients remain assigned even when today's forecast has no demand.
-    const mappedIngredientIds = new Set(
-      Array.from(await analyticsService.getMappedIngredientIds(), String)
-    );
+    let mappedIngredientIds = new Set();
+    try {
+      mappedIngredientIds = new Set(Array.from(await analyticsService.getMappedIngredientIds(), String));
+    } catch (mappingError) {
+      console.warn('Ingredient Management: recipe mapping unavailable:', mappingError.message);
+    }
     const isMappedToProduct = (item) => mappedIngredientIds.has(String(item.id));
     const statusFor = (item) => {
       if (status === 'Archived' && item.is_archived) return 'Archived';
@@ -376,6 +388,7 @@ const getInventoryItems = async (req, res) => {
       // or dry), so the screen can show how the status was reached.
       current_stock_pct: current.stockPct,
       current_low_threshold_pct: current.lowThresholdPct,
+      current_excess_threshold_pct: current.excessThresholdPct,
       ideal_level_set: current.idealLevelSet,
       predicted_stock_status: predicted.status,
       predicted_coverage_pct: predicted.coveragePct,

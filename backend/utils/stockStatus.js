@@ -14,8 +14,9 @@
 //    Stock % = current stock / ideal stock level (ingredients.min_stock) x 100
 //      Out of Stock   stock <= 0
 //      Low Stock      0% < Stock % <  low threshold   (wet 50%, dry 20%)
-//      Normal Stock   low threshold <= Stock % <= 100%
-//      Excess Stock   Stock % > 100%
+//      Normal Stock   low threshold <= Stock % <= excess threshold (default 100%)
+//      Excess Stock   Stock % > excess threshold
+//    The excess threshold is configurable since Oct 25 2026 (migration 022).
 //
 // 2. PREDICTED STOCK LEVEL STATUS — after a forecast, stock vs forecasted demand.
 //    Coverage % = current stock / forecasted demand x 100
@@ -43,7 +44,6 @@ const PREDICTED_ACTIONS = Object.freeze({ ...RULES.predicted.actions });
 const DEFAULT_STOCK_THRESHOLDS = Object.freeze({ ...RULES.defaults });
 const THRESHOLD_LIMITS = Object.freeze({ ...RULES.limits });
 const THRESHOLD_KEYS = Object.freeze(Object.keys(RULES.defaults));
-const NORMAL_UPPER_PCT = RULES.current.normalUpperPct;
 
 // The old short labels still used by the dashboard, the grocery lists and
 // Product Performance (renamed in the UI pass). Same level, old wording.
@@ -100,6 +100,10 @@ function normalizeThresholds(row = {}) {
     const { min, max } = THRESHOLD_LIMITS[key];
     out[key] = Number.isFinite(value) && value >= min && value <= max ? value : DEFAULT_STOCK_THRESHOLDS[key];
   }
+  // Excess must sit above both Low thresholds; otherwise use the default.
+  if (!(out.current_excess_pct > out.current_low_wet_pct && out.current_excess_pct > out.current_low_dry_pct)) {
+    out.current_excess_pct = DEFAULT_STOCK_THRESHOLDS.current_excess_pct;
+  }
   // The predicted bands must stay in order; if a stored row breaks that,
   // fall back to the defaults for all three rather than mixing.
   if (!(out.predicted_critical_pct < out.predicted_sufficient_pct && out.predicted_sufficient_pct < out.predicted_above_pct)) {
@@ -122,6 +126,7 @@ function validateThresholds(input = {}, current = DEFAULT_STOCK_THRESHOLDS) {
   const labels = {
     current_low_wet_pct: 'Wet raw materials low stock threshold',
     current_low_dry_pct: 'Dry raw materials low stock threshold',
+    current_excess_pct: 'Excess Stock threshold',
     predicted_critical_pct: 'Critical Shortage threshold',
     predicted_sufficient_pct: 'Sufficient Supply threshold',
     predicted_above_pct: 'Above Forecast Limit threshold',
@@ -134,6 +139,9 @@ function validateThresholds(input = {}, current = DEFAULT_STOCK_THRESHOLDS) {
       return { ok: false, error: `${labels[key]} must be a number from ${min} to ${max}` };
     }
     merged[key] = value;
+  }
+  if (!(merged.current_excess_pct > merged.current_low_wet_pct && merged.current_excess_pct > merged.current_low_dry_pct)) {
+    return { ok: false, error: 'Excess Stock threshold must be higher than both Low Stock thresholds' };
   }
   if (!(merged.predicted_critical_pct < merged.predicted_sufficient_pct)) {
     return { ok: false, error: 'Critical Shortage threshold must be lower than the Sufficient Supply threshold' };
@@ -166,6 +174,7 @@ function currentStockStatus({ quantity, idealLevel, materialType } = {}, thresho
     status: CURRENT_LABELS[level],
     stockPct: idealLevelSet ? percentOf(stock, ideal) : null,
     lowThresholdPct,
+    excessThresholdPct: t.current_excess_pct,
     materialType: type,
     idealLevelSet,
   });
@@ -177,7 +186,7 @@ function currentStockStatus({ quantity, idealLevel, materialType } = {}, thresho
   // stock level" instead of pretending it was measured.
   if (!idealLevelSet) return result('normal');
   if (compareStockPct(stock, ideal, lowThresholdPct) < 0) return result('low');
-  if (compareStockPct(stock, ideal, NORMAL_UPPER_PCT) <= 0) return result('normal');
+  if (compareStockPct(stock, ideal, t.current_excess_pct) <= 0) return result('normal');
   return result('excess');
 }
 

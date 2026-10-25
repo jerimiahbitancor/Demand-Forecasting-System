@@ -35,6 +35,7 @@ test('Settings defaults are the agreed table', () => {
   assert.deepEqual(RULES.defaults, {
     current_low_wet_pct: 50,
     current_low_dry_pct: 20,
+    current_excess_pct: 100,
     predicted_critical_pct: 50,
     predicted_sufficient_pct: 100,
     predicted_above_pct: 200,

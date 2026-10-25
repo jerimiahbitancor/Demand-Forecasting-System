@@ -194,7 +194,7 @@ const IngredientManagement = () => {
         item.current_stock_status || 'Unassigned',
         item.ideal_level_set === false
           ? 'No ideal stock level is set for this ingredient, so the stock cannot be measured as a percentage. Edit the ingredient to set one.'
-          : `${item.current_stock_pct ?? 0}% of the ideal stock level (${formatStockQty(item.min_stock || 0, item.unit)} ${item.unit || ''}). ${item.material_type === 'wet' ? 'Wet' : 'Dry'} raw material: Low Stock below ${item.current_low_threshold_pct ?? (item.material_type === 'wet' ? 50 : 20)}%.`
+          : `${item.current_stock_pct ?? 0}% of the ideal stock level (${formatStockQty(item.min_stock || 0, item.unit)} ${item.unit || ''}). ${item.material_type === 'wet' ? 'Wet' : 'Dry'} raw material: Low Stock below ${item.current_low_threshold_pct ?? (item.material_type === 'wet' ? 50 : 20)}%, Excess Stock above ${item.current_excess_threshold_pct ?? 100}%.`
       );
     return { current, unassigned: !item.is_mapped_to_product && !item.is_archived };
   }, [getStatusPresentation]);

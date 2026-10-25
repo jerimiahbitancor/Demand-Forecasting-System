@@ -8,8 +8,8 @@ import jsPDF from 'jspdf';
 import autoTable from 'jspdf-autotable';
 import * as XLSX from 'xlsx';
 import { getStoredBusinessLogo } from '../context/BusinessProfileContext';
-import { formatStockQty } from '../utils/formatStockQty.js';
 import { formatItemsSold } from '../utils/formatItemsSold.js';
+import { formatIngredientDemandQty, formatIngredientDemandMoney, formatUnitPrice } from '../utils/formatIngredientDemand.js';
 
 // ---------------------------------------------------------------------
 // Palette — pulled directly from the app's CSS variables so the PDF
@@ -262,7 +262,7 @@ function generatedLabelNow() {
 // ---------------------------------------------------------------------
 // metrics: [{ label, value, caption }] (a value may contain ₱).
 // salesTable: { body: string[][], totals: string[] } or null (not selected)
-//   columns: Date | Product | Expected items | Expected sales | Est. cost | Est. gross profit
+//   columns: Date | Product | Expected items | Expected sales | Est. cost   (gross profit removed Oct 25 2026)
 // demandTable: { body: string[][] } or null (not selected)
 //   columns: Date | Product | Actual items | Expected items
 export async function buildSalesForecastPDF({
@@ -297,9 +297,9 @@ export async function buildSalesForecastPDF({
   if (salesTable) {
     y = drawSectionTitle(doc, y, 'Expected sales');
     y = drawTable(doc, y, {
-      head: ['Date', 'Product', 'Expected items', 'Expected sales', 'Est. cost', 'Est. gross profit'],
+      head: ['Date', 'Product', 'Expected items', 'Expected sales', 'Est. cost'],
       body: [...salesTable.body, salesTable.totals].map((row) => row.map(money)),
-      columnStyles: { 2: { halign: 'right' }, 3: { halign: 'right' }, 4: { halign: 'right' }, 5: { halign: 'right' } },
+      columnStyles: { 2: { halign: 'right' }, 3: { halign: 'right' }, 4: { halign: 'right' } },
       didParseCell: (data) => {
         pesoCell(data);
         // Totals row (last body row) in bold.
@@ -452,9 +452,9 @@ export async function buildIngredientDemandPDF({
 
   y = drawSectionTitle(doc, y, `Shopping list \u2014 ${shoppingDateLabel || 'selected day'}`);
   y = drawTable(doc, y, {
-    head: ['No.', 'Ingredient', 'Used in', 'Base Qty Needed', '+ Buffer', 'Total to Buy', 'Unit'],
+    head: ['No.', 'Ingredient', 'Used in', 'Raw Forecast', 'Safety Buffer', 'Forecasted Need'],
     body: shoppingListRows.map((r, i) => [
-      i + 1, r.ingredient, r.linkedDishes, r.baseQty, `+ ${r.buffer}`, r.total, r.unit,
+      i + 1, r.ingredient, r.linkedDishes, r.baseQty, `+ ${r.buffer}`, r.total,
     ]),
     columnStyles: { 0: { cellWidth: 10 } },
   });
@@ -494,6 +494,7 @@ export async function buildGroceryListPDF({
   groceryMode,
   itemsToDownload,
   GROCERY_CATEGORIES,
+  estTotalCost,
 }) {
   const doc = new jsPDF({ unit: 'mm', format: 'a5', orientation: 'portrait' });
   const [logoDataUrl, pesoFontBase64] = await Promise.all([
@@ -543,13 +544,13 @@ export async function buildGroceryListPDF({
   const now = new Date();
   const generatedLabel = `Generated ${now.toLocaleDateString('en-PH', { month: 'short', day: 'numeric', year: 'numeric' })}, ${now.toLocaleTimeString('en-PH', { hour: 'numeric', minute: '2-digit' })}`;
   doc.text(generatedLabel, rightX, headY + 13.5, { align: 'right' });
-  doc.text('Market Price Source: Department of Agriculture, Puregold, etc.', rightX, headY + 17, { align: 'right' });
+  doc.text('Price basis: configured ingredient price per stock unit', rightX, headY + 17, { align: 'right' });
   doc.setDrawColor(122, 1, 1);
   doc.setLineWidth(0.6);
   doc.line(MARGIN, headY + 20, MARGIN + CONTENT_W, headY + 20);
 
   let y = headY + 26;
-  const totalCost = itemsToDownload.reduce((sum, i) => sum + (i.estCost || 0), 0);
+  const totalCost = Number(estTotalCost ?? 0);
   const cardW = (CONTENT_W - 6) / 2;
   const cardH = 18;
 
@@ -564,7 +565,7 @@ export async function buildGroceryListPDF({
   doc.setTextColor(28, 38, 50);
   doc.setFont(pesoFontReady ? PESO_FONT : 'courier', pesoFontReady ? 'normal' : 'bold');
   doc.setFontSize(13);
-  doc.text(`${peso} ${totalCost.toLocaleString()}`, MARGIN + cardW / 2, y + 13, { align: 'center' });
+  doc.text(`${peso} ${totalCost.toLocaleString('en-PH', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`, MARGIN + cardW / 2, y + 13, { align: 'center' });
 
   const card2X = MARGIN + cardW + 6;
   doc.setFillColor(237, 233, 222);
@@ -594,14 +595,17 @@ export async function buildGroceryListPDF({
   const filledCats = GROCERY_CATEGORIES
     .map((cat) => ({ cat, items: itemsToDownload.filter((i) => i.category === cat) }))
     .filter(({ items }) => items.length > 0);
-  const TABLE_HEAD = [['', 'Item', 'Qty', 'Unit', 'Market Price', 'Notes']];
+  // Oct 25 2026: smaller type and short units ("2.31 kg", "₱50.00/kg")
+  // so every row stays on one line in the A5 page; Est. Cost added so the
+  // list adds up to the Est. Total Cost card.
+  const TABLE_HEAD = [['', 'Item', 'Qty to Buy', 'Price / Unit', 'Est. Cost', 'Notes']];
   const COLUMN_STYLES = {
-    0: { cellWidth: 8, halign: 'center' },
+    0: { cellWidth: 6, halign: 'center' },
     1: { cellWidth: 'auto' },
-    2: { cellWidth: 14, halign: 'right' },
-    3: { cellWidth: 14 },
-    4: { cellWidth: 34, halign: 'right' },
-    5: { cellWidth: 24 },
+    2: { cellWidth: 19, halign: 'right' },
+    3: { cellWidth: 21, halign: 'right' },
+    4: { cellWidth: 18, halign: 'right' },
+    5: { cellWidth: 20 },
   };
   const drawCheckbox = (data) => {
     if (data.section === 'body' && data.column.index === 0) {
@@ -647,17 +651,16 @@ export async function buildGroceryListPDF({
       body: items.map((item) => [
         '',
         item.name,
-        // Stock amounts: 3 decimals (whole number for count units).
-        formatStockQty(item.toBuy, item.unit),
-        item.unit,
-        `${peso}${item.marketPrice}/${item.unit}`,
+        formatIngredientDemandQty(item.toBuy, item.unit),
+        formatUnitPrice(item.marketPrice, item.unit),
+        formatIngredientDemandMoney(item.estCost),
         '',
       ]),
       margin: { left: MARGIN, right: MARGIN },
       tableWidth: CONTENT_W,
       theme: 'grid',
-      styles: { fontSize: 7.5, textColor: [28, 38, 50], lineColor: [232, 224, 221], lineWidth: 0.15, cellPadding: 1.4 },
-      headStyles: { fillColor: [244, 244, 242], textColor: [28, 38, 50], fontStyle: 'bold', fontSize: 7 },
+      styles: { fontSize: 6.5, textColor: [28, 38, 50], lineColor: [232, 224, 221], lineWidth: 0.15, cellPadding: 1.1 },
+      headStyles: { fillColor: [244, 244, 242], textColor: [28, 38, 50], fontStyle: 'bold', fontSize: 6.5 },
       columnStyles: COLUMN_STYLES,
       didParseCell: usePesoFontForCurrency,
       didDrawCell: drawCheckbox,
@@ -686,8 +689,8 @@ export async function buildGroceryListPDF({
     margin: { left: MARGIN, right: MARGIN },
     tableWidth: CONTENT_W,
     theme: 'grid',
-    styles: { fontSize: 7.5, textColor: [28, 38, 50], lineColor: [200, 200, 200], lineWidth: 0.15, cellPadding: 1.4, minCellHeight: 7.5 },
-    headStyles: { fillColor: [244, 244, 242], textColor: [28, 38, 50], fontStyle: 'bold', fontSize: 7 },
+    styles: { fontSize: 6.5, textColor: [28, 38, 50], lineColor: [200, 200, 200], lineWidth: 0.15, cellPadding: 1.1, minCellHeight: 7 },
+    headStyles: { fillColor: [244, 244, 242], textColor: [28, 38, 50], fontStyle: 'bold', fontSize: 6.5 },
     columnStyles: COLUMN_STYLES,
     didDrawCell: drawCheckbox,
   });

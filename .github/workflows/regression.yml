@@ -1,0 +1,35 @@
+# Regression check on every push and pull request (Oct 25 2026).
+# Runs backend tests, frontend tests and the frontend build through
+# scripts/verify.mjs and fails if ANY test fails that is not already listed
+# in .github/test-baseline.json. Needs no secrets: the tests use an
+# in-memory fake Supabase and never touch the live database.
+name: Regression
+
+on:
+  push:
+    branches: [fixes, staging, biancakes]
+  pull_request:
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Install backend
+        working-directory: backend
+        run: npm ci --no-audit --no-fund
+      - name: Install frontend
+        working-directory: frontend
+        # The lockfile was made on Windows and lacks the Linux build
+        # binaries; add the matching ones without changing the lockfile.
+        run: |
+          npm ci --no-audit --no-fund
+          npm install --no-save --no-audit --no-fund \
+            "@rolldown/binding-linux-x64-gnu@$(node -p "require('./node_modules/rolldown/package.json').version")" \
+            "lightningcss-linux-x64-gnu@$(node -p "require('./node_modules/lightningcss/package.json').version")"
+      - name: Regression check
+        run: node scripts/verify.mjs --compare .github/test-baseline.json --quick

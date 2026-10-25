@@ -454,20 +454,23 @@ function businessDayEnd(saleDate) {
 }
 
 /**
- * The ingredient's last stock count: the newest 'adjustment' row
- * (transaction_type = 'adjustment') in inventory_transactions.
+ * The ingredient's stock CUTOFF: the newer of
+ *   - the newest 'adjustment' row (an Edit of the stock = a stock count), and
+ *   - the newest 'restock' row (a delivery, including the initial stock).
  *
- * 'restock' is a delivery, not a count, so it is never counted here.
+ * Owner decision, Oct 25 2026 (replaces "restock is not a count"): sales on
+ * a business day that ended BEFORE the ingredient's latest restock or stock
+ * update are never deducted from the current stock. The owner sets the
+ * stock after the fact, so those plates are already reflected in it. This
+ * also fixes the first-time setup, where the initial stock is logged as a
+ * restock and uploading older sales history was refused as "not enough stock".
  *
- * ingredients.created_at is NOT part of the maximum any more (U7): a row that
- * was created with a quantity is not a count — the adjustment row written at
- * the same moment already is one — and mixing the two made the result depend
- * on when the ingredient row happened to be inserted. With no adjustment row
- * there is no known count, and shouldDeduct() then deducts.
+ * ingredients.created_at is still NOT part of the maximum (U7). With neither
+ * row there is no cutoff, and shouldDeduct() then deducts.
  */
-function lastStockCountAt({ latestAdjustmentAt = null } = {}) {
-  const countTime = toTime(latestAdjustmentAt);
-  return countTime === null ? null : new Date(countTime);
+function lastStockCountAt({ latestAdjustmentAt = null, latestRestockAt = null } = {}) {
+  const times = [toTime(latestAdjustmentAt), toTime(latestRestockAt)].filter((t) => t !== null);
+  return times.length ? new Date(Math.max(...times)) : null;
 }
 
 // Deduct a day's plates only if that day ENDED after the last stock count.

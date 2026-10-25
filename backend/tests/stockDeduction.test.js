@@ -157,6 +157,12 @@ test('businessDayEnd crosses month and year ends', () => {
   assert.equal(businessDayEnd('2028-02-28').toISOString(), '2028-02-28T19:00:00.000Z'); // leap year: Feb 29
 });
 
+test('Oct 25 2026: lastStockCountAt = the newer of the last edit and the last restock', () => {
+  assert.equal(lastStockCountAt({ latestAdjustmentAt: '2026-10-05T00:00:00Z', latestRestockAt: '2026-10-07T00:00:00Z' }).toISOString(), '2026-10-07T00:00:00.000Z');
+  assert.equal(lastStockCountAt({ latestAdjustmentAt: '2026-10-09T00:00:00Z', latestRestockAt: '2026-10-07T00:00:00Z' }).toISOString(), '2026-10-09T00:00:00.000Z');
+  assert.equal(lastStockCountAt({ latestRestockAt: '2026-10-07T00:00:00Z' }).toISOString(), '2026-10-07T00:00:00.000Z', 'a restock alone is a cutoff');
+});
+
 test('C1/U7: lastStockCountAt uses the newest adjustment only; created_at is not a count', () => {
   assert.equal(lastStockCountAt({ latestAdjustmentAt: '2026-10-05T00:00:00Z' }).toISOString(), '2026-10-05T00:00:00.000Z');
   assert.equal(lastStockCountAt({}), null, 'no adjustment -> no known count');
@@ -411,29 +417,37 @@ test('C3: a product still Discontinued after this upload\'s refresh deducts (old
   assert.equal(stock(EGG).toString(), '1', 'and its egg was still deducted');
 });
 
-test('C1/C2: a stock count after the day ended skips that day; a restock is not a count', async () => {
+test('C1/C2 (Oct 25 2026): a stock edit OR a restock after the day ended skips that day; one before it does not', async () => {
   seed();
-  // Rice counted (Edit) on Sun 2026-10-11 08:00 Manila -> Sat 10-10 already counted.
   fake.tables.inventory_transactions.push(
+    // Rice counted (Edit) on Sun 2026-10-11 08:00 Manila -> Sat 10-10 already in the stock.
     { id: 1, ingredient_id: RICE, transaction_type: 'adjustment', quantity: 1, previous_quantity: 9, new_quantity: 10, created_at: '2026-10-11T00:00:00+00:00' },
-    // Pork delivered (restock) after the day ended: NOT a count, still deducts.
+    // Pork restocked on Sun 10-11 09:00 Manila, after Saturday ended: now ALSO a cutoff.
     { id: 2, ingredient_id: PORK, transaction_type: 'restock', quantity: 3, previous_quantity: 5, new_quantity: 8, created_at: '2026-10-11T01:00:00+00:00' }
   );
   const result = await upload([['Adobo', 10], ['Brand New Dish', 2]], 52, 'item-sales-summary-2026-10-10-2026-10-10.csv');
-  assert.equal(stock(RICE).toString(), '10', 'rice not deducted: the count already includes Saturday');
+  assert.equal(stock(RICE).toString(), '10', 'rice not deducted: the stock edit came after Saturday ended');
   assert.equal(sales(RICE).length, 0, 'no sale transaction for a fully skipped ingredient');
-  assert.equal(stock(PORK).toString(), '7', 'pork still deducted after a restock');
+  assert.equal(stock(PORK).toString(), '8', 'pork not deducted: the restock came after Saturday ended');
   assert.ok(
-    result.warnings.some((w) => /not deducted for 1 ingredient\(s\).*Rice/.test(w)),
+    result.warnings.some((w) => /not deducted for 2 ingredient\(s\).*restock or stock update/.test(w)),
     JSON.stringify(result.warnings)
   );
-  // The upload screen only shows uploadSummary, so the skip must be there too.
   const skipped = result.uploadSummary.stockNotDeducted;
-  assert.equal(skipped.length, 1, JSON.stringify(skipped));
-  assert.equal(skipped[0].ingredientId, RICE);
-  assert.equal(skipped[0].reason, 'counted_after');
-  assert.deepEqual(skipped[0].days, ['2026-10-10']);
-  assert.match(skipped[0].message, /Rice: sales on 2026-10-10 were not deducted/);
+  assert.equal(skipped.length, 2, JSON.stringify(skipped));
+  assert.deepEqual(skipped.map((s) => s.ingredientId).sort(), [RICE, PORK].sort());
+  assert.ok(skipped.every((s) => s.reason === 'counted_after'));
+  assert.match(skipped.find((s) => s.ingredientId === RICE).message, /Rice: sales on 2026-10-10 were not deducted because the stock was restocked or updated/);
+});
+
+test('C1/C2: a restock made BEFORE the day ended does not stop that day from deducting', async () => {
+  seed();
+  // Restocked Sat 10-10 14:00 Manila, before the store opened: Saturday's plates still deduct.
+  fake.tables.inventory_transactions.push(
+    { id: 3, ingredient_id: PORK, transaction_type: 'restock', quantity: 3, previous_quantity: 5, new_quantity: 8, created_at: '2026-10-10T06:00:00+00:00' }
+  );
+  await upload([['Brand New Dish', 2]], 54, 'item-sales-summary-2026-10-10-2026-10-10.csv');
+  assert.equal(stock(PORK).toString(), '7', 'pork deducted: the restock was before Saturday ended');
 });
 
 test('C1/U7: an ingredient created after the day ended is NOT a stock count', async () => {
