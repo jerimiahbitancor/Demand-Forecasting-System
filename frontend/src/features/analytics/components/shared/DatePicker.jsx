@@ -80,10 +80,23 @@ function DatePicker({ value, onChange, mode = "single" }) {
   const [rangeStart, setRangeStart] = useState(Array.isArray(value) ? value[0] || null : null);
   const [rangeEnd, setRangeEnd] = useState(Array.isArray(value) ? value[1] || null : null);
   const containerRef = useRef(null);
+  // Latest values for the outside-click handler (it is registered once).
+  const latest = useRef({ rangeStart, rangeEnd, onChange, mode, open });
+  useEffect(() => {
+    latest.current = { rangeStart, rangeEnd, onChange, mode, open };
+  });
 
   useEffect(() => {
     function handleClickOutside(e) {
       if (containerRef.current && !containerRef.current.contains(e.target)) {
+        // Oct 26 2026: one date picked in a range, then the calendar closed:
+        // apply it as a one-day range. Before, nothing was sent, so the label
+        // showed the new date while the table still showed the old dates.
+        const { rangeStart: start, rangeEnd: end, onChange: change, mode: m, open: isOpen } = latest.current;
+        if (isOpen && m === "range" && start && !end) {
+          setRangeEnd(start);
+          change([start, start]);
+        }
         setOpen(false);
       }
     }

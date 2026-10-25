@@ -22,6 +22,7 @@ import { roundItems, formatItemsSold } from "../../../utils/formatItemsSold.js";
 import { toYmd, fromYmd } from "../../../utils/localDate.js";
 import { accuracyPercent, accuracyVerdict, accuracyOffByLine, ACCURACY_HELP_SENTENCES } from "../../../utils/accuracyText.js";
 import { shortDateLabel } from "../../dashboard/utils/dashboardPanels.js";
+import { peso } from "../../../utils/formatNumber.js";
 import {
   LineChart as RechartsLineChart,
   Line,
@@ -39,7 +40,7 @@ const API_URL = import.meta.env.VITE_API_URL || "http://localhost:5000/api";
 // the table, the totals and the reports (Oct 25 2026).
 function formatPeso(value) {
   if (value === null || value === undefined || Number.isNaN(Number(value))) return "—";
-  return `₱${Number(value).toLocaleString("en-PH", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+  return peso(value);
 }
 
 function formatDisplayDate(dateStr) {
@@ -142,7 +143,8 @@ function buildSeriesFromRows(rows) {
     }));
 }
 
-// Every column can be sorted highest-first or lowest-first (Oct 25 2026).
+// Every column can be sorted highest-first or lowest-first by clicking its
+// header (Oct 25 2026). The separate Sort dropdown was removed (Oct 26 2026).
 // Empty values ("—", "No price") always go last.
 const SORT_COLUMNS = [
   { key: "date", label: "Date", text: false },
@@ -168,11 +170,6 @@ function sortPredictionRows(rows, sort) {
   });
 }
 
-function sortLabel(column, dir) {
-  if (column.text) return `${column.label}: ${dir === "asc" ? "A → Z" : "Z → A"}`;
-  if (column.key === "date") return `${column.label}: ${dir === "asc" ? "oldest first" : "newest first"}`;
-  return `${column.label}: ${dir === "asc" ? "lowest first" : "highest first"}`;
-}
 
 // ---------------------------------------------------------------------
 // Tooltips
@@ -206,6 +203,8 @@ const tooltips = {
         </div>
       </div>
       Hover over the chart to see the numbers for a day. A gap means the store was closed.
+      <br/><br/>
+      <strong>Table:</strong> only products with an ingredient recipe. Forecast Qty. = predicted items sold, rounded to a whole number. Forecast Revenue = Forecast Qty. × price. Est. Total Cost = Forecast Qty. × COGS per item (Product Management). &quot;—&quot; = no uploaded sales or no forecast for that date. Click a column header to sort it.
     </div>
   ),
 };
@@ -708,28 +707,6 @@ function Forecasting() {
     setSalesPage(1);
     setModalSalesPage(1);
   };
-  const handleSortSelect = (value) => {
-    if (!value) setSort(null);
-    else {
-      const [key, dir] = value.split(":");
-      setSort({ key, dir });
-    }
-    setSalesPage(1);
-    setModalSalesPage(1);
-  };
-  const sortSelect = (
-    <select
-      className="filter-pill filter-pill--mode"
-      value={sort ? `${sort.key}:${sort.dir}` : ""}
-      onChange={(e) => handleSortSelect(e.target.value)}
-      aria-label="Sort the table"
-    >
-      <option value="">Sort: by date</option>
-      {SORT_COLUMNS.flatMap((c) => ["desc", "asc"].map((dir) => (
-        <option key={`${c.key}:${dir}`} value={`${c.key}:${dir}`}>{sortLabel(c, dir)}</option>
-      )))}
-    </select>
-  );
   const sortHeader = (column) => {
     const active = sort?.key === column.key;
     const arrow = active ? (sort.dir === "desc" ? " ▼" : " ▲") : " ⇅";
@@ -903,7 +880,6 @@ function Forecasting() {
               <option value="Demand">Demand</option>
               <option value="Sales">Sales</option>
             </select>
-            {sortSelect}
           </div>
 
           {isLoading ? null : !hasForecastData ? noForecastEmptyState : predictionChart}
@@ -918,7 +894,7 @@ function Forecasting() {
             role="region"
             aria-label="Sales and forecast by date: actual and forecast quantity, revenue and cost"
           >
-          <table className="analytics-table">
+          <table className="analytics-table forecast-table">
             {tableHead}
             <tbody>
               {filteredSalesRows.length === 0 ? (
@@ -1049,7 +1025,6 @@ function Forecasting() {
             <option value="Demand">Demand</option>
             <option value="Sales">Sales</option>
           </select>
-          {sortSelect}
         </div>
 
         {!hasForecastData ? noForecastEmptyState : predictionChart}
@@ -1061,7 +1036,7 @@ function Forecasting() {
           role="region"
           aria-label="Sales and forecast by date, full view"
         >
-        <table className="analytics-table">
+        <table className="analytics-table forecast-table">
           {tableHead}
           <tbody>
             {filteredSalesRows.length === 0 ? (

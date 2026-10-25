@@ -1,6 +1,7 @@
 import { FaTimes, FaUndo } from 'react-icons/fa';
 import InventoryModal from '../components/InventoryModal';
 import './ProductRestoreModal.css';
+import { peso } from "../../../utils/formatNumber.js";
 
 const ProductRestoreModal = ({ product, isSubmitting, onConfirm, onClose }) => {
   if (!product) return null;
@@ -30,7 +31,7 @@ const ProductRestoreModal = ({ product, isSubmitting, onConfirm, onClose }) => {
           </p>
           <div className="item-details">
             <p><strong>Category:</strong> {product.category || 'N/A'}</p>
-            <p><strong>Price:</strong> {product.price == null ? '₱0.00' : `₱${Number(product.price).toFixed(2)}`}</p>
+            <p><strong>Price:</strong> {peso(product.price ?? 0)}</p>
           </div>
         </div>
       </div>

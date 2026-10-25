@@ -3,6 +3,7 @@ import { FaArchive, FaEye, FaTimes, FaUndo } from 'react-icons/fa';
 import InventoryModal from '../components/InventoryModal';
 import { convertRecipeQuantity, parseRecipeQuantity } from '../../../utils/recipeUnits';
 import './ProductDetailsModal.css';
+import { peso } from "../../../utils/formatNumber.js";
 
 const ProductDetailsModal = ({
   product,
@@ -92,7 +93,7 @@ const ProductDetailsModal = ({
     forecastNote = 'Excluded from forecasting and automatic stock deduction until sales resume or 28 days of sales data are reached.';
   }
 
-  const formatCurrency = (amount) => `₱${amount.toFixed(2)}`;
+  const formatCurrency = (amount) => peso(amount);
 
   return (
     <InventoryModal className="product-details-modal" onClose={onClose}>
@@ -126,7 +127,7 @@ const ProductDetailsModal = ({
         <div className="product-details-summary">
           <div>
             <span>Price</span>
-            <strong>{product.price == null ? '₱0.00' : `₱${Number(product.price).toFixed(2)}`}</strong>
+            <strong>{peso(product.price ?? 0)}</strong>
           </div>
           <div>
             <span>Ingredients</span>

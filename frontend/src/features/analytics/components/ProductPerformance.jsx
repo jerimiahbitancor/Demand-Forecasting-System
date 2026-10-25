@@ -21,6 +21,7 @@ import { authService } from "../../../services/authService.js";
 import { roundItems, formatItemsSold } from "../../../utils/formatItemsSold.js";
 import { toYmd, fromYmd } from "../../../utils/localDate.js";
 import { manilaToday, addDays } from "../../dashboard/utils/dashboardPanels.js";
+import { fmt2 } from "../../../utils/formatNumber.js";
 
 const API_URL = import.meta.env.VITE_API_URL || "http://localhost:5000/api";
 
@@ -74,6 +75,9 @@ function buildPerformanceRows(apiRows) {
     rank: r.rank,
     product: r.product,
     qtySold: r.quantitySold,
+    // Breakdown (Oct 26 2026): avgDaily = qtySold ÷ openDays.
+    openDays: r.openDays ?? null,
+    avgDaily: r.avgDaily ?? null,
     // null = not an active product, or no sales at all in the range: "—".
     // An active product that sold nothing is a real 0.00.
     ratio: r.performanceRatio ?? null,
@@ -81,9 +85,17 @@ function buildPerformanceRows(apiRows) {
   }));
 }
 
+// "12.40 ÷ 8.10 = 1.53": how one product's ratio is made.
+function ratioMath(row, storeAvg) {
+  if (row.ratio == null || row.avgDaily == null || !storeAvg) return null;
+  return `${fmt2(row.avgDaily)} ÷ ${fmt2(storeAvg)} = ${fmt2(row.ratio)}`;
+}
+
+const DEMAND_FILTERS = ["All", "High Demand", "Medium Demand", "Low Demand", "Not enough data"];
+
 function ratioText(ratio) {
   if (ratio === null || ratio === undefined) return "—";
-  return `${ratio.toFixed(2)} ${ratio >= 1 ? "▲" : "▼"}`;
+  return `${fmt2(ratio)} ${ratio >= 1 ? "▲" : "▼"}`;
 }
 
 function ratioClass(ratio) {
@@ -109,7 +121,9 @@ const tooltips = {
       So a product that sells 3 a day can be "High" when it usually sells 1.
       Each row shows what is usual for that product.
       <br/><br/>
-      The action also looks at the stock of each product's ingredients, so you know which one to watch.
+      <strong>How:</strong> predicted items sold (rounded to a whole number) are compared with the product&apos;s own 40th (P40) and 80th (P80) percentile of past daily sales: above P80 = High, P40 to P80 = Medium, below P40 = Low.
+      <br/><br/>
+      The action also looks at the Predicted Stock Level Status of the product&apos;s ingredients and names the most urgent one. Use the filter to show one demand level.
     </div>
   ),
 
@@ -131,8 +145,10 @@ const tooltips = {
         </div>
       </div>
       <br/>
+      <strong>How:</strong> Avg / Day = items sold ÷ open days in the dates picked. Store avg / day = the average of that over all active products. Ratio = Avg / Day ÷ Store avg / day.
+      <br/><br/>
       <span style={{ color: '#94a3b8', fontSize: '12px' }}>
-        1.00 = sells as much as your average product. 1.50 = sells 50% more than average. 0.50 = sells half as much.
+        1 = sells as much as your average product. 1.50 = sells 50% more than average. 0.50 = sells half as much. Above 1.2: keep on menu · 1–1.2: maintain · 0.8–1: monitor · below 0.8: consider a promo or review.
       </span>
     </div>
   ),
@@ -161,7 +177,7 @@ const tooltips = {
           <strong style={{ color: '#ef4444' }}>Inactive Products</strong>
           <br/>
           <span style={{ fontSize: '12px', color: '#94a3b8' }}>
-            Auto-flagged after 0 sales for 28 consecutive days. Excluded from forecast until sales resume.
+            No sale in the last 28 open days. Excluded from the forecast until sales resume.
           </span>
         </div>
         <div style={{ marginBottom: '10px' }}>
@@ -172,10 +188,8 @@ const tooltips = {
           </span>
         </div>
         <div>
-          <strong style={{ color: '#94a3b8' }}>Unmapped Products</strong>
-          <br/>
           <span style={{ fontSize: '12px', color: '#94a3b8' }}>
-            No ingredient recipe configured. Forecasting works, but ingredient demand estimation is unavailable until a recipe is added.
+            A product with no ingredient recipe is still forecast, but it has no ingredient demand, stock deduction or cost until a recipe is added in Product Management.
           </span>
         </div>
       </div>
@@ -251,7 +265,7 @@ function RatioBar({ label, ratio, maxRatio }) {
           className={`ratio-bar-value ${inside ? "ratio-bar-value--inside" : "ratio-bar-value--outside"}`}
           style={valueStyle}
         >
-          {Number(ratio).toFixed(2)} ×
+          {fmt2(ratio)} ×
         </span>
       </div>
     </div>
@@ -363,6 +377,8 @@ function ProductPerformance() {
   const [demandPage, setDemandPage] = useState(1);
   const [ratioPage, setRatioPage] = useState(1);
   const [demandQuery, setDemandQuery] = useState('');
+  // Demand level filter (Oct 26 2026): All | High | Medium | Low | Not enough data.
+  const [demandLevelFilter, setDemandLevelFilter] = useState('All');
   const [ratioQuery, setRatioQuery] = useState('');
   const [activeStatusPage, setActiveStatusPage] = useState(1);
   const [newStatusPage, setNewStatusPage] = useState(1);
@@ -480,12 +496,15 @@ function ProductPerformance() {
     // period, so that part reuses the page's already-loaded values.
     // Local calendar dates: toISOString() would shift them a day back in Manila.
     const [from, to] = dateRange.map((d) => toYmd(d));
-    let reportDemandRows, reportPerformanceRows;
+    let reportDemandRows, reportPerformanceRows, reportRatio, reportStatus;
     try {
       const headers = await authService.getAuthHeaders();
       const response = await axios.get(`${API_URL}/analytics/product-performance`, { headers, params: { from, to } });
-      reportDemandRows = buildDemandRows(response.data?.data?.demandClassification);
-      reportPerformanceRows = buildPerformanceRows(response.data?.data?.performanceRatio?.rows);
+      const data = response.data?.data || {};
+      reportDemandRows = buildDemandRows(data.demandClassification);
+      reportPerformanceRows = buildPerformanceRows(data.performanceRatio?.rows);
+      reportRatio = data.performanceRatio || {};
+      reportStatus = data.productStatus || {};
     } catch (err) {
       console.error("Error fetching report data:", err);
       toast.error("Failed to load data for the selected date range.");
@@ -497,37 +516,65 @@ function ProductPerformance() {
       return;
     }
 
-    const topPerformers = reportPerformanceRows.filter((r) => r.ratio >= 1).slice(0, 2);
-    // null = no ratio yet (null < 1 is true in JS, so check it first).
-    const needsReview = reportPerformanceRows.filter((r) => r.ratio !== null && r.ratio < 1).slice(0, 2);
+    // Everything below comes from THIS report's data (Oct 26 2026): no
+    // example names or fixed sentences.
+    const rStoreAvg = reportRatio.storeAverageDaily ?? null;
+    const rRange = reportRatio.range || { from, to };
+    const rLabel = `${shortDate(rRange.from)} – ${shortDate(rRange.to)}`;
+    const ranked = reportPerformanceRows.filter((r) => r.ratio !== null);
+    const above = ranked.filter((r) => r.ratio >= 1);
+    const below = ranked.filter((r) => r.ratio < 1);
+    const names = (rows, n = 3) => rows.slice(0, n).map((r) => `${r.product} (${fmt2(r.ratio)})`).join(", ");
+    const counts = reportStatus.counts || { active: 0, new: 0, inactive: 0, archived: 0 };
+    const levelCount = (level) => reportDemandRows.filter((r) => r.demandLevel === level).length;
+    const shiftText = reportRatio.ratioShift
+      ? `No sales were uploaded for ${shortDate(reportRatio.ratioShift.requested.from)} – ${shortDate(reportRatio.ratioShift.requested.to)}, so the ratio uses the latest 7 days with sales (${rLabel}). `
+      : "";
+    const narrativeText = ranked.length
+      ? `${shiftText}Sales from ${rLabel} (${reportRatio.openDays} open days): the average active product sold ${fmt2(rStoreAvg)} items a day. `
+        + `${above.length} product${above.length === 1 ? "" : "s"} sold above that average, led by ${names(above)}. `
+        + (below.length
+          ? `${below.length} sold below it; the lowest were ${names([...below].reverse())}. Consider a promo or a menu review for them.`
+          : "No product sold below the average.")
+      : `${shiftText}No sales were uploaded in or before these dates, so there is no performance ratio yet.`;
+    const statusBullets = [
+      `${counts.active} active (forecast running)`,
+      `${counts.new} not enough data yet (fewer than 42 days with sales)`,
+      `${counts.inactive} inactive (no sale in the last 28 open days)`,
+      `${counts.archived} archived`,
+    ];
+    const ratioRows = reportPerformanceRows.map((r) => [
+      r.rank, r.product, fmt2(r.qtySold), r.openDays ?? "—", r.avgDaily == null ? "—" : fmt2(r.avgDaily),
+      rStoreAvg == null ? "—" : fmt2(rStoreAvg), r.ratio == null ? "—" : fmt2(r.ratio), r.actionSignal || "—",
+    ]);
 
     try {
     if (format === "pdf") {
       const doc = await buildProductPerformancePDF({
         dateRange,
-        business: null, // wire to your business_profile fetch — see prior note
+        business: null, // the report reads Settings > Business Profile itself
         metrics: [
-          { label: "Active Products", value: activeProducts.length, caption: "menu products" },
-          { label: "High Demand", value: reportDemandRows.filter(r => r.demandLevel === "High Demand").length, caption: "products" },
-          { label: "Below Average", value: reportPerformanceRows.filter(r => r.ratio !== null && r.ratio < 1).length, valueColor: [15, 153, 24], caption: "products" },
-          { label: "Not Enough Data", value: newProducts.length, caption: "product" },
+          { label: "Active Products", value: counts.active, caption: "being forecast" },
+          { label: "High Demand", value: levelCount("High Demand"), caption: "product-days forecast" },
+          { label: "Below Average", value: below.length, valueColor: below.length ? [180, 35, 24] : [15, 153, 24], caption: "ratio below 1" },
+          { label: "Not Enough Data", value: counts.new, caption: "products" },
         ],
-        statusBullets: [
-          `${activeProducts.length} active menu`,
-          `${newProducts.length} with not enough data yet (e.g. ${newProducts[0]?.product}: ${newProducts[0]?.forecastStatus})`,
-          `${inactiveProducts.length} inactive (${inactiveProducts[0]?.product}, last sale ${inactiveProducts[0]?.lastSale})`,
-        ],
-        narrativeText: `${topPerformers[0]?.product || "—"} was the top performer this period. ${needsReview[0]?.product || "No products"} underperformed and may need a promo or menu review.`,
-        topPerformers, needsReview, demandRows: reportDemandRows,
-        disclaimer: "Disclaimer \u2014 Performance ratio compares each product's sales against the store average across all active products.",
+        statusBullets,
+        narrativeText,
+        ratioTable: {
+          note: rStoreAvg == null ? null
+            : `Avg / day = items sold ÷ ${reportRatio.openDays} open days. Store avg / day = the average over ${reportRatio.activeProductCount ?? counts.active} active products = ${fmt2(rStoreAvg)} items. Ratio = Avg / day ÷ ${fmt2(rStoreAvg)}.`,
+          rows: ratioRows,
+        },
+        demandRows: reportDemandRows,
+        disclaimer: "Performance ratio compares each product's actual sales in the dates shown with the average active product. Demand levels compare each product's forecast with its own usual sales.",
       });
       doc.save("product-performance-report.pdf");
     } else {
       // Human column headers; internal fields (zone, bottleneckStatus,
-      // productId) stay out of the file.
+      // productId) stay out of the file. Numbers stay numbers.
+      const num2 = (v) => (v == null ? "" : Math.round(Number(v) * 100) / 100);
       const sheetMap = {
-        // Whole numbers in the spreadsheet; the rows themselves keep the raw
-        // forecast because the bar chart sizes its bars from it.
         demand: {
           sheetName: "Demand Classification",
           rows: reportDemandRows.map((r, i) => ({
@@ -542,16 +589,32 @@ function ProductPerformance() {
         },
         ratio: {
           sheetName: "Performance Ratio",
-          rows: reportPerformanceRows.map((r) => ({
-            "Rank": r.rank,
-            "Product": r.product,
-            "Items Sold": r.qtySold,
-            // null = no ratio for this product: "—", never 0.
-            "Performance vs Average": r.ratio == null ? "—" : Number(Number(r.ratio).toFixed(2)),
-            "What to do": r.actionSignal || "",
-          })),
+          rows: [
+            ...reportPerformanceRows.map((r) => ({
+              "Rank": r.rank,
+              "Product": r.product,
+              "Items Sold": r.qtySold,
+              "Open Days": r.openDays ?? "",
+              "Avg / Day": num2(r.avgDaily),
+              "Store Avg / Day": num2(rStoreAvg),
+              // null = no ratio for this product: blank, never 0.
+              "Performance Ratio": num2(r.ratio),
+              "What to do": r.actionSignal || "",
+            })),
+            {},
+            { "Rank": "Dates", "Product": rLabel },
+            { "Rank": "Formula", "Product": "Ratio = (Items Sold ÷ Open Days) ÷ Store Avg / Day" },
+          ],
         },
-        status: { sheetName: "Product Status", rows: [...activeProducts, ...newProducts, ...inactiveProducts] },
+        status: {
+          sheetName: "Product Status",
+          rows: [
+            ...(reportStatus.active || []).map((r) => ({ "Status": "Active", "Product": r.product, "Days on Menu / Last Sale": r.daysOnMenu, "Forecast Status": r.forecastStatus })),
+            ...(reportStatus.new || []).map((r) => ({ "Status": "Not enough data", "Product": r.product, "Days on Menu / Last Sale": r.daysOnMenu, "Forecast Status": r.forecastStatus })),
+            ...(reportStatus.inactive || []).map((r) => ({ "Status": "Inactive", "Product": r.product, "Days on Menu / Last Sale": r.lastSale, "Forecast Status": r.forecastStatus })),
+            ...(reportStatus.archived || []).map((r) => ({ "Status": "Archived", "Product": r.product, "Days on Menu / Last Sale": r.lastSale, "Forecast Status": r.forecastStatus })),
+          ],
+        },
       };
       generateExcel(
         Object.entries(sheetMap).filter(([id]) => selectedTableIds.includes(id)).map(([, v]) => v),
@@ -582,7 +645,48 @@ function ProductPerformance() {
   const matchesQuery = (row, query) =>
     (row.product || "").toLowerCase().includes(query.trim().toLowerCase());
 
-  const filteredDemandRows = demandRows.filter((row) => matchesQuery(row, demandQuery));
+  const filteredDemandRows = demandRows.filter((row) => matchesQuery(row, demandQuery)
+    && (demandLevelFilter === 'All' || row.demandLevel === demandLevelFilter));
+  const handleDemandLevelChange = (value) => {
+    setDemandLevelFilter(value);
+    setDemandPage(1);
+    setModalDemandPage(1);
+    setDemandChartPage(1);
+    setModalDemandChartPage(1);
+  };
+  const demandLevelSelect = (
+    <select
+      className="filter-pill filter-pill--mode"
+      value={demandLevelFilter}
+      onChange={(e) => handleDemandLevelChange(e.target.value)}
+      aria-label="Show one demand level"
+    >
+      {DEMAND_FILTERS.map((level) => (
+        <option key={level} value={level}>{level === 'All' ? 'All demand levels' : level}</option>
+      ))}
+    </select>
+  );
+  const storeAvg = apiData?.performanceRatio?.storeAverageDaily ?? null;
+  const ratioOpenDays = apiData?.performanceRatio?.openDays ?? 0;
+  const ratioShift = apiData?.performanceRatio?.ratioShift || null;
+  const ratioRangeUsed = apiData?.performanceRatio?.range || null;
+  const shortDate = (ymd) => fromYmd(ymd).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
+  // How the ratio is worked out, with this range's own numbers.
+  const ratioBreakdown = storeAvg ? (
+    <div className="ratio-breakdown" role="note">
+      <p className="ratio-breakdown-title">How the ratio is calculated</p>
+      <ol>
+        <li><strong>Avg / day</strong> = a product&apos;s items sold ÷ {ratioOpenDays} open day{ratioOpenDays === 1 ? "" : "s"} in these dates.</li>
+        <li><strong>Store avg / day</strong> = the average of Avg / day over all {apiData?.performanceRatio?.activeProductCount ?? "active"} active products = <strong>{fmt2(storeAvg)} items</strong>.</li>
+        <li><strong>Ratio</strong> = Avg / day ÷ {fmt2(storeAvg)}. Above 1 sells more than the average product; below 1 sells less.</li>
+      </ol>
+    </div>
+  ) : null;
+  const ratioShiftNote = ratioShift && ratioRangeUsed ? (
+    <InfoBanner variant="info">
+      No sales were uploaded for {shortDate(ratioShift.requested.from)} – {shortDate(ratioShift.requested.to)}, so this uses the latest 7 days with sales: {shortDate(ratioRangeUsed.from)} – {shortDate(ratioRangeUsed.to)}.
+    </InfoBanner>
+  ) : null;
   const filteredPerformanceRows = performanceRows.filter((row) => matchesQuery(row, ratioQuery));
 
   const handleDemandQueryChange = (value) => {
@@ -608,8 +712,8 @@ function ProductPerformance() {
   );
 
   // Bar chart pagination — 5 bars per page in the panel
-  const totalDemandChartPages = Math.max(1, Math.ceil(demandRows.length / ROWS_PER_PAGE));
-  const paginatedDemandChartRows = demandRows.slice(
+  const totalDemandChartPages = Math.max(1, Math.ceil(filteredDemandRows.length / ROWS_PER_PAGE));
+  const paginatedDemandChartRows = filteredDemandRows.slice(
     (demandChartPage - 1) * ROWS_PER_PAGE, demandChartPage * ROWS_PER_PAGE
   );
 
@@ -633,7 +737,7 @@ function ProductPerformance() {
 
   const modalDemandRows = filteredDemandRows.slice((modalDemandPage - 1) * 10, modalDemandPage * 10);
   const modalRatioRows = filteredPerformanceRows.slice((modalRatioPage - 1) * 10, modalRatioPage * 10);
-  const modalDemandChartRows = demandRows.slice((modalDemandChartPage - 1) * 10, modalDemandChartPage * 10);
+  const modalDemandChartRows = filteredDemandRows.slice((modalDemandChartPage - 1) * 10, modalDemandChartPage * 10);
   const modalRatioChartRows = ratioChartRows.slice((modalRatioChartPage - 1) * 10, modalRatioChartPage * 10);
   // Scale = the largest ratio on the page being shown (at least 2).
   const pageRatioMax = ratioBarMax(paginatedRatioChartRows.map((r) => r.ratio));
@@ -695,6 +799,7 @@ function ProductPerformance() {
               placeholder="Search Product"
               aria-label="Search products in demand classification"
             />
+            {demandLevelSelect}
           </div>
 
           {shiftNote && <p className="section-note value--muted">{shiftNote}</p>}
@@ -822,11 +927,8 @@ function ProductPerformance() {
             selling below average.
           </p>
 
-          {apiData?.performanceRatio?.openDays > 0 && (
-            <p className="section-note">
-              Based on actual sales on {apiData.performanceRatio.openDays} open day{apiData.performanceRatio.openDays === 1 ? "" : "s"} in these dates.
-            </p>
-          )}
+          {ratioShiftNote}
+          {ratioBreakdown}
 
           {!isLoading && !hasSalesInRange && (
             <EmptyState
@@ -861,8 +963,9 @@ function ProductPerformance() {
                 <tr>
                   <th>Rank</th>
                   <th>Product</th>
-                  <th>Quantity Sold</th>
-                  <th>Performance Ratio</th>
+                  <th>Items Sold</th>
+                  <th title="Items sold ÷ open days">Avg / Day</th>
+                  <th title="Avg / Day ÷ Store avg / day">Performance Ratio</th>
                   <th>Action Signal</th>
                 </tr>
               </thead>
@@ -871,9 +974,11 @@ function ProductPerformance() {
                   <tr key={row.product}>
                     <td data-label="Rank">{row.rank}</td>
                     <td data-label="Product">{row.product}</td>
-                    <td data-label="Quantity Sold">{row.qtySold}</td>
-                    <td data-label="Performance Ratio" className={ratioClass(row.ratio)}>
+                    <td data-label="Items Sold">{row.qtySold}</td>
+                    <td data-label="Avg / Day" title={row.avgDaily == null ? undefined : `${row.qtySold} ÷ ${row.openDays} open days`}>{row.avgDaily == null ? "—" : fmt2(row.avgDaily)}</td>
+                    <td data-label="Performance Ratio" className={ratioClass(row.ratio)} title={ratioMath(row, storeAvg) || undefined}>
                       {ratioText(row.ratio)}
+                      {ratioMath(row, storeAvg) && <span className="demand-basis">{ratioMath(row, storeAvg)}</span>}
                     </td>
                     <td data-label="Action Signal" className="action-signal">{row.actionSignal}</td>
                   </tr>
@@ -985,7 +1090,7 @@ function ProductPerformance() {
           <div className="status-group">
             <p className="status-group-title">Inactive Product</p>
             <p className="status-group-subtitle">
-              System auto-flags product inactive with 0 sales for 28 consecutive days
+              No sale in the last 28 open days. Excluded from the forecast until sales resume
             </p>
             <div className="table-scroll" tabIndex={0} role="region" aria-label="Inactive products: last sale and forecast status">
               <table className="analytics-table analytics-table--compact">
@@ -1058,6 +1163,7 @@ function ProductPerformance() {
         onClose={() => setIsDemandClassOpen(false)}
         title="Demand Classification — Full View"
       >
+        <div className="analytics-filter-row">{demandLevelSelect}</div>
         <div className="demand-bar-chart">
           {modalDemandChartRows.map((row) => (
             <DemandBar key={`${row.rawDate}-${row.productId}`} label={barLabel(row)} qty={row.forecastQty} maxQty={maxQty} zone={row.zone} />
@@ -1065,7 +1171,7 @@ function ProductPerformance() {
         </div>
         <Pagination
           currentPage={modalDemandChartPage}
-          totalPages={Math.max(1, Math.ceil(demandRows.length / 10))}
+          totalPages={Math.max(1, Math.ceil(filteredDemandRows.length / 10))}
           onPageChange={setModalDemandChartPage}
         />
         <div className="chart-legend">
@@ -1109,6 +1215,8 @@ function ProductPerformance() {
         onClose={() => setIsRatioOpen(false)}
         title="Product Performance Ratio Analysis — Full View"
       >
+        {ratioShiftNote}
+        {ratioBreakdown}
         <div className="ratio-bar-chart">
           {modalRatioChartRows.map((row) => (
             <RatioBar key={row.product} label={row.product} ratio={row.ratio} maxRatio={modalRatioMax} />
@@ -1132,7 +1240,7 @@ function ProductPerformance() {
           <table className="analytics-table">
             <thead>
               <tr>
-                <th>Rank</th><th>Product</th><th>Quantity Sold</th><th>Performance Ratio</th><th>Action Signal</th>
+                <th>Rank</th><th>Product</th><th>Items Sold</th><th>Avg / Day</th><th>Performance Ratio</th><th>Action Signal</th>
               </tr>
             </thead>
             <tbody>
@@ -1141,7 +1249,11 @@ function ProductPerformance() {
                   <td>{row.rank}</td>
                   <td>{row.product}</td>
                   <td>{row.qtySold}</td>
-                  <td className={ratioClass(row.ratio)}>{ratioText(row.ratio)}</td>
+                  <td>{row.avgDaily == null ? "—" : fmt2(row.avgDaily)}</td>
+                  <td className={ratioClass(row.ratio)}>
+                    {ratioText(row.ratio)}
+                    {ratioMath(row, storeAvg) && <span className="demand-basis">{ratioMath(row, storeAvg)}</span>}
+                  </td>
                   <td className="action-signal">{row.actionSignal}</td>
                 </tr>
               ))}
@@ -1195,7 +1307,7 @@ function ProductPerformance() {
 
         <div className="status-group">
           <p className="status-group-title">Inactive Product</p>
-          <p className="status-group-subtitle">System auto-flags product inactive with 0 sales for 28 consecutive days</p>
+          <p className="status-group-subtitle">No sale in the last 28 open days. Excluded from the forecast until sales resume</p>
           <div className="table-scroll" tabIndex={0} role="region" aria-label="Inactive products: last sale and forecast status (full view)">
             <table className="analytics-table analytics-table--compact">
               <thead><tr><th>No.</th><th>Product</th><th>Last Sale</th><th>Forecast Status</th></tr></thead>
