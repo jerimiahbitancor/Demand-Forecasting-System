@@ -7,6 +7,7 @@ import {
 import InventoryModal from "../InventoryModal";
 import "./RestockModal.css";
 import { formatStockQty } from "../../../../utils/formatStockQty.js";
+import { currentStockBadge } from "../../../../utils/stockStatusBadge.js";
 import { parseRecipeQuantity, unitShortLabel } from "../../../../utils/recipeUnits";
 
 const RestockModal = ({
@@ -23,24 +24,9 @@ const RestockModal = ({
     if (!isSubmitting) onClose();
   };
 
-  // Get stock status
-  const getStockStatus = (item) => {
-    if (!item)
-      return { label: "Unknown", color: "#9ca3af", bgColor: "#f3f4f6" };
-    if (item.quantity === 0) {
-      return { label: "Critical", color: "#dc2626", bgColor: "#fee2e2" };
-    } else if (item.quantity <= (item.min_stock || 0) * 0.5) {
-      return { label: "Critical", color: "#dc2626", bgColor: "#fee2e2" };
-    } else if (item.quantity <= (item.min_stock || 0)) {
-      return { label: "Low", color: "#f59e0b", bgColor: "#fef3c7" };
-    } else if (item.quantity >= (item.min_stock || 0) * 3) {
-      return { label: "Excess", color: "#3b82f6", bgColor: "#dbeafe" };
-    } else {
-      return { label: "Normal", color: "#16a34a", bgColor: "#dcfce7" };
-    }
-  };
-
-  const status = getStockStatus(item);
+  // The Current Stock Level Status as the backend computed it (wet/dry
+  // threshold of the ideal stock level). No second formula here.
+  const status = currentStockBadge(item);
   // How much stock this entry adds, so the owner sees the new balance
   // before saving. The amount itself is never rounded, only the display.
   const enteredAmount = parseRecipeQuantity(data.quantity);

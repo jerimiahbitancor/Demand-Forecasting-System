@@ -1221,11 +1221,11 @@ const rowForSummary = selectedRow ? getEffectiveRow(selectedRow) : null;
     }
 
     // 4. Low-stock cross-reference from the inventory list.
-    const lowItems = (ingredients || []).filter((ing) => {
-      const q = Number(ing.quantity) || 0;
-      const ms = Number(ing.min_stock) || 0;
-      return q === 0 || q <= ms;
-    });
+    // Uses the Current Stock Level Status from the inventory list (backend,
+    // wet/dry threshold of the ideal stock level), not a formula of its own.
+    const lowItems = (ingredients || []).filter((ing) => (
+      ing.current_stock_status === 'Low Stock' || ing.current_stock_status === 'Out of Stock'
+    ));
     if (lowItems.length) {
       tips.push({
         tone: 'warning',

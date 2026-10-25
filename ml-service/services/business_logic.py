@@ -118,8 +118,8 @@ def estimate_ingredient_demand(
     modifier_shares: output of compute_modifier_shares() (optional)
 
     Returns one row per ingredient with total forecasted need,
-    current stock, and how much to buy. To Buy and stock status are
-    unchanged.
+    current stock, and how much to buy. The stock status is not computed
+    here: the backend (utils/stockStatus.js) does that from these numbers.
     """
     recipe_df = recipe_df.copy()
     recipe_df["predicted_quantity"] = recipe_df["product_id"].map(forecasts_by_product).fillna(0)
@@ -150,28 +150,14 @@ def estimate_ingredient_demand(
     grouped["to_buy"] = (grouped["forecasted_need"] - grouped["current_stock"]).clip(lower=0)
     grouped["est_cost"] = grouped["to_buy"] * grouped["unit_cost"]
 
-    grouped["stock_status"] = grouped.apply(_stock_status_row, axis=1)
+    # No stock status here (Oct 25 2026). The two stock level statuses
+    # (Current and Predicted) are decided in ONE place, the backend's
+    # utils/stockStatus.js, with the owner's thresholds from Settings. This
+    # service returns the amounts (forecasted_need, current_stock, to_buy) and
+    # the backend classifies them; a second copy of the rule here used to
+    # drift from the backend's.
 
     return grouped.drop(columns=["raw_need"])
-
-
-def _stock_status_row(row) -> str:
-    """
-    Critical <50%, Low <100%, Normal 100-200%, Excess >200% of
-    tomorrow's forecasted demand — the thresholds from the finalized
-    Inventory Management module.
-    """
-    if row["forecasted_need"] == 0:
-        return "No Forecast"
-    ratio = row["current_stock"] / row["forecasted_need"]
-    if ratio < 0.5:
-        return "Critical"
-    elif ratio < 1.0:
-        return "Low"
-    elif ratio <= 2.0:
-        return "Normal"
-    else:
-        return "Excess"
 
 
 def estimate_cogs(predicted_quantity: float, product_id: int, recipe_df: pd.DataFrame) -> float:

@@ -78,10 +78,11 @@ const { runStockRefresh, _waitForEmails, _resetEmailState } = notificationServic
 
 // The Ingredient Management page's rule as it was before Oct 17 (copied
 // from controllers/inventoryController.js). The shared helper must answer
-// exactly the same label for every case.
+// exactly the same label for every case. One deliberate change (Oct 25):
+// stock below 0 is out of stock too, forecast or not.
 function oldPageStatus(item, need) {
   if (item.is_archived) return 'Archived';
-  if ((Number(item.quantity) || 0) === 0) return 'Critical Stock';
+  if ((Number(item.quantity) || 0) <= 0) return 'Critical Stock';
   const status = analyticsService.computeStockStatus(Number(item.quantity) || 0, need || 0);
   return status === 'No Forecast' ? 'No Forecast' : `${status} Stock`;
 }
@@ -106,9 +107,9 @@ test('parity: classifyStock().pageLabel === the old Ingredient Management status
   assert.ok(cases > 200);
 });
 
-test('alert groups: out, Critical, Low alert; Normal/Excess do not; No Forecast keeps min_stock', () => {
-  const group = (quantity, need, minStock = 0) => stock.alertGroupOf(
-    stock.classifyStock({ quantity, need }), { quantity, minStock },
+test('alert groups: out, Critical, Low alert; Normal/Excess do not; No Forecast uses the Current Stock Level Status', () => {
+  const group = (quantity, need, minStock = 0, materialType = 'dry') => stock.alertGroupOf(
+    stock.classifyStock({ quantity, need }), { quantity, minStock, materialType },
   );
   assert.equal(group(0, 10), 'out');
   assert.equal(group(0, 0), 'out', 'out of stock with no forecast still alerts');
@@ -116,9 +117,13 @@ test('alert groups: out, Critical, Low alert; Normal/Excess do not; No Forecast 
   assert.equal(group(9, 10), 'low');
   assert.equal(group(10, 10), null, 'Normal');
   assert.equal(group(25, 10), null, 'Excess');
-  assert.equal(group(3, 0, 5), 'low', 'No Forecast + quantity <= min_stock');
-  assert.equal(group(6, 0, 5), null, 'No Forecast above min_stock');
-  assert.equal(group(3, 0, 0), null, 'No Forecast, min_stock 0');
+  // No forecast: Low Stock (below 20% dry / 50% wet of the ideal level) alerts.
+  assert.equal(group(0.5, 0, 5), 'low', 'No Forecast, dry, 10% of ideal -> Low Stock');
+  assert.equal(group(1, 0, 5), null, 'No Forecast, dry, exactly 20% -> Normal Stock');
+  assert.equal(group(3, 0, 5), null, 'No Forecast, dry, 60% -> Normal Stock (the old min_stock rule alerted here)');
+  assert.equal(group(2, 0, 5, 'wet'), 'low', 'No Forecast, wet, 40% < 50% -> Low Stock');
+  assert.equal(group(6, 0, 5), null, 'No Forecast, Excess Stock');
+  assert.equal(group(3, 0, 0), null, 'No Forecast, no ideal level set');
   assert.equal(group(0.4, 1, 0), 'critical', 'Critical with min_stock 0 now alerts (the old rule missed it)');
 });
 
@@ -160,9 +165,10 @@ test('list: groups in order Out of stock, Critical, Low; est. cost desc inside a
   assert.equal(sum.totalEstCost, 190 + 900 + 18 + 50 + 1);
 });
 
-test('list: "used in" = up to 3 products that use the most; No Forecast rows use the min_stock rule', () => {
+test('list: "used in" = up to 3 products that use the most; No Forecast rows use the current stock rule', () => {
   const items = stock.buildRestockItems({
-    ingredients: [ing(1, 'Rice', 8), ing(2, 'Salt', 1, { min_stock: 3 })],
+    // Salt: 0.5 of ideal 3 kg = 16.7% < 20% (dry) -> Low Stock.
+    ingredients: [ing(1, 'Rice', 8), ing(2, 'Salt', 0.5, { min_stock: 3 }), ing(3, 'Pepper', 1, { min_stock: 3 })],
     needs: new Map([[1, needOf(32, [[11, 2], [12, 20], [13, 5], [14, 5.5]])]]),
     productNames: new Map([[11, 'Hotsilog'], [12, 'Tapsilog'], [13, 'Porksilog'], [14, 'Longsilog']]),
   });
@@ -173,6 +179,7 @@ test('list: "used in" = up to 3 products that use the most; No Forecast rows use
   assert.equal(salt.need, null);
   assert.equal(salt.toBuy, null);
   assert.equal(salt.coveragePct, null);
+  assert.equal(items.find((i) => i.name === 'Pepper'), undefined, 'Pepper: 1 of 3 = 33% -> Normal Stock, no alert');
 });
 
 // ---------------------------------------------------------------- email
@@ -231,14 +238,14 @@ test('email: "No price yet", and a caveat that counts the items without a price'
   assert.match(email.html, /Costs use the latest market prices; 1 item has no price yet\./);
 });
 
-test('email: No Forecast (min_stock) rows say "Have X, minimum Y" and have no bar', () => {
+test('email: No Forecast (current stock rule) rows say "Have X, ideal stock level Y" and have no bar', () => {
   const email = buildRestockEmail(listOf([
-    item({ name: 'Salt', group: 'low', status: 'Low', rule: 'min_stock', stock: 1, need: null, minStock: 3, toBuy: null, coveragePct: null, price: 20, estCost: null, usedIn: [] }),
+    item({ name: 'Salt', group: 'low', status: 'Low', rule: 'min_stock', stock: 0.5, need: null, minStock: 3, toBuy: null, coveragePct: null, price: 20, estCost: null, usedIn: [] }),
   ]));
-  assert.match(email.html, /Have 1 kg, minimum 3 kg/);
+  assert.match(email.html, /Have 0\.5 kg, ideal stock level 3 kg/);
   assert.match(email.html, />Restock</);
   assert.doesNotMatch(email.html, /height:6px/, 'no bar');
-  assert.match(email.text, /- Salt: Restock\. Have 1 kg, minimum 3 kg\. —/);
+  assert.match(email.text, /- Salt: Restock\. Have 0\.5 kg, ideal stock level 3 kg\. —/);
 });
 
 test('email: every value is escaped (an ingredient named <b>Salt</b>)', () => {
@@ -286,7 +293,7 @@ function seedWorld({ riceQty = 8, eggQty = 50, users = [{ id: 7 }], forecastRan 
   const ingredients = [
     ingredientRow(1, 'Rice', riceQty),
     ingredientRow(2, 'Egg', eggQty, 'pcs'),
-    ingredientRow(3, 'Salt', 1, 'kg', 3), // no recipe -> No Forecast, below min_stock
+    ingredientRow(3, 'Salt', 0.5, 'kg', 3), // no recipe -> No Forecast; 0.5 of ideal 3 = 16.7% < 20% -> Low Stock
   ];
   // Product 11 (Tapsilog): 0.2 kg rice + 1 egg per plate; 100 plates forecast,
   // 15% buffer -> rice need 23, egg need 115.
@@ -337,7 +344,7 @@ test('refresh: bell alerts per ingredient (not emailed) + one summary with the l
   const out = await refresh(NOW);
   setEmail(false);
 
-  // Rice 8 / 23 = 0.35 -> Critical. Egg 50 / 115 = 0.43 -> Critical. Salt: min_stock rule -> Low.
+  // Rice 8 / 23 = 0.35 -> Critical. Egg 50 / 115 = 0.43 -> Critical. Salt: no forecast, Low Stock -> Low.
   assert.deepEqual(stockAlerts().map((n) => n.metadata.key).sort(), ['critical_1', 'critical_2', 'low_3']);
   assert.equal(summaries().length, 1);
   const md = summaries()[0].metadata;

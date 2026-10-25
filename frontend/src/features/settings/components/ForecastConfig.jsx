@@ -12,6 +12,7 @@ import { setUnitMetadata } from '../../../utils/recipeUnits';
 import './ForecastConfig.css';
 import '../../inventory/pages/Inventory.css';
 import { buildPageItems, ELLIPSIS } from '../../../utils/pagination';
+import STOCK_RULES from '../../../../../shared/stockStatusRules.json' with { type: 'json' };
 
 const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:5000/api';
 
@@ -19,6 +20,20 @@ const NAME_LABELS = {
   category: 'Category',
   unit: 'Unit',
 };
+
+// Stock level thresholds: defaults and limits come from the same file the
+// backend uses (shared/stockStatusRules.json); the backend validates again.
+const DEFAULT_THRESHOLDS = STOCK_RULES.defaults;
+const THRESHOLD_LIMITS = STOCK_RULES.limits;
+const CURRENT_THRESHOLD_FIELDS = [
+  ['current_low_wet_pct', 'Wet raw materials', 'Fast turnover, 1–2 days shelf life'],
+  ['current_low_dry_pct', 'Dry raw materials', 'Slow turnover, 1–4 weeks shelf life'],
+];
+const PREDICTED_THRESHOLD_FIELDS = [
+  ['predicted_critical_pct', 'Critical Shortage below', 'critical'],
+  ['predicted_sufficient_pct', 'Sufficient Supply from', 'normal'],
+  ['predicted_above_pct', 'Above Forecast Limit above', 'excess'],
+];
 
 // A new unit must say what kind it is so recipe costing can convert it.
 const EMPTY_UNIT_FORM = { family: '', baseFactor: '', isPiece: false, pieceWeight: '', aliases: '' };
@@ -28,7 +43,9 @@ function ForecastConfig() {
   const [value, setValue] = useState(15);
   const [foodCostThreshold, setFoodCostThreshold] = useState(35);
   const [isSavingConfig, setIsSavingConfig] = useState(false);
-  const [thresholds, setThresholds] = useState({ critical: 50, low: 100, excess: 200 });
+  const [thresholds, setThresholds] = useState(DEFAULT_THRESHOLDS);
+  const [thresholdsSaved, setThresholdsSaved] = useState(true);
+  const [isSavingThresholds, setIsSavingThresholds] = useState(false);
   const [categoryTab, setCategoryTab] = useState('ingredient');
   const [unitTab, setUnitTab] = useState('ingredient');
   const [categoryData, setCategoryData] = useState({ ingredient: [], product: [] });
@@ -89,6 +106,12 @@ function ForecastConfig() {
         const config = response.data.data;
         if (config.safety_buffer_percentage != null) setValue(config.safety_buffer_percentage);
         if (config.food_cost_warning_threshold != null) setFoodCostThreshold(config.food_cost_warning_threshold);
+        const loaded = {};
+        for (const key of Object.keys(DEFAULT_THRESHOLDS)) {
+          loaded[key] = config[key] != null ? Number(config[key]) : DEFAULT_THRESHOLDS[key];
+        }
+        setThresholds(loaded);
+        setThresholdsSaved(config.stock_thresholds_saved !== false);
       }
     } catch (error) {
       console.error('Error fetching forecast config:', error);
@@ -121,8 +144,48 @@ function ForecastConfig() {
     }
   };
 
-  const handleSaveThresholds = () => {
-    toast('This feature is not yet implemented.');
+  // Quick check before sending, so the owner sees the problem at once. The
+  // backend checks the same rules (utils/stockStatus.js validateThresholds).
+  const thresholdProblem = (values) => {
+    for (const [key, { min, max }] of Object.entries(THRESHOLD_LIMITS)) {
+      const value = Number(values[key]);
+      if (!Number.isFinite(value) || value < min || value > max) {
+        return `Each threshold must be a number from ${min} to ${max}.`;
+      }
+    }
+    if (!(values.predicted_critical_pct < values.predicted_sufficient_pct)) {
+      return 'Critical Shortage must be lower than Sufficient Supply.';
+    }
+    if (!(values.predicted_sufficient_pct < values.predicted_above_pct)) {
+      return 'Sufficient Supply must be lower than Above Forecast Limit.';
+    }
+    return null;
+  };
+
+  const handleSaveThresholds = async () => {
+    const problem = thresholdProblem(thresholds);
+    if (problem) {
+      toast.error(problem);
+      return;
+    }
+    setIsSavingThresholds(true);
+    try {
+      const response = await apiClient.post('/settings/forecast-config', { ...thresholds });
+      if (response.data.success) {
+        setThresholdsSaved(true);
+        toast.success('Stock level thresholds saved. Stock statuses now use the new values.');
+      } else {
+        toast.error(response.data.error || 'Failed to save stock level thresholds.');
+      }
+    } catch (error) {
+      toast.error(error.response?.data?.error || 'Failed to save stock level thresholds.');
+    } finally {
+      setIsSavingThresholds(false);
+    }
+  };
+
+  const setThreshold = (key, raw) => {
+    setThresholds((current) => ({ ...current, [key]: raw === '' ? '' : Number(raw) }));
   };
 
   const openManagementDialog = (type, mode, item = '') => {
@@ -448,23 +511,17 @@ function ForecastConfig() {
             <Tippy
               content={(
                 <div className="fc-tooltip-content fc-threshold-tooltip">
-                   <section>
-                    <strong>Low Threshold</strong>
-                    <p>Stock is insufficient to cover tomorrow's demand. Proactive alert — order soon before you run out during the day.</p>
-                    <p><strong>Higher value (e.g., 120%):</strong> Earlier alerts, more restock time<br /><strong>Lower value (e.g., 80%):</strong> Fewer alerts, higher stockout risk</p>
-                    <p><strong>Default:</strong> 100%<br /><strong>Recommended:</strong> 90–110%</p>
+                  <section>
+                    <strong>Current Stock Level Status (real time)</strong>
+                    <p>Stock % = current stock ÷ ideal stock level × 100.</p>
+                    <p>Out of Stock: stock is 0. Low Stock: below the low threshold. Normal Stock: from the low threshold up to 100%. Excess Stock: above 100%.</p>
+                    <p>Wet raw materials spoil in 1–2 days, so they need a higher low threshold (default 50%) than dry raw materials (default 20%).</p>
                   </section>
                   <section>
-                    <strong>Critical Threshold</strong>
-                    <p>Stock is severely insufficient — cannot even cover half of tomorrow's demand. Emergency — you will run out soon.</p>
-                    <p><strong>Higher value (e.g., 60%):</strong> Safer, more alerts<br /><strong>Lower value (e.g., 40%):</strong> Fewer alerts, higher stockout risk</p>
-                    <p><strong>Default:</strong> 50%<br /><strong>Recommended:</strong> 40–60%</p>
-                  </section>
-                  <section>
-                    <strong>Excess Threshold</strong>
-                    <p>Stock is more than double tomorrow's demand — you may have over-purchased. Consider delaying restocking to avoid waste and excess inventory costs.</p>
-                    <p><strong>Higher value (e.g., 250%):</strong> Accept higher inventory levels<br /><strong>Lower value (e.g., 150%):</strong> Tighter control, earlier alerts</p>
-                    <p><strong>Default:</strong> 200%<br /><strong>Recommended:</strong> 150–250%</p>
+                    <strong>Predicted Stock Level Status (after each forecast)</strong>
+                    <p>Coverage % = current stock ÷ forecasted demand × 100.</p>
+                    <p>Critical Shortage → Order now. Insufficient Supply → Order soon. Sufficient Supply → No action needed. Above Forecast Limit → Delay restocking.</p>
+                    <p><strong>Defaults:</strong> Critical below 50%, Sufficient from 100%, Above Forecast Limit above 200%.</p>
                   </section>
                 </div>
               )}
@@ -485,27 +542,62 @@ function ForecastConfig() {
               </button>
             </Tippy>
           </div>
-          <div className="fc-desc-card"><strong>Description:</strong> These thresholds determine stock status by comparing current stock against tomorrow's forecasted demand.</div>
+          <div className="fc-desc-card">
+            <strong>Current Stock Level Status:</strong> compares the stock on hand with each ingredient&apos;s ideal stock level. An ingredient is <strong>Low Stock</strong> below this percentage.
+          </div>
           <div className="fc-threshold-list">
-            {[
-              ['critical', 'Critical Threshold:', 'Stock < 50% of demand', 'Critical (Order now)'],
-              ['low', 'Low Threshold:', 'Stock < 100% of demand', 'Low (Order soon)'],
-              ['excess', 'Excess Threshold:', 'Stock > 200% of demand', 'Excess (Delay restocking)']
-            ].map(([key, label, description, status]) => (
+            {CURRENT_THRESHOLD_FIELDS.map(([key, label, note]) => (
               <label className="fc-threshold-row" key={key}>
                 <input
                   type="number"
-                  min="0"
+                  min={THRESHOLD_LIMITS[key].min}
+                  max={THRESHOLD_LIMITS[key].max}
                   step="1"
                   value={thresholds[key]}
-                  onChange={(e) => setThresholds({ ...thresholds, [key]: Number(e.target.value) })}
-                  aria-label={label}
+                  onChange={(e) => setThreshold(key, e.target.value)}
+                  aria-label={`${label} low stock threshold (%)`}
                 />
-                <span><strong>{label}</strong><small>{description} <i className={`fc-status-dot ${key}`}></i>{status}</small></span>
+                <span>
+                  <strong>{label}: Low Stock below {thresholds[key]}%</strong>
+                  <small>Normal Stock from {thresholds[key]}% to 100% · Excess above 100% · {note}</small>
+                </span>
               </label>
             ))}
           </div>
-          <button type="button" className="fc-save" onClick={handleSaveThresholds}>SAVE CONFIGURATION</button>
+          <div className="fc-desc-card" style={{ marginTop: 14 }}>
+            <strong>Predicted Stock Level Status:</strong> after each forecast, compares the stock on hand with the forecasted demand.
+          </div>
+          <div className="fc-threshold-list">
+            {PREDICTED_THRESHOLD_FIELDS.map(([key, label, dot]) => (
+              <label className="fc-threshold-row" key={key}>
+                <input
+                  type="number"
+                  min={THRESHOLD_LIMITS[key].min}
+                  max={THRESHOLD_LIMITS[key].max}
+                  step="1"
+                  value={thresholds[key]}
+                  onChange={(e) => setThreshold(key, e.target.value)}
+                  aria-label={`${label} (% of forecasted demand)`}
+                />
+                <span>
+                  <strong><i className={`fc-status-dot ${dot}`}></i>{label} {thresholds[key]}% of demand</strong>
+                  <small>
+                    {key === 'predicted_critical_pct' && 'Order now — emergency shortage'}
+                    {key === 'predicted_sufficient_pct' && `Insufficient Supply (order soon) from ${thresholds.predicted_critical_pct}% up to here; Sufficient Supply (no action) from here`}
+                    {key === 'predicted_above_pct' && 'Delay restocking — overstock detected'}
+                  </small>
+                </span>
+              </label>
+            ))}
+          </div>
+          {!thresholdsSaved && (
+            <p className="fc-subtitle" role="status" style={{ marginTop: 10 }}>
+              Showing the default thresholds. They can be saved once the database update (migration 021) has been run.
+            </p>
+          )}
+          <button type="button" className="fc-save" onClick={handleSaveThresholds} disabled={isSavingThresholds}>
+            {isSavingThresholds ? 'SAVING…' : 'SAVE CONFIGURATION'}
+          </button>
         </div>
 
         {renderManagementCard('category', 'Category', 'Used for Product Management and  inventory Management ', categoryTab, setCategoryTab, categoryData, 'Category', [['ingredient', 'Ingredient Management'], ['product', 'Product Management']], null)}

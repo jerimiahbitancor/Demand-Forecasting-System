@@ -21,17 +21,18 @@ dayjs.extend(utc);
 dayjs.extend(timezone);
 const PH_TZ = 'Asia/Manila';
 const { convertRecipeQuantity, parseRecipeQuantity, isMissingColumnError, toBuyQuantity } = require('../utils/recipeUnits');
+const { legacyPredictedLabel, DEFAULT_STOCK_THRESHOLDS } = require('../utils/stockStatus');
+const { getStockThresholds } = require('./stockThresholdService');
 
-// Critical <50%, Low <100%, Normal 100-200%, Excess >200% of forecasted
-// demand — locked thresholds, matches ml-service/services/business_logic.py's
-// _stock_status_row() exactly. Keep these two in sync if either changes.
-function computeStockStatus(onStock, forecastedNeed) {
-  if (!forecastedNeed || forecastedNeed <= 0) return 'No Forecast';
-  const ratio = onStock / forecastedNeed;
-  if (ratio < 0.5) return 'Critical';
-  if (ratio < 1.0) return 'Low';
-  if (ratio <= 2.0) return 'Normal';
-  return 'Excess';
+// The PREDICTED STOCK LEVEL STATUS (stock vs forecasted demand), in the
+// short wording the dashboard, grocery lists and Product Performance still
+// use: Critical = Critical Shortage, Low = Insufficient Supply, Normal =
+// Sufficient Supply, Excess = Above Forecast Limit, No Forecast = Unassigned.
+// The rule and the numbers are utils/stockStatus.js (one place); callers
+// pass the owner's thresholds from getStockThresholds(). Defaults: <50%,
+// <100%, 100-200%, >200%.
+function computeStockStatus(onStock, forecastedNeed, thresholds = DEFAULT_STOCK_THRESHOLDS) {
+  return legacyPredictedLabel(onStock, forecastedNeed, thresholds);
 }
 
 // Worse-status-wins ranking, used to find a product's "bottleneck"
@@ -51,11 +52,11 @@ function worseStockStatus(a, b) {
 //   status      = computeStockStatus(stock, weekly need); Critical + Low only
 //   toBuy       = toBuyQuantity(weekly need, stock, unit) (count units round up)
 //   estCost     = toBuy × latest market price, null without a price
-function buildWeeklyGroceryList(rows = [], priceOf = () => null) {
+function buildWeeklyGroceryList(rows = [], priceOf = () => null, thresholds = DEFAULT_STOCK_THRESHOLDS) {
   const all = rows
     .map((row) => {
       const weeklyNeed = (row.values || []).reduce((sum, v) => sum + (Number(v) || 0), 0);
-      const status = computeStockStatus(row.currentStock, weeklyNeed);
+      const status = computeStockStatus(row.currentStock, weeklyNeed, thresholds);
       const toBuy = toBuyQuantity(weeklyNeed, row.currentStock, row.unit);
       const marketPrice = priceOf(row.ingredientId) ?? null;
       return {
@@ -846,6 +847,7 @@ async function getProductPerformanceAnalytics({ from, to, demandFrom, demandTo }
     ratioFrom = from || fallback.from;
     ratioTo = to || fallback.to;
   }
+  const stockThresholds = await getStockThresholds();
   const safetyBufferPct = await getSafetyBufferPercentage();
   const bufferMultiplier = 1 + safetyBufferPct / 100;
 
@@ -909,7 +911,7 @@ async function getProductPerformanceAnalytics({ from, to, demandFrom, demandTo }
       let bottleneckIngredient = null;
       for (const item of recipeItems) {
         const need = Number(f.predicted_quantity) * item.qtyPerServing * bufferMultiplier;
-        const status = computeStockStatus(item.currentStock, need);
+        const status = computeStockStatus(item.currentStock, need, stockThresholds);
         if (bottleneckStatus === null || worseStockStatus(status, bottleneckStatus) === status) {
           bottleneckStatus = status;
           bottleneckIngredient = item.name;
@@ -1185,6 +1187,7 @@ async function getMappedIngredientIds() {
 }
 
 async function getIngredientDemandAnalytics({ date, weekStart } = {}) {
+  const stockThresholds = await getStockThresholds();
   const safetyBufferPct = await getSafetyBufferPercentage();
   const bufferMultiplier = 1 + safetyBufferPct / 100;
   let targetDate = date || defaultDateRange().today;
@@ -1297,7 +1300,7 @@ async function getIngredientDemandAnalytics({ date, weekStart } = {}) {
   const dailyIngredients = Array.from(dailyByIngredient.values())
     .map((entry) => {
       const marketPrice = marketPriceMap.get(entry.ingredientId)?.price ?? null;
-      const status = computeStockStatus(entry.currentStock, entry.forecastedNeed);
+      const status = computeStockStatus(entry.currentStock, entry.forecastedNeed, stockThresholds);
       // Count units round UP (utils/recipeUnits.js toBuyQuantity); est.
       // cost is for what is actually bought.
       const toBuy = toBuyQuantity(entry.forecastedNeed, entry.currentStock, entry.unit);
@@ -1342,6 +1345,7 @@ async function getIngredientDemandAnalytics({ date, weekStart } = {}) {
       };
     }),
     (ingredientId) => marketPriceMap.get(ingredientId)?.price ?? null,
+    stockThresholds,
   );
 
   // Lets the page say WHY a table is empty: no forecast vs. no recipe.
@@ -1433,10 +1437,10 @@ async function getForecastSummary() {
   // across every product that uses it (sumIngredientNeeds). The old code
   // judged each product-ingredient pair on its own and kept the worst, so
   // two "Low" dishes sharing rice never added up to "Critical".
-  const recipeMap = await getRecipeMap();
+  const [recipeMap, stockThresholds] = await Promise.all([getRecipeMap(), getStockThresholds()]);
   const stockCounts = { Critical: 0, Low: 0, Normal: 0, Excess: 0 };
   for (const { item, need } of sumIngredientNeeds(todayForecasts, recipeMap, bufferMultiplier).values()) {
-    const status = computeStockStatus(item.currentStock, need);
+    const status = computeStockStatus(item.currentStock, need, stockThresholds);
     if (stockCounts[status] !== undefined) stockCounts[status] += 1;
   }
 
