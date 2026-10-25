@@ -769,7 +769,7 @@ const IngredientManagement = () => {
         </span>
       );
     }
-    return <span className="market-price-empty">—</span>;
+    return null;
   };
 
   const handleSort = (field) => {
@@ -1115,10 +1115,7 @@ const IngredientManagement = () => {
                   <th className="sortable" onClick={() => handleSort('quantity')}>
                     Current Stock {sortField === 'quantity' && (sortDirection === 'asc' ? <FaSortAmountUp /> : <FaSortAmountDown />)}
                   </th>
-                  <th title="How many pieces or grams one purchase pack holds (e.g. 30 pcs for a tray of eggs, 250 g for a bag).">
-                    Pack
-                  </th>
-                  <th className="sortable" onClick={() => handleSort('price')}>
+                  <th className="sortable ingredient-cost-heading" onClick={() => handleSort('price')}>
                     Unit Cost {sortField === 'price' && (sortDirection === 'asc' ? <FaSortAmountUp /> : <FaSortAmountDown />)}
                   </th>
                   <th title="Average of the latest recorded price across all market price sources (Robinson's, SM, Puregold, Wet Market, DA Reference).">Avg Market Price</th>
@@ -1225,10 +1222,12 @@ const IngredientManagement = () => {
                           </div>
                         )}
                       </td>
-                      <td data-label="Pack" className="ingredient-pack-cell">
-                        {packBadgeFor(item)}
+                      <td data-label="Unit Cost" className="ingredient-cost-cell">
+                        <div className="ingredient-cost-stack">
+                          {packBadgeFor(item)}
+                          <span>{formatCurrency(item.price)}/{item.unit || 'pcs'}</span>
+                        </div>
                       </td>
-                      <td data-label="Unit Cost">{formatCurrency(item.price)}/{item.unit || 'pcs'}</td>
                       <td data-label="Avg Market Price">
                         {item.avg_market_price !== null && item.avg_market_price !== undefined
                           ? formatCurrency(item.avg_market_price)
