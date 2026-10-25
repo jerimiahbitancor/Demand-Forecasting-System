@@ -28,9 +28,10 @@ const day = (v) => (v == null ? v : String(v).slice(0, 10));
 // the live database. A select naming one fails like Postgres does (42703),
 // so code still asking for them fails in tests too, not only in production
 // (Oct 24 2026: every sales upload broke this way while the tests passed).
-// options.droppedColumns overrides the list.
+// pack_price is not here: migration 023 added it back for purchase-pack
+// pricing. options.droppedColumns overrides the list.
 const DROPPED_COLUMNS = Object.freeze([
-  'pack_qty', 'pack_unit', 'pack_price', 'pack_size', 'grams_per_cup', 'density_g_per_ml',
+  'pack_qty', 'pack_unit', 'pack_size', 'grams_per_cup', 'density_g_per_ml',
 ]);
 
 function createFakeSupabase(seed = {}, options = {}) {

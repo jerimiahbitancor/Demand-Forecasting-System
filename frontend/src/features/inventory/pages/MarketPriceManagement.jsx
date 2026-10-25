@@ -48,6 +48,7 @@ import InventoryModal from '../components/InventoryModal';
 import MarketPriceModal from '../components/market modal/MarketPriceModal';
 import Swal from '../../../utils/swal';
 import { buildPageItems, ELLIPSIS } from '../../../utils/pagination';
+import { peso } from "../../../utils/formatNumber.js";
 
 const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:5000/api';
 
@@ -145,7 +146,7 @@ const LINE_PALETTE = [
 
 const formatCurrency = (amount) => {
   if (amount === undefined || amount === null) return '₱ 0.00';
-  return `₱ ${parseFloat(amount).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+  return peso(amount, { space: true });
 };
 
 // Client-side summary computation (used as a fallback; the server returns a

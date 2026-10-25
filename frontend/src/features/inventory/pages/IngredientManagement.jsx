@@ -25,6 +25,7 @@ import toast from 'react-hot-toast';
 import { useAuth } from "../../../context/AuthContext";
 import { canonicalUnitName, parseRecipeQuantity, RECIPE_EXTRA_UNITS, setUnitMetadata } from "../../../utils/recipeUnits";
 import { formatStockQty } from "../../../utils/formatStockQty.js";
+import { packQuantityKind, pricePerUnitFromPack } from "../../../utils/ingredientPackPrice";
 import Tippy from '@tippyjs/react';
 import 'tippy.js/dist/tippy.css';
 import 'tippy.js/animations/scale.css';
@@ -36,6 +37,7 @@ import RestockModal from '../components/ingredients modal/RestockModal';
 import HistoryModal from '../components/ingredients modal/HistoryModal';
 import ArchiveModal from '../components/ingredients modal/ArchiveModal';
 import { buildPageItems, ELLIPSIS } from "../../../utils/pagination";
+import { peso } from "../../../utils/formatNumber.js";
 
 const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:5000/api';
 
@@ -102,7 +104,10 @@ const IngredientManagement = () => {
     batch: '',
     min_stock: '',
     market_price: '',
-    material_type: 'dry'
+    material_type: 'dry',
+    pieces_per_pack: '',
+    grams_per_pack: '',
+    pack_price: ''
   });
 
   const [restockData, setRestockData] = useState({
@@ -334,11 +339,17 @@ const IngredientManagement = () => {
   // that happened while the window was open. The stock is set in the Current
   // Stock column of the list or with Add Stock.
   const buildItemPayload = ({ includeQuantity = true } = {}) => {
+    const piecesPerPack = String(formData.pieces_per_pack ?? '').trim();
+    const gramsPerPack = String(formData.grams_per_pack ?? '').trim();
+    const packPrice = String(formData.pack_price ?? '').trim();
     const payload = {
       ...formData,
       price: parseFloat(formData.price),
       market_price: parseFloat(formData.market_price) || 0,
-      min_stock: parseRecipeQuantity(formData.min_stock) || 0
+      min_stock: parseRecipeQuantity(formData.min_stock) || 0,
+      pieces_per_pack: piecesPerPack === '' ? null : parseRecipeQuantity(piecesPerPack),
+      grams_per_pack: gramsPerPack === '' ? null : parseRecipeQuantity(gramsPerPack),
+      pack_price: packPrice === '' ? null : parseRecipeQuantity(packPrice)
     };
     if (includeQuantity) payload.quantity = parseRecipeQuantity(formData.quantity);
     else delete payload.quantity;
@@ -602,18 +613,41 @@ const IngredientManagement = () => {
     } else if (!Number.isFinite(parseRecipeQuantity(formData.quantity)) || parseRecipeQuantity(formData.quantity) < 0) {
       errors.quantity = 'Quantity must be a valid number';
     }
-    // Ideal stock level: the 100% of the Current Stock Level Status. Without
-    // it there is nothing to take a percentage of, so it is required.
-    const idealLevel = parseRecipeQuantity(formData.min_stock);
-    if (formData.min_stock === undefined || formData.min_stock === null || String(formData.min_stock).trim() === '') {
-      errors.min_stock = 'Ideal stock level is required';
-    } else if (!Number.isFinite(idealLevel) || idealLevel <= 0) {
-      errors.min_stock = 'Ideal stock level must be greater than 0';
-    }
     if (!formData.price || formData.price === '') {
       errors.price = 'Price is required';
     } else if (!Number.isFinite(Number(formData.price)) || Number(formData.price) <= 0) {
       errors.price = 'Price must be greater than 0';
+    }
+    const piecesPerPack = String(formData.pieces_per_pack ?? '').trim();
+    const gramsPerPack = String(formData.grams_per_pack ?? '').trim();
+    const packPrice = String(formData.pack_price ?? '').trim();
+    const packKind = packQuantityKind(formData.unit);
+    if (packKind === 'pieces' && piecesPerPack !== '') {
+      const parsedPiecesPerPack = parseRecipeQuantity(piecesPerPack);
+      if (!Number.isFinite(parsedPiecesPerPack) || parsedPiecesPerPack <= 0) {
+        errors.pieces_per_pack = 'Pieces per pack must be a valid number greater than 0';
+      }
+    }
+    if (packKind === 'grams' && gramsPerPack !== '') {
+      const parsedGramsPerPack = parseRecipeQuantity(gramsPerPack);
+      if (!Number.isFinite(parsedGramsPerPack) || parsedGramsPerPack <= 0) {
+        errors.grams_per_pack = 'Grams per pack must be a valid number greater than 0';
+      }
+    }
+    if (packKind !== null && packPrice !== '') {
+      const parsedPackPrice = parseRecipeQuantity(packPrice);
+      if (!Number.isFinite(parsedPackPrice) || parsedPackPrice <= 0) {
+        errors.pack_price = 'Pack price must be a valid number greater than 0';
+      } else {
+        const hasPackQuantity = packKind === 'grams' ? gramsPerPack !== '' : piecesPerPack !== '';
+        if (!hasPackQuantity) {
+          if (packKind === 'grams') {
+            errors.grams_per_pack = 'Enter grams per pack to compute the cost per unit';
+          } else {
+            errors.pieces_per_pack = 'Enter pieces per pack to compute the cost per unit';
+          }
+        }
+      }
     }
 
     setFormErrors(errors);
@@ -630,23 +664,46 @@ const IngredientManagement = () => {
       batch: '',
       min_stock: '',
       market_price: '',
-      material_type: 'dry'
+      material_type: 'dry',
+      pieces_per_pack: '',
+      grams_per_pack: '',
+      pack_price: ''
     });
     setFormErrors({});
   };
 
   const openEditModal = (item) => {
     setSelectedItem(item);
+    const unit = canonicalUnitName(item.unit) || 'Kilograms (kg)';
+    const packKind = packQuantityKind(unit);
+    const piecesPerPack = packKind === 'pieces' && item.pieces_per_pack !== null && item.pieces_per_pack !== undefined
+      ? item.pieces_per_pack.toString()
+      : '';
+    const gramsPerPack = packKind === 'grams' && item.grams_per_pack !== null && item.grams_per_pack !== undefined
+      ? item.grams_per_pack.toString()
+      : '';
+    const packPrice = packKind !== null && item.pack_price !== null && item.pack_price !== undefined
+      ? item.pack_price.toString()
+      : '';
+    const derivedPrice = pricePerUnitFromPack({
+      unit,
+      pieces_per_pack: piecesPerPack,
+      grams_per_pack: gramsPerPack,
+      pack_price: packPrice,
+    });
     setFormData({
       name: item.name || '',
       category: item.category || '',
-      unit: canonicalUnitName(item.unit) || 'Kilograms (kg)',
+      unit,
       quantity: item.quantity?.toString() || '',
-      price: item.price?.toString() || '',
+      price: derivedPrice !== null ? String(derivedPrice) : item.price?.toString() || '',
       batch: item.batch || '',
       min_stock: item.min_stock?.toString() || '',
       market_price: item.market_price?.toString() || '',
-      material_type: item.material_type || 'dry'
+      material_type: item.material_type || 'dry',
+      pieces_per_pack: piecesPerPack,
+      grams_per_pack: gramsPerPack,
+      pack_price: packPrice
     });
     setIsEditModalOpen(true);
   };
@@ -689,7 +746,31 @@ const IngredientManagement = () => {
 
   const formatCurrency = (amount) => {
     if (amount === undefined || amount === null) return '₱ 0.00';
-    return `₱ ${parseFloat(amount).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+    return peso(amount, { space: true });
+  };
+
+  const packBadgeFor = (item) => {
+    const kind = packQuantityKind(item.unit);
+    const packPrice = Number(item.pack_price) > 0
+      ? ` Pack price: ${formatCurrency(item.pack_price)}.`
+      : '';
+    if (kind === 'pieces' && Number(item.pieces_per_pack) > 0) {
+      const pieces = formatStockQty(item.pieces_per_pack, 'Pieces (pcs)');
+      return (
+        <span className="ingredient-pack-badge" title={`One pack holds ${pieces} pieces.${packPrice}`}>
+          {pieces} pcs/pack
+        </span>
+      );
+    }
+    if (kind === 'grams' && Number(item.grams_per_pack) > 0) {
+      const grams = formatStockQty(item.grams_per_pack, 'Grams (g)');
+      return (
+        <span className="ingredient-pack-badge" title={`One pack weighs ${grams} g.${packPrice}`}>
+          {grams} g/pack
+        </span>
+      );
+    }
+    return <span className="market-price-empty">—</span>;
   };
 
   const handleSort = (field) => {
@@ -1035,6 +1116,9 @@ const IngredientManagement = () => {
                   <th className="sortable" onClick={() => handleSort('quantity')}>
                     Current Stock {sortField === 'quantity' && (sortDirection === 'asc' ? <FaSortAmountUp /> : <FaSortAmountDown />)}
                   </th>
+                  <th title="How many pieces or grams one purchase pack holds (e.g. 30 pcs for a tray of eggs, 250 g for a bag).">
+                    Pack
+                  </th>
                   <th className="sortable" onClick={() => handleSort('price')}>
                     Unit Cost {sortField === 'price' && (sortDirection === 'asc' ? <FaSortAmountUp /> : <FaSortAmountDown />)}
                   </th>
@@ -1141,6 +1225,9 @@ const IngredientManagement = () => {
                               : ` from ${Number(item.open_shortfall_sales) || 0} sales`}
                           </div>
                         )}
+                      </td>
+                      <td data-label="Pack" className="ingredient-pack-cell">
+                        {packBadgeFor(item)}
                       </td>
                       <td data-label="Unit Cost">{formatCurrency(item.price)}/{item.unit || 'pcs'}</td>
                       <td data-label="Avg Market Price">

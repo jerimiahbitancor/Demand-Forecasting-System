@@ -1,5 +1,5 @@
-// Tests utils/formatStockQty.js: stock amounts show up to 3 decimals, count
-// units show a whole number when whole (DFS Formulas v3.2).
+// Tests utils/formatStockQty.js: stock amounts show up to 3 decimals and
+// count units display as whole numbers.
 //
 // Plain Node, no test runner:
 //   cd frontend && node tests/formatStockQty.test.mjs
@@ -22,10 +22,11 @@ eq('10.000 g -> 10', formatStockQty('10.000', 'g'), '10');
 eq('11.250 g -> 11.25', formatStockQty('11.250', 'g'), '11.25');
 eq('"Kilograms (kg)" is not a count unit', formatStockQty(1.5, 'Kilograms (kg)'), '1.5');
 eq('36 pcs -> 36', formatStockQty(36, 'pcs'), '36');
-eq('0.5 pcs -> 0.5', formatStockQty(0.5, 'pcs'), '0.5');
+eq('0.5 pcs rounds to a whole count', formatStockQty(0.5, 'pcs'), '1');
 eq('35.99999999 pcs -> 36', formatStockQty(35.99999999, 'pcs'), '36');
-eq('1.23456 pcs -> 1.235', formatStockQty(1.23456, 'pcs'), '1.235');
+eq('1.23456 pcs rounds to a whole count', formatStockQty(1.23456, 'pcs'), '1');
 eq('"Pieces (pcs)" counts as pcs', formatStockQty(12, 'Pieces (pcs)'), '12');
+eq('"Pieces (pcs)" rounds fractional quantities', formatStockQty(12.6, 'Pieces (pcs)'), '13');
 eq('sachets are a count unit', formatStockQty(10, 'sachets'), '10');
 eq('packs are a count unit', formatStockQty(3, 'Packs'), '3');
 eq('unknown unit -> up to 3 decimals', formatStockQty(1.2, 'tali'), '1.2');

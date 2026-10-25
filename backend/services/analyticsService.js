@@ -895,10 +895,47 @@ async function getForecastingAnalytics({ productId, from, to } = {}) {
   const rangeFrom = from || range.from;
   const rangeTo = to || range.to;
 
-  const { data: metricsRows, error: metricsError } = await supabaseAdmin
-    .from('model_metrics')
-    .select('*')
-    .order('evaluation_date', { ascending: true });
+  // SPEED (Oct 26 2026): every read starts now and runs at the same time;
+  // each is awaited where it is used.
+  const salesTo = rangeTo < range.today ? rangeTo : range.today;
+  // A Supabase query runs each time it is awaited: Promise.resolve() turns
+  // each into ONE real promise, so awaiting it twice never reads twice.
+  const metricsP = Promise.resolve(supabaseAdmin.from('model_metrics').select('*').order('evaluation_date', { ascending: true }));
+  const productsP = Promise.resolve((() => {
+    let q = supabaseAdmin.from('products').select('id, name, price, status');
+    if (productId) q = q.eq('id', productId);
+    return q;
+  })());
+  const forecastsP = fetchAllRows(() => {
+    let q = supabaseAdmin
+      .from('forecasts')
+      .select('product_id, forecast_date, predicted_quantity, model_version')
+      .gte('forecast_date', rangeFrom)
+      .lte('forecast_date', rangeTo);
+    if (productId) q = q.eq('product_id', productId);
+    return q.order('forecast_date').order('product_id');
+  });
+  const salesP = fetchAllRows(() => {
+    let q = supabaseAdmin
+      .from('daily_sales')
+      .select('product_id, sale_date, quantity_sold')
+      .gte('sale_date', rangeFrom)
+      .lte('sale_date', salesTo);
+    if (productId) q = q.eq('product_id', productId);
+    return q.order('sale_date').order('product_id');
+  });
+  const recipeMapP = getRecipeMap();
+  const latestRunP = Promise.resolve(supabaseAdmin
+    .from('forecast_runs')
+    .select('run_at, run_type, model_version, last_confirmed_date, stale_days')
+    .order('run_at', { ascending: false })
+    .limit(1)
+    .maybeSingle());
+  const activeCountP = Promise.resolve(supabaseAdmin.from('products').select('id', { count: 'exact', head: true }).eq('status', 'active'));
+  // Settle every one so a failure in one never leaves the others unhandled.
+  await Promise.allSettled([metricsP, productsP, forecastsP, salesP, recipeMapP, latestRunP, activeCountP]);
+
+  const { data: metricsRows, error: metricsError } = await metricsP;
   if (metricsError) throw metricsError;
 
   // Ordered by TRAINING time (from model_version), so two trainings on the
@@ -939,43 +976,17 @@ async function getForecastingAnalytics({ productId, from, to } = {}) {
         .sort((a, b) => b.value - a.value)
     : null;
 
-  let productQuery = supabaseAdmin.from('products').select('id, name, price, status');
-  if (productId) productQuery = productQuery.eq('id', productId);
-  const { data: products, error: productsError } = await productQuery;
+  const { data: products, error: productsError } = await productsP;
   if (productsError) throw productsError;
   const productById = new Map((products || []).map((p) => [p.id, p]));
 
-  // Paged: the default range is 38 days (30 back + 7 forward) and a
-  // forecast row accumulates per product per date, so ~40 products
-  // already puts this over 1,000 rows.
-  const buildForecastQuery = () => {
-    let q = supabaseAdmin
-      .from('forecasts')
-      .select('product_id, forecast_date, predicted_quantity, model_version')
-      .gte('forecast_date', rangeFrom)
-      .lte('forecast_date', rangeTo);
-    if (productId) q = q.eq('product_id', productId);
-    return q.order('forecast_date').order('product_id');
-  };
-  const { data: forecastRows, error: forecastError } = await fetchAllRows(buildForecastQuery);
+  const { data: forecastRows, error: forecastError } = await forecastsP;
   if (forecastError) throw forecastError;
-
-  // Paged: a date range across all products easily passes 1,000 rows.
   // Sales never go past today (today's file is uploaded tomorrow).
-  const salesTo = rangeTo < range.today ? rangeTo : range.today;
-  const buildSalesQuery = () => {
-    let q = supabaseAdmin
-      .from('daily_sales')
-      .select('product_id, sale_date, quantity_sold')
-      .gte('sale_date', rangeFrom)
-      .lte('sale_date', salesTo);
-    if (productId) q = q.eq('product_id', productId);
-    return q.order('sale_date').order('product_id');
-  };
-  const { data: salesRows, error: salesError } = await fetchAllRows(buildSalesQuery);
+  const { data: salesRows, error: salesError } = await salesP;
   if (salesError) throw salesError;
 
-  const recipeMap = await getRecipeMap();
+  const recipeMap = await recipeMapP;
   const cogsPerUnitByProduct = new Map();
   for (const [pid, items] of recipeMap.entries()) {
     cogsPerUnitByProduct.set(pid, cogsPerUnit(items));
@@ -1010,17 +1021,8 @@ async function getForecastingAnalytics({ productId, from, to } = {}) {
   });
   const totals = summarizePredictionTotals(rows);
 
-  const { data: latestRun } = await supabaseAdmin
-    .from('forecast_runs')
-    .select('run_at, run_type, model_version, last_confirmed_date, stale_days')
-    .order('run_at', { ascending: false })
-    .limit(1)
-    .maybeSingle();
-
-  const { count: activeProductsCount } = await supabaseAdmin
-    .from('products')
-    .select('id', { count: 'exact', head: true })
-    .eq('status', 'active');
+  const { data: latestRun } = await latestRunP;
+  const { count: activeProductsCount } = await activeCountP;
 
   return {
     accuracy: {
@@ -1073,15 +1075,58 @@ async function getForecastingAnalytics({ productId, from, to } = {}) {
 // ---------------------------------------------------------------------
 // from/to: both cards (the report uses this). demandFrom/demandTo: the
 // Demand Classification card only (its own date control on the page).
+// Recent enough to hold every forecast product's newest classification.
+const CLASSIFICATION_LOOKBACK_DAYS = 60;
+
+function readRatioSales(fromDate, toDate) {
+  return fetchAllRows(() => supabaseAdmin
+    .from('daily_sales')
+    .select('product_id, sale_date, quantity_sold')
+    .gte('sale_date', fromDate)
+    .lte('sale_date', toDate)
+    .order('sale_date')
+    .order('product_id'));
+}
+
 async function getProductPerformanceAnalytics({ from, to, demandFrom, demandTo } = {}) {
   const range = defaultDateRange();
+  // SPEED (Oct 26 2026): every read that does not depend on another runs at
+  // the same time. Before, ~14 reads ran one after another (> 2 s on Render
+  // + Supabase); now there are three rounds.
+  const needDefaultDay = !from && !to && !demandFrom && !demandTo;
+  const needLatestSale = !from || !to;
+  const classificationSince = dayjs().tz(PH_TZ).subtract(CLASSIFICATION_LOOKBACK_DAYS, 'day').format('YYYY-MM-DD');
+  const readClassifications = (since) => fetchAllRows(() => {
+    let q = supabaseAdmin
+      .from('product_classifications')
+      .select('product_id, classification_date, demand_tier, basis');
+    if (since) q = q.gte('classification_date', since);
+    // Tie-break: two runs on the same date -> the newer row (higher id)
+    // comes first, so the "first row per product wins" loop keeps it.
+    return q.order('classification_date', { ascending: false }).order('id', { ascending: false }).order('product_id');
+  });
+  // Product status reads are the slowest part; start them now, await later.
+  const statusInputsPromise = loadStatusInputs(supabaseAdmin);
+  const [
+    day, latestSaleRes, stockThresholds, safetyBufferPct, productsRes, [recipeMap, modifierShares], recentClassifications,
+  ] = await Promise.all([
+    needDefaultDay ? defaultForecastDay(range.today) : Promise.resolve(null),
+    needLatestSale
+      ? supabaseAdmin.from('daily_sales').select('sale_date').order('sale_date', { ascending: false }).limit(1).maybeSingle()
+      : Promise.resolve({ data: null, error: null }),
+    getStockThresholds(),
+    getSafetyBufferPercentage(),
+    supabaseAdmin.from('products').select('id, name, price, status, first_sold_date, created_at'),
+    Promise.all([getRecipeMap(), loadModifierShares()]),
+    readClassifications(classificationSince),
+  ]);
+
   // Demand Classification defaults to today; on a closed day (no open
   // forecast rows) to the next open forecast date. Any explicit date: as given.
   let rangeFrom = demandFrom || from || range.today;
   let rangeTo = demandTo || demandFrom || to || from || range.today;
   let shiftReason = null;
-  if (!from && !to && !demandFrom && !demandTo) {
-    const day = await defaultForecastDay(range.today);
+  if (day) {
     rangeFrom = day.date;
     rangeTo = day.date;
     shiftReason = day.shiftReason;
@@ -1089,57 +1134,43 @@ async function getProductPerformanceAnalytics({ from, to, demandFrom, demandTo }
   const shiftedFromClosedDay = shiftReason === 'closed';
   // Performance Ratio defaults to the 7 days ending on the newest sale
   // date — today's sales are uploaded tomorrow, so "today" is always empty.
+  if (latestSaleRes.error) throw latestSaleRes.error;
   let ratioFrom = from;
   let ratioTo = to;
-  if (!from || !to) {
-    const { data: latestSale, error: latestSaleError } = await supabaseAdmin
-      .from('daily_sales')
-      .select('sale_date')
-      .order('sale_date', { ascending: false })
-      .limit(1)
-      .maybeSingle();
-    if (latestSaleError) throw latestSaleError;
-    const fallback = defaultRatioRange(latestSale?.sale_date, range.today);
+  if (needLatestSale) {
+    const fallback = defaultRatioRange(latestSaleRes.data?.sale_date, range.today);
     ratioFrom = from || fallback.from;
     ratioTo = to || fallback.to;
   }
-  const stockThresholds = await getStockThresholds();
-  const safetyBufferPct = await getSafetyBufferPercentage();
   const bufferMultiplier = safetyBufferMultiplier(safetyBufferPct);
-
-  const { data: products, error: productsError } = await supabaseAdmin
-    .from('products')
-    .select('id, name, price, status, first_sold_date, created_at');
-  if (productsError) throw productsError;
+  if (productsRes.error) throw productsRes.error;
+  const products = productsRes.data || [];
   const productById = new Map(products.map((p) => [p.id, p]));
 
-  const [recipeMap, modifierShares] = await Promise.all([getRecipeMap(), loadModifierShares()]);
+  // Round 2: the forecasts for the demand dates and the sales for the ratio
+  // dates, together.
+  const [forecastRes, salesRes] = await Promise.all([
+    fetchAllRows(() => supabaseAdmin
+      .from('forecasts')
+      .select('product_id, forecast_date, predicted_quantity, model_version')
+      .gte('forecast_date', rangeFrom)
+      .lte('forecast_date', rangeTo)
+      .order('forecast_date')
+      .order('product_id')),
+    readRatioSales(ratioFrom, ratioTo),
+  ]);
+  if (forecastRes.error) throw forecastRes.error;
+  const forecastRows = forecastRes.data;
 
-  // --- Demand Classification: each day's forecast, tier PER PRODUCT
-  // (each product vs its own past sales: productDemandTier()). Closed-day
-  // rows are skipped; a date with only closed rows goes in closedDates.
-  // Paged: same reason as getForecastingAnalytics — products x dates.
-  const { data: forecastRows, error: forecastError } = await fetchAllRows(() => supabaseAdmin
-    .from('forecasts')
-    .select('product_id, forecast_date, predicted_quantity, model_version')
-    .gte('forecast_date', rangeFrom)
-    .lte('forecast_date', rangeTo)
-    .order('forecast_date')
-    .order('product_id'));
-  if (forecastError) throw forecastError;
-
-  // Paged: this reads the WHOLE table to pick each product's newest row,
-  // and the forecast run appends one row per product per day — ~40/day,
-  // so it passes 1,000 rows in under a month of normal operation.
-  const { data: classificationRows, error: classError } = await fetchAllRows(() => supabaseAdmin
-    .from('product_classifications')
-    .select('product_id, classification_date, demand_tier, basis')
-    .order('classification_date', { ascending: false })
-    // Tie-break: two runs on the same date -> the newer row (higher id)
-    // comes first, so the "first row per product wins" loop keeps it.
-    .order('id', { ascending: false })
-    .order('product_id'));
-  if (classError) throw classError;
+  // Only the recent classifications are read (a product forecast every day
+  // is re-classified every day). Nothing recent -> read them all, as before.
+  let classificationRows = recentClassifications.data;
+  if (recentClassifications.error) throw recentClassifications.error;
+  if (!classificationRows || classificationRows.length === 0) {
+    const all = await readClassifications(null);
+    if (all.error) throw all.error;
+    classificationRows = all.data;
+  }
   const latestClassificationByProduct = new Map();
   for (const row of classificationRows || []) {
     if (!latestClassificationByProduct.has(row.product_id)) {
@@ -1203,16 +1234,33 @@ async function getProductPerformanceAnalytics({ from, to, demandFrom, demandTo }
     .sort((a, b) => a.date.localeCompare(b.date) || b.forecastQty - a.forecastQty || a.product.localeCompare(b.product));
 
   // --- Performance Ratio ---
-  // Quantity Sold / Revenue columns are still real actual sales summed
-  // over the range (unchanged).
-  const { data: salesRows, error: salesError } = await fetchAllRows(() => supabaseAdmin
-    .from('daily_sales')
-    .select('product_id, sale_date, quantity_sold')
-    .gte('sale_date', ratioFrom)
-    .lte('sale_date', ratioTo)
-    .order('sale_date')
-    .order('product_id'));
-  if (salesError) throw salesError;
+  // Quantity Sold / Revenue columns are real actual sales summed over the
+  // range. If the chosen dates have NO sales at all (e.g. a report for this
+  // week while the last upload was weeks ago), the ratio uses the 7 days
+  // ending on the newest sale on or before the chosen end date instead, and
+  // says so (ratioShift), rather than showing an empty table.
+  let salesRows = salesRes.data;
+  if (salesRes.error) throw salesRes.error;
+  let ratioShift = null;
+  if ((!salesRows || salesRows.length === 0) && !needLatestSale) {
+    const { data: latestBefore, error: latestBeforeError } = await supabaseAdmin
+      .from('daily_sales')
+      .select('sale_date')
+      .lte('sale_date', ratioTo)
+      .order('sale_date', { ascending: false })
+      .limit(1)
+      .maybeSingle();
+    if (latestBeforeError) throw latestBeforeError;
+    if (latestBefore?.sale_date) {
+      const fallback = defaultRatioRange(latestBefore.sale_date, range.today);
+      const shifted = await readRatioSales(fallback.from, fallback.to);
+      if (shifted.error) throw shifted.error;
+      ratioShift = { requested: { from: ratioFrom, to: ratioTo }, reason: 'no_sales' };
+      ratioFrom = fallback.from;
+      ratioTo = fallback.to;
+      salesRows = shifted.data;
+    }
+  }
 
   const qtyByProduct = new Map();
   for (const row of salesRows || []) {
@@ -1255,6 +1303,10 @@ async function getProductPerformanceAnalytics({ from, to, demandFrom, demandTo }
         productId,
         product: product.name,
         quantitySold: qty,
+        // Breakdown shown on the page (Oct 26 2026):
+        //   avgDaily = quantitySold ÷ openDays;  ratio = avgDaily ÷ storeAverageDaily
+        openDays: openDayCount,
+        avgDaily: openDayCount > 0 ? qty / openDayCount : null,
         // Empty (not ₱0) when nothing sold in range or the price is 0.
         revenue: hasSales && price > 0 ? qty * price : null,
         hasPrice: price > 0,
@@ -1272,7 +1324,7 @@ async function getProductPerformanceAnalytics({ from, to, demandFrom, demandTo }
   // Same inputs as the status rule itself (productStatusService: sales days,
   // last real sale, confirmed-open days), a few paged reads for all products,
   // so the texts below match what decided each product's status.
-  const statusInputs = await loadStatusInputs(supabaseAdmin);
+  const statusInputs = await statusInputsPromise;
   const lastSaleByProduct = new Map(
     [...statusInputs.byProduct].map(([productId, s]) => [productId, s.lastSaleDate])
   );
@@ -1340,7 +1392,12 @@ async function getProductPerformanceAnalytics({ from, to, demandFrom, demandTo }
       // Store average items sold per open day (active products that sold).
       storeAverageDaily,
       openDays: openDayCount,
+      // How many ACTIVE products the store average is taken over.
+      activeProductCount: activeProductIds.size,
       range: { from: ratioFrom, to: ratioTo },
+      // Set when the chosen dates had no sales and the newest 7 days with
+      // sales were used instead: { requested: { from, to }, reason: 'no_sales' }.
+      ratioShift,
       // The ratio always comes from actual sales in the range now.
       ratioAsOf: null,
       ratioSource: 'sales',
@@ -1454,17 +1511,23 @@ async function getMappedIngredientIds() {
 }
 
 async function getIngredientDemandAnalytics({ date, weekStart } = {}) {
-  const stockThresholds = await getStockThresholds();
-  const safetyBufferPct = await getSafetyBufferPercentage();
-  const bufferMultiplier = safetyBufferMultiplier(safetyBufferPct);
   let targetDate = date || defaultDateRange().today;
+  // SPEED (Oct 26 2026): independent reads run together (two rounds instead
+  // of ~10 one after another).
   // No date or week asked for, and today has no open forecast (a closed
   // day): show the next open forecast date, and its week. Explicit params
   // are used as given. (Stock alerts use getIngredientDailyNeedDetails,
   // not this: a closed day needs no stock.)
+  const [stockThresholds, safetyBufferPct, day, [recipeMap, modifierShares], productsRes] = await Promise.all([
+    getStockThresholds(),
+    getSafetyBufferPercentage(),
+    !date && !weekStart ? defaultForecastDay(targetDate) : Promise.resolve(null),
+    Promise.all([getRecipeMap(), loadModifierShares()]),
+    supabaseAdmin.from('products').select('id, name'),
+  ]);
+  const bufferMultiplier = safetyBufferMultiplier(safetyBufferPct);
   let shiftReason = null;
-  if (!date && !weekStart) {
-    const day = await defaultForecastDay(targetDate);
+  if (day) {
     targetDate = day.date;
     shiftReason = day.shiftReason;
   }
@@ -1477,14 +1540,20 @@ async function getIngredientDemandAnalytics({ date, weekStart } = {}) {
     return toDateOnly(d);
   });
 
-  const { data: forecastRows, error: forecastError } = await supabaseAdmin
-    .from('forecasts')
-    .select('product_id, forecast_date, predicted_quantity, model_version')
-    .gte('forecast_date', weekDates[0])
-    .lte('forecast_date', weekDates[6]);
-  if (forecastError) throw forecastError;
-
-  const [recipeMap, modifierShares] = await Promise.all([getRecipeMap(), loadModifierShares()]);
+  const outsideWeek = !weekDates.includes(targetDate);
+  const [weekRes, dayRes] = await Promise.all([
+    supabaseAdmin
+      .from('forecasts')
+      .select('product_id, forecast_date, predicted_quantity, model_version')
+      .gte('forecast_date', weekDates[0])
+      .lte('forecast_date', weekDates[6]),
+    outsideWeek
+      ? supabaseAdmin.from('forecasts').select('product_id, forecast_date, predicted_quantity, model_version').eq('forecast_date', targetDate)
+      : Promise.resolve({ data: null, error: null }),
+  ]);
+  if (weekRes.error) throw weekRes.error;
+  if (dayRes.error) throw dayRes.error;
+  const forecastRows = weekRes.data;
   // ingredient name -> { values: number[7], ingredientId }
   const heatmap = new Map();
   // ingredientId -> { category, currentStock, productIds } for the weekly grocery list
@@ -1508,20 +1577,17 @@ async function getIngredientDemandAnalytics({ date, weekStart } = {}) {
           category: item.category,
           currentStock: item.currentStock,
           unitPrice: item.unitPrice,
-          bufferedValues: Array.from({ length: 7 }, () => new Decimal(0)),
           productIds: new Set(),
         });
       }
       const entry = heatmap.get(item.ingredientId);
       // Weekly heatmap = RAW demand: whole plates × recipe × (1 − modifier
-      // share), NO safety buffer (owner decision, Oct 25 2026). The buffered
-      // copy below feeds only the Weekly Grocery List.
+      // share), NO safety buffer (owner decision, Oct 25 2026).
       const rawNeed = new Decimal(wholeItems(f.predicted_quantity))
         .mul(decimalValue(item.qtyPerServing))
         .mul(new Decimal(1).minus(modifierShareOf(modifierShares, f.product_id, item.ingredientId)));
       entry.values[dayIndex] = entry.values[dayIndex].plus(rawNeed);
       const info = weekInfo.get(item.ingredientId);
-      info.bufferedValues[dayIndex] = info.bufferedValues[dayIndex].plus(rawNeed.mul(bufferMultiplier));
       info.productIds.add(f.product_id);
     }
   }
@@ -1552,15 +1618,9 @@ async function getIngredientDemandAnalytics({ date, weekStart } = {}) {
   // --- Daily ingredient demand for targetDate ---
   // The page picks the day and the week separately, so targetDate can be
   // outside the heatmap week: then its forecasts are read on their own.
-  let dayForecasts = (forecastRows || []).filter((f) => f.forecast_date === targetDate);
-  if (!weekDates.includes(targetDate)) {
-    const { data: dayRows, error: dayError } = await supabaseAdmin
-      .from('forecasts')
-      .select('product_id, forecast_date, predicted_quantity, model_version')
-      .eq('forecast_date', targetDate);
-    if (dayError) throw dayError;
-    dayForecasts = dayRows || [];
-  }
+  const dayForecasts = outsideWeek
+    ? (dayRes.data || [])
+    : (forecastRows || []).filter((f) => f.forecast_date === targetDate);
   // Same summing rule as the Dashboard's stock alerts (sumIngredientNeeds).
   const dailyByIngredient = new Map();
   for (const { ingredientId, item, need, rawNeed, safetyBuffer, productIds } of sumIngredientNeeds(dayForecasts, recipeMap, bufferMultiplier, modifierShares).values()) {
@@ -1579,10 +1639,7 @@ async function getIngredientDemandAnalytics({ date, weekStart } = {}) {
   }
 
   const productNamesById = new Map();
-  {
-    const { data: products } = await supabaseAdmin.from('products').select('id, name');
-    for (const p of products || []) productNamesById.set(p.id, p.name);
-  }
+  for (const p of productsRes.data || []) productNamesById.set(p.id, p.name);
 
   const dailyIngredients = Array.from(dailyByIngredient.values())
     .map((entry) => {
@@ -1628,6 +1685,19 @@ async function getIngredientDemandAnalytics({ date, weekStart } = {}) {
   };
 
   // --- Weekly Grocery List: the same week as the heatmap ---
+  // Weekly Forecasted Need = the SUM of the 7 daily Forecasted Need values,
+  // each worked out exactly as the Daily Ingredient Demand table shows it
+  // (sumIngredientNeeds, rounded per day). Before Oct 26 2026 it summed
+  // unrounded buffered values, so the weekly total never matched the daily
+  // numbers the owner could add up by hand.
+  const dailyNeedByIngredient = new Map(); // ingredientId -> [7 needs]
+  weekDates.forEach((weekDate, dayIndex) => {
+    const rows = (forecastRows || []).filter((f) => f.forecast_date === weekDate);
+    for (const entry of sumIngredientNeeds(rows, recipeMap, bufferMultiplier, modifierShares).values()) {
+      if (!dailyNeedByIngredient.has(entry.ingredientId)) dailyNeedByIngredient.set(entry.ingredientId, Array(7).fill(0));
+      dailyNeedByIngredient.get(entry.ingredientId)[dayIndex] = entry.need;
+    }
+  });
   const groceryListWeekly = buildWeeklyGroceryList(
     weeklyDemand.map((row) => {
       const info = weekInfo.get(row.ingredientId);
@@ -1639,7 +1709,7 @@ async function getIngredientDemandAnalytics({ date, weekStart } = {}) {
         unitPrice: info.unitPrice,
         currentStock: info.currentStock,
         usedIn: Array.from(info.productIds).map((pid) => productNamesById.get(pid)).filter(Boolean).join(', '),
-        values: info.bufferedValues,
+        values: dailyNeedByIngredient.get(row.ingredientId) || Array(7).fill(0),
       };
     }),
     () => null,

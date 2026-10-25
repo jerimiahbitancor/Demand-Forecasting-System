@@ -1,6 +1,7 @@
 // Display rule for INGREDIENT DEMAND amounts and money (Analytics > Ingredient
 // Demand, its reports and the grocery list). Owner decision, Oct 25 2026:
-//   - every amount strictly 2 decimals            1.2 kg   -> "1.20 kg"
+//   - every amount at most 2 decimals; ".00" is dropped (Oct 26 2026):
+//                                                 1.2 kg -> "1.20 kg", 9.00 kg -> "9 kg"
 //   - pieces (pcs) are whole numbers              17 pcs   -> "17 pcs"
 //   - the unit sits next to its value, in its SHORT form ("kg", not
 //     "Kilograms (kg)"), so a cell reads as one quantity
@@ -10,6 +11,7 @@
 //     cost stays checkable by hand. The math always uses the stored price.
 import { isCountUnit } from "./formatStockQty.js";
 import { unitShortLabel } from "./recipeUnits.js";
+import { fmt2 } from "./formatNumber.js";
 
 // -> { value: "1.20", unit: "kg" } (unit "" when unknown); null for no value.
 export function ingredientDemandParts(value, unit) {
@@ -18,7 +20,7 @@ export function ingredientDemandParts(value, unit) {
   if (!Number.isFinite(quantity)) return null;
   const formatted = isCountUnit(unit)
     ? Math.round(quantity).toLocaleString("en-PH")
-    : quantity.toLocaleString("en-PH", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+    : fmt2(quantity);
   return { value: formatted, unit: unit ? unitShortLabel(unit) : "" };
 }
 
@@ -31,9 +33,7 @@ export function formatIngredientDemandQty(value, unit) {
 export function formatIngredientDemandMoney(value) {
   if (value === null || value === undefined || value === "") return "—";
   const amount = Number(value);
-  return Number.isFinite(amount)
-    ? `₱${amount.toLocaleString("en-PH", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
-    : "—";
+  return Number.isFinite(amount) ? `₱${fmt2(amount)}` : "—";
 }
 
 // "₱50.00/kg"; "₱0.0035/g" for a tiny per-gram price; "—" without a price.
@@ -42,10 +42,9 @@ export function formatUnitPrice(price, unit) {
   const amount = Number(price);
   if (!Number.isFinite(amount)) return "—";
   const tiny = amount > 0 && amount < 1 && Number(amount.toFixed(2)) !== amount;
-  const text = amount.toLocaleString("en-PH", {
-    minimumFractionDigits: 2,
-    maximumFractionDigits: tiny ? 4 : 2,
-  });
+  const text = tiny
+    ? amount.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 4 })
+    : fmt2(amount);
   return `₱${text}/${unit ? unitShortLabel(unit) : "unit"}`;
 }
 
