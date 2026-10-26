@@ -466,3 +466,56 @@
   text-align: right;
   font-variant-numeric: tabular-nums;
 }
+
+/* Generate Forecast dialog: start date options (Oct 26 2026). */
+.forecast-start-dialog {
+  text-align: left;
+  padding: 0 1rem;
+  font-size: 0.92rem;
+  line-height: 1.45;
+}
+.forecast-start-dialog__intro {
+  margin: 0 0 0.75rem;
+}
+.forecast-start-dialog__group {
+  border: 1px solid #e5e7eb;
+  border-radius: 8px;
+  padding: 0.5rem 0.75rem 0.75rem;
+  margin: 0 0 0.75rem;
+}
+.forecast-start-dialog__group legend {
+  font-weight: 600;
+  padding: 0 0.25rem;
+}
+.forecast-start-dialog__group label {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.5rem;
+  margin-top: 0.4rem;
+  cursor: pointer;
+}
+.forecast-start-dialog__group input[type="radio"] {
+  flex: none;
+  margin: 0.3rem 0 0;
+}
+.forecast-start-dialog input[type="date"] {
+  margin-left: 0.25rem;
+}
+.forecast-start-dialog input[type="date"],
+.forecast-start-dialog select {
+  font: inherit;
+  padding: 0.2rem 0.4rem;
+  border: 1px solid #d1d5db;
+  border-radius: 6px;
+}
+.forecast-start-dialog__length {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-weight: 600;
+}
+.forecast-start-dialog__hint {
+  margin: 0.75rem 0 0;
+  font-size: 0.82rem;
+  color: #6b7280;
+}

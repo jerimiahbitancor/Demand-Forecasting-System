@@ -553,6 +553,25 @@ def get_latest_confirmed_open_date():
     return response.data[0]["business_date"]
 
 
+def get_confirmed_closed_dates_after(after_date) -> list:
+    """
+    Dates the owner confirmed CLOSED after `after_date` ("YYYY-MM-DD"), as
+    datetime.date objects. Used only by a forecast with a chosen start date
+    (Oct 26 2026): a closed day right after the latest sales is not a gap.
+    A handful of rows at most, so no paging.
+    """
+    response = (
+        supabase.table("business_days")
+        .select("business_date")
+        .eq("status", "confirmed_closed")
+        .gt("business_date", str(after_date))
+        .order("business_date")
+        .limit(400)
+        .execute()
+    )
+    return [date.fromisoformat(str(r["business_date"])[:10]) for r in (response.data or []) if r.get("business_date")]
+
+
 def get_safety_buffer_percentage() -> float:
     """
     Single configurable safety buffer (default 15%), owner-set in

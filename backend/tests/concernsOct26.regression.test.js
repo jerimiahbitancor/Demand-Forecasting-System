@@ -105,3 +105,24 @@ test('SPEED: Product Performance reads in parallel (no more one-read-at-a-time)'
   }
   assert.ok(peak >= 4, `at least 4 reads at once (peak was ${peak})`);
 });
+
+// F5 (Oct 26 2026, redemonstration): a forecast can start right after the
+// latest uploaded sales so it can be checked against the real sales. Guards
+// the three hops (route -> mlService -> ml-service) and the two fairness
+// rules in ml-service (no leakage, no gap). Source checks: the behaviour is
+// tested in forecastStartDate.test.js and ml-service/tests/test_forecast_start_date.py.
+test('F5: chosen forecast start date reaches ml-service and keeps both fairness rules', () => {
+  const fs = require('fs');
+  const path = require('path');
+  const read = (rel) => fs.readFileSync(path.join(__dirname, '..', '..', rel), 'utf8');
+  const route = read('backend/routes/ml.js');
+  const ml = read('backend/services/mlService.js');
+  const py = read('ml-service/services/forecast_service.py');
+  const app = read('ml-service/app.py');
+  assert.ok(route.includes('normalizeStartDate((req.body || {}).startDate)'), 'route reads startDate');
+  assert.ok(ml.includes('if (startDate) body.start_date = startDate;'), 'only sent when chosen');
+  assert.ok(py.includes('start <= train_end_date'), 'no leakage: start after the training data');
+  assert.ok(py.includes('start > next_day'), 'no gap: cannot skip unuploaded days');
+  assert.ok(py.includes('today = start_date or manila_today()'), 'no start date = today, as before');
+  assert.ok(app.includes('requested_start = body.get("start_date")'));
+});

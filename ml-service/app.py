@@ -13,7 +13,7 @@ service is up before showing "Training in progress" style states.
 """
 import logging
 import traceback
-from datetime import date
+from datetime import date, timedelta
 from functools import wraps
 import pandas as pd
 from flask import Flask, request, jsonify
@@ -25,6 +25,8 @@ from services.data_loader import (
     get_confirmed_open_dates, get_latest_confirmed_open_date, get_operating_days,
     get_recipe_and_stock, get_safety_buffer_percentage, get_modifier_share_inputs,
 )
+from services.data_loader import get_confirmed_closed_dates_after
+from services.forecast_service import resolve_forecast_window, ForecastWindowError
 from services.history_gate import evaluate_history_gate, describe_failure
 from services.preprocessing import validate_sales_data, clean_sales_data, DataValidationError
 from services.feature_engineering import engineer_features, FEATURE_COLUMNS
@@ -290,6 +292,9 @@ def forecast():
     body = request.get_json(silent=True) or {}
     horizon_days = int(body.get("horizon_days", 1))
     run_type = body.get("run_type") or ("daily" if horizon_days == 1 else "weekly")
+    # Optional (Oct 26 2026): "YYYY-MM-DD" or "after_latest_sales". Absent
+    # -> today, exactly as before (the 9:00 AM jobs never send it).
+    requested_start = body.get("start_date")
 
     model, model_version = load_latest_model()
     if model is None:
@@ -360,6 +365,29 @@ def forecast():
             "current_feature_columns": list(FEATURE_COLUMNS),
         }), 409
 
+    # Chosen start date (accuracy test): checked before any forecast is
+    # written. See forecast_service.resolve_forecast_window for the rules.
+    window_start = None
+    warnings = []
+    if requested_start:
+        latest_open = get_latest_confirmed_open_date()
+        train_end = metadata.get("train_end_date")
+        if not train_end:
+            warnings.append(
+                "This model does not record its training end date, so the system could not "
+                "confirm that the start date comes after the days the model learned."
+            )
+        try:
+            window_start, horizon_days = resolve_forecast_window(
+                requested_start, horizon_days,
+                operating_days=operating_days,
+                latest_open_date=date.fromisoformat(str(latest_open)[:10]) if latest_open else None,
+                closed_dates=get_confirmed_closed_dates_after(latest_open) if latest_open else [],
+                train_end_date=date.fromisoformat(str(train_end)[:10]) if train_end else None,
+            )
+        except ForecastWindowError as e:
+            return jsonify({"status": "failed", "reason": str(e)}), 422
+
     # Loaded once per run and shared by every product. Deliberately AFTER
     # the feature-set guard above, so a model that must be refused is
     # refused before any database work.
@@ -385,10 +413,12 @@ def forecast():
             })
             continue
         try:
+            forecast_kwargs = {"operating_days": operating_days, "open_dates": open_dates}
+            if window_start is not None:
+                forecast_kwargs["start_date"] = window_start
             forecast_rows = generate_forecast(
                 product_id, model, model_version, known_categories, horizon_days,
-                operating_days=operating_days,
-                open_dates=open_dates,
+                **forecast_kwargs,
             )
 
             forecast_ids = [write_forecast(row) for row in forecast_rows]
@@ -396,7 +426,11 @@ def forecast():
             first_day_qty = forecast_rows[0]["predicted_quantity"]
             day1_forecasts_by_product[product_id] = first_day_qty
 
-            classification = classify_forecast(product_id, first_day_qty)
+            classification = (
+                classify_forecast(product_id, first_day_qty)
+                if window_start is None
+                else classify_forecast(product_id, first_day_qty, before_date=window_start)
+            )
             write_classification(product_id, classification)
 
             cogs = estimate_cogs(first_day_qty, product_id, recipe_df)
@@ -471,13 +505,18 @@ def forecast():
 
     write_forecast_run(run_type, model_version, last_confirmed_date, stale_days)
 
-    return jsonify({
+    response_body = {
         "results": results,
         "failed_count": len(failed),
         "ingredient_demand": ingredient_demand_df.to_dict(orient="records"),
         "last_confirmed_date": last_confirmed_date,
         "stale_days": stale_days,
-    }), 200
+    }
+    if window_start is not None:
+        response_body["forecast_start"] = window_start.isoformat()
+        response_body["forecast_end"] = (window_start + timedelta(days=horizon_days - 1)).isoformat()
+        response_body["warnings"] = warnings
+    return jsonify(response_body), 200
 
 
 if __name__ == "__main__":

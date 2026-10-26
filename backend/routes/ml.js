@@ -5,6 +5,7 @@ const authenticate = require('../middleware/auth');
 const mlService = require('../services/mlService');
 const { createNotification, queueStockRefresh } = require('../services/notificationService');
 const { supabaseAdmin } = require('../config/supabase');
+const { normalizeStartDate, describeForecastWindow } = require('../utils/forecastStart');
 
 const userIdOf = (req) => req.user?.user_id || req.user?.id || null;
 
@@ -161,9 +162,18 @@ router.post('/forecast', authenticate, async (req, res) => {
   if (mlService.isForecastInFlight()) {
     return res.status(409).json({ success: false, error: mlService.FORECAST_IN_FLIGHT_MESSAGE });
   }
+  // Optional chosen start date (Oct 26 2026). Only the shape is checked
+  // here; ml-service decides whether the date is allowed.
+  const start = normalizeStartDate((req.body || {}).startDate);
+  if (start.error) {
+    return res.status(400).json({ success: false, error: start.error });
+  }
   try {
     const { horizonDays, runType } = req.body || {};
-    const result = await mlService.forecast({ horizonDays, runType });
+    const result = await mlService.forecast(
+      start.value ? { horizonDays, runType, startDate: start.value } : { horizonDays, runType }
+    );
+    const testWindow = describeForecastWindow(result?.forecast_start, result?.forecast_end);
     // New forecast -> new ingredient needs: refresh the stock alerts.
     queueStockRefresh('forecast');
 
@@ -178,7 +188,9 @@ router.post('/forecast', authenticate, async (req, res) => {
       userId: userIdOf(req),
       type: failedProducts.length ? 'warning' : 'success',
       title: failedProducts.length ? 'Forecast ready, with some products missing' : 'Forecast report is ready',
-      message: `Forecast${horizonDays === 7 ? ' for the next week' : ' for today'} has been generated and saved. Check the Forecasts page to review it.${failedNote}`,
+      message: testWindow
+        ? `Forecast for ${testWindow} (starting after your latest sales data) has been generated and saved. Upload the actual sales for those days to compare. Check the Forecasts page to review it.${failedNote}`
+        : `Forecast${horizonDays === 7 ? ' for the next week' : ' for today'} has been generated and saved. Check the Forecasts page to review it.${failedNote}`,
       link: '/analytics',
       metadata: {
         kind: 'forecast', status: 'ready', horizon_days: horizonDays || 1, failed_count: failedProducts.length,
