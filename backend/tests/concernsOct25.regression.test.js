@@ -165,6 +165,7 @@ test('DM1: a refused upload creates an emailed notification with the shortfall t
     shortfalls: [{ ingredientId: 101, name: 'Pork', unit: 'Kilograms (kg)', required: '3', available: '1.2', shortfall: '1.8' }],
     filename: 'item-sales-summary.csv', uploadId: 7,
   });
+  assert.equal(notice.title, 'File not saved: not enough stock');
   assert.equal(notice.metadata.kind, 'upload_blocked_stock');
   assert.equal(notice.metadata.shortfalls.length, 1);
   assert.ok(EMAIL_REMINDER_KINDS.includes('upload_blocked_stock'), 'this kind is emailed');

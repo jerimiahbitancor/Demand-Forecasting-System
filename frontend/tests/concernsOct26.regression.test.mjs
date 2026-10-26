@@ -10,6 +10,7 @@ const forecastingCss = read('features/analytics/components/Forecasting.css');
 const perf = read('features/analytics/components/ProductPerformance.jsx');
 const demand = read('features/analytics/components/IngredientDemand.jsx');
 const report = read('services/reportService.js');
+const dashboard = read('features/dashboard/states/FullyOperational.jsx');
 const { fmt2, peso } = await import('../src/utils/formatNumber.js');
 const { formatIngredientDemandQty, formatIngredientDemandMoney } = await import('../src/utils/formatIngredientDemand.js');
 
@@ -30,12 +31,16 @@ check('G3: every report reads the business profile', (report.match(/business = a
 check('F1: no sort dropdown; header sorting stays', !forecasting.includes('aria-label="Sort the table"') && forecasting.includes('th-sort-btn'));
 check('F1: the table pans sideways with room per column', forecastingCss.includes('.forecast-table') && /min-width: 960px/.test(forecastingCss));
 check('F2: totals row keeps the ₱ font (set after bold)', /fontStyle = 'bold';[\s\S]{0,200}?\}\s*pesoCell\(data\);/.test(report));
+check('F3: prediction totals include actual and forecast quantities', forecasting.includes('predictionTotals.actualQty') && forecasting.includes('predictionTotals.forecastQty'));
+check('F4: searched chart tooltip identifies the matching product', forecasting.includes('point.products') && forecasting.includes('productFilter={productQuery}'));
+check('G4: dashboard describes servings sold versus forecast, not revenue', dashboard.includes('item quantities, not peso revenue'));
 
 // Product Performance
 check('PP2: demand level filter', perf.includes('DEMAND_FILTERS') && perf.includes('demandLevelSelect'));
-check('PP3: ratio breakdown shown', perf.includes('How the ratio is calculated') && perf.includes('ratioMath('));
+check('PP3: ratio calculations are available on hover, not printed in the table', perf.includes('ratioBreakdownText(row, storeAvg)') && perf.includes('<Tippy content={ratioBreakdownText') && !perf.includes('ratioBreakdown}'));
 check('PP4: report summary is built from the data (no example names)', !perf.includes('newProducts[0]?.product') && !perf.includes('inactiveProducts[0]?.product') && perf.includes('ratioTable:'));
 check('PP5: Excel ratio sheet has the breakdown columns', perf.includes('"Avg / Day"') && perf.includes('"Store Avg / Day"') && perf.includes('"Open Days"'));
+check('PP6: PDF performance ratio has visual comparison bars', report.includes('didDrawCell: (data) =>') && report.includes('centerX - barWidth'));
 
 // Ingredient Demand
 check('ID2: daily status and weekly level filters', demand.includes('dailyFilterSelect') && demand.includes('weeklyFilterSelect'));
@@ -44,6 +49,7 @@ check('ID4: grocery list shows Need and On Stock next to Qty to Buy', demand.inc
 check('ID5: report cards shrink long names to fit', report.includes('getTextWidth(raw) > maxWidth'));
 check('ID6: report includes the weekly ingredient demand', demand.includes('weeklyTable:') && report.includes('weeklyTable.rows'));
 check('ID7: previous / next day buttons', demand.includes('aria-label="Previous day"') && demand.includes('aria-label="Next day"'));
+check('ID8: grocery categories come from ingredient records and weekly grid has no hover wrapper', demand.includes('new Set(groceryGrouped.map((item) => item.category))') && !demand.includes('<Tippy\n            content={tooltips.weeklyPlanner}'));
 
 // Forecast start date (redemonstration, Oct 26 2026)
 check('F5: Generate Forecast can start after the latest sales (accuracy test), not only today', forecasting.includes('html: FORECAST_START_DIALOG_HTML') && forecasting.includes('confirmation.value') && !forecasting.includes('{ horizonDays: 7 },\n'));

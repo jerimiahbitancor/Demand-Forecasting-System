@@ -1099,12 +1099,7 @@ const UploadData = ({
         const id = toast.error("Can't reach the server — check that the backend is running.");
         setSalesToastId(id);
       } else if (underlying.response?.status === 422 && underlying.response?.data?.insufficientStock) {
-        const names = (underlying.response.data.shortfalls || []).map((s) => s.name).filter(Boolean);
-        const id = toast.error(
-          `Not saved: not enough stock${names.length ? ` for ${names.slice(0, 3).join(', ')}${names.length > 3 ? '…' : ''}` : ''}. `
-          + 'See the upload summary below.',
-          { duration: 8000 }
-        );
+        const id = toast.error("File not saved: not enough stock", { duration: 8000 });
         setSalesToastId(id);
       } else if (underlying.response?.status === 409) {
         const id = toast.error(`Upload failed: ${underlying.response?.data?.message || 'Duplicate file detected'}`);

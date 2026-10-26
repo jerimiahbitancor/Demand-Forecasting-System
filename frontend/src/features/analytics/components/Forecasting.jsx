@@ -117,9 +117,10 @@ function buildSeriesFromRows(rows) {
     const date = r.raw.date;
     let b = byDate.get(date);
     if (!b) {
-      b = { date, actual: 0, actualRevenue: 0, hasActual: false, forecast: 0, forecastRevenue: 0, hasForecast: false, closed: false };
+      b = { date, actual: 0, actualRevenue: 0, hasActual: false, forecast: 0, forecastRevenue: 0, hasForecast: false, closed: false, products: new Set() };
       byDate.set(date, b);
     }
+    if (r.product) b.products.add(r.product);
     if (r.raw.actualQty !== null) {
       b.actual += Number(r.raw.actualQty) || 0;
       b.actualRevenue += Number(r.raw.actualRevenue) || 0;
@@ -143,6 +144,7 @@ function buildSeriesFromRows(rows) {
       future: null,
       futureRevenue: null,
       closed: b.closed && !b.hasForecast,
+      products: [...b.products],
     }));
 }
 
@@ -267,13 +269,16 @@ function AccuracyChart({ history }) {
 
 const pesoText = (value) => `₱${Math.round(Number(value)).toLocaleString("en-PH")}`;
 
-function PredictionPointTooltip({ active, payload, revenueMode }) {
+function PredictionPointTooltip({ active, payload, revenueMode, productFilter }) {
   if (!active || !payload || !payload.length) return null;
   const point = payload[0].payload;
   const show = (v) => (v == null ? "—" : revenueMode ? pesoText(v) : formatItemsSold(v, { withUnit: true }));
   return (
     <div className="chart-hover-box">
       <p className="chart-hover-title">{longDateLabel(point.date)}{point.isToday ? " (today)" : ""}</p>
+      {productFilter?.trim() && point.products?.length > 0 && (
+        <p><strong>Product{point.products.length === 1 ? "" : "s"}:</strong> {point.products.join(", ")}</p>
+      )}
       {point.closed ? (
         <p>Store closed</p>
       ) : (
@@ -289,7 +294,7 @@ function PredictionPointTooltip({ active, payload, revenueMode }) {
 // Actual = solid green, forecast = dashed blue (past and coming days in one
 // line, so it joins the actual line at today), a marker at today. Closed
 // days have no values: the lines break there (a gap), never a drop to 0.
-function PredictionChart({ series, revenueMode, today }) {
+function PredictionChart({ series, revenueMode, today, productFilter }) {
   const data = series.map((p) => {
     const past = revenueMode ? p.forecastRevenue : p.forecast;
     const ahead = revenueMode ? p.futureRevenue : p.future;
@@ -299,6 +304,7 @@ function PredictionChart({ series, revenueMode, today }) {
       forecast: past ?? ahead ?? null,
       closed: Boolean(p.closed),
       isToday: p.date === today,
+      products: p.products || [],
     };
   });
   const hasToday = data.some((p) => p.isToday);
@@ -319,7 +325,7 @@ function PredictionChart({ series, revenueMode, today }) {
             minTickGap={24}
           />
           <YAxis stroke="#6b7280" tick={{ fontSize: 11 }} tickFormatter={yTick} width={56} />
-          <Tooltip content={<PredictionPointTooltip revenueMode={revenueMode} />} />
+          <Tooltip content={<PredictionPointTooltip revenueMode={revenueMode} productFilter={productFilter} />} />
           {hasToday && (
             <ReferenceLine x={today} stroke="#9ca3af" strokeDasharray="4 4" label={{ value: "Today", position: "top", fill: "#6b7280", fontSize: 11 }} />
           )}
@@ -671,7 +677,7 @@ function Forecasting() {
 
   const predictionChart = hasForecastData || predictionSeries.length > 0 ? (
     <>
-      <PredictionChart series={chartSeries} revenueMode={revenueMode} today={predictionToday} />
+      <PredictionChart series={chartSeries} revenueMode={revenueMode} today={predictionToday} productFilter={productQuery} />
       <div className="chart-legend">
         <span className="legend-item">
           <span className="legend-swatch legend-swatch--actual" /> {revenueMode ? "Actual Sales" : "Actual Demand"} (solid)
@@ -702,7 +708,9 @@ function Forecasting() {
   const totalsRow = showTotals ? (
     <tfoot>
       <tr className="analytics-table-total">
-        <td colSpan={5}><strong>Total</strong></td>
+        <td colSpan={3}><strong>Total</strong></td>
+        <td data-label="Actual Qty.">{formatItemsSold(predictionTotals.actualQty, { withUnit: true })}</td>
+        <td data-label="Forecast Qty.">{formatItemsSold(predictionTotals.forecastQty, { withUnit: true })}</td>
         <td data-label="Actual Revenue">{formatPeso(predictionTotals.actualRevenue)}</td>
         <td data-label="Forecast Revenue">{formatPeso(predictionTotals.forecastRevenue)}</td>
         <td data-label="Est. Total Cost">{formatPeso(predictionTotals.estCost)}</td>

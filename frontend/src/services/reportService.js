@@ -456,8 +456,39 @@ export async function buildProductPerformancePDF({
     didParseCell: (data) => {
       if (data.section === 'body' && data.column.index === 6) {
         const ratio = Number(data.cell.raw);
-        if (Number.isFinite(ratio)) data.cell.styles.textColor = ratio >= 1 ? COLOR.success : COLOR.pillHighText;
+        if (Number.isFinite(ratio)) {
+          data.cell.styles.textColor = ratio >= 1 ? COLOR.success : COLOR.pillHighText;
+          data.cell.styles.fillColor = [248, 249, 250];
+          data.cell.styles.minCellHeight = 9;
+        }
       }
+    },
+    didDrawCell: (data) => {
+      if (data.section !== 'body' || data.column.index !== 6) return;
+      const ratio = Number(data.cell.raw);
+      if (!Number.isFinite(ratio)) return;
+
+      const trackX = data.cell.x + 2;
+      const trackY = data.cell.y + data.cell.height - 3;
+      const trackWidth = data.cell.width - 4;
+      const halfWidth = trackWidth / 2;
+      const centerX = trackX + halfWidth;
+      const barWidth = halfWidth * Math.min(Math.abs(ratio - 1), 1);
+
+      doc.setFillColor(232, 236, 240);
+      doc.roundedRect(trackX, trackY, trackWidth, 1.4, 0.5, 0.5, 'F');
+      if (barWidth > 0) {
+        if (ratio >= 1) {
+          doc.setFillColor(...COLOR.success);
+          doc.roundedRect(centerX, trackY, barWidth, 1.4, 0.5, 0.5, 'F');
+        } else {
+          doc.setFillColor(...COLOR.pillHighText);
+          doc.roundedRect(centerX - barWidth, trackY, barWidth, 1.4, 0.5, 0.5, 'F');
+        }
+      }
+      doc.setDrawColor(...COLOR.textLight);
+      doc.setLineWidth(0.2);
+      doc.line(centerX, trackY - 0.5, centerX, trackY + 1.9);
     },
   });
 

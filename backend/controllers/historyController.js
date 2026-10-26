@@ -82,7 +82,6 @@ const RESTORE_CHUNK_SIZE = 1000;
 // Catalog and configuration tables are deliberately kept.
 const RESET_TABLES = [
   'uploads',
-  
   'daily_sales',
   'daily_sales_modifiers',
   'forecasts',
@@ -91,15 +90,15 @@ const RESET_TABLES = [
   'model_metrics',
   'forecast_config',
   'inventory_transactions',
+  'notifications',
+  'daily_sales_modifiers',
+  'market_price',
+  'business_days',
   'product_categories',
   'product_classifications',
   'product_ingredients',
   'product_aliases',
   'products',
-  'notifications',
-  'daily_sales_modifiers',
-  'market_price',
-  'business_days'
 ];
 
 const timestampName = (date = new Date()) => {

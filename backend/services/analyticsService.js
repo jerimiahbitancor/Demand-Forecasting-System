@@ -594,17 +594,28 @@ function buildForecastTableRows({
 // Table totals add only known values. Products with no price add nothing to
 // revenue; no recipe adds nothing to cost. Exact decimals, then centavos.
 function summarizePredictionTotals(rows = []) {
-  const sums = { actualRevenue: new Decimal(0), forecastRevenue: new Decimal(0), estCost: new Decimal(0) };
+  const sums = {
+    actualQty: new Decimal(0),
+    forecastQty: new Decimal(0),
+    actualRevenue: new Decimal(0),
+    forecastRevenue: new Decimal(0),
+    estCost: new Decimal(0),
+  };
   const noPrice = new Set();
   const noRecipe = new Set();
   for (const r of rows) {
     if (!r.hasPrice) noPrice.add(r.productId);
     if (!r.hasRecipe) noRecipe.add(r.productId);
+    if (r.actualQty != null) sums.actualQty = sums.actualQty.plus(decimalValue(r.actualQty));
+    if (!r.closed && r.forecastQty != null) sums.forecastQty = sums.forecastQty.plus(decimalValue(r.forecastQty));
     for (const key of Object.keys(sums)) {
+      if (key === 'actualQty' || key === 'forecastQty') continue;
       if (r[key] != null) sums[key] = sums[key].plus(decimalValue(r[key]));
     }
   }
   return {
+    actualQty: sums.actualQty.toNumber(),
+    forecastQty: sums.forecastQty.toNumber(),
     actualRevenue: roundMoney(sums.actualRevenue),
     forecastRevenue: roundMoney(sums.forecastRevenue),
     estCost: roundMoney(sums.estCost),
