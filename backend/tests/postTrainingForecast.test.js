@@ -1,9 +1,9 @@
 // tests/postTrainingForecast.test.js — run: node --test tests/postTrainingForecast.test.js
 //
-// A successful POST /api/ml/train starts the first forecast right away
-// (Oct 24 2026), so the dashboard does not wait for tomorrow's 9:00 AM run.
-// A failed training starts nothing. mlService is replaced: nothing reaches a
-// real ml-service.
+// Training never starts a forecast (owner decision, Oct 26 2026; replaces
+// the Oct 24 automatic first forecast). The owner runs Generate Forecast
+// when ready, so an accuracy test can start after the latest sales.
+// mlService is replaced: nothing reaches a real ml-service.
 
 const test = require('node:test');
 const assert = require('node:assert/strict');
@@ -46,7 +46,6 @@ const ml = {
 stubModule('services/mlService.js', ml);
 
 const mlRouter = require('../routes/ml');
-const { forecastSlotFor } = require('../jobs/forecastScheduler');
 
 function post(server, urlPath) {
   return new Promise((resolve, reject) => {
@@ -71,7 +70,7 @@ async function withServer(fn) {
   try { return await fn(server); } finally { Object.assign(console, quiet); server.close(); }
 }
 
-test('training succeeds -> the first forecast starts right away, for today\'s slot', async () => {
+test('training succeeds -> NO forecast is started; the owner is told to run it', async () => {
   ml.forecastCalls.length = 0;
   notifications.length = 0;
   ml.trainError = null;
@@ -80,11 +79,11 @@ test('training succeeds -> the first forecast starts right away, for today\'s sl
     await settle();
     assert.equal(res.status, 200, JSON.stringify(res.body));
   });
-  const slot = forecastSlotFor(new Date());
-  assert.deepEqual(ml.forecastCalls, [{ horizonDays: slot.horizonDays, runType: slot.runType }]);
-  const done = notifications.find((n) => n.metadata && n.metadata.kind === 'forecast');
+  assert.deepEqual(ml.forecastCalls, [], 'training must not start a forecast');
+  assert.equal(notifications.filter((n) => n.metadata && n.metadata.kind === 'forecast').length, 0);
+  const done = notifications.find((n) => n.metadata && n.metadata.kind === 'training' && n.metadata.status === 'completed');
   assert.ok(done, JSON.stringify(notifications.map((n) => n.title)));
-  assert.match(done.message, /first forecast after training finished/);
+  assert.match(done.message, /Generate Forecast/);
 });
 
 test('training fails -> no forecast is started', async () => {

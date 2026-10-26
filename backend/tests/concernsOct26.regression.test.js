@@ -126,3 +126,14 @@ test('F5: chosen forecast start date reaches ml-service and keeps both fairness 
   assert.ok(py.includes('today = start_date or manila_today()'), 'no start date = today, as before');
   assert.ok(app.includes('requested_start = body.get("start_date")'));
 });
+
+// F6 (Oct 26 2026): training never starts a forecast; the owner runs
+// Generate Forecast (and picks the start date). Behaviour: postTrainingForecast.test.js.
+test('F6: a finished training does not start a forecast', () => {
+  const fs = require('fs');
+  const path = require('path');
+  const route = fs.readFileSync(path.join(__dirname, '..', 'routes', 'ml.js'), 'utf8');
+  const trainHandler = route.slice(route.indexOf("router.post('/train'"), route.indexOf("router.post('/forecast'"));
+  assert.ok(trainHandler.length > 0, 'train route found');
+  assert.ok(!/runScheduledForecast|mlService\.forecast\(|post_training/.test(trainHandler.replace(/\/\/.*$/gm, '')), 'no forecast call inside /train');
+});
