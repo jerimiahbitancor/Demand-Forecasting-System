@@ -5,6 +5,7 @@ const authenticate = require('../middleware/auth');
 const mlService = require('../services/mlService');
 const { createNotification, queueStockRefresh } = require('../services/notificationService');
 const { supabaseAdmin } = require('../config/supabase');
+const { normalizeStartDate, describeForecastWindow } = require('../utils/forecastStart');
 
 const userIdOf = (req) => req.user?.user_id || req.user?.id || null;
 
@@ -108,26 +109,18 @@ router.post('/train', authenticate, async (req, res) => {
       userId: userIdOf(req),
       type: 'success',
       title: 'Forecast model training completed',
-      message: 'Training finished successfully — the forecast model is ready for the current data.',
+      message: 'Training finished successfully — the forecast model is ready for the current data. '
+        + 'No forecast was run yet: use Generate Forecast when you are ready.',
       link: '/analytics',
       metadata: { kind: 'training', status: 'completed' },
     });
 
-    // Run the first forecast right away instead of waiting for tomorrow's
-    // 9:00 AM job, so the dashboard has today's forecast as soon as the
-    // model exists. Same horizon as today's scheduled slot (weekly on
-    // Monday, daily otherwise). Not awaited: the training response must not
-    // wait for it, and runScheduledForecast() never throws (it records and
-    // notifies its own success or failure, and skips if a run is already
-    // going). Required lazily so this route file stays cheap to load.
-    try {
-      const { runScheduledForecast, forecastSlotFor } = require('../jobs/forecastScheduler');
-      const slot = forecastSlotFor(new Date());
-      runScheduledForecast({ horizonDays: slot.horizonDays, runType: slot.runType, trigger: 'post_training' })
-        .catch((forecastError) => console.error('Post-training forecast failed:', forecastError));
-    } catch (scheduleError) {
-      console.error('Could not start the post-training forecast:', scheduleError);
-    }
+    // Owner decision (Oct 26 2026): training NEVER starts a forecast. The
+    // automatic run added on Oct 24 is removed, so the owner decides when
+    // the first forecast runs and from which start date (an accuracy test
+    // must start right after the latest uploaded sales, not today). The
+    // 9:00 AM jobs are unchanged. The Dashboard's "No forecast yet" notice
+    // offers Generate Forecast.
 
     res.json({ success: true, data: result });
   } catch (error) {
@@ -161,9 +154,18 @@ router.post('/forecast', authenticate, async (req, res) => {
   if (mlService.isForecastInFlight()) {
     return res.status(409).json({ success: false, error: mlService.FORECAST_IN_FLIGHT_MESSAGE });
   }
+  // Optional chosen start date (Oct 26 2026). Only the shape is checked
+  // here; ml-service decides whether the date is allowed.
+  const start = normalizeStartDate((req.body || {}).startDate);
+  if (start.error) {
+    return res.status(400).json({ success: false, error: start.error });
+  }
   try {
     const { horizonDays, runType } = req.body || {};
-    const result = await mlService.forecast({ horizonDays, runType });
+    const result = await mlService.forecast(
+      start.value ? { horizonDays, runType, startDate: start.value } : { horizonDays, runType }
+    );
+    const testWindow = describeForecastWindow(result?.forecast_start, result?.forecast_end);
     // New forecast -> new ingredient needs: refresh the stock alerts.
     queueStockRefresh('forecast');
 
@@ -178,7 +180,9 @@ router.post('/forecast', authenticate, async (req, res) => {
       userId: userIdOf(req),
       type: failedProducts.length ? 'warning' : 'success',
       title: failedProducts.length ? 'Forecast ready, with some products missing' : 'Forecast report is ready',
-      message: `Forecast${horizonDays === 7 ? ' for the next week' : ' for today'} has been generated and saved. Check the Forecasts page to review it.${failedNote}`,
+      message: testWindow
+        ? `Forecast for ${testWindow} (starting after your latest sales data) has been generated and saved. Upload the actual sales for those days to compare. Check the Forecasts page to review it.${failedNote}`
+        : `Forecast${horizonDays === 7 ? ' for the next week' : ' for today'} has been generated and saved. Check the Forecasts page to review it.${failedNote}`,
       link: '/analytics',
       metadata: {
         kind: 'forecast', status: 'ready', horizon_days: horizonDays || 1, failed_count: failedProducts.length,

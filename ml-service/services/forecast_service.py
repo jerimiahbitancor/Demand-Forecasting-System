@@ -37,6 +37,90 @@ class ModelNotReadyError(Exception):
     pass
 
 
+class ForecastWindowError(ValueError):
+    """
+    A chosen start date that cannot give a fair forecast. The message is
+    shown to the owner as-is, so it is plain language.
+    """
+    pass
+
+
+# start_date value meaning "the first open day after the latest uploaded
+# sales" (Oct 26 2026) — the usual choice for an accuracy test.
+AFTER_LATEST_SALES = "after_latest_sales"
+
+
+def _long_date(d: date) -> str:
+    return f"{d.strftime('%b')} {d.day}, {d.year}"
+
+
+def next_forecastable_date(latest_open_date: date, operating_days: set, closed_dates=()) -> date:
+    """
+    The first day after `latest_open_date` that is an operating weekday and
+    is not confirmed closed: the earliest day a forecast can start without
+    skipping sales days that were never uploaded.
+    """
+    closed = set(closed_dates)
+    d = latest_open_date + timedelta(days=1)
+    for _ in range(366):
+        if _is_operating_day(d, operating_days) and d not in closed:
+            return d
+        d += timedelta(days=1)
+    return latest_open_date + timedelta(days=1)  # no operating days set at all
+
+
+def resolve_forecast_window(requested_start, horizon_days: int, *, operating_days: set,
+                            latest_open_date, closed_dates=(), train_end_date=None):
+    """
+    Pure. Turns an owner-chosen start (a "YYYY-MM-DD" string or
+    AFTER_LATEST_SALES) into (start_date, horizon_days), or raises
+    ForecastWindowError. Added Oct 26 2026 for accuracy tests: forecast
+    from the day after the last uploaded sales, upload the real sales
+    later, compare.
+
+    Two rules keep such a test fair:
+      1. No leakage — the start must be AFTER the model's train_end_date.
+         A model scored on days it already learned would look better than
+         it is. (The lag/rolling inputs are safe on their own:
+         generate_forecast only reads sales BEFORE the start date.)
+      2. No gap — the start may not be later than the first open day
+         after the latest uploaded sales. Starting later would skip
+         unuploaded days and treat old sales as "yesterday", which is the
+         exact problem this option exists to avoid.
+
+    Length: horizon_days == 1 -> that one day; anything else -> from the
+    start through that week's Sunday (Mon-Sun weeks, like the Monday run).
+    """
+    if latest_open_date is None:
+        raise ForecastWindowError(
+            "No sales day has been confirmed open yet, so there is no sales data to start a forecast from."
+        )
+    next_day = next_forecastable_date(latest_open_date, operating_days, closed_dates)
+
+    if requested_start == AFTER_LATEST_SALES:
+        start = next_day
+    else:
+        try:
+            start = date.fromisoformat(str(requested_start))
+        except ValueError:
+            raise ForecastWindowError("The start date must be a date in the form YYYY-MM-DD.")
+
+    if train_end_date is not None and start <= train_end_date:
+        raise ForecastWindowError(
+            f"The current model already learned the sales up to {_long_date(train_end_date)}. "
+            f"Pick a start date after that day, or the test would check days the model has already seen."
+        )
+    if start > next_day:
+        raise ForecastWindowError(
+            f"Sales data ends on {_long_date(latest_open_date)}. A forecast starting on "
+            f"{_long_date(start)} would skip the days in between. Upload those days (or mark them "
+            f"closed), or start on {_long_date(next_day)}."
+        )
+
+    horizon = 1 if int(horizon_days) == 1 else 7 - start.weekday()
+    return start, horizon
+
+
 def _is_operating_day(d: date, operating_days: set) -> bool:
     """
     Owner-configured operating schedule (0=Mon..6=Sun), read from
@@ -116,6 +200,7 @@ def generate_forecast(
     start_offset: int = 0,
     operating_days: set = None,
     open_dates=None,
+    start_date: date = None,
 ) -> list:
     """
     Generates `horizon_days` forecasts for one product against the
@@ -148,7 +233,11 @@ def generate_forecast(
     if operating_days is None:
         operating_days = {0, 1, 2, 3, 4}  # Mon-Fri fallback if caller didn't pass one
 
-    today = manila_today()  # Asia/Manila, not the container's UTC date
+    # Day 1 of the run. Normally today (Asia/Manila, not the container's UTC
+    # date). start_date (Oct 26 2026) lets an accuracy test start right after
+    # the latest uploaded sales; only sales BEFORE it are read, so actual
+    # sales uploaded later for the forecast days can never leak in.
+    today = start_date or manila_today()
     history = _get_recent_series(product_id, before_date=today, open_dates=open_dates)
 
     if len(history) < WARMUP_OBSERVATIONS:
@@ -220,13 +309,18 @@ def generate_forecast(
     return results
 
 
-def classify_forecast(product_id: int, predicted_quantity: float) -> dict:
+def classify_forecast(product_id: int, predicted_quantity: float, before_date: date = None) -> dict:
     """
     Wraps business_logic.classify_demand with this product's own
     historical distribution, pulled fresh so the P40/P80 thresholds
     stay current as more sales accumulate.
+
+    before_date (Oct 26 2026): for a run with a chosen start date, only
+    sales before that date set P40/P80, the same history the forecast saw.
     """
     sales_df = get_daily_sales(product_id)
+    if before_date is not None and not sales_df.empty:
+        sales_df = sales_df[sales_df["sale_date"].dt.date < before_date]
     if sales_df.empty:
         return {"demand_tier": "Low", "p40_threshold": 0, "p80_threshold": 0}
     return classify_demand(predicted_quantity, sales_df["quantity_sold"])

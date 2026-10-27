@@ -560,7 +560,10 @@ const FORECAST_IN_FLIGHT_MESSAGE = 'A forecast is already running';
 // another forecast is still running; nothing is sent to ml-service then.
 // Wakes the ML service first (inside the lock); a wake timeout rejects
 // with 503 { wakeupTimedOut: true } and /forecast is never POSTed.
-function forecast({ horizonDays = 1, runType } = {}) {
+// startDate (Oct 26 2026, optional): 'YYYY-MM-DD' or 'after_latest_sales'
+// for an accuracy test. Omitted -> today, as before; the scheduled jobs
+// never pass it.
+function forecast({ horizonDays = 1, runType, startDate } = {}) {
   if (forecastInFlight) {
     const error = new MlServiceError(FORECAST_IN_FLIGHT_MESSAGE, 409);
     error.code = 'FORECAST_IN_FLIGHT';
@@ -569,8 +572,10 @@ function forecast({ horizonDays = 1, runType } = {}) {
   forecastInFlight = true;
   let pending;
   try {
+    const body = { horizon_days: horizonDays, run_type: runType };
+    if (startDate) body.start_date = startDate;
     pending = ensureMlServiceAwake().then(() => callMlService(
-      '/forecast', { horizon_days: horizonDays, run_type: runType }, { retryOnBusy: true }
+      '/forecast', body, { retryOnBusy: true }
     ));
   } catch (error) {
     forecastInFlight = false;

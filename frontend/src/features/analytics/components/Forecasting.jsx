@@ -24,6 +24,9 @@ import { accuracyPercent, accuracyVerdict, accuracyOffByLine, ACCURACY_HELP_SENT
 import { shortDateLabel } from "../../dashboard/utils/dashboardPanels.js";
 import { peso } from "../../../utils/formatNumber.js";
 import {
+  FORECAST_START_DIALOG_HTML, buildForecastRequest, readForecastStartDialog, forecastWindowLabel,
+} from "../../../utils/forecastStartChoice.js";
+import {
   LineChart as RechartsLineChart,
   Line,
   XAxis,
@@ -424,20 +427,30 @@ function Forecasting() {
   // ReadyToTrain.jsx's Start Training pattern — a Swal confirmation, then a
   // single toast id carried through loading -> success/error so the message
   // never claims success before the server actually confirms it.
+  // Oct 26 2026: the dialog also offers a start date (see
+  // utils/forecastStartChoice.js) so an accuracy test can start right after
+  // the latest uploaded sales instead of today.
   const handleGenerateForecast = async () => {
     const confirmation = await Swal.fire({
       title: "Generate forecast now?",
-      text: "This runs a manual 7-day forecast refresh using the current trained model — " +
-            "the same weekly-style run the scheduled Monday 9:00 AM job performs. It does not " +
-            "retrain the model, only re-forecasts with it.",
+      html: FORECAST_START_DIALOG_HTML,
       icon: "question",
       showCancelButton: true,
       confirmButtonText: "Generate forecast",
       cancelButtonText: "Cancel",
       confirmButtonColor: "#7A0101",
+      focusConfirm: false,
+      preConfirm: () => {
+        const request = buildForecastRequest(readForecastStartDialog(Swal.getPopup()));
+        if (request.error) {
+          Swal.showValidationMessage(request.error);
+          return false;
+        }
+        return request.body;
+      },
     });
 
-    if (!confirmation.isConfirmed) return;
+    if (!confirmation.isConfirmed || !confirmation.value) return;
 
     setIsGeneratingForecast(true);
     const toastId = toast.loading("Generating forecast… (the first run after a quiet period can take about a minute)");
@@ -445,18 +458,20 @@ function Forecasting() {
       const headers = await authService.getAuthHeaders();
       const response = await axios.post(
         `${API_URL}/ml/forecast`,
-        { horizonDays: 7 },
+        confirmation.value,
         { headers }
       );
       const forecastedCount = (response.data?.data?.results || []).filter(
         (r) => r.status === "forecasted"
       ).length;
+      const windowLabel = forecastWindowLabel(response.data?.data);
       toast.success(
-        forecastedCount
-          ? `Forecast generated for ${forecastedCount} product${forecastedCount === 1 ? "" : "s"}.`
-          : "Forecast generated.",
+        (forecastedCount
+          ? `Forecast generated for ${forecastedCount} product${forecastedCount === 1 ? "" : "s"}`
+          : "Forecast generated") + (windowLabel ? `, ${windowLabel}.` : "."),
         { id: toastId }
       );
+      (response.data?.data?.warnings || []).forEach((w) => toast(w, { duration: 8000 }));
       // Refresh this page's charts/tables with the rows the run just wrote.
       await fetchForecastingAnalytics({ silent: true });
     } catch (err) {

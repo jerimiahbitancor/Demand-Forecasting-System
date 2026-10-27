@@ -51,6 +51,9 @@ check('ID6: report includes the weekly ingredient demand', demand.includes('week
 check('ID7: previous / next day buttons', demand.includes('aria-label="Previous day"') && demand.includes('aria-label="Next day"'));
 check('ID8: grocery categories come from ingredient records and weekly grid has no hover wrapper', demand.includes('new Set(groceryGrouped.map((item) => item.category))') && !demand.includes('<Tippy\n            content={tooltips.weeklyPlanner}'));
 
+// Forecast start date (redemonstration, Oct 26 2026)
+check('F5: Generate Forecast can start after the latest sales (accuracy test), not only today', forecasting.includes('html: FORECAST_START_DIALOG_HTML') && forecasting.includes('confirmation.value') && !forecasting.includes('{ horizonDays: 7 },\n'));
+
 if (failures.length) {
   console.log(`FAILED: ${failures.length} check(s): ${JSON.stringify(failures)}`);
   process.exit(1);
