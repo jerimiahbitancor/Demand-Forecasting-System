@@ -139,3 +139,17 @@ test('bad options are refused before anything is read', () => {
   assert.throws(() => report.parseArgs(['--from', '2026-10-04', '--to', '2026-09-29']), /before/);
   assert.deepEqual(report.parseArgs(['--from', '2026-09-29', '--to', '2026-10-04', '--no-model']), { model: false, from: '2026-09-29', to: '2026-10-04' });
 });
+
+test('reliability uses the app rule (beats the 7-day average), with the training test as context', () => {
+  const base = { wmape: 35.56, wmapeDecimal: 36.04, avg7Wmape: 38.87, bias: -2.07 };
+  const good = report.reliabilityOf(base, { wmape: 28.09 });
+  assert.equal(good.beats, true);
+  assert.match(good.verdict, /^Reliable/);
+  assert.equal(Math.round(good.vsTest * 100) / 100, 7.95);
+  assert.equal(good.direction, 'too low');
+  const bad = report.reliabilityOf({ ...base, wmape: 61.66, wmapeDecimal: 61.81, avg7Wmape: 51.44, bias: 29.06 }, null);
+  assert.equal(bad.beats, false);
+  assert.match(bad.verdict, /^Not reliable/);
+  assert.equal(bad.testWmape, null);
+  assert.equal(report.reliabilityOf(null, null), null);
+});
