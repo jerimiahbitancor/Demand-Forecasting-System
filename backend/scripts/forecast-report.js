@@ -136,6 +136,24 @@ function accuracyOf(rows) {
   };
 }
 
+// Is this window's forecast reliable? Same rule as the app (utils/accuracy.js):
+// judged only by whether it beats the 7-day average on the same rows, never a
+// fixed WMAPE threshold. The training test's WMAPE is shown next to it as
+// context (decimal forecasts, so the two are comparable).
+function reliabilityOf(summary, metrics) {
+  if (!summary || summary.wmapeDecimal === null || summary.avg7Wmape === null) return null;
+  const beats = summary.wmape < summary.avg7Wmape;
+  const testWmape = metrics && metrics.wmape !== null && metrics.wmape !== undefined ? Number(metrics.wmape) : null;
+  const vsTest = testWmape === null ? null : summary.wmapeDecimal - testWmape;
+  return {
+    beats,
+    verdict: beats ? 'Reliable: better than a simple 7-day average' : 'Not reliable for this window: a simple 7-day average did better',
+    testWmape,
+    vsTest,
+    direction: summary.bias > 0 ? 'too high' : summary.bias < 0 ? 'too low' : 'on target',
+  };
+}
+
 // ---------------------------------------------------------------------
 // Reading (all SELECTs)
 // ---------------------------------------------------------------------
@@ -460,6 +478,15 @@ ${table(['Measure', 'Value', 'Meaning'], [
     ['Same weekday WMAPE', pct(a.sameWeekdayWmape), 'Benchmark: last time open on that weekday'],
     ['Skill vs 7-day average', pct(a.skillVsAvg7), '(1 − model ÷ benchmark) × 100; above 0 = the model is better'],
   ])}
+${(() => {
+    const rel = reliabilityOf(a, data.metrics);
+    if (!rel) return '';
+    return `<h3>Is this forecast reliable?</h3>
+<p><b>${esc(rel.verdict)}.</b> On these product-days the model missed ${pct(a.wmape)} of items sold; the 7-day average missed ${pct(a.avg7Wmape)} (skill ${pct(a.skillVsAvg7)}).
+${rel.testWmape !== null ? `In the training test it missed ${pct(rel.testWmape)}, so this window is ${num(Math.abs(rel.vsTest))} points ${rel.vsTest > 0 ? 'less' : 'more'} accurate than tested (decimal forecasts, ${pct(a.wmapeDecimal)}).` : ''}
+For the whole store per day it missed ${pct(a.storeWmape)}; overall the forecast was ${esc(rel.direction)} (bias ${pct(a.bias)}).</p>
+<p class="note">Rule (same as the app): a forecast is judged by whether it beats a simple 7-day average on the same days, not by a fixed WMAPE. A WMAPE far above the training test means demand changed (closure, menu change) and a retrain on recent sales may help.</p>`;
+  })()}
 ${storeChart(a.byDay)}
 ${table(['Day', 'Actual', 'Predicted', 'Difference'], a.byDay.map((d) => [esc(`${weekdayOf(d.date)} ${longDate(d.date)}`), num(d.a), num(d.f), num(d.f - d.a)]), { numeric: [1, 2, 3] })}
 <details><summary>Per product (whole window)</summary>${table(['Product', 'Actual', 'Predicted', 'Missed items', 'WMAPE'],
@@ -580,4 +607,4 @@ if (require.main === module) {
   });
 }
 
-module.exports = { num, peso, wholeOf, datesBetween, describeTrigger, accuracyOf, detectLatestWindow, collect, render, parseArgs, manilaTime };
+module.exports = { num, peso, wholeOf, datesBetween, describeTrigger, accuracyOf, reliabilityOf, detectLatestWindow, collect, render, parseArgs, manilaTime };
